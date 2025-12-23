@@ -391,8 +391,12 @@ class OVExportCommand(BaseOptimumCLICommand):
                 self.args.model, self.args.weight_format, self.args.quant_mode
             )
             if self.args.weight_format is not None:
-                # For int4 quantization if no parameter is provided, then use the default config if exists
-                if no_compression_parameter_provided(self.args) and self.args.weight_format == "int4":
+                # For int4/int8 quantization if no parameter is provided, then use the default config if exists
+                if no_compression_parameter_provided(self.args) and (
+                    self.args.weight_format == "int4"
+                    or self.args.weight_format == "int8"
+                    and default_quantization_config is not None
+                ):
                     if default_quantization_config is not None:
                         quantization_config = default_quantization_config
                         log_message = (

@@ -67,7 +67,7 @@ from optimum.intel import (  # noqa
 )
 from optimum.intel.openvino.configuration import (
     _DEFAULT_4BIT_WQ_CONFIGS,
-    _DEFAULT_DYNAMIC_QUANTIZATION_GROUP_SIZE_CONFIGS,
+    _DEFAULT_8BIT_WQ_CONFIGS,
     _DEFAULT_IGNORED_SCOPE_CONFIGS,
     _DEFAULT_INT8_FQ_CONFIGS,
 )
@@ -1172,6 +1172,16 @@ class OVCLIExportTestCase(unittest.TestCase):
             {"model": {"int8": 22, "int4": 4}},
             {"model": 0},
         ),
+        (
+            "gpt2",
+            "Qwen/Qwen2.5-Coder-3B-Instruct",
+            AutoModelForCausalLM,
+            OVModelForCausalLM,
+            "--task text-generation-with-past --weight-format int8",
+            _DEFAULT_8BIT_WQ_CONFIGS,
+            {"model": {"int8": 44}},
+            {"model": 0},
+        ),
     ]
 
     # filter models type depending on min max transformers version
@@ -1246,6 +1256,15 @@ class OVCLIExportTestCase(unittest.TestCase):
                 model_quantization_config["statistics_path"].value = advanced_parameters["statistics_path"]
                 if dataset is not None:
                     default_config["statistics_path"] = f"{tmpdir}/statistics"
+
+                if "dq_group_size" in default_config:
+                    ref_dq_group_size = default_config.pop("dq_group_size")
+                    dq_group_size = int(rt_info["runtime_options"]["DYNAMIC_QUANTIZATION_GROUP_SIZE"].value)
+                    self.assertEqual(
+                        ref_dq_group_size,
+                        dq_group_size,
+                        f"DQ group size {dq_group_size} does not match expected {ref_dq_group_size}",
+                    )
             else:
                 dtype = default_config.pop("dtype", None)
                 self.assertEqual(dtype, "int8")
@@ -1281,17 +1300,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         config
         for config in DEFAULT_IGNORED_SCOPE_TEST_CONFIGURATIONS
         if TEST_NAME_TO_MODEL_TYPE.get(config[0], config[0]) in get_supported_model_for_library("transformers")
-    ]
-
-    DEFAULT_DQ_TEST_CONFIGURATIONS = [
-        (
-            "gpt2",
-            "Qwen/Qwen2.5-Coder-3B-Instruct",
-            "model",
-            AutoModelForCausalLM,
-            OVModelForCausalLM,
-            "--task text-generation-with-past --weight-format int8",
-        ),
     ]
 
     @parameterized.expand(SUPPORTED_DEFAULT_IGNORED_SCOPE_TEST_CONFIGURATIONS)
@@ -1340,47 +1348,6 @@ class OVCLIExportTestCase(unittest.TestCase):
                 expected_ignored_scope,
                 ignored_scope,
                 f"Ignored scope {ignored_scope} does not match expected {expected_ignored_scope}",
-            )
-
-    @parameterized.expand(DEFAULT_DQ_TEST_CONFIGURATIONS)
-    def test_exporters_cli_with_default_dq_group_size(
-        self,
-        test_model_id,
-        model_id,
-        ov_model_name,
-        auto_model_cls,
-        ov_model_cls,
-        options,
-    ):
-        with TemporaryDirectory() as tmpdir:
-            # 1. Create a local copy of the model so that we can override _name_or_path
-            pt_model = auto_model_cls.from_pretrained(MODEL_NAMES[test_model_id])
-            pt_model.save_pretrained(tmpdir)
-            maybe_save_preprocessors(MODEL_NAMES[test_model_id], tmpdir)
-
-            # 2. Overwrite config.json so that _name_or_path matches the HF model id
-            config_path = Path(tmpdir) / "config.json"
-            with config_path.open("r") as f:
-                config = json.load(f)
-            config["_name_or_path"] = model_id
-            with config_path.open("w") as wf:
-                json.dump(config, wf)
-
-            # 3. Run export
-            run_command = f"optimum-cli export openvino --model {tmpdir} {options} {tmpdir}"
-            subprocess.run(run_command, shell=True, check=True)
-
-            # 4. Load OV model and inspect rt_info
-            model = ov_model_cls.from_pretrained(tmpdir)
-            rt_info = model.ov_models[ov_model_name].get_rt_info()
-            dq_group_size = int(rt_info["runtime_options"]["DYNAMIC_QUANTIZATION_GROUP_SIZE"].value)
-
-            # 5. Compare
-            expected_dq_group_size = _DEFAULT_DYNAMIC_QUANTIZATION_GROUP_SIZE_CONFIGS[model_id][ov_model_name]
-            self.assertEqual(
-                expected_dq_group_size,
-                dq_group_size,
-                f"DQ group size {dq_group_size} does not match expected {expected_dq_group_size}",
             )
 
     def test_exporters_cli_help(self):

@@ -121,6 +121,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "ratio": 1.0,
         "dataset": "wikitext2",
         "scale_estimation": True,
+        "dq_group_size": 128,
     },
     "Qwen/Qwen3-1.7B": {
         "bits": 4,
@@ -366,6 +367,9 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     },
 }
 
+_DEFAULT_8BIT_WQ_CONFIGS = {
+    "Qwen/Qwen2.5-Coder-3B-Instruct": {"bits": 8, "sym": False, "dq_group_size": 128},
+}
 
 # Add configs for model id aliases
 # The list below contains pairs of model ids: config for the second model id will be copied from the first model id.
@@ -494,11 +498,6 @@ _DEFAULT_IGNORED_SCOPE_CONFIGS = {
 }
 
 
-# Default dynamic quantization group size configs. For each model id it is a dict of `{ov_model_name: group_size}`.
-# For possible values of `ov_model_name` please take a look at `_ov_model_names` property of corresponding OVModel class.
-_DEFAULT_DYNAMIC_QUANTIZATION_GROUP_SIZE_CONFIGS = {"Qwen/Qwen2.5-Coder-3B-Instruct": {"model": 128}}
-
-
 def _get_model_id_candidates(model_id_or_path: str) -> List[str]:
     """
     Get possible model id candidates from the given model id or path.
@@ -527,7 +526,7 @@ def get_default_quantization_config(
         model_id_or_path (`str`):
             id of the model or path to it.
         weight_format (`str`, *optional*):
-            The format of the weights. Currently only "int4" value is supported.
+            The format of the weights. Currently only "int4" and "int8" values are supported.
         quant_mode (`str`, *optional*):
             The quantization mode. Currently only "int8" value is supported.
     Returns:
@@ -539,6 +538,8 @@ def get_default_quantization_config(
 
     if weight_format == "int4":
         default_configs_dict = _DEFAULT_4BIT_WQ_CONFIGS
+    elif weight_format == "int8":
+        default_configs_dict = _DEFAULT_8BIT_WQ_CONFIGS
     elif quant_mode == "int8":
         default_configs_dict = _DEFAULT_INT8_FQ_CONFIGS
     else:
@@ -624,45 +625,6 @@ def _apply_default_ignored_scope_config(
 
             merged_ignored_scope = _merge_ignored_scopes(q_config.ignored_scope, default_ignored_scope)
             q_config.ignored_scope = merged_ignored_scope
-    return quantization_config_copy or quantization_config
-
-
-def _apply_default_dq_group_size_config(
-    model_id_or_path: str, quantization_config: "OVPipelineQuantizationConfig"
-) -> "OVPipelineQuantizationConfig":
-    """
-    Applies default dynamic quantization group size configuration to the given quantization configuration based on
-    the model ID or path.
-    Args:
-        model_id_or_path (`str`):
-            id of the model or path to it.
-        quantization_config (`OVPipelineQuantizationConfig`):
-            The quantization configuration to which the default dynamic quantization group size will be applied.
-    Returns:
-        Updated quantization configuration with the default dynamic quantization group size applied.
-    """
-    if not isinstance(quantization_config, OVPipelineQuantizationConfig):
-        raise ValueError(
-            "`_apply_default_dynamic_quantization_group_size_config` function expects "
-            "`OVPipelineQuantizationConfig` instance as `quantization_config` argument, but got: "
-            f"{type(quantization_config)}"
-        )
-    quantization_config_copy = None
-    model_id_candidates = _get_model_id_candidates(model_id_or_path)
-    for model_id in model_id_candidates:
-        default_group_sizes_per_model = _DEFAULT_DYNAMIC_QUANTIZATION_GROUP_SIZE_CONFIGS.get(model_id)
-        if not default_group_sizes_per_model:
-            continue
-        for ov_model_name, default_group_size in default_group_sizes_per_model.items():
-            q_config = quantization_config.quantization_configs.get(ov_model_name, quantization_config.default_config)
-            # We skip setting DQ group size for non-weight-only quantization configs
-            if q_config and isinstance(q_config, OVWeightQuantizationConfig):
-                q_config = q_config.clone()
-                q_config.dq_group_size = default_group_size
-                if quantization_config_copy is None:
-                    # Clone only if needed
-                    quantization_config_copy = quantization_config.clone()
-                quantization_config_copy.quantization_configs[ov_model_name] = q_config
     return quantization_config_copy or quantization_config
 
 

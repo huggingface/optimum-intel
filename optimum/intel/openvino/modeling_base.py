@@ -40,7 +40,6 @@ from .configuration import (
     OVConfig,
     OVQuantizationConfigBase,
     OVWeightQuantizationConfig,
-    _apply_default_dq_group_size_config,
     _apply_default_ignored_scope_config,
     _quantization_config_from_dict,
     get_default_quantization_config,
@@ -614,8 +613,8 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             quantization_config (`OVQuantizationConfigBase` or `Dict`):
                 The quantization config to resolve.
         """
-        if quantization_config == {"bits": 4}:
-            # If config is given as {"bits": 4}, use the default 4-bit quantization config
+        if quantization_config == {"bits": 4} or quantization_config == {"bits": 8}:
+            # If config is given as {"bits": N}, use the default N-bit quantization config
             if model_name_or_path in ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]:
                 raise NotImplementedError(
                     "Quantization with the default 4-bit config is not supported through Python API for openai/gpt-oss-20b model. "
@@ -623,17 +622,20 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
                     "recommended quantization config will be used."
                 )
             quantization_config = (
-                get_default_quantization_config(model_name_or_path, weight_format="int4") or _DEFAULT_4BIT_WQ_CONFIG
+                get_default_quantization_config(model_name_or_path, weight_format=f"int{quantization_config['bits']}")
+                or _DEFAULT_4BIT_WQ_CONFIG
             )
         else:
-            # Notify a user if 4-bit quantization is requested and there is a recommended config for the model
-            if (
-                isinstance(quantization_config, OVWeightQuantizationConfig)
-                and quantization_config.bits == 4
-                or isinstance(quantization_config, dict)
-                and quantization_config.get("bits", None) == 4
-            ):
-                default_config = get_default_quantization_config(model_name_or_path, weight_format="int4")
+            # Notify a user if 4 or 8 bit quantization is requested and there is a recommended config for the model
+            if isinstance(quantization_config, dict):
+                quantization_config = _quantization_config_from_dict(quantization_config)
+            if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.dtype in [
+                "int4",
+                "int8",
+            ]:
+                default_config = get_default_quantization_config(
+                    model_name_or_path, weight_format=quantization_config.dtype
+                )
                 if default_config is not None:
                     logger.info(
                         f"For the given model, we recommend the following `quantization_config` : {default_config}"
@@ -696,7 +698,6 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         quantization_config = self._preprocess_quantization_config(quantization_config, model_name_or_path)
         quantization_config = quantizer._construct_pipeline_quantization_config(quantization_config)
         quantization_config = _apply_default_ignored_scope_config(model_name_or_path, quantization_config)
-        quantization_config = _apply_default_dq_group_size_config(model_name_or_path, quantization_config)
 
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
 
