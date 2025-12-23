@@ -409,6 +409,27 @@ class OVQuantizerTest(unittest.TestCase):
                 "vision_embeddings_merger_model": {"f8e4m3": 2, "int4": 16},
             },
         ),
+        (
+            OVModelForVisualCausalLM,
+            "qwen3_vl",
+            OVQuantizationConfig(
+                bits=8,
+                dataset="contextual",
+                num_samples=1,
+            ),
+            {
+                "lm_model": 13,
+                "text_embeddings_model": 0,
+                "vision_embeddings_model": 1,
+                "vision_embeddings_merger_model": 14,
+            },
+            {
+                "lm_model": {"int8": 15},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 10},
+            },
+        ),
     ]
 
     @staticmethod
@@ -882,6 +903,25 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForVisualCausalLM,
+            "qwen3_vl",
+            False,
+            dict(
+                bits=4,
+                group_size=16,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+            ),
+            {
+                "lm_model": {"int8": 10, "int4": 20},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 10},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
             "phi3_v",
             True,
             dict(
@@ -1018,7 +1058,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "llava_next_video", False),
         (OVModelForVisualCausalLM, "minicpmv", True),
         (OVModelForVisualCausalLM, "qwen2_vl", False),
-    ]
+        (OVModelForVisualCausalLM, "qwen3_vl", False),]
 
     if is_transformers_version("<", "4.54.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "llava-qwen2", True))
