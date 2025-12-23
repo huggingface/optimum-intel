@@ -95,6 +95,7 @@ from .model_patcher import (
     GptJModelPatcher,
     GptNeoModelPatcher,
     GptNeoxModelPatcher,
+    GptOssModelPatcher,
     GraniteMoeHybridModelPatcher,
     GraniteMoEModelPatcher,
     IBertModelPatcher,
@@ -437,6 +438,7 @@ class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, ChatGLM2DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = ChatGLM2DummyPastKeyValuesGenerator
     _MODEL_PATCHER = ChatGLMModelPatcher
+    MAX_TRANSFORMERS_VERSION = "4.55.4"
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
@@ -545,6 +547,16 @@ class MixtralOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 class GemmaOpenVINOConfig(GemmaOnnxConfig):
     _MODEL_PATCHER = OVDecoderModelPatcher
 
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        # position_ids was removed from optimum-onnx's gemma config because
+        # it's not necessary (it's correctly generated inside the model)
+        # but openvino genai requires it to be present to work properly
+        inputs = super().inputs
+        if "position_ids" not in inputs:
+            inputs["position_ids"] = {0: "batch_size", 1: "sequence_length"}
+        return inputs
+
 
 @register_in_tasks_manager(
     "llama",
@@ -576,6 +588,7 @@ class GptOssOpenVINOConfig(LlamaOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
     MIN_TRANSFORMERS_VERSION = "4.55.1"
+    _MODEL_PATCHER = GptOssModelPatcher
 
 
 @register_in_tasks_manager(
@@ -669,6 +682,7 @@ class QwenDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
 @register_in_tasks_manager("qwen", *["text-generation", "text-generation-with-past"])
 class QwenOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
+    MAX_TRANSFORMERS_VERSION = "4.55.4"
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
         num_layers="num_hidden_layers", num_attention_heads="num_attention_heads", hidden_size="hidden_size"
     )
@@ -772,6 +786,7 @@ class OrionOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager("olmo", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -907,9 +922,8 @@ class PersimmonOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 class BioGPTOpenVINOConfig(
     TextDecoderWithPositionIdsOnnxConfig if is_transformers_version(">=", "4.52.0") else TextDecoderOnnxConfig
 ):
-    # BioGPT does not require position_ids input.
-    DEFAULT_ONNX_OPSET = 13
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager(
@@ -979,6 +993,7 @@ class XGLMConfig(TextDecoderWithPositionIdsOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
         num_attention_heads="attention_heads", hidden_size="d_model"
     )
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 class AquilaDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
@@ -1188,7 +1203,7 @@ class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
     ],
     library_name="transformers",
 )
-class Gemma2OpenVINOConfig(GemmaOnnxConfig):
+class Gemma2OpenVINOConfig(GemmaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.43.0"
     _MODEL_PATCHER = Gemma2ModelPatcher
 
@@ -3527,66 +3542,6 @@ class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
     _MODEL_PATCHER = GraniteMoEModelPatcher
 
 
-# TODO: remove and replace with GPTBigCodeDummyPastKeyValuesGenerator when optimum >= v2
-class GPTBigCodeDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
-    def __init__(
-        self,
-        task: str,
-        normalized_config: NormalizedTextConfig,
-        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
-        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
-        random_batch_size_range: Optional[Tuple[int, int]] = None,
-        random_sequence_length_range: Optional[Tuple[int, int]] = None,
-        **kwargs,
-    ):
-        super().__init__(
-            task=task,
-            normalized_config=normalized_config,
-            batch_size=batch_size,
-            sequence_length=sequence_length,
-            random_batch_size_range=random_batch_size_range,
-            random_sequence_length_range=random_sequence_length_range,
-            **kwargs,
-        )
-        self.multi_query = normalized_config.multi_query
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if is_transformers_version("<", "4.54"):
-            if self.multi_query:
-                shape = (
-                    self.batch_size,
-                    self.sequence_length,
-                    self.hidden_size // self.num_attention_heads * 2,
-                )
-            else:
-                shape = (
-                    self.batch_size,
-                    self.num_attention_heads,
-                    self.sequence_length,
-                    self.hidden_size // self.num_attention_heads * 2,
-                )
-            pkv = [
-                self.random_float_tensor(shape, framework=framework, dtype=float_dtype) for _ in range(self.num_layers)
-            ]
-
-        else:
-            shape = (
-                self.batch_size,
-                self.num_attention_heads if not self.multi_query else 1,
-                self.sequence_length,
-                self.hidden_size // self.num_attention_heads,
-            )
-            pkv = [
-                (
-                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
-                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
-                )
-                for _ in range(self.num_layers)
-            ]
-
-        return pkv
-
-
 @register_in_tasks_manager(
     "whisper",
     *[
@@ -4045,10 +4000,7 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
             if self.variant == "with-past" and self.use_past_in_inputs:
                 self.add_past_key_values(common_inputs, direction="inputs")
         elif self._behavior is SpeechT5ConfigBehavior.POSTNET:
-            common_inputs["raw_spectrogram"] = {
-                0: "n_spectrums",
-                1: "batch_size",
-            }
+            common_inputs["raw_spectrogram"] = {0: "n_spectrums", 1: "batch_size"}
         elif self._behavior is SpeechT5ConfigBehavior.VOCODER:
             common_inputs["spectrogram"] = {0: "batch_size", 1: "n_spectrums"}
         else:

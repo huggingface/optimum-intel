@@ -208,6 +208,11 @@ PREDEFINED_SAM_DATASETS = {
 NEED_CONVERT_TO_FAST_TOKENIZER: Tuple[Type[PreTrainedTokenizer]] = (CLIPTokenizer,)
 
 
+class classproperty(property):
+    def __get__(self, instance, owner=None):
+        return self.fget(owner)
+
+
 def maybe_convert_tokenizer_to_fast(
     hf_tokenizer: PreTrainedTokenizer, tokenizer_path: Path
 ) -> Union[PreTrainedTokenizer, PreTrainedTokenizerFast]:

@@ -608,7 +608,13 @@ class OVWeightCompressionTest(unittest.TestCase):
                 bits=4,
                 sym=False,
                 group_size=32,
-                ignored_scope={"names": ["__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"]},
+                ignored_scope={
+                    "names": [
+                        "__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
+                        if is_transformers_version("<", "4.57")
+                        else "__module.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
+                    ]
+                },
             ),
             {"model": {"int8": 4, "int4": 38}},
         ),
