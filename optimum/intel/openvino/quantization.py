@@ -16,6 +16,7 @@ import copy
 import dataclasses
 import inspect
 import logging
+import random
 from collections import UserDict, deque
 from contextlib import contextmanager
 from io import BytesIO
@@ -658,9 +659,9 @@ class OVCalibrationDatasetBuilder:
 
     def _prepare_causal_lm_calibration_data(self, config: OVQuantizationConfigBase) -> OVCalibrationDataset:
         """
-        Prepares calibration data for causal language models. Relies on `optimum.gptq.data` module.
+        Prepares calibration data for causal language models.
         """
-        from optimum.gptq.data import get_dataset, prepare_dataset
+        from optimum.gptq.data import get_c4, get_c4_new, prepare_dataset
 
         seq_len = config._dataset_kwargs.get("seq_len")
         tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
@@ -685,7 +686,44 @@ class OVCalibrationDatasetBuilder:
                 ]
             else:
                 seq_len = seq_len or 32
-                calibration_dataset = get_dataset(config.dataset, tokenizer, seqlen=seq_len, nsamples=nsamples)
+                if not is_datasets_available():
+                    raise ValueError(
+                        DATASETS_IMPORT_ERROR.format("OVCalibrationDatasetBuilder._prepare_causal_lm_calibration_data")
+                    )
+
+                def get_wikitext2(tokenizer: Any, seqlen: int, nsamples: int, split: str = "train"):
+                    # Copied from optimum.gptq.data.get_wikitext2 with added computation of `limit` variable:
+                    from datasets import load_dataset
+
+                    if split == "train":
+                        data = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
+                    elif split == "validation":
+                        data = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+                    # length of 288059 should be enough
+                    limit = nsamples * seqlen // 4  # ~1k for 128 samples with seqlen=32 to be aligned with optimum
+                    text = "".join([" \n" if s == "" else s for s in data["text"][:limit]])
+
+                    enc = tokenizer(text, return_tensors="pt")
+                    dataset = []
+                    for _ in range(nsamples):
+                        i = random.randint(0, enc.input_ids.shape[1] - seqlen - 1)
+                        j = i + seqlen
+                        inp = enc.input_ids[:, i:j]
+                        attention_mask = torch.ones_like(inp)
+                        dataset.append({"input_ids": inp, "attention_mask": attention_mask})
+                    return dataset
+
+                # Copied from optimum.gptq.data.get_dataset:
+                random.seed(self.seed)
+                np.random.seed(self.seed)
+                torch.random.manual_seed(self.seed)
+                get_dataset_map = {"wikitext2": get_wikitext2, "c4": get_c4, "c4-new": get_c4_new}
+                if config.dataset not in get_dataset_map:
+                    raise ValueError(f"Expected a value in {list(get_dataset_map.keys())} but found {config.dataset}")
+                get_dataset_fn = get_dataset_map[config.dataset]
+                calibration_dataset = get_dataset_fn(
+                    tokenizer=tokenizer, nsamples=nsamples, seqlen=seq_len, split="train"
+                )
         elif isinstance(config.dataset, list) and all(isinstance(it, str) for it in config.dataset):
             calibration_dataset = [tokenizer(text, return_tensors="pt") for text in config.dataset[:nsamples]]
         else:
