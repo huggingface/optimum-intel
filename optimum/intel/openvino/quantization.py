@@ -662,7 +662,7 @@ class OVCalibrationDatasetBuilder:
         """
         Prepares calibration data for causal language models.
         """
-        from optimum.gptq.data import get_c4, get_c4_new, prepare_dataset
+        from optimum.gptq.data import prepare_dataset
 
         seq_len = config._dataset_kwargs.get("seq_len")
         tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
@@ -714,10 +714,71 @@ class OVCalibrationDatasetBuilder:
                         dataset.append({"input_ids": inp, "attention_mask": attention_mask})
                     return dataset
 
+                def get_c4(tokenizer: Any, seqlen: int, nsamples: int, split: str = "train"):
+                    # Copied from optimum.gptq.data.get_c4 with an updated break condition
+                    # TODO: remove once https://github.com/huggingface/optimum/pull/2398 is merged
+                    from datasets import load_dataset
+
+                    if split == "train":
+                        data = load_dataset(
+                            "allenai/c4", split="train", data_files={"train": "en/c4-train.00000-of-01024.json.gz"}
+                        )
+                    elif split == "validation":
+                        data = load_dataset(
+                            "allenai/c4",
+                            split="validation",
+                            data_files={"validation": "en/c4-validation.00000-of-00008.json.gz"},
+                        )
+                    dataset = []
+                    for _ in range(nsamples):
+                        while True:
+                            i = random.randint(0, len(data) - 1)
+                            enc = tokenizer(data[i]["text"], return_tensors="pt")
+                            if enc.input_ids.shape[1] > seqlen:
+                                break
+                        i = random.randint(0, enc.input_ids.shape[1] - seqlen - 1)
+                        j = i + seqlen
+                        inp = enc.input_ids[:, i:j]
+                        attention_mask = torch.ones_like(inp)
+                        dataset.append({"input_ids": inp, "attention_mask": attention_mask})
+
+                    return dataset
+
+                def get_c4_new(tokenizer: Any, seqlen: int, nsamples: int, split: str = "train"):
+                    # Copied from optimum.gptq.data.get_c4_new with an updated break condition
+                    # TODO: remove once https://github.com/huggingface/optimum/pull/2398 is merged
+                    from datasets import load_dataset
+
+                    if split == "train":
+                        data = load_dataset(
+                            "allenai/c4", split="train", data_files={"train": "en/c4-train.00000-of-01024.json.gz"}
+                        )
+                    elif split == "validation":
+                        data = load_dataset(
+                            "allenai/c4",
+                            split="validation",
+                            data_files={"validation": "en/c4-validation.00000-of-00008.json.gz"},
+                        )
+                    dataset = []
+                    for _ in range(nsamples):
+                        while True:
+                            i = random.randint(0, len(data) - 1)
+                            enc = tokenizer(data[i]["text"], return_tensors="pt")
+                            if enc.input_ids.shape[1] > seqlen:
+                                break
+                        i = random.randint(0, enc.input_ids.shape[1] - seqlen - 1)
+                        j = i + seqlen
+                        inp = enc.input_ids[:, i:j]
+                        attention_mask = torch.ones_like(inp)
+                        dataset.append({"input_ids": inp, "attention_mask": attention_mask})
+
+                    return dataset
+
                 # Copied from optimum.gptq.data.get_dataset:
-                random.seed(self.seed)
-                np.random.seed(self.seed)
-                torch.random.manual_seed(self.seed)
+                # The value 42 is deducted to keep the seed value consistent
+                random.seed(self.seed - 42)
+                np.random.seed(self.seed - 42)
+                torch.random.manual_seed(self.seed - 42)
                 get_dataset_map = {"wikitext2": get_wikitext2, "c4": get_c4, "c4-new": get_c4_new}
                 if config.dataset not in get_dataset_map:
                     raise ValueError(f"Expected a value in {list(get_dataset_map.keys())} but found {config.dataset}")
