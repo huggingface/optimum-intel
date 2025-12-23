@@ -402,7 +402,8 @@ class OVExportCommand(BaseOptimumCLICommand):
                     elif self.args.weight_format == "int4":
                         quantization_config = _DEFAULT_4BIT_WQ_CONFIG
                         logger.info(f"Applying a default quantization config: {quantization_config}.")
-                    quantization_config["statistics_path"] = self.args.quantization_statistics_path
+                    if self.args.quantization_statistics_path is not None:
+                        quantization_config["statistics_path"] = self.args.quantization_statistics_path
             else:
                 if no_quantization_parameter_provided(self.args) and default_quantization_config is not None:
                     quantization_config = default_quantization_config
