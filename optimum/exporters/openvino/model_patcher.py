@@ -5151,12 +5151,14 @@ class BlenderbotModelPatcher(OVSeq2SeqModelPatcher):
 class BlenderbotSmallModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
+
         from transformers.models.blenderbot_small.modeling_blenderbot_small import BlenderbotSmallAttention
 
         modulewise_patch(self._model, BlenderbotSmallAttention, _blenderbot_attn_forward)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+
         from transformers.models.blenderbot_small.modeling_blenderbot_small import BlenderbotSmallAttention
 
         modulewise_unpatch(self._model, BlenderbotSmallAttention)
@@ -5165,12 +5167,14 @@ class BlenderbotSmallModelPatcher(OVSeq2SeqModelPatcher):
 class PegasusModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
+
         from transformers.models.pegasus.modeling_pegasus import PegasusAttention
 
         modulewise_patch(self._model, PegasusAttention, _blenderbot_attn_forward)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+
         from transformers.models.pegasus.modeling_pegasus import PegasusAttention
 
         modulewise_unpatch(self._model, PegasusAttention)
@@ -6231,7 +6235,6 @@ class Llama4TextModelPatcher(ModelPatcher):
                 layer.feed_forward.forward = types.MethodType(llama4_moe_forward, layer.feed_forward)
             layer.self_attn._orig_forward = layer.self_attn.forward
             layer.self_attn.forward = types.MethodType(llama4_attn_forward, layer.self_attn)
-
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
