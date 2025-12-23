@@ -656,9 +656,11 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
                     "Please export the model via optimum-cli with `--weight-format int4` argument. This way the "
                     "recommended quantization config will be used."
                 )
-            quantization_config = (
-                get_default_quantization_config(model_name_or_path, weight_format=f"int{quantization_config['bits']}")
-                or _DEFAULT_4BIT_WQ_CONFIG
+            default_config = get_default_quantization_config(
+                model_name_or_path, weight_format=f"int{quantization_config['bits']}"
+            )
+            quantization_config = default_config or (
+                _DEFAULT_4BIT_WQ_CONFIG if quantization_config == {"bits": 4} else quantization_config
             )
         else:
             # Notify a user if 4 or 8 bit quantization is requested and there is a recommended config for the model
