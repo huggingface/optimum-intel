@@ -14,6 +14,7 @@
 
 import copy
 import gc
+import os
 import unittest
 from tempfile import TemporaryDirectory
 
@@ -59,6 +60,9 @@ from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.intel.openvino.modeling_visual_language import MODEL_PARTS_CLS_MAPPING, MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
@@ -603,6 +607,9 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
                 f"Each batch of input_ids must contain exactly one BOS token, "
                 f"but found counts: {bos_token_counts.tolist()}",
             )
+
+            if is_transformers_version(">=", "4.57.0"):
+                inputs.pop("token_type_ids")
 
         transformers_inputs = copy.deepcopy(inputs)
         # llama4 preprocessing force bf16 dtype for pixel_values, that does not work on CPU with fp32 model

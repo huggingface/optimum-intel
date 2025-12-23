@@ -52,6 +52,7 @@ from .utils import (
     OV_DECODER_WITH_PAST_NAME,
     OV_ENCODER_NAME,
     TemporaryDirectory,
+    classproperty,
 )
 
 
@@ -319,6 +320,14 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
     main_input_name = "input_ids"
     export_feature = "text2text-generation"
 
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        return {
+            "encoder": OV_ENCODER_NAME,
+            "decoder": OV_DECODER_NAME,
+            "decoder_with_past": OV_DECODER_WITH_PAST_NAME,
+        }
+
     def __init__(
         self,
         encoder: openvino.Model,
@@ -408,25 +417,6 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
     def ov_models(self) -> Dict[str, openvino.Model]:
         return {name: getattr(component, "model") for name, component in self.components.items()}
 
-    def _save_pretrained(self, save_directory: Union[str, Path]):
-        file_names = {
-            "encoder": OV_ENCODER_NAME,
-            "decoder": OV_DECODER_NAME,
-            "decoder_with_past": OV_DECODER_WITH_PAST_NAME,
-        }
-        for ov_model_name, ov_model in self.ov_models.items():
-            dst_path = os.path.join(save_directory, file_names[ov_model_name])
-            openvino.save_model(ov_model, dst_path, compress_to_fp16=False)
-
-        self._save_openvino_config(save_directory)
-        if self.generation_config is not None:
-            try:
-                self.generation_config.save_pretrained(save_directory)
-            except Exception as exception:
-                logger.warning(
-                    f"The generation config will not be saved, saving failed with following error:\n{exception}"
-                )
-
     @classmethod
     def _from_pretrained(
         cls,
@@ -450,9 +440,11 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         generation_config = kwargs.pop("generation_config", None)
         subfolder = kwargs.pop("subfolder", "")
 
-        default_encoder_file_name = ONNX_ENCODER_NAME if from_onnx else OV_ENCODER_NAME
-        default_decoder_file_name = ONNX_DECODER_NAME if from_onnx else OV_DECODER_NAME
-        default_decoder_with_past_file_name = ONNX_DECODER_WITH_PAST_NAME if from_onnx else OV_DECODER_WITH_PAST_NAME
+        default_encoder_file_name = ONNX_ENCODER_NAME if from_onnx else cls._all_ov_model_paths["encoder"]
+        default_decoder_file_name = ONNX_DECODER_NAME if from_onnx else cls._all_ov_model_paths["decoder"]
+        default_decoder_with_past_file_name = (
+            ONNX_DECODER_WITH_PAST_NAME if from_onnx else cls._all_ov_model_paths["decoder_with_past"]
+        )
         encoder_file_name = encoder_file_name or default_encoder_file_name
         decoder_file_name = decoder_file_name or default_decoder_file_name
         decoder_with_past_file_name = decoder_with_past_file_name or default_decoder_with_past_file_name

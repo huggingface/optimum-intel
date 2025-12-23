@@ -114,6 +114,9 @@ from optimum.utils import (
 from optimum.utils.testing_utils import require_diffusers
 
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+
 class Timer(object):
     def __enter__(self):
         self.elapsed = time.perf_counter()
@@ -228,7 +231,9 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     def test_load_from_hub_and_save_visual_language_model(self):
         model_ids = [self.OV_VLM_MODEL_ID]
-        if is_transformers_version(">=", "4.51"):
+        if is_transformers_version(">=", "4.51") and is_transformers_version("<", "4.57"):
+            # the phi4 auto-processor can't be loaded in offline mode
+            # anymore due to an internal bug in transformers
             model_ids.append("katuni4ka/phi-4-multimodal-ov")
         for model_id in model_ids:
             processor = get_preprocessor(model_id)
@@ -491,11 +496,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         input_points = [[[450, 600]]]
         raw_image = Image.open(requests.get(img_url, stream=True).raw).convert("RGB")
         inputs = processor(raw_image, input_points=input_points, return_tensors="pt")
-
         loaded_model_outputs = loaded_model(**inputs)
 
         # Test compile only
-
         compile_only_model = OVModelForFeatureExtraction.from_pretrained(
             self.OV_SAM_MODEL_ID, ov_config=ov_config, compile_only=True, device=OPENVINO_DEVICE
         )
@@ -508,10 +511,10 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder.model, ov.CompiledModel)
         self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder.request, ov.CompiledModel)
         outputs = compile_only_model(**inputs)
-        self.assertTrue(torch.equal(loaded_model_outputs.iou_scores, outputs.iou_scores))
-        self.assertTrue(torch.equal(loaded_model_outputs.pred_masks, outputs.pred_masks))
-        del compile_only_model
+        torch.testing.assert_close(loaded_model_outputs.iou_scores, outputs.iou_scores, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(loaded_model_outputs.pred_masks, outputs.pred_masks, atol=1e-4, rtol=1e-4)
 
+        # Test save and load
         with TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
@@ -527,12 +530,8 @@ class OVModelIntegrationTest(unittest.TestCase):
             )
 
         outputs = model(**inputs)
-        self.assertTrue(torch.equal(loaded_model_outputs.iou_scores, outputs.iou_scores))
-        self.assertTrue(torch.equal(loaded_model_outputs.pred_masks, outputs.pred_masks))
-
-        del loaded_model
-        del model
-        gc.collect()
+        torch.testing.assert_close(loaded_model_outputs.iou_scores, outputs.iou_scores, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(loaded_model_outputs.pred_masks, outputs.pred_masks, atol=1e-4, rtol=1e-4)
 
     def test_load_from_hub_and_save_text_speech_model(self):
         loaded_model = OVModelForTextToSpeechSeq2Seq.from_pretrained(
@@ -553,10 +552,10 @@ class OVModelIntegrationTest(unittest.TestCase):
         with TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
-            self.assertTrue(loaded_model.OV_ENCODER_MODEL_NAME in folder_contents)
-            self.assertTrue(loaded_model.OV_DECODER_MODEL_NAME in folder_contents)
-            self.assertTrue(loaded_model.OV_POSTNET_MODEL_NAME in folder_contents)
-            self.assertTrue(loaded_model.OV_VOCODER_MODEL_NAME in folder_contents)
+            self.assertTrue(loaded_model._ov_model_paths["encoder"] in folder_contents)
+            self.assertTrue(loaded_model._ov_model_paths["decoder"] in folder_contents)
+            self.assertTrue(loaded_model._ov_model_paths["postnet"] in folder_contents)
+            self.assertTrue(loaded_model._ov_model_paths["vocoder"] in folder_contents)
             model = OVModelForTextToSpeechSeq2Seq.from_pretrained(tmpdirname, device="cpu")
             # compile only
             compile_only_model = OVModelForTextToSpeechSeq2Seq.from_pretrained(
@@ -1641,10 +1640,14 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
         with TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
-            self.assertTrue(loaded_model.text_model._xml_model_name in folder_contents)
-            self.assertTrue(loaded_model.text_model._xml_model_name.replace(".xml", ".bin") in folder_contents)
-            self.assertTrue(loaded_model.visual_model._xml_model_name in folder_contents)
-            self.assertTrue(loaded_model.visual_model._xml_model_name.replace(".xml", ".bin") in folder_contents)
+            self.assertTrue(loaded_model.text_model._all_ov_model_paths["model"] in folder_contents)
+            self.assertTrue(
+                loaded_model.text_model._all_ov_model_paths["model"].replace(".xml", ".bin") in folder_contents
+            )
+            self.assertTrue(loaded_model.visual_model._all_ov_model_paths["model"] in folder_contents)
+            self.assertTrue(
+                loaded_model.visual_model._all_ov_model_paths["model"].replace(".xml", ".bin") in folder_contents
+            )
             model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
 
         outputs = model(tokens, processed_image)

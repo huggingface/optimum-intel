@@ -12,6 +12,9 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+
+import warnings
+
 from ..utils.import_utils import is_sentence_transformers_available
 from .modeling_base import (
     IPEXModel,
@@ -28,3 +31,10 @@ from .modeling_base import (
 
 if is_sentence_transformers_available():
     from .modeling_sentence_transformers import IPEXSentenceTransformer
+
+
+warnings.warn(
+    "`optimum.intel.ipex` is deprecated and will be removed in the next major release of `optimum-intel`.",
+    FutureWarning,
+    stacklevel=2,
+)

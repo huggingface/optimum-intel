@@ -14,6 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  UV_TORCH_BACKEND: cpu
+  UV_SYSTEM_PYTHON: true
   TRANSFORMERS_IS_CI: true
 
 jobs:
@@ -31,7 +33,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install .[tests,openvino]
+          pip install --upgrade pip uv
+          uv pip install .[openvino,diffusers,tests]
 
       - name: Test
         run: |
