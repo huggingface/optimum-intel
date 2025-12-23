@@ -396,6 +396,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
         try:
             # TODO : add input shapes
+            # TODO: Consider replacing `ov_config` argument with `dtype` argument
             main_export(
                 model_name_or_path=self.args.model,
                 output=output,

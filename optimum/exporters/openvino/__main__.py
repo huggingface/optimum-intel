@@ -746,6 +746,69 @@ def prepare_quantization_config(
     group_size_fallback: Optional[str] = None,
     smooth_quant_alpha: Optional[float] = None,
 ):
+    """
+    Prepare the quantization configuration based on the provided parameters.
+    Full description of quantization-related parameters can be found at OVExportCommand class.
+
+    Args:
+        output (`Path`):
+            Path indicating the directory where the exported OpenVINO model is stored.
+        model_name_or_path (`str`):
+            Model ID on huggingface.co or path on disk to the model repository.
+        task (`str`):
+            The task to export the model for.
+        library_name (`str`):
+            The library name.
+        cache_dir (`str`):
+            Path indicating where to store cache. The default Hugging Face cache path will be used by default.
+        trust_remote_code (`bool`, defaults to `False`):
+            Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories
+            you trust and in which you have read the code, as it will execute on your local machine arbitrary code present in the
+            model repository.
+        subfolder (`str`, defaults to `""`):
+            In case the relevant files are located inside a subfolder of the model repo either locally or on huggingface.co, you can
+            specify the folder name here.
+        revision (`str`, defaults to `"main"`):
+            Revision is the specific model version to use. It can be a branch name, a tag name, or a commit id.
+        token (Optional[Union[bool, str]], defaults to `None`):
+            The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
+            when running `huggingface-cli login` (stored in `~/.huggingface`).
+        weight_format (`Optional[str]`, defaults to `None`):
+            The weight format of the exported model.
+        quant_mode (`Optional[str]`, defaults to `None`):
+            Quantization precision mode.
+        ratio (`Optional[float]`, defaults to `None`):
+            A parameter used when applying 4-bit quantization to control the ratio between 4-bit and 8-bit quantization.
+        sym (`Optional[bool]`, defaults to `None`):
+            Whether to apply symmetric quantization.
+        group_size (`Optional[int]`, defaults to `None`):
+            The group size to use for quantization.
+        all_layers (`Optional[bool]`, defaults to `None`):
+            Whether embeddings and last MatMul layers should be compressed to INT4.
+        dataset (`Optional[str]`, defaults to `None`):
+            The dataset used for data-aware compression or quantization with NNCF.
+        num_samples (`Optional[int]`, defaults to `None`):
+            The maximum number of samples to take from the dataset for quantization.
+        awq (`Optional[bool]`, defaults to `None`):
+            Whether to apply AWQ algorithm.
+        sensitivity_metric (`Optional[str]`, defaults to `None`):
+            The sensitivity metric for assigning quantization precision to layers.
+        scale_estimation (`Optional[bool]`, defaults to `None`):
+            Indicates whether to apply a scale estimation algorithm.
+        gptq (`Optional[bool]`, defaults to `None`):
+            Indicates whether to apply GPTQ algorithm.
+        lora_correction (`Optional[bool]`, defaults to `None`):
+            Indicates whether to apply LoRA Correction algorithm.
+        quantization_statistics_path (`Optional[str]`, defaults to `None`):
+            Directory path to dump/load data-aware weight-only quantization statistics.
+        backup_precision (`Optional[str]`, defaults to `None`):
+            Defines a backup precision for mixed-precision weight compression.
+        group_size_fallback (`Optional[str]`, defaults to `None`):
+            Specifies how to handle operations that do not support the given group size.
+        smooth_quant_alpha (`Optional[float]`, defaults to `None`):
+            SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and
+            reduces quantization error.
+    """
     from optimum.intel.openvino.configuration import (
         _DEFAULT_4BIT_WQ_CONFIG,
         OVPipelineQuantizationConfig,
@@ -868,7 +931,7 @@ def prepare_quantization_config(
                 quantization_config = _prepare_q_config(quant_mode, sym, dataset, num_samples, smooth_quant_alpha)
         return quantization_config
 
-    # Step 3. No quantization parameters provided, apply int8 weight quantization only for large models
+    # Step 3. No quantization parameters provided, apply int8 weight quantization only to models larger than 1B params
     model_cls = _infer_ov_model_class(
         model_name_or_path=model_name_or_path,
         task=task,
