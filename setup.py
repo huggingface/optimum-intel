@@ -28,9 +28,8 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=2.1",
-    "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git@main",
+    "optimum-onnx~=0.1.0",
     "transformers>=4.45,<4.58",
-    "setuptools",
 ]
 
 TESTS_REQUIRE = [
