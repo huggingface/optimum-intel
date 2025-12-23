@@ -604,7 +604,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
                 f"but found counts: {bos_token_counts.tolist()}",
             )
 
-
         transformers_inputs = copy.deepcopy(inputs)
         # llama4 preprocessing force bf16 dtype for pixel_values, that does not work on CPU with fp32 model
         # if past key values are not initialized, llama4 creates HybridCache with bf16 precision
