@@ -47,6 +47,7 @@ from .utils import (
     clear_class_registry,
     deduce_diffusers_dtype,
     load_preprocessors,
+    patch_qwenvl_configs,
 )
 
 
@@ -322,6 +323,9 @@ def main_export(
         do_quant_patching = quant_method in supported_quant_methods
         do_gptq_patching = quant_method == "gptq"
         do_bitnet_patching = quant_method == "bitnet"
+
+        if is_transformers_version(">=", "4.56") and config.model_type in {"qwen2_vl_text", "qwen2_5_vl_text"}:
+            patch_qwenvl_configs()
 
         model_type = config.model_type
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
@@ -603,7 +607,7 @@ def _main_quantize(
             `model_kwargs={"output_attentions": True}` is passed).
 
     """
-    from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
+    from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 
     # Step 0. Infer task and library name if needed
     original_task = task
@@ -659,29 +663,16 @@ def _main_quantize(
         **(model_kwargs or {}),
     )
 
-    # Step 3. Apply quantization
-    temporary_directory = TemporaryDirectory()
-    try:
-        # Save quantized model to a temporary directory to avoid conflicts when reading and writing from the same directory
-        model._apply_quantization(
-            quantization_config,
-            compile_only=False,
-            compile_model=False,
-            model_name_or_path=model_name_or_path,
-            trust_remote_code=trust_remote_code,
-        )
-        model.save_pretrained(temporary_directory.name)
-
-        del model
-        gc.collect()
-
-        # Move quantized model to the output directory
-        output.mkdir(parents=True, exist_ok=True)
-        for item in Path(temporary_directory.name).iterdir():
-            dest = output / item.name
-            _merge_move(item, dest)
-    finally:
-        temporary_directory.cleanup()
+    # Step 3. Apply quantization and save the quantized model
+    model._apply_quantization(
+        quantization_config,
+        compile_only=False,
+        compile_model=False,
+        model_name_or_path=model_name_or_path,
+        trust_remote_code=trust_remote_code,
+        save_directory=output,
+        immediate_save=True,
+    )
 
 
 def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):
@@ -732,9 +723,8 @@ def _apply_model_size_based_quantization(submodel_paths: List[str], ov_config: "
     Apply weight-only quantization to int8_asym to submodels larger than 1B parameters.
     """
     # TODO: Refactor the code below in the following way:
-    #   1. Introduce OVBaseModel.ov_model_paths attribute that will return list of paths to all ov_models
-    #   2. Create a OVPipelineQuantizationConfig based on each submodel size
-    #   3. Run main_quantize() with the created quantization config
+    #   1. Create a OVPipelineQuantizationConfig based on each submodel size
+    #   2. Run _main_quantize() with the created quantization config
     # TODO: Apply default ignored scope from configuration.py if matches
     for submodel_path in submodel_paths:
         submodel_path = Path(output) / submodel_path

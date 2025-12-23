@@ -1218,7 +1218,7 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             check_compression_state_per_model(
                 self,
-                model.ov_submodels,
+                model.ov_models,
                 expected_num_weight_nodes_per_model,
                 expected_fake_nodes_per_model,
             )

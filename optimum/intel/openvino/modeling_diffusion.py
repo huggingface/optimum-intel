@@ -73,6 +73,7 @@ from .utils import (
     OV_XML_FILE_NAME,
     TemporaryDirectory,
     _print_compiled_model_properties,
+    classproperty,
     model_has_dynamic_inputs,
     np_to_pt_generators,
 )
@@ -140,6 +141,19 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
     auto_model_class = DiffusionPipeline
     config_name = "model_index.json"
     _library_name = "diffusers"
+
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        models_paths = {
+            "unet": os.path.join(DIFFUSION_MODEL_UNET_SUBFOLDER, OV_XML_FILE_NAME),
+            "transformer": os.path.join(DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER, OV_XML_FILE_NAME),
+            "vae_decoder": os.path.join(DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER, OV_XML_FILE_NAME),
+            "vae_encoder": os.path.join(DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER, OV_XML_FILE_NAME),
+            "text_encoder": os.path.join(DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER, OV_XML_FILE_NAME),
+            "text_encoder_2": os.path.join(DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER, OV_XML_FILE_NAME),
+            "text_encoder_3": os.path.join(DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER, OV_XML_FILE_NAME),
+        }
+        return models_paths
 
     def __init__(
         self,
@@ -282,16 +296,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     @property
     def _component_names(self) -> List[str]:
-        component_name_candidates = [
-            "unet",
-            "transformer",
-            "vae_decoder",
-            "vae_encoder",
-            "text_encoder",
-            "text_encoder_2",
-            "text_encoder_3",
-        ]
-        component_names = [name for name in component_name_candidates if getattr(self, name) is not None]
+        component_names = [name for name in self._all_ov_model_paths if getattr(self, name) is not None]
         return component_names
 
     @property
@@ -319,33 +324,27 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         save_directory = Path(save_directory)
 
         models_to_save_paths = {
-            (self.unet, save_directory / DIFFUSION_MODEL_UNET_SUBFOLDER),
-            (self.vae_decoder, save_directory / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER),
-            (self.vae_encoder, save_directory / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER),
-            (self.text_encoder, save_directory / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER),
-            (self.text_encoder_2, save_directory / DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER),
-            (self.text_encoder_3, save_directory / DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER),
-            (self.transformer, save_directory / DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER),
+            component: save_directory / self._ov_model_paths[ov_component_name]
+            for ov_component_name, component in self.components.items()
         }
-        for model, save_path in models_to_save_paths:
-            if model is not None:
-                dst_path = save_path / OV_XML_FILE_NAME
-                dst_path.parent.mkdir(parents=True, exist_ok=True)
-                openvino.save_model(model.model, dst_path, compress_to_fp16=False)
-                model_dir = (
-                    self.model_save_dir
-                    if not isinstance(self.model_save_dir, TemporaryDirectory)
-                    else self.model_save_dir.name
-                )
-                config_path = Path(model_dir) / save_path.name / CONFIG_NAME
-                if config_path.is_file():
-                    config_save_path = save_path / CONFIG_NAME
-                    shutil.copyfile(config_path, config_save_path)
-                else:
-                    if hasattr(model, "save_config"):
-                        model.save_config(save_path)
-                    elif hasattr(model, "config") and hasattr(model.config, "save_pretrained"):
-                        model.config.save_pretrained(save_path)
+        for model, dst_path in models_to_save_paths.items():
+            save_path = dst_path.parent
+            save_path.mkdir(parents=True, exist_ok=True)
+            openvino.save_model(model.model, dst_path, compress_to_fp16=False)
+            model_dir = (
+                self.model_save_dir
+                if not isinstance(self.model_save_dir, TemporaryDirectory)
+                else self.model_save_dir.name
+            )
+            config_path = Path(model_dir) / save_path.name / CONFIG_NAME
+            if config_path.is_file():
+                config_save_path = save_path / CONFIG_NAME
+                shutil.copyfile(config_path, config_save_path)
+            else:
+                if hasattr(model, "save_config"):
+                    model.save_config(save_path)
+                elif hasattr(model, "config") and hasattr(model.config, "save_pretrained"):
+                    model.config.save_pretrained(save_path)
 
         self.scheduler.save_pretrained(save_directory / "scheduler")
 
@@ -416,33 +415,23 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
 
-        unet_file_name = unet_file_name or default_file_name
-        vae_encoder_file_name = vae_encoder_file_name or default_file_name
-        vae_decoder_file_name = vae_decoder_file_name or default_file_name
-        text_encoder_file_name = text_encoder_file_name or default_file_name
-        text_encoder_2_file_name = text_encoder_2_file_name or default_file_name
-        text_encoder_3_file_name = text_encoder_3_file_name or default_file_name
-        transformer_file_name = transformer_file_name or default_file_name
+        file_names = {
+            "unet": unet_file_name or default_file_name,
+            "vae_encoder": vae_encoder_file_name or default_file_name,
+            "vae_decoder": vae_decoder_file_name or default_file_name,
+            "text_encoder": text_encoder_file_name or default_file_name,
+            "text_encoder_2": text_encoder_2_file_name or default_file_name,
+            "text_encoder_3": text_encoder_3_file_name or default_file_name,
+            "transformer": transformer_file_name or default_file_name,
+        }
 
         if not os.path.isdir(str(model_id)):
             all_components = {key for key in config.keys() if not key.startswith("_")} | {"vae_encoder", "vae_decoder"}
             allow_patterns = {os.path.join(component, "*") for component in all_components}
             allow_patterns.update(
                 {
-                    unet_file_name,
-                    transformer_file_name,
-                    vae_encoder_file_name,
-                    vae_decoder_file_name,
-                    text_encoder_file_name,
-                    text_encoder_2_file_name,
-                    text_encoder_3_file_name,
-                    unet_file_name.replace(".xml", ".bin"),
-                    transformer_file_name.replace(".xml", ".bin"),
-                    vae_encoder_file_name.replace(".xml", ".bin"),
-                    vae_decoder_file_name.replace(".xml", ".bin"),
-                    text_encoder_file_name.replace(".xml", ".bin"),
-                    text_encoder_2_file_name.replace(".xml", ".bin"),
-                    text_encoder_3_file_name.replace(".xml", ".bin"),
+                    *file_names.values(),
+                    *(file_name.replace(".xml", ".bin") for file_name in file_names.values()),
                     SCHEDULER_CONFIG_NAME,
                     cls.config_name,
                     CONFIG_NAME,
@@ -506,15 +495,9 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     submodels[name] = load_method(model_save_path)
 
         models = {
-            "unet": model_save_path / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name,
-            "transformer": model_save_path / DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER / transformer_file_name,
-            "vae_decoder": model_save_path / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name,
-            "vae_encoder": model_save_path / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
-            "text_encoder": model_save_path / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER / text_encoder_file_name,
-            "text_encoder_2": model_save_path / DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER / text_encoder_2_file_name,
-            "text_encoder_3": model_save_path / DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER / text_encoder_3_file_name,
+            ov_model_name: (model_save_path / ov_model_path).parent / file_names[ov_model_name]
+            for ov_model_name, ov_model_path in cls._all_ov_model_paths.items()
         }
-
         for config_key, value in config.items():
             if config_key not in models and config_key not in kwargs and config_key not in submodels:
                 kwargs[config_key] = value
