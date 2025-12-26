@@ -18,7 +18,7 @@ import operator
 import warnings
 from functools import reduce
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Type, Union
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
@@ -627,7 +627,7 @@ def main_quantize(
 
     Args:
         model_name_or_path (`str`):
-            Model ID on huggingface.co or path on disk to the model repository.
+            Model ID on huggingface.co or path on disk to the original model repository.
         task (`str`):
             The task to export the model for.
         library_name (`str`):
@@ -664,7 +664,7 @@ def main_quantize(
 
     # Step 1. Obtain the correct OpenVINO model class
     model_cls = _infer_ov_model_class(
-        model_name_or_path=model_name_or_path,
+        model_name_or_path=str(output),
         task=task,
         library_name=library_name,
         cache_dir=cache_dir,
@@ -745,7 +745,7 @@ def prepare_quantization_config(
     backup_precision: Optional[str] = None,
     group_size_fallback: Optional[str] = None,
     smooth_quant_alpha: Optional[float] = None,
-):
+) -> Optional["OVQuantizationConfigBase"]:  # noqa: F821
     """
     Prepare the quantization configuration based on the provided parameters.
     Full description of quantization-related parameters can be found at OVExportCommand class.
@@ -754,7 +754,7 @@ def prepare_quantization_config(
         output (`Path`):
             Path indicating the directory where the exported OpenVINO model is stored.
         model_name_or_path (`str`):
-            Model ID on huggingface.co or path on disk to the model repository.
+            Model ID on huggingface.co or path on disk to the original model repository.
         task (`str`):
             The task to export the model for.
         library_name (`str`):
@@ -808,11 +808,12 @@ def prepare_quantization_config(
         smooth_quant_alpha (`Optional[float]`, defaults to `None`):
             SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and
             reduces quantization error.
+    Returns:
+        `Optional[OVQuantizationConfigBase]`: The prepared quantization configuration or `None` if no quantization is to be applied.
     """
     from optimum.intel.openvino.configuration import (
         _DEFAULT_4BIT_WQ_CONFIG,
-        OVPipelineQuantizationConfig,
-        OVWeightQuantizationConfig,
+        _quantization_config_from_dict,
         get_default_quantization_config,
     )
 
@@ -890,6 +891,7 @@ def prepare_quantization_config(
                 logger.info(
                     f"For the given model, we recommend the following `quantization_config` : {default_quantization_config}."
                 )
+        quantization_config = _quantization_config_from_dict(quantization_config)
         return quantization_config
 
     # Step 2. If quant_mode argument is provided, construct a full quantization config
@@ -929,11 +931,12 @@ def prepare_quantization_config(
                         "quantization. It will be ignored."
                     )
                 quantization_config = _prepare_q_config(quant_mode, sym, dataset, num_samples, smooth_quant_alpha)
+        quantization_config = _quantization_config_from_dict(quantization_config)
         return quantization_config
 
     # Step 3. No quantization parameters provided, apply int8 weight quantization only to models larger than 1B params
     model_cls = _infer_ov_model_class(
-        model_name_or_path=model_name_or_path,
+        model_name_or_path=str(output),
         task=task,
         library_name=library_name,
         cache_dir=cache_dir,
@@ -942,9 +945,32 @@ def prepare_quantization_config(
         revision=revision,
         token=token,
     )
+    quantization_config = infer_quantization_config_by_model_size(output, model_cls)
+
+    return quantization_config
+
+
+def infer_quantization_config_by_model_size(
+    model_dir: Path,
+    model_cls: Type["OVBaseModel"],  # noqa: F821
+) -> Optional["OVPipelineQuantizationConfig"]:  # noqa: F821
+    """
+    Prepare a quantization configuration based on the model size. If a model has more than 1 billion parameters,
+    an 8-bit weight-only quantization configuration will be returned for it. Otherwise, no quantization will be applied.
+
+    Args:
+        model_dir (`Path`):
+            Path indicating the directory where the exported OpenVINO model is stored.
+        model_cls (`Type[OVBaseModel]`):
+            The OpenVINO model class.
+    Returns:
+        `Optional[OVPipelineQuantizationConfig]`: The quantization configuration to use or None if no quantization is needed.
+    """
+    from optimum.intel.openvino.configuration import OVPipelineQuantizationConfig, OVWeightQuantizationConfig
+
     ov_model_names_to_quantize = []
     for ov_model_name, ov_model_rel_path in model_cls._all_ov_model_paths.items():
-        ov_model_path = output / ov_model_rel_path
+        ov_model_path = model_dir / ov_model_rel_path
         if not ov_model_path.exists():
             continue
         ov_model = core.read_model(ov_model_path)
@@ -958,14 +984,13 @@ def prepare_quantization_config(
                 num_parameters += reduce(operator.mul, op.shape, 1)
         if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
             ov_model_names_to_quantize.append(ov_model_name)
+    quantization_config = None
     if ov_model_names_to_quantize:
-        wq_config = OVWeightQuantizationConfig(bits=8, sym=False)
+        wq_config = OVWeightQuantizationConfig(bits=8)
         quantization_config = OVPipelineQuantizationConfig(
             {model_name: wq_config for model_name in ov_model_names_to_quantize}
         )
-        return quantization_config
-
-    return None
+    return quantization_config
 
 
 def _prepare_wc_config(

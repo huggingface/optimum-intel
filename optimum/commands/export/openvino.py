@@ -376,7 +376,7 @@ class OVExportCommand(BaseOptimumCLICommand):
         elif self.args.weight_format in {"fp16", "fp32"}:
             ov_config = OVConfig(dtype=self.args.weight_format)
         else:
-            ov_config = OVConfig()
+            ov_config = OVConfig(dtype="auto")
 
         temporary_directory = None
         original_output = None

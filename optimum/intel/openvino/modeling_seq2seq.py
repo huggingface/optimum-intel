@@ -38,7 +38,7 @@ from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 from transformers.utils import http_user_agent
 
-from ...exporters.openvino import main_export
+from ...exporters.openvino import infer_quantization_config_by_model_size, main_export
 from ...exporters.openvino.stateful import model_has_state
 from .. import OVConfig
 from ..utils import is_transformers_version
@@ -523,7 +523,11 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                     "Generation config file not found, using a generation config created from the model config."
                 )
 
+        # Apply 8-bit weight quantization if load_in_8bit is True
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
+        # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
+        if quantization_config is None and load_in_8bit is None:
+            quantization_config = infer_quantization_config_by_model_size(model_save_dir, cls)
         compile_model = kwargs.pop("compile", True)
         model = cls(
             encoder=encoder,
@@ -590,11 +594,6 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                 "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`"
             )
             compile_only = False
-        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
-            ov_config = None
-        else:
-            ov_config = OVConfig(dtype="fp32")
         stateful = kwargs.get("stateful", True)
         variant = kwargs.pop("variant", None)
 
@@ -612,7 +611,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            ov_config=ov_config,
+            ov_config=OVConfig(dtype="auto"),
             stateful=stateful,
             variant=variant,
             model_kwargs=model_kwargs,

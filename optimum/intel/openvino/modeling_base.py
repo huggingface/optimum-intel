@@ -32,7 +32,7 @@ from transformers.utils.hub import cached_file
 from optimum.exporters.base import ExportConfig
 from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
 
-from ...exporters.openvino import export, main_export
+from ...exporters.openvino import export, infer_quantization_config_by_model_size, main_export
 from ..utils.import_utils import is_nncf_available
 from ..utils.modeling_utils import _find_files_matching_pattern
 from .configuration import (
@@ -504,12 +504,12 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             trust_remote_code (`bool`, *optional*, defaults to `False`):
                 Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
-        model_path = Path(model_id)
+        model_save_dir = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else cls._all_ov_model_paths["model"]
         file_name = file_name or default_file_name
 
         model_cache_path = cls._cached_file(
-            model_path=model_path,
+            model_path=model_save_dir,
             token=token,
             revision=revision,
             force_download=force_download,
@@ -531,7 +531,11 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
                 model_save_dir=model_cache_path.parent,
             )
 
+        # Apply 8-bit weight quantization if load_in_8bit is True
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
+        # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
+        if quantization_config is None and load_in_8bit is None:
+            quantization_config = infer_quantization_config_by_model_size(model_save_dir, cls)
         compile_model = kwargs.pop("compile", True)
         model = cls(
             ov_model,
@@ -835,12 +839,6 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             )
             compile_only = False
 
-        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
-            ov_config = None
-        else:
-            ov_config = OVConfig(dtype="fp32")
-
         variant = kwargs.pop("variant", None)
 
         main_export(
@@ -854,7 +852,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            ov_config=ov_config,
+            ov_config=OVConfig(dtype="auto"),
             library_name=cls._library_name,
             variant=variant,
         )

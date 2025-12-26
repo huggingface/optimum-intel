@@ -36,7 +36,12 @@ from transformers.utils.hub import PushToHubMixin
 
 from optimum.utils.normalized_config import NormalizedConfigManager
 
-from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
+from ...exporters.openvino import (
+    ensure_stateful_is_available,
+    infer_quantization_config_by_model_size,
+    main_export,
+    patch_stateful,
+)
 from ...exporters.openvino.stateful import model_has_state
 from ...exporters.openvino.utils import SSM_MODELS
 from ..utils.import_utils import compare_versions
@@ -320,12 +325,6 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             if use_cache:
                 task = task + "-with-past"
 
-        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
-            ov_export_config = None
-        else:
-            ov_export_config = OVConfig(dtype="auto")
-
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
 
         torch_dtype = kwargs.pop("torch_dtype", None)
@@ -348,7 +347,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            ov_config=ov_export_config,
+            ov_config=OVConfig(dtype="auto"),
             stateful=stateful,
             model_loading_kwargs=model_loading_kwargs,
             library_name=cls._library_name,
@@ -850,12 +849,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         **kwargs,
     ):
         generation_config = kwargs.pop("generation_config", None)
-        model_path = Path(model_id)
+        model_save_dir = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else cls._all_ov_model_paths["model"]
         file_name = file_name or default_file_name
 
         model_cache_path = cls._cached_file(
-            model_path=model_path,
+            model_path=model_save_dir,
             token=token,
             revision=revision,
             force_download=force_download,
@@ -901,7 +900,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     "Generation config file not found, using a generation config created from the model config."
                 )
 
+        # Apply 8-bit weight quantization if load_in_8bit is True
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
+        # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
+        if quantization_config is None and load_in_8bit is None:
+            quantization_config = infer_quantization_config_by_model_size(model_save_dir, cls)
         compile_model = kwargs.pop("compile", True)
         causal_model = init_cls(
             model=model,

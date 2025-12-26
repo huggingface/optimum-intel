@@ -29,7 +29,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
 from transformers.utils import ModelOutput
 
-from ...exporters.openvino import main_export
+from ...exporters.openvino import infer_quantization_config_by_model_size, main_export
 from ...exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
 from ...exporters.openvino.utils import save_config
 from ..utils.import_utils import is_transformers_version
@@ -570,7 +570,11 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         except Exception:
             pass
 
+        # Apply 8-bit weight quantization if load_in_8bit is True
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
+        # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
+        if quantization_config is None and load_in_8bit is None:
+            quantization_config = infer_quantization_config_by_model_size(model_save_dir, cls)
         compile_model = kwargs.pop("compile", True)
         model = model_cls(
             language_model=language_model,
@@ -632,13 +636,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         if task is None:
             task = cls.export_feature
 
-        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
-            ov_config = None
-        else:
-            # Export in fp32 if compression won't be applied later
-            ov_config = OVConfig(dtype="fp32" if load_in_8bit is False else "auto")
-
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
         variant = kwargs.pop("variant", None)
 
@@ -653,7 +650,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            ov_config=ov_config,
+            ov_config=OVConfig(dtype="auto"),
             stateful=stateful,
             variant=variant,
         )

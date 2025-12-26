@@ -62,7 +62,7 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 
-from ...exporters.openvino import main_export
+from ...exporters.openvino import infer_quantization_config_by_model_size, main_export
 from ..utils.import_utils import is_diffusers_version
 from .configuration import OVConfig, OVQuantizationConfigBase, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
@@ -455,10 +455,10 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         else:
             model_save_folder = str(model_id)
 
-        model_save_path = Path(model_save_folder)
+        model_save_dir = Path(model_save_folder)
 
         if model_save_dir is None:
-            model_save_dir = model_save_path
+            model_save_dir = model_save_dir
 
         submodels = {
             "scheduler": None,
@@ -481,8 +481,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 class_obj = getattr(module, module_class)
                 load_method = getattr(class_obj, "from_pretrained")
                 # Check if the module is in a subdirectory
-                if (model_save_path / name).is_dir():
-                    submodels[name] = load_method(model_save_path / name)
+                if (model_save_dir / name).is_dir():
+                    submodels[name] = load_method(model_save_dir / name)
                 # For backward compatibility with models exported using previous optimum version, where safety_checker saving was disabled
                 elif name == "safety_checker":
                     logger.warning(
@@ -492,10 +492,10 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     )
                     submodels[name] = None
                 else:
-                    submodels[name] = load_method(model_save_path)
+                    submodels[name] = load_method(model_save_dir)
 
         models = {
-            ov_model_name: (model_save_path / ov_model_path).parent / file_names[ov_model_name]
+            ov_model_name: (model_save_dir / ov_model_path).parent / file_names[ov_model_name]
             for ov_model_name, ov_model_path in cls._all_ov_model_paths.items()
         }
         for config_key, value in config.items():
@@ -529,7 +529,11 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     models[name] = cls.load_model(path) if path.is_file() else None
 
         name_or_path = config.get("_name_or_path", str(model_id))
+        # Apply 8-bit weight quantization if load_in_8bit is True
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
+        # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
+        if quantization_config is None and load_in_8bit is None:
+            quantization_config = infer_quantization_config_by_model_size(model_save_dir, cls)
         compile_model = kwargs.pop("compile", True)
         ov_pipeline = ov_pipeline_class(
             **models,
@@ -584,13 +588,6 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             )
             compile_only = False
 
-        # If load_in_8bit and quantization_config not specified then ov_config is set
-        # to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
-            ov_config = None
-        else:
-            ov_config = OVConfig(dtype="auto")
-
         torch_dtype = kwargs.pop("torch_dtype", None)
 
         model_loading_kwargs = {}
@@ -613,7 +610,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             token=token,
             local_files_only=local_files_only,
             force_download=force_download,
-            ov_config=ov_config,
+            ov_config=OVConfig(dtype="auto"),
             library_name=cls._library_name,
             variant=variant,
             model_loading_kwargs=model_loading_kwargs,
