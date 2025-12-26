@@ -1572,47 +1572,18 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(openvino_config.quantization_config.to_dict(), ref_quantization_config.to_dict())
 
     @parameterized.expand([(MODEL_NAMES["gpt2"],)])
-    def test_dataset_seq_len_option_passed_to_get_dataset(self, model_id):
-        """Test that seq_len from dataset option is correctly passed to get_dataset."""
-
-        # Patch get_dataset to capture the seqlen parameter
-        with unittest.mock.patch("optimum.gptq.data.get_c4") as mock_get_dataset:
-            # Setup mock to return a minimal dataset
-            mock_get_dataset.return_value = [
-                {
-                    "input_ids": torch.tensor([[1, 2, 3]]),
-                    "attention_mask": torch.tensor([[1, 1, 1]]),
-                }
-            ]
-
-            OVModelForCausalLM.from_pretrained(
-                model_id,
-                export=True,
-                quantization_config=OVWeightQuantizationConfig(
-                    bits=4,
-                    group_size=8,
-                    dataset="c4:seq_len=64",
-                    quant_method=OVQuantizationMethod.AWQ,
-                    tokenizer=model_id,
-                    num_samples=1,
-                ),
-            )
-
-            # Verify that get_dataset was called
-            self.assertTrue(mock_get_dataset.called, "get_dataset should have been called")
-
-            # Verify that seqlen parameter was passed and is not the default value of 32
-            call_args = mock_get_dataset.call_args
-            if call_args is not None:
-                # Check if seqlen was passed as a keyword argument
-                if "seqlen" in call_args.kwargs:
-                    actual_seqlen = call_args.kwargs["seqlen"]
-                    self.assertEqual(
-                        actual_seqlen,
-                        64,
-                        f"Expected seq_len to be 64 (from dataset option), but got {actual_seqlen}",
-                    )
-                    self.assertNotEqual(actual_seqlen, 32, "seq_len should not be the default value of 32")
+    def test_dataset_seq_len_option(self, model_id):
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, load_in_8bit=False)
+        dataset_builder = OVCalibrationDatasetBuilder(model)
+        dataset = dataset_builder.build_from_quantization_config(
+            OVWeightQuantizationConfig(
+                bits=4,
+                dataset="c4:seq_len=64",
+                tokenizer=model_id,
+                num_samples=1,
+            ),
+        )
+        self.assertTrue(all(len(sample["input_ids"][0]) == 64 for sample in dataset["model"].get_data()))
 
 
 class OVPipelineQuantizationTest(unittest.TestCase):
