@@ -345,6 +345,21 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "weight_only": True,
         },
     },
+    "optimum-intel-internal-testing/tiny-random-gpt-oss-mxfp4": {
+        "quantization_config1": {
+            "bits": 4,
+            "sym": True,
+            "group_size": 32,
+            # With ignored scope below we keep some weights in their original precision during the first quantization
+            # run and then quantize them to int8 in the second run.
+            "ignored_scope": {"patterns": [".*self_attn.*", ".*router.*"]},
+        },
+        "quantization_config2": {
+            "bits": 8,
+            "sym": False,
+            "weight_only": True,
+        },
+    },
     "Qwen/Qwen3-30B-A3B": {
         "bits": 4,
         "sym": False,

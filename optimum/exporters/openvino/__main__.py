@@ -692,7 +692,16 @@ def main_quantize(
         ov_model = core.read_model(ov_model_path)
         _weight_only_quantization(ov_model, quantization_config.quantization_config1)
         _weight_only_quantization(ov_model, quantization_config.quantization_config2, verify_not_optimized=False)
-        save_model(ov_model, ov_model_path)
+
+        # Save to a temporary path and replace the original model files to avoid reading and writing to the same file
+        compressed_ov_model_path = ov_model_path.parent / f"{ov_model_path.stem}_compressed.xml"
+        save_model(ov_model, compressed_ov_model_path, compress_to_fp16=False)
+        del ov_model
+        gc.collect()
+        ov_model_path.unlink()
+        ov_model_path.with_suffix(".bin").unlink()
+        compressed_ov_model_path.rename(ov_model_path)
+        compressed_ov_model_path.with_suffix(".bin").rename(ov_model_path.with_suffix(".bin"))
         return
 
     # Step 3. Load the exported model
