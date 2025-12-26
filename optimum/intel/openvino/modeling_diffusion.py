@@ -455,10 +455,10 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         else:
             model_save_folder = str(model_id)
 
-        model_save_dir = Path(model_save_folder)
+        model_save_path = Path(model_save_folder)
 
         if model_save_dir is None:
-            model_save_dir = model_save_dir
+            model_save_dir = model_save_path
 
         submodels = {
             "scheduler": None,
@@ -481,8 +481,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 class_obj = getattr(module, module_class)
                 load_method = getattr(class_obj, "from_pretrained")
                 # Check if the module is in a subdirectory
-                if (model_save_dir / name).is_dir():
-                    submodels[name] = load_method(model_save_dir / name)
+                if (model_save_path / name).is_dir():
+                    submodels[name] = load_method(model_save_path / name)
                 # For backward compatibility with models exported using previous optimum version, where safety_checker saving was disabled
                 elif name == "safety_checker":
                     logger.warning(
@@ -492,10 +492,10 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     )
                     submodels[name] = None
                 else:
-                    submodels[name] = load_method(model_save_dir)
+                    submodels[name] = load_method(model_save_path)
 
         models = {
-            ov_model_name: (model_save_dir / ov_model_path).parent / file_names[ov_model_name]
+            ov_model_name: (model_save_path / ov_model_path).parent / file_names[ov_model_name]
             for ov_model_name, ov_model_path in cls._all_ov_model_paths.items()
         }
         for config_key, value in config.items():
@@ -533,7 +533,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
         if quantization_config is None and load_in_8bit is None:
-            quantization_config = prepare_model_size_based_quantization_config(model_save_dir, cls)
+            quantization_config = prepare_model_size_based_quantization_config(model_save_path, cls)
         compile_model = kwargs.pop("compile", True)
         ov_pipeline = ov_pipeline_class(
             **models,
