@@ -379,7 +379,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self.is_dynamic = True
         self.config = config
         self.use_cache = kwargs.get("use_cache", True)
-        self.use_cache = True if self.use_cache is None else self.use_cache
         self.model_save_dir = model_save_dir
         self._device = device.upper()
         self.ov_config = {} if ov_config is None else {**ov_config}

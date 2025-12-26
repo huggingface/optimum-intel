@@ -705,12 +705,30 @@ def main_quantize(
         return
 
     # Step 3. Load the exported model
+    if library_name is None:
+        library_name = infer_library_name(
+            model_name_or_path,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+        )
+    task = infer_task(
+        task,
+        model_name_or_path,
+        subfolder=subfolder,
+        revision=revision,
+        cache_dir=cache_dir,
+        token=token,
+        library_name=library_name,
+        trust_remote_code=trust_remote_code,
+    )
     model = model_cls.from_pretrained(
         output,
         compile=False,
         trust_remote_code=trust_remote_code,
         cache_dir=cache_dir,
-        use_cache=True if task.endswith("with-past") else None,
+        use_cache=task.endswith("with-past"),
         **(model_kwargs or {}),
     )
 

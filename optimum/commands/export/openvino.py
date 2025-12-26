@@ -351,21 +351,6 @@ class OVExportCommand(BaseOptimumCLICommand):
         from ...exporters.openvino.utils import _merge_move
         from ...intel.openvino.configuration import OVConfig
         from ...intel.openvino.utils import TemporaryDirectory
-        from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
-
-        if self.args.library is None:
-            # TODO: add revision, subfolder and token to args
-            library_name = _infer_library_from_model_name_or_path(
-                model_name_or_path=self.args.model, cache_dir=self.args.cache_dir
-            )
-            if library_name == "sentence_transformers":
-                logger.warning(
-                    "Library name is not specified. There are multiple possible variants: `sentence_transformers`, `transformers`."
-                    "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
-                )
-                library_name = "transformers"
-        else:
-            library_name = self.args.library
 
         if self.args.weight_format is None and self.args.quant_mode is None:
             ov_config = None
@@ -431,7 +416,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 ov_config=ov_config,
                 stateful=not self.args.disable_stateful,
                 convert_tokenizer=not self.args.disable_convert_tokenizer,
-                library_name=library_name,
+                library_name=self.args.library,
                 variant=self.args.variant,
                 model_kwargs=self.args.model_kwargs,
                 # **input_shapes,
@@ -441,7 +426,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 output=output,
                 model_name_or_path=self.args.model,
                 task=self.args.task,
-                library_name=library_name,
+                library_name=self.args.library,
                 cache_dir=self.args.cache_dir,
                 trust_remote_code=self.args.trust_remote_code,
                 weight_format=self.args.weight_format,
@@ -466,7 +451,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 main_quantize(
                     model_name_or_path=self.args.model,
                     task=self.args.task,
-                    library_name=library_name,
+                    library_name=self.args.library,
                     quantization_config=quantization_config,
                     output=output,
                     cache_dir=self.args.cache_dir,
