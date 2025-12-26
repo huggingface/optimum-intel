@@ -945,12 +945,12 @@ def prepare_quantization_config(
         revision=revision,
         token=token,
     )
-    quantization_config = infer_quantization_config_by_model_size(output, model_cls)
+    quantization_config = prepare_model_size_based_quantization_config(output, model_cls)
 
     return quantization_config
 
 
-def infer_quantization_config_by_model_size(
+def prepare_model_size_based_quantization_config(
     model_dir: Path,
     model_cls: Type["OVBaseModel"],  # noqa: F821
 ) -> Optional["OVPipelineQuantizationConfig"]:  # noqa: F821

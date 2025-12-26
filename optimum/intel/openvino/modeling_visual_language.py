@@ -29,7 +29,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
 from transformers.utils import ModelOutput
 
-from ...exporters.openvino import infer_quantization_config_by_model_size, main_export
+from ...exporters.openvino import main_export, prepare_model_size_based_quantization_config
 from ...exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
 from ...exporters.openvino.utils import save_config
 from ..utils.import_utils import is_transformers_version
@@ -574,7 +574,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
         if quantization_config is None and load_in_8bit is None:
-            quantization_config = infer_quantization_config_by_model_size(model_save_dir, cls)
+            quantization_config = prepare_model_size_based_quantization_config(model_save_dir, cls)
         compile_model = kwargs.pop("compile", True)
         model = model_cls(
             language_model=language_model,

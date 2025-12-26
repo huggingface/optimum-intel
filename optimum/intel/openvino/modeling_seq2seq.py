@@ -38,7 +38,7 @@ from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 from transformers.utils import http_user_agent
 
-from ...exporters.openvino import infer_quantization_config_by_model_size, main_export
+from ...exporters.openvino import main_export, prepare_model_size_based_quantization_config
 from ...exporters.openvino.stateful import model_has_state
 from .. import OVConfig
 from ..utils import is_transformers_version
@@ -527,7 +527,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
         if quantization_config is None and load_in_8bit is None:
-            quantization_config = infer_quantization_config_by_model_size(model_save_dir, cls)
+            quantization_config = prepare_model_size_based_quantization_config(model_save_dir, cls)
         compile_model = kwargs.pop("compile", True)
         model = cls(
             encoder=encoder,
