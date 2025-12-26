@@ -664,7 +664,7 @@ def main_quantize(
 
     # Step 1. Obtain the correct OpenVINO model class
     model_cls = _infer_ov_model_class(
-        model_name_or_path=str(output),
+        model_name_or_path=model_name_or_path,
         task=task,
         library_name=library_name,
         cache_dir=cache_dir,
@@ -936,7 +936,7 @@ def prepare_quantization_config(
 
     # Step 3. No quantization parameters provided, apply int8 weight quantization only to models larger than 1B params
     model_cls = _infer_ov_model_class(
-        model_name_or_path=str(output),
+        model_name_or_path=model_name_or_path,
         task=task,
         library_name=library_name,
         cache_dir=cache_dir,
