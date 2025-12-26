@@ -872,7 +872,9 @@ def prepare_quantization_config(
         raise ValueError("Both weight_format and quant_mode arguments are provided. Please provide only one of them.")
 
     # Step 1. If weight_format argument is provided, construct a weight-only quantization config
-    default_quantization_config = get_default_quantization_config(model_name_or_path, weight_format, quant_mode)
+    default_quantization_config = None
+    if weight_format is not None or quant_mode is not None:
+        default_quantization_config = get_default_quantization_config(model_name_or_path, weight_format, quant_mode)
     if weight_format is not None:
         quantization_config = wc_config
         # For int4/int8 quantization if no parameter is provided, then use the default config if exists
