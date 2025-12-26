@@ -1419,8 +1419,8 @@ class OVQuantizer(OptimumQuantizer):
                         raise FileNotFoundError(f"Expected to find model file at {ov_model_path} to overwrite it.")
                     ov_model_path.unlink()
                     ov_model_path.with_suffix(".bin").unlink()
-                    temp_model_path.rename(save_directory / ov_model_path)
-                    temp_model_path.with_suffix(".bin").rename((save_directory / ov_model_path).with_suffix(".bin"))
+                    temp_model_path.rename(ov_model_path)
+                    temp_model_path.with_suffix(".bin").rename(ov_model_path.with_suffix(".bin"))
                 finally:
                     temporary_directory.cleanup()
 

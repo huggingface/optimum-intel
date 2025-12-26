@@ -151,6 +151,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
         )
         self.is_dynamic = True
         use_cache = kwargs.pop("use_cache", True)
+        use_cache = True if use_cache is None else use_cache
         model_has_sinks = model_has_state(self.model)
         self.use_cache = self._has_cache_inputs(model) or model_has_sinks
         stateful = kwargs.pop("stateful", None)  # stateful model only if it is converted with stateful=True

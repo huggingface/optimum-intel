@@ -341,7 +341,13 @@ class OVExportCommand(BaseOptimumCLICommand):
         return parse_args_openvino(parser)
 
     def run(self):
-        from ...exporters.openvino.__main__ import main_export, main_quantize, prepare_quantization_config
+        from ...exporters.openvino.__main__ import (
+            _no_compression_parameter_provided,
+            _no_quantization_parameter_provided,
+            main_export,
+            main_quantize,
+            prepare_quantization_config,
+        )
         from ...exporters.openvino.utils import _merge_move
         from ...intel.openvino.configuration import OVConfig
         from ...intel.openvino.utils import TemporaryDirectory
@@ -363,12 +369,29 @@ class OVExportCommand(BaseOptimumCLICommand):
 
         if self.args.weight_format is None and self.args.quant_mode is None:
             ov_config = None
-            if not no_compression_parameter_provided(self.args) or self.args.quantization_statistics_path is not None:
+            no_compression_parameter_was_provided = _no_compression_parameter_provided(
+                self.args.ratio,
+                self.args.group_size,
+                self.args.sym,
+                self.args.all_layers,
+                self.args.dataset,
+                self.args.num_samples,
+                self.args.awq,
+                self.args.scale_estimation,
+                self.args.gptq,
+                self.args.lora_correction,
+                self.args.sensitivity_metric,
+                self.args.backup_precision,
+            )
+            no_quantization_parameter_was_provided = _no_quantization_parameter_provided(
+                self.args.sym, self.args.dataset, self.args.num_samples, self.args.smooth_quant_alpha
+            )
+            if not no_compression_parameter_was_provided or self.args.quantization_statistics_path is not None:
                 raise ValueError(
                     "Some compression parameters are provided, but the weight format is not specified. "
                     "Please provide it with --weight-format argument."
                 )
-            if not no_quantization_parameter_provided(self.args):
+            if not no_quantization_parameter_was_provided:
                 raise ValueError(
                     "Some quantization parameters are provided, but the quantization mode is not specified. "
                     "Please provide it with --quant-mode argument."

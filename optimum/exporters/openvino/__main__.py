@@ -701,7 +701,7 @@ def main_quantize(
         compile=False,
         trust_remote_code=trust_remote_code,
         cache_dir=cache_dir,
-        use_cache=task.endswith("with-past"),
+        use_cache=True if task.endswith("with-past") else None,
         **(model_kwargs or {}),
     )
 
@@ -870,12 +870,12 @@ def prepare_quantization_config(
         )
     if weight_format is not None and quant_mode is not None:
         raise ValueError("Both weight_format and quant_mode arguments are provided. Please provide only one of them.")
-
-    # Step 1. If weight_format argument is provided, construct a weight-only quantization config
     default_quantization_config = None
     if weight_format is not None or quant_mode is not None:
         default_quantization_config = get_default_quantization_config(model_name_or_path, weight_format, quant_mode)
-    if weight_format is not None:
+
+    # Step 1. If weight_format argument is provided, construct a weight-only quantization config
+    if weight_format not in [None, "fp16", "fp32"]:
         quantization_config = wc_config
         # For int4/int8 quantization if no parameter is provided, then use the default config if exists
         if weight_format in ["int4", "int8"]:
@@ -937,19 +937,21 @@ def prepare_quantization_config(
         return quantization_config
 
     # Step 3. No quantization parameters provided, apply int8 weight quantization only to models larger than 1B params
-    model_cls = _infer_ov_model_class(
-        model_name_or_path=model_name_or_path,
-        task=task,
-        library_name=library_name,
-        cache_dir=cache_dir,
-        trust_remote_code=trust_remote_code,
-        subfolder=subfolder,
-        revision=revision,
-        token=token,
-    )
-    quantization_config = prepare_model_size_based_quantization_config(output, model_cls)
+    if weight_format not in ["fp16", "fp32"]:
+        model_cls = _infer_ov_model_class(
+            model_name_or_path=model_name_or_path,
+            task=task,
+            library_name=library_name,
+            cache_dir=cache_dir,
+            trust_remote_code=trust_remote_code,
+            subfolder=subfolder,
+            revision=revision,
+            token=token,
+        )
+        quantization_config = prepare_model_size_based_quantization_config(output, model_cls)
+        return quantization_config
 
-    return quantization_config
+    return None
 
 
 def prepare_model_size_based_quantization_config(
