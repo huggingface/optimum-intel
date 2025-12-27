@@ -62,7 +62,7 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 
-from ...exporters.openvino import main_export
+from ...exporters.openvino import main_export, prepare_model_size_based_quantization_config
 from ..utils.import_utils import is_diffusers_version
 from .configuration import OVConfig, OVQuantizationConfigBase, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
@@ -529,7 +529,11 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     models[name] = cls.load_model(path) if path.is_file() else None
 
         name_or_path = config.get("_name_or_path", str(model_id))
+        # Apply 8-bit weight quantization if load_in_8bit is True
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
+        # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
+        if quantization_config is None and load_in_8bit is None:
+            quantization_config = prepare_model_size_based_quantization_config(model_save_path, cls)
         compile_model = kwargs.pop("compile", True)
         ov_pipeline = ov_pipeline_class(
             **models,
@@ -584,13 +588,6 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             )
             compile_only = False
 
-        # If load_in_8bit and quantization_config not specified then ov_config is set
-        # to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
-            ov_config = None
-        else:
-            ov_config = OVConfig(dtype="auto")
-
         torch_dtype = kwargs.pop("torch_dtype", None)
 
         model_loading_kwargs = {}
@@ -613,7 +610,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             token=token,
             local_files_only=local_files_only,
             force_download=force_download,
-            ov_config=ov_config,
+            ov_config=OVConfig(dtype="auto"),
             library_name=cls._library_name,
             variant=variant,
             model_loading_kwargs=model_loading_kwargs,

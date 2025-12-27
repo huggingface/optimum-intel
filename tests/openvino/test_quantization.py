@@ -1087,6 +1087,50 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
     ]
 
+    LARGE_MODEL_COMPRESSION_CONFIGURATIONS = [
+        (OVModelForCausalLM, "llama", {"model": {"int8": 32}}),
+        (
+            OVModelForFeatureExtraction,
+            "llama",
+            {"model": {"int8": 30}},
+        ),
+        (
+            OVStableDiffusionPipeline,
+            "stable-diffusion",
+            {
+                "unet": {"int8": 242},
+                "vae_decoder": {"int8": 42},
+                "vae_encoder": {"int8": 34},
+                "text_encoder": {"int8": 64},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "llava",
+            {
+                "lm_model": {"int8": 30},
+                "text_embeddings_model": {"int8": 2},
+                "vision_embeddings_model": {"int8": 18},
+            },
+        ),
+        (
+            OVSamModel,
+            "sam",
+            {
+                "vision_encoder": {"int8": 150},
+                "prompt_encoder_mask_decoder": {"int8": 98},
+            },
+        ),
+        (
+            OVModelForSpeechSeq2Seq,
+            "whisper",
+            {
+                "decoder": {"int8": 44},
+                "encoder": {"int8": 28},
+            },
+        ),
+    ]
+
     DEFAULT_IGNORED_SCOPE_CONFIGURATIONS = [
         (
             OVModelForCausalLM,
@@ -1452,61 +1496,36 @@ class OVWeightCompressionTest(unittest.TestCase):
                 kv_cache_precision = ov_model.get_rt_info(["runtime_options", "KV_CACHE_PRECISION"]).value
                 self.assertTrue(kv_cache_precision == "f16")
 
-    def test_ovmodel_load_large_model_with_default_compressed_weights(self):
+    @parameterized.expand(
+        [(*it[0], it[1]) for it in itertools.product(LARGE_MODEL_COMPRESSION_CONFIGURATIONS, [False, None])]
+    )
+    def test_ovmodel_load_large_model_with_default_compressed_weights(
+        self,
+        model_cls,
+        model_type,
+        expected_num_weight_nodes_per_model,
+        load_in_8bit,
+    ):
         compressed_model_mock_obj = unittest.mock.Mock()
         compressed_model_mock_obj.has_rt_info.return_value = False
 
-        def main_export_in_stacktrace(*args, **kwargs):
-            # Compression was called from `main_export`
-            self.assertTrue(inspect.stack()[6].function == "main_export")
-            return compressed_model_mock_obj
-
         with unittest.mock.patch(
             "openvino.op.Constant.shape", new_callable=unittest.mock.PropertyMock
         ) as ov_constant_shape:
-            ov_constant_shape.return_value = (2000000000,)
-            with unittest.mock.patch(
-                "nncf.compress_weights", side_effect=main_export_in_stacktrace
-            ) as compress_weights_patch:
-                _ = OVModelForCausalLM.from_pretrained(
-                    MODEL_NAMES["llama"], export=True, compile=False, use_cache=False, device=OPENVINO_DEVICE
-                )
-                compression_params = {
-                    "mode": nncf.CompressWeightsMode.INT8_ASYM,
-                    "ratio": 1.0,
-                    "group_size": None,
-                    "all_layers": None,
-                    "sensitivity_metric": None,
-                    "dataset": None,
-                    "ignored_scope": nncf.IgnoredScope(),
-                    "awq": None,
-                    "subset_size": 128,
-                    "scale_estimation": None,
-                    "gptq": None,
-                    "lora_correction": None,
-                    "backup_mode": None,
-                }
-                compress_weights_patch.assert_called_with(
-                    unittest.mock.ANY,
-                    **compression_params,
-                )
-
-    def test_ovmodel_load_large_model_with_uncompressed_weights(self):
-        with unittest.mock.patch(
-            "openvino.op.Constant.shape", new_callable=unittest.mock.PropertyMock
-        ) as ov_constant_shape:
-            ov_constant_shape.return_value = (2000000000,)
-            with unittest.mock.patch("nncf.compress_weights") as compress_weights_patch:
-                model = OVModelForCausalLM.from_pretrained(
-                    MODEL_NAMES["llama"],
+            with unittest.mock.patch("nncf.compress_weights", wraps=nncf.compress_weights) as compress_weights_patch:
+                ov_constant_shape.return_value = (2000000000,)
+                model = model_cls.from_pretrained(
+                    MODEL_NAMES[model_type],
                     export=True,
-                    load_in_8bit=False,
+                    load_in_8bit=load_in_8bit,
                     compile=False,
                     use_cache=False,
                     device=OPENVINO_DEVICE,
                 )
-                compress_weights_patch.assert_not_called()
-                self.assertTrue(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+                if load_in_8bit is False:
+                    compress_weights_patch.assert_not_called()
+                else:
+                    check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
 
     def test_ovmodel_load_large_model_with_additional_quantization_config(self):
         compressed_model_mock_obj = unittest.mock.Mock()
