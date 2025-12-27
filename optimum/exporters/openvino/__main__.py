@@ -173,6 +173,14 @@ def _infer_ov_model_class(
 ):
     from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 
+    if library_name is None:
+        library_name = infer_library_name(
+            model_name_or_path,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+        )
     original_task = task
     task = infer_task(
         task,
@@ -184,14 +192,6 @@ def _infer_ov_model_class(
         library_name=library_name,
         trust_remote_code=trust_remote_code,
     )
-    if library_name is None:
-        library_name = infer_library_name(
-            model_name_or_path,
-            subfolder=subfolder,
-            revision=revision,
-            cache_dir=cache_dir,
-            token=token,
-        )
 
     # Step 1. Obtain the correct OpenVINO model class
     if library_name == "diffusers":
