@@ -418,16 +418,18 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "lm_model": 13,
+                "lm_model": 14,
                 "text_embeddings_model": 0,
                 "vision_embeddings_model": 1,
-                "vision_embeddings_merger_model": 14,
+                "vision_embeddings_merger_model": 44,
+                "vision_embeddings_pos_model": 0,
             },
             {
                 "lm_model": {"int8": 15},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 1},
-                "vision_embeddings_merger_model": {"int8": 10},
+                "vision_embeddings_merger_model": {"int8": 32},
+                "vision_embeddings_pos_model": {"int8": 1},
             },
         ),
     ]
@@ -563,6 +565,7 @@ class OVQuantizerTest(unittest.TestCase):
         expected_num_weight_nodes_per_model,
     ):
         model_id = MODEL_NAMES[model_name]
+        print(model_name)
 
         with TemporaryDirectory() as tmp_dir:
             ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
