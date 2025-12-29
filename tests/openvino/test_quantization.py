@@ -565,7 +565,6 @@ class OVQuantizerTest(unittest.TestCase):
         expected_num_weight_nodes_per_model,
     ):
         model_id = MODEL_NAMES[model_name]
-        print(model_name)
 
         with TemporaryDirectory() as tmp_dir:
             ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
