@@ -193,7 +193,6 @@ def _infer_ov_model_class(
         trust_remote_code=trust_remote_code,
     )
 
-    # Step 1. Obtain the correct OpenVINO model class
     if library_name == "diffusers":
         if not is_diffusers_available():
             raise ValueError(DIFFUSERS_IMPORT_ERROR.format("Export of diffusers models"))
