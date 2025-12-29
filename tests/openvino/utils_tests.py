@@ -322,7 +322,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "lm_model": 30,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 1,
-        "vision_embeddings_merger_model": 10,
+        "vision_embeddings_merger_model": 32,
+        "vision_embeddings_pos_model": 1,
     },
     "sana": {
         "transformer": 58,
