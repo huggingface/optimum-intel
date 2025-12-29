@@ -296,7 +296,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
 
 
 def no_compression_parameter_provided(args):
-    from ...exporters.openvino.__main__ import _no_compression_parameter_provided
+    from optimum.exporters.openvino.__main__ import _no_compression_parameter_provided
 
     logger.warning(
         "Calling `no_compression_parameter_provided` from `openvino.py` is deprecated and will be removed in future versions."
@@ -319,7 +319,7 @@ def no_compression_parameter_provided(args):
 
 
 def no_quantization_parameter_provided(args):
-    from ...exporters.openvino.__main__ import _no_quantization_parameter_provided
+    from optimum.exporters.openvino.__main__ import _no_quantization_parameter_provided
 
     logger.warning(
         "Calling `no_quantization_parameter_provided` from `openvino.py` is deprecated and will be removed in future versions."
@@ -468,7 +468,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
 
 def prepare_wc_config(args, default_configs):
-    from ...exporters.openvino.__main__ import _prepare_wc_config
+    from optimum.exporters.openvino.__main__ import _prepare_wc_config
 
     logger.warning(
         "Calling `prepare_wc_config` from openvino.py is deprecated and will be removed in future versions."
@@ -495,7 +495,7 @@ def prepare_wc_config(args, default_configs):
 
 
 def prepare_q_config(args):
-    from ...exporters.openvino.__main__ import _prepare_q_config
+    from optimum.exporters.openvino.__main__ import _prepare_q_config
 
     logger.warning(
         "Calling `prepare_q_config` from openvino.py is deprecated and will be removed in future versions."
