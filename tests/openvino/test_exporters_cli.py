@@ -799,11 +799,11 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     def test_filtered_architectures(cls):
         if is_transformers_version("<", "4.49"):
-            expected = {"llama4", "qwen2_5_vl", "phi4mm"}
+            expected = {"qwen3_vl", "llama4", "qwen2_5_vl", "phi4mm"}
         elif is_transformers_version("<", "4.51"):
-            expected = {"llama4", "phi4mm"}
+            expected = {"qwen3_vl", "llama4", "phi4mm"}
         elif is_transformers_version("<", "4.52"):
-            expected = set()
+            expected = {"qwen3_vl"}
         else:
             expected = {"llava-qwen2", "phi3_v", "phi4mm", "minicpmo"}
 

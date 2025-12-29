@@ -409,7 +409,10 @@ class OVQuantizerTest(unittest.TestCase):
                 "vision_embeddings_merger_model": {"f8e4m3": 2, "int4": 16},
             },
         ),
-        (
+    ]
+
+    if is_transformers_version(">=", "4.57.0"):
+        SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET.extend((
             OVModelForVisualCausalLM,
             "qwen3_vl",
             OVQuantizationConfig(
@@ -431,8 +434,7 @@ class OVQuantizerTest(unittest.TestCase):
                 "vision_embeddings_merger_model": {"int8": 32},
                 "vision_embeddings_pos_model": {"int8": 1},
             },
-        ),
-    ]
+        ),)
 
     @staticmethod
     def get_calibration_dataset(
