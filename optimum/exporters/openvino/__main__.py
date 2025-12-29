@@ -164,8 +164,8 @@ def infer_library_name(
 def _infer_ov_model_class(
     model_name_or_path: str,
     task: str,
-    library_name: str,
-    cache_dir: str,
+    library_name: Optional[str] = None,
+    cache_dir: Optional[str] = HUGGINGFACE_HUB_CACHE,
     trust_remote_code: bool = False,
     subfolder: str = "",
     revision: str = "main",
@@ -264,7 +264,7 @@ def main_export(
             The device to use to do the export. Defaults to "cpu".
         framework (`Optional[str]`, defaults to `pt`):
             The framework to use for the ONNX export. Defaults to 'pt' for PyTorch.
-        cache_dir (`Optional[str]`, defaults to `None`):
+        cache_dir (`Optional[str]`, defaults to `HUGGINGFACE_HUB_CACHE`):
             Path indicating where to store cache. The default Hugging Face cache path will be used by default.
         trust_remote_code (`bool`, defaults to `False`):
             Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories
@@ -611,11 +611,11 @@ def main_export(
 
 def main_quantize(
     model_name_or_path: str,
-    task: str,
-    library_name: str,
+    output: Union[str, Path],
     quantization_config: Union[Dict, "OVQuantizationConfigBase"],  # noqa: F821
-    output: Path,
-    cache_dir: str,
+    task: str,
+    cache_dir: Optional[str] = HUGGINGFACE_HUB_CACHE,
+    library_name: Optional[str] = None,
     trust_remote_code: bool = False,
     subfolder: str = "",
     revision: str = "main",
@@ -628,17 +628,17 @@ def main_quantize(
     Args:
         model_name_or_path (`str`):
             Model ID on huggingface.co or path on disk to the original model repository.
-        task (`str`):
-            The task to export the model for.
-        library_name (`str`):
-            The library name.
-        quantization_config (`Union[Dict, OVQuantizationConfigBase]`):
-            The quantization configuration to use.
-        output (`Path`):
+        output (`Union[str, Path]`):
             Path indicating the directory where the exported OpenVINO model is stored and where to save the
             quantized model.
-        cache_dir (`Optional[str]`, defaults to `None`):
+        quantization_config (`Union[Dict, OVQuantizationConfigBase]`):
+            The quantization configuration to use.
+        task (`str`):
+            The task to export the model for.
+        cache_dir (`Optional[str]`, defaults to `HUGGINGFACE_HUB_CACHE`):
             Path indicating where to store cache. The default Hugging Face cache path will be used by default.
+        library_name (`Optional[str]`, defaults to `None`):
+            The library name.
         trust_remote_code (`bool`, defaults to `False`):
             Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories
             you trust and in which you have read the code, as it will execute on your local machine arbitrary code present in the
@@ -673,6 +673,7 @@ def main_quantize(
         revision=revision,
         token=token,
     )
+    output = Path(output)
 
     # Step 2. A special case for quantization of GPT-OSS models
     # TODO: remove this workaround when possible
@@ -745,11 +746,11 @@ def main_quantize(
 
 
 def prepare_quantization_config(
-    output: Path,
     model_name_or_path: str,
+    output: Union[str, Path],
     task: str,
-    library_name: str,
-    cache_dir: str,
+    cache_dir: Optional[str] = HUGGINGFACE_HUB_CACHE,
+    library_name: Optional[str] = None,
     trust_remote_code: bool = False,
     subfolder: str = "",
     revision: str = "main",
@@ -778,15 +779,15 @@ def prepare_quantization_config(
     Full description of quantization-related parameters can be found at OVExportCommand class.
 
     Args:
-        output (`Path`):
-            Path indicating the directory where the exported OpenVINO model is stored.
         model_name_or_path (`str`):
             Model ID on huggingface.co or path on disk to the original model repository.
+        output (`Union[str, Path]`):
+            Path indicating the directory where the exported OpenVINO model is stored.
         task (`str`):
             The task to export the model for.
-        library_name (`str`):
+        library_name (`str`, defaults to `None`):
             The library name.
-        cache_dir (`str`):
+        cache_dir (`str`, defaults to `HUGGINGFACE_HUB_CACHE`):
             Path indicating where to store cache. The default Hugging Face cache path will be used by default.
         trust_remote_code (`bool`, defaults to `False`):
             Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories
@@ -858,10 +859,10 @@ def prepare_quantization_config(
         sensitivity_metric,
         backup_precision,
     )
-
     no_quantization_parameter_provided = _no_quantization_parameter_provided(
         sym, dataset, num_samples, smooth_quant_alpha
     )
+    output = Path(output)
 
     wc_config = None
     if weight_format is None and quant_mode is None:
