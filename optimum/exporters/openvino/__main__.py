@@ -983,7 +983,7 @@ def prepare_quantization_config(
 
 
 def prepare_model_size_based_quantization_config(
-    model_dir: Path,
+    model_dir: Union[str, Path],
     model_cls: Type["OVBaseModel"],  # noqa: F821
 ) -> Optional["OVPipelineQuantizationConfig"]:  # noqa: F821
     """
@@ -991,7 +991,7 @@ def prepare_model_size_based_quantization_config(
     an 8-bit weight-only quantization configuration will be returned for it. Otherwise, no quantization will be applied.
 
     Args:
-        model_dir (`Path`):
+        model_dir (`Union[str, Path]`):
             Path indicating the directory where the exported OpenVINO model is stored.
         model_cls (`Type[OVBaseModel]`):
             The OpenVINO model class.
@@ -1000,6 +1000,7 @@ def prepare_model_size_based_quantization_config(
     """
     from optimum.intel.openvino.configuration import OVPipelineQuantizationConfig, OVWeightQuantizationConfig
 
+    model_dir = Path(model_dir)
     ov_model_names_to_quantize = []
     for ov_model_name, ov_model_rel_path in model_cls._all_ov_model_paths.items():
         ov_model_path = model_dir / ov_model_rel_path
