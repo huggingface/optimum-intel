@@ -1283,7 +1283,9 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         image_sizes=None,
         **kwargs,
     ):
-        inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
+        embeds_from_args = kwargs.pop("inputs_embeds", None)
+        inputs_embeds = embeds_from_args if embeds_from_args is not None else self.get_text_embeddings(input_ids,
+                                                                                                       **kwargs)
 
         if pixel_values is not None and self._support_new_processing and past_key_values is None:
             legacy_processing = (input_ids == self.config.image_token_index).sum(
@@ -1593,7 +1595,9 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
         pixel_values_videos=None,
         **kwargs,
     ):
-        inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
+        embeds_from_args = kwargs.pop("inputs_embeds", None)
+        inputs_embeds = embeds_from_args if embeds_from_args is not None else self.get_text_embeddings(input_ids,
+                                                                                                       **kwargs)
 
         if (
             pixel_values is not None
