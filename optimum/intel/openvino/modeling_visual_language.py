@@ -3434,7 +3434,7 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
         return inputs
 
         return model_kwargs
-    
+
 class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
     additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
 
@@ -3465,7 +3465,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
         )
         self.rope_deltas = None  # cache rope_deltas here
 
-        if is_transformers_version(">=", "4.56.0"):
+        if is_transformers_version(">=", "4.57.0"):
             from transformers.models.qwen3_vl.modeling_qwen3_vl import (
                 Qwen3VLVisionRotaryEmbedding as VisionRotaryEmbedding,
             )
@@ -3481,7 +3481,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
 
         else:
             raise ValueError(
-                f"Initialization model for {self.config.model_type} required at least transformers >= 4.45"
+                f"Initialization model for {self.config.model_type} required at least transformers >= 4.57"
             )
             
     def _update_model_kwargs_for_generation(
@@ -3553,7 +3553,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
         )
         return model_inputs
 
-    
+    # Adapted from https://github.com/huggingface/transformers/blob/8ac2b916b042b1f78b75c9eb941c0f5d2cdd8e10/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L916
     def get_rope_index(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -3672,7 +3672,8 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
                 )
 
             return position_ids, mrope_position_deltas
-        
+
+    # Adapted from https://github.com/huggingface/transformers/blob/8ac2b916b042b1f78b75c9eb941c0f5d2cdd8e10/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L603
     def rot_pos_emb(self, grid_thw: torch.Tensor) -> torch.Tensor:
         merge_size = self.spatial_merge_size
 
@@ -3711,7 +3712,8 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
         embeddings = freq_table[pos_ids]  # lookup rotary embeddings
         embeddings = embeddings.flatten(1)
         return embeddings
-    
+
+    # Adapted from https://github.com/huggingface/transformers/blob/8ac2b916b042b1f78b75c9eb941c0f5d2cdd8e10/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L642
     def fast_pos_embed_interpolate(self, grid_thw):
         grid_ts, grid_hs, grid_ws = grid_thw[:, 0], grid_thw[:, 1], grid_thw[:, 2]
 
@@ -3771,7 +3773,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
         patch_pos_embeds = torch.cat(patch_pos_embeds_permute)
         return patch_pos_embeds
     
-    
+    # Adapted from https://github.com/huggingface/transformers/blob/8ac2b916b042b1f78b75c9eb941c0f5d2cdd8e10/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1066
     def get_placeholder_mask(
         self,
         input_ids: torch.LongTensor,
