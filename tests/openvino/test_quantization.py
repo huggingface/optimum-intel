@@ -912,7 +912,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             False,
             dict(
                 bits=4,
-                group_size=16,
+                group_size=8,
                 dataset="contextual",
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
@@ -1197,11 +1197,11 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_filtered_architectures(cls):
         expected = set()
         if is_transformers_version("<", "4.49"):
-            expected.add("qwen2_5_vl")
+            expected.add("qwen3_vl", "qwen2_5_vl")
         if is_transformers_version("<", "4.51"):
-            expected.add("llama4")
+            expected.add("qwen3_vl", "llama4")
         if is_transformers_version("<", "4.54"):
-            expected.add("exaone4")
+            expected.add("qwen3_vl", "exaone4")
         if is_transformers_version(">=", "4.54"):
             expected.update({"llava-qwen2", "phi3_v", "minicpmo"})
 

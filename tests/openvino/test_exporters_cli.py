@@ -698,7 +698,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         (
             "image-text-to-text",
             "qwen3_vl",
-            'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
             "--dataset contextual --num-samples 1",
             {
                 "lm_model": {"int8": 10, "int4": 20},
