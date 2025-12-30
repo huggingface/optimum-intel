@@ -3433,8 +3433,6 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
         inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
         return inputs
 
-        return model_kwargs
-
 class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
     additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
 
@@ -3483,7 +3481,8 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
             raise ValueError(
                 f"Initialization model for {self.config.model_type} required at least transformers >= 4.57"
             )
-            
+
+    # Copied from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1602
     def _update_model_kwargs_for_generation(
         self,
         outputs: ModelOutput,
@@ -3553,7 +3552,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
         )
         return model_inputs
 
-    # Adapted from https://github.com/huggingface/transformers/blob/8ac2b916b042b1f78b75c9eb941c0f5d2cdd8e10/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L916
+    # Copied from https://github.com/huggingface/transformers/blob/8ac2b916b042b1f78b75c9eb941c0f5d2cdd8e10/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L916
     def get_rope_index(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -3673,7 +3672,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
 
             return position_ids, mrope_position_deltas
 
-    # Adapted from https://github.com/huggingface/transformers/blob/8ac2b916b042b1f78b75c9eb941c0f5d2cdd8e10/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L603
+    # Copied from https://github.com/huggingface/transformers/blob/8ac2b916b042b1f78b75c9eb941c0f5d2cdd8e10/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L603
     def rot_pos_emb(self, grid_thw: torch.Tensor) -> torch.Tensor:
         merge_size = self.spatial_merge_size
 
@@ -3713,7 +3712,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
         embeddings = embeddings.flatten(1)
         return embeddings
 
-    # Adapted from https://github.com/huggingface/transformers/blob/8ac2b916b042b1f78b75c9eb941c0f5d2cdd8e10/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L642
+    # Copied from https://github.com/huggingface/transformers/blob/8ac2b916b042b1f78b75c9eb941c0f5d2cdd8e10/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L642
     def fast_pos_embed_interpolate(self, grid_thw):
         grid_ts, grid_hs, grid_ws = grid_thw[:, 0], grid_thw[:, 1], grid_thw[:, 2]
 
@@ -3773,7 +3772,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
         patch_pos_embeds = torch.cat(patch_pos_embeds_permute)
         return patch_pos_embeds
     
-    # Adapted from https://github.com/huggingface/transformers/blob/8ac2b916b042b1f78b75c9eb941c0f5d2cdd8e10/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1066
+    # Copied from https://github.com/huggingface/transformers/blob/8ac2b916b042b1f78b75c9eb941c0f5d2cdd8e10/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1066
     def get_placeholder_mask(
         self,
         input_ids: torch.LongTensor,
@@ -3877,7 +3876,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
         split_sizes = (video_grid_thw.prod(-1) // self.spatial_merge_size**2).tolist()
         video_embeds = torch.split(video_embeds, split_sizes)
         return video_embeds, deepstack_video_embeds
-    
+
     def get_multimodal_embeddings(
         self,
         input_ids,
