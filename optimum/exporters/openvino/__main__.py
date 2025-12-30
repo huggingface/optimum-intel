@@ -905,21 +905,21 @@ def prepare_quantization_config(
     if weight_format not in [None, "fp16", "fp32"]:
         quantization_config = wc_config
         # For int4/int8 quantization if no parameter is provided, then use the default config if exists
-        if weight_format in ["int4", "int8"]:
-            if no_compression_parameter_provided:
-                if default_quantization_config is not None:
-                    quantization_config = default_quantization_config
-                    logger.info(
-                        f"Applying the default quantization config for {model_name_or_path}: {quantization_config}."
-                    )
-                elif weight_format == "int4":
-                    quantization_config = _DEFAULT_4BIT_WQ_CONFIG
-                    logger.info(f"Applying a default quantization config: {quantization_config}.")
-                quantization_config["statistics_path"] = quantization_statistics_path
-            elif default_quantization_config is not None:
+        if no_compression_parameter_provided and weight_format in ["int4", "int8"]:
+            if default_quantization_config is not None:
+                quantization_config = default_quantization_config
                 logger.info(
-                    f"For the given model, we recommend the following `quantization_config` : {default_quantization_config}."
+                    f"Applying the default quantization config for {model_name_or_path}: {quantization_config}."
                 )
+            elif weight_format == "int4":
+                quantization_config = _DEFAULT_4BIT_WQ_CONFIG
+                logger.info(f"Applying a default quantization config: {quantization_config}.")
+            if quantization_statistics_path is not None:
+                quantization_config["statistics_path"] = quantization_statistics_path
+        elif default_quantization_config is not None:
+            logger.info(
+                f"For the given model, we recommend the following `quantization_config` : {default_quantization_config}."
+            )
         quantization_config = _quantization_config_from_dict(quantization_config)
         return quantization_config
 
