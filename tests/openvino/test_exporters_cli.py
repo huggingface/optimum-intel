@@ -701,10 +701,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
             "--dataset contextual --num-samples 1",
             {
-                "lm_model": {"int8": 10, "int4": 20},
+                "lm_model": {"int8": 12, "int4": 18},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 1},
-                "vision_embeddings_merger_model": {"int8": 10},
+                "vision_embeddings_merger_model": {"int8": 32},
+                "vision_embeddings_pos_model": {"int8": 1},
             },
         ),
         (

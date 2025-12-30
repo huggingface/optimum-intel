@@ -919,10 +919,11 @@ class OVWeightCompressionTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "lm_model": {"int8": 10, "int4": 20},
+                "lm_model": {"int8": 12, "int4": 18},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 1},
-                "vision_embeddings_merger_model": {"int8": 10},
+                "vision_embeddings_merger_model": {"int8": 32},
+                "vision_embeddings_pos_model": {"int8": 1},
             },
         ),
         (
@@ -1197,11 +1198,11 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_filtered_architectures(cls):
         expected = set()
         if is_transformers_version("<", "4.49"):
-            expected.add("qwen3_vl", "qwen2_5_vl")
+            expected.update({"qwen3_vl", "qwen2_5_vl"})
         if is_transformers_version("<", "4.51"):
-            expected.add("qwen3_vl", "llama4")
+            expected.update({"qwen3_vl", "llama4"})
         if is_transformers_version("<", "4.54"):
-            expected.add("qwen3_vl", "exaone4")
+            expected.update({"qwen3_vl", "exaone4"})
         if is_transformers_version(">=", "4.54"):
             expected.update({"llava-qwen2", "phi3_v", "minicpmo"})
 
