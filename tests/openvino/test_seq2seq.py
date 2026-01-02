@@ -499,6 +499,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ["minicpmo"]
     if is_transformers_version(">=", "4.57.0"):
         SUPPORTED_ARCHITECTURES += ["qwen3_vl"]
+        SUPPORT_VIDEO += ["qwen3_vl"]
 
     if is_transformers_version(">=", "4.54.0"):
         # remote code models differs after transformers v4.54
