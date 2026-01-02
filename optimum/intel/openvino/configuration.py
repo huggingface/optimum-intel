@@ -348,7 +348,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     "Qwen/Qwen3-30B-A3B": {
         "bits": 4,
         "sym": False,
-        "group_size": -1,
+        "group_size": 128,
     },
     "inceptionai/jais-13b": {
         "bits": 4,
