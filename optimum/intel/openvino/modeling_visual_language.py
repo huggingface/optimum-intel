@@ -3856,7 +3856,6 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
             image_grid_thw (`torch.LongTensor` of shape `(num_images, 3)`, *optional*):
                 The temporal, height and width of feature shape of each image in LLM.
         """
-        # pixel_values = pixel_values.type(self.visual.dtype)
         image_embeds, deepstack_image_embeds = self.get_vision_embeddings(pixel_values, image_grid_thw)
         image_embeds, deepstack_image_embeds = torch.from_numpy(image_embeds), torch.from_numpy(deepstack_image_embeds)
         deepstack_image_embeds = deepstack_image_embeds.tolist()
@@ -3876,11 +3875,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
             video_grid_thw (`torch.LongTensor` of shape `(num_videos, 3)`, *optional*):
                 The temporal, height and width of feature shape of each video in LLM.
         """
-        video_embeds = self.get_vision_embeddings(pixel_values_videos, video_grid_thw)
-        video_embeds, deepstack_video_embeds = torch.from_numpy(video_embeds[0]), torch.from_numpy(video_embeds[1])
-        split_sizes = (video_grid_thw.prod(-1) // self.spatial_merge_size**2).tolist()
-        video_embeds = torch.split(video_embeds, split_sizes)
-        return video_embeds, deepstack_video_embeds
+        return self.get_image_features(pixel_values_videos, video_grid_thw)
 
     def get_multimodal_embeddings(
         self,
