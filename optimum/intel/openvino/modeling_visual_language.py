@@ -148,7 +148,6 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         token_type_ids: Optional[torch.LongTensor] = None,
         visual_pos_masks: Optional[torch.FloatTensor] = None,
         deepstack_visual_embeds: Optional[torch.FloatTensor] = None,
-        
         **kwargs,
     ):
         batch_size = input_ids.shape[0] if input_ids is not None else inputs_embeds.shape[0]
@@ -191,7 +190,11 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             if past_len:
                 position_ids = position_ids[:, -inputs_embeds.shape[1] :]
 
-            if (self.config.model_type == "qwen2_vl" or self.config.model_type == "qwen3_vl" or self.config.model_type == "qwen3_vl_moe") and position_ids.ndim != 3:
+            if (
+                self.config.model_type == "qwen2_vl"
+                or self.config.model_type == "qwen3_vl"
+                or self.config.model_type == "qwen3_vl_moe"
+            ) and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
 
             inputs["position_ids"] = position_ids
@@ -209,7 +212,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
                 inputs["deepstack_visual_embeds"] = torch.Tensor(deepstack_visual_embeds)
             else:
                 inputs["deepstack_visual_embeds"] = torch.zeros((num_layers, 1, emd_dim), dtype=torch.float32)
-                
+
         if "token_type_ids" in self.input_names:
             if token_type_ids is None:
                 token_type_ids = np.zeros(inputs_embeds.shape[:2], dtype=int)
@@ -792,13 +795,13 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             input_mode=input_mode,
             **kwargs,
         )
-        
+
         # Prepare additional kwargs for qwen3_vl models
         additional_kwargs = {}
         if self.config.model_type in ("qwen3_vl", "qwen3_vl_moe") and extra_outputs:
             additional_kwargs["visual_pos_masks"] = extra_outputs[0]
             additional_kwargs["deepstack_visual_embeds"] = extra_outputs[1]
-        
+
         return self.language_model.forward(
             input_ids=None,
             inputs_embeds=inputs_embeds,
@@ -828,7 +831,9 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, **kwargs
     ):
         embeds_from_args = kwargs.pop("inputs_embeds", None)
-        inputs_embeds = embeds_from_args if embeds_from_args is not None else self.get_text_embeddings(input_ids, **kwargs)
+        inputs_embeds = (
+            embeds_from_args if embeds_from_args is not None else self.get_text_embeddings(input_ids, **kwargs)
+        )
         if pixel_values is not None:
             vision_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, **kwargs)
             if vision_embeds is not None:
@@ -1284,8 +1289,9 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         **kwargs,
     ):
         embeds_from_args = kwargs.pop("inputs_embeds", None)
-        inputs_embeds = embeds_from_args if embeds_from_args is not None else self.get_text_embeddings(input_ids,
-                                                                                                       **kwargs)
+        inputs_embeds = (
+            embeds_from_args if embeds_from_args is not None else self.get_text_embeddings(input_ids, **kwargs)
+        )
 
         if pixel_values is not None and self._support_new_processing and past_key_values is None:
             legacy_processing = (input_ids == self.config.image_token_index).sum(
@@ -1596,8 +1602,9 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
         **kwargs,
     ):
         embeds_from_args = kwargs.pop("inputs_embeds", None)
-        inputs_embeds = embeds_from_args if embeds_from_args is not None else self.get_text_embeddings(input_ids,
-                                                                                                       **kwargs)
+        inputs_embeds = (
+            embeds_from_args if embeds_from_args is not None else self.get_text_embeddings(input_ids, **kwargs)
+        )
 
         if (
             pixel_values is not None
@@ -2578,6 +2585,7 @@ class QWen2VLModelOutputWithPast(ModelOutput):
     rope_deltas: Optional[torch.FloatTensor] = None
     second_per_grid_ts: Optional[torch.FloatTensor] = None
 
+
 class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
     additional_parts = ["vision_embeddings_merger"]
 
@@ -3433,6 +3441,7 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
         inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
         return inputs
 
+
 class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
     additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
 
@@ -3464,10 +3473,10 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
         self.rope_deltas = None  # cache rope_deltas here
 
         if is_transformers_version(">=", "4.57.0"):
+            from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLVisionRotaryEmbedding
             from transformers.models.qwen3_vl.modeling_qwen3_vl import (
                 Qwen3VLVisionRotaryEmbedding as VisionRotaryEmbedding,
             )
-            from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLVisionRotaryEmbedding
 
             self._rotary_pos_emb = VisionRotaryEmbedding(
                 self.config.vision_config.hidden_size // self.config.vision_config.num_heads // 2
@@ -3501,7 +3510,6 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
             model_kwargs["rope_deltas"] = outputs.rope_deltas
 
         return model_kwargs
-
 
     def prepare_inputs_for_generation(
         self,
@@ -3771,7 +3779,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
             patch_pos_embeds_permute.append(pos_embed)
         patch_pos_embeds = torch.cat(patch_pos_embeds_permute)
         return patch_pos_embeds
-    
+
     # Copied from https://github.com/huggingface/transformers/blob/8ac2b916b042b1f78b75c9eb941c0f5d2cdd8e10/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1066
     def get_placeholder_mask(
         self,
@@ -3812,13 +3820,12 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
             )
 
         return special_image_mask, special_video_mask
-    
-    
+
     def get_vision_embeddings(self, pixel_values, grid_thw, **kwargs):
         hidden_states = torch.from_numpy(self.vision_embeddings(pixel_values)[0])
         pos_embeds = self.fast_pos_embed_interpolate(grid_thw)
         hidden_states = hidden_states + pos_embeds
-        
+
         rotary_pos_emb = self.rot_pos_emb(grid_thw)
         seq_len, _ = hidden_states.size()
         hidden_states = hidden_states.reshape(seq_len, -1)
@@ -3838,8 +3845,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
             pixel_values=hidden_states, attention_mask=causal_mask, rotary_pos_emb=rotary_pos_emb
         )
         return res[0], res[1]
-    
-    
+
     def get_image_features(self, pixel_values: torch.FloatTensor, image_grid_thw: Optional[torch.LongTensor] = None):
         """
         Encodes images into continuous embeddings that can be forwarded to the language model. The deepstack visual features are also returned.
@@ -3857,8 +3863,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
         split_sizes = (image_grid_thw.prod(-1) // self.spatial_merge_size**2).tolist()
         image_embeds = torch.split(image_embeds, split_sizes)
         return image_embeds, deepstack_image_embeds
-    
-    
+
     def get_video_features(
         self, pixel_values_videos: torch.FloatTensor, video_grid_thw: Optional[torch.LongTensor] = None
     ):
@@ -3970,8 +3975,8 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
                     delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
                 position_ids = position_ids.add(delta)
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
-        return inputs_embeds, attention_mask, position_ids, visual_pos_masks, deepstack_visual_embeds 
-    
+        return inputs_embeds, attention_mask, position_ids, visual_pos_masks, deepstack_visual_embeds
+
     @staticmethod
     def preprocess_inputs(
         text: str,
@@ -4003,7 +4008,6 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
 
         inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
         return inputs
-                
 
     def forward(
         self,
@@ -4047,16 +4051,16 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
         self,
         inputs: Optional[torch.Tensor] = None,
         generation_config: Optional[GenerationConfig] = None,
-        logits_processor = None,
-        stopping_criteria = None,
-        prefix_allowed_tokens_fn = None,
+        logits_processor=None,
+        stopping_criteria=None,
+        prefix_allowed_tokens_fn=None,
         synced_gpus: Optional[bool] = None,
-        assistant_model: Optional["PreTrainedModel"] = None,
-        streamer: Optional["BaseStreamer"] = None,
+        assistant_model=None,
+        streamer: Optional = None,
         negative_prompt_ids: Optional[torch.Tensor] = None,
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
         use_model_defaults: Optional[bool] = None,
-        custom_generate = None,
+        custom_generate=None,
         **kwargs,
     ):
         # Clear cached rope delta from previous generations
@@ -4076,7 +4080,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
             use_model_defaults,
             custom_generate,
             **kwargs,
-            )
+        )
 
 
 class _OVMaira2ForCausalLM(_OVLlavaForCausalLM):

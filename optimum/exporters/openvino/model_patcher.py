@@ -4061,18 +4061,26 @@ class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
 
-        
+
 class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: Union["PreTrainedModel"],
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-
         # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L2156-L2178
         # moved audio and vision features processing outside model
-        def lm_forward(self, attention_mask, position_ids, past_key_values, inputs_embeds, visual_pos_masks, deepstack_visual_embeds, use_cache=True):
+        def lm_forward(
+            self,
+            attention_mask,
+            position_ids,
+            past_key_values,
+            inputs_embeds,
+            visual_pos_masks,
+            deepstack_visual_embeds,
+            use_cache=True,
+        ):
             from transformers.cache_utils import DynamicCache
 
             pkv = DynamicCache.from_legacy_cache(past_key_values)
@@ -4097,6 +4105,7 @@ class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
+
 
 def patch_qwen2vl_vision_blocks(model, force_new_behaviour=False):
     if not force_new_behaviour and is_transformers_version("<=", "4.48.99"):
@@ -4310,12 +4319,13 @@ class Qwen2_5_VLVisionEmbMergerPatcher(ModelPatcher):
         for block in self._model.blocks:
             block.forward = block._orig_forward
             block.attn.forward = block.attn._orig_forward
-            
+
+
 class Qwen3VLVisionEmbMergerPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: Union["PreTrainedModel"],
         model_kwargs: Dict[str, Any] = None,
     ):
         model.__orig_forward = model.forward

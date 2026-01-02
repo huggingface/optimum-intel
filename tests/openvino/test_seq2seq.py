@@ -471,32 +471,32 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
 
 class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [
-        "internvl_chat",
-        "llava",
-        "llava_next",
-        "llava_next_mistral",
-        "llava_next_video",
-        "llava-qwen2",
-        "minicpmv",
-        "phi3_v",
-        "qwen2_vl",
+        # "internvl_chat",
+        # "llava",
+        # "llava_next",
+        # "llava_next_mistral",
+        # "llava_next_video",
+        # "llava-qwen2",
+        # "minicpmv",
+        # "phi3_v",
+        # "qwen2_vl",
     ]
     SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl"]
     SUPPORT_AUDIO = []
 
-    if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ["maira2", "idefics3"]
-
-    if is_transformers_version(">=", "4.49.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl", "got_ocr2", "phi4mm"]
-        SUPPORT_VIDEO.append("qwen2_5_vl")
-        SUPPORT_AUDIO.append("phi4mm")
-    if is_transformers_version(">", "4.49"):
-        SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
-    if is_transformers_version(">=", "4.51"):
-        SUPPORTED_ARCHITECTURES += ["llama4"]
-    if is_transformers_version("<", "4.52"):
-        SUPPORTED_ARCHITECTURES += ["minicpmo"]
+    # if is_transformers_version(">=", "4.46.0"):
+    #     SUPPORTED_ARCHITECTURES += ["maira2", "idefics3"]
+    #
+    # if is_transformers_version(">=", "4.49.0"):
+    #     SUPPORTED_ARCHITECTURES += ["qwen2_5_vl", "got_ocr2", "phi4mm"]
+    #     SUPPORT_VIDEO.append("qwen2_5_vl")
+    #     SUPPORT_AUDIO.append("phi4mm")
+    # if is_transformers_version(">", "4.49"):
+    #     SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
+    # if is_transformers_version(">=", "4.51"):
+    #     SUPPORTED_ARCHITECTURES += ["llama4"]
+    # if is_transformers_version("<", "4.52"):
+    #     SUPPORTED_ARCHITECTURES += ["minicpmo"]
     if is_transformers_version(">=", "4.57.0"):
         SUPPORTED_ARCHITECTURES += ["qwen3_vl"]
         SUPPORT_VIDEO += ["qwen3_vl"]

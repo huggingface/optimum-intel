@@ -413,29 +413,32 @@ class OVQuantizerTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.57.0"):
         SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET.extend(
-            [(
-            OVModelForVisualCausalLM,
-            "qwen3_vl",
-            OVQuantizationConfig(
-                bits=8,
-                dataset="contextual",
-                num_samples=1,
-            ),
-            {
-                "lm_model": 14,
-                "text_embeddings_model": 0,
-                "vision_embeddings_model": 1,
-                "vision_embeddings_merger_model": 44,
-                "vision_embeddings_pos_model": 0,
-            },
-            {
-                "lm_model": {"int8": 15},
-                "text_embeddings_model": {"int8": 1},
-                "vision_embeddings_model": {"int8": 1},
-                "vision_embeddings_merger_model": {"int8": 32},
-                "vision_embeddings_pos_model": {"int8": 1},
-            },
-        ),])
+            [
+                (
+                    OVModelForVisualCausalLM,
+                    "qwen3_vl",
+                    OVQuantizationConfig(
+                        bits=8,
+                        dataset="contextual",
+                        num_samples=1,
+                    ),
+                    {
+                        "lm_model": 14,
+                        "text_embeddings_model": 0,
+                        "vision_embeddings_model": 1,
+                        "vision_embeddings_merger_model": 44,
+                        "vision_embeddings_pos_model": 0,
+                    },
+                    {
+                        "lm_model": {"int8": 15},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 1},
+                        "vision_embeddings_merger_model": {"int8": 32},
+                        "vision_embeddings_pos_model": {"int8": 1},
+                    },
+                ),
+            ]
+        )
 
     @staticmethod
     def get_calibration_dataset(
@@ -1063,7 +1066,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "llava", False),
         (OVModelForVisualCausalLM, "llava_next_video", False),
         (OVModelForVisualCausalLM, "minicpmv", True),
-        (OVModelForVisualCausalLM, "qwen2_vl", False),]
+        (OVModelForVisualCausalLM, "qwen2_vl", False),
+    ]
 
     if is_transformers_version("<", "4.54.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "llava-qwen2", True))
