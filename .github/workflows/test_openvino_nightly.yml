@@ -69,7 +69,19 @@ jobs:
           - nncf-version: "nncf-stable"
             openvino-version: "openvino-stable"
             export-mode: "torchdynamo"
-            test-pattern: "*{genai,decoder,seq2seq,modeling}*"
+            test-pattern: "*modeling*"
+          - nncf-version: "nncf-stable"
+            openvino-version: "openvino-stable"
+            export-mode: "torchdynamo"
+            test-pattern: "*decoder*"
+          - nncf-version: "nncf-stable"
+            openvino-version: "openvino-stable"
+            export-mode: "torchdynamo"
+            test-pattern: "*seq2seq*"
+          - nncf-version: "nncf-stable"
+            openvino-version: "openvino-stable"
+            export-mode: "torchdynamo"
+            test-pattern: "*diffusion*"
 
     runs-on: ubuntu-22.04
 
