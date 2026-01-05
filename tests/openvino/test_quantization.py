@@ -2537,8 +2537,8 @@ class TestDatasetParsing(unittest.TestCase):
         """Test that options without '=' raise ValueError."""
         with pytest.raises(ValueError) as exc_info:
             OVQuantizationConfigBase(dataset="wikitext:seq_len")
-        assert "Malformed dataset option" in str(exc_info.value)
-        assert "Expected format: 'key=value'" in str(exc_info.value)
+        self.assertIn("Malformed dataset option", str(exc_info.value))
+        self.assertIn("Expected format: 'key=value'", str(exc_info.value))
 
     def test_dataset_invalid_seq_len_value(self):
         """Test that non-integer seq_len values raise ValueError."""
