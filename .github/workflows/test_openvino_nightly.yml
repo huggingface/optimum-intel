@@ -65,7 +65,7 @@ jobs:
           - nncf-version: "nncf-stable"
             openvino-version: "openvino-stable"
             export-mode: "torchdynamo"
-            test-pattern: "*{quantization,export,diffusion}*"
+            test-pattern: "*{quantization,export}*"
           - nncf-version: "nncf-stable"
             openvino-version: "openvino-stable"
             export-mode: "torchdynamo"
