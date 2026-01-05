@@ -2530,8 +2530,8 @@ class TestDatasetParsing(unittest.TestCase):
         """Test that unsupported options raise ValueError."""
         with pytest.raises(ValueError) as exc_info:
             OVQuantizationConfigBase(dataset="wikitext:foo=bar")
-        assert "Unsupported dataset option 'foo'" in str(exc_info.value)
-        assert "Only 'seq_len' is supported" in str(exc_info.value)
+        self.assertIn("Unsupported dataset option 'foo'", str(exc_info.value))
+        self.assertIn("Only 'seq_len' is supported", str(exc_info.value))
 
     def test_dataset_malformed_option_no_equals(self):
         """Test that options without '=' raise ValueError."""
