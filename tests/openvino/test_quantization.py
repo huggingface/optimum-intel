@@ -2544,8 +2544,8 @@ class TestDatasetParsing(unittest.TestCase):
         """Test that non-integer seq_len values raise ValueError."""
         with pytest.raises(ValueError) as exc_info:
             OVQuantizationConfigBase(dataset="wikitext:seq_len=abc")
-        assert "Invalid value 'abc' for seq_len" in str(exc_info.value)
-        assert "Expected an integer" in str(exc_info.value)
+        self.assertIn("Invalid value 'abc' for seq_len", str(exc_info.value))
+        self.assertIn("Expected an integer", str(exc_info.value))
 
     def test_dataset_empty_string_option(self):
         """Test that empty seq_len value raises ValueError."""
