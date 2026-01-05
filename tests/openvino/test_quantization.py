@@ -2551,7 +2551,7 @@ class TestDatasetParsing(unittest.TestCase):
         """Test that empty seq_len value raises ValueError."""
         with pytest.raises(ValueError) as exc_info:
             OVQuantizationConfigBase(dataset="wikitext:seq_len=")
-        assert "Invalid value '' for seq_len" in str(exc_info.value)
+        self.assertIn("Invalid value '' for seq_len", str(exc_info.value))
 
     def test_dataset_none(self):
         """Test that None dataset is handled correctly."""
