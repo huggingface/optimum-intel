@@ -31,7 +31,7 @@ from huggingface_hub import model_info
 from openvino import Core, Model, properties
 from openvino import Type as OVType
 from packaging.version import Version
-from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
+from transformers import AutoTokenizer, CLIPTokenizer, Qwen2Tokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
 from optimum.intel.utils.import_utils import is_torch_version
@@ -206,7 +206,7 @@ PREDEFINED_SAM_DATASETS = {
 }
 
 
-NEED_CONVERT_TO_FAST_TOKENIZER: Tuple[Type[PreTrainedTokenizer]] = (CLIPTokenizer,)
+NEED_CONVERT_TO_FAST_TOKENIZER: Tuple[Type[PreTrainedTokenizer]] = (CLIPTokenizer, Qwen2Tokenizer)
 
 
 def maybe_convert_tokenizer_to_fast(
