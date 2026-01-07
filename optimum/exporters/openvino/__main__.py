@@ -14,11 +14,9 @@
 
 import gc
 import logging
-import operator
 import warnings
-from functools import reduce
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
@@ -26,11 +24,11 @@ from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, Pro
 from transformers.utils import is_torch_available
 
 from openvino import Core, save_model
-from openvino import Type as ov_Type
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     DIFFUSERS_IMPORT_ERROR,
+    NNCF_IMPORT_ERROR,
     is_diffusers_available,
     is_nncf_available,
     is_openvino_tokenizers_available,
@@ -42,7 +40,6 @@ from optimum.intel.utils.modeling_utils import (
 )
 
 from .utils import (
-    _MAX_UNCOMPRESSED_SIZE,
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     clear_class_registry,
     deduce_diffusers_dtype,
@@ -195,11 +192,13 @@ def _infer_ov_model_class(
 
     if library_name == "diffusers":
         if not is_diffusers_available():
-            raise ValueError(DIFFUSERS_IMPORT_ERROR.format("Export of diffusers models"))
+            raise ImportError(DIFFUSERS_IMPORT_ERROR.format("Export of diffusers models"))
 
         from diffusers import DiffusionPipeline
 
-        diffusers_config = DiffusionPipeline.load_config(model_name_or_path)
+        diffusers_config = DiffusionPipeline.load_config(
+            model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
+        )
         class_name = diffusers_config.get("_class_name", None)
         ov_class_name = f"OV{class_name}"
         try:
@@ -659,7 +658,7 @@ def main_quantize(
     from optimum.intel.openvino.configuration import _GPTOSSQuantizationConfig
 
     if not is_nncf_available():
-        raise ImportError("Applying quantization requires nncf, please install it with `pip install nncf`")
+        raise ImportError(NNCF_IMPORT_ERROR.format("Applying quantization"))
 
     # Step 1. Obtain the correct OpenVINO model class
     model_cls = _infer_ov_model_class(
@@ -975,54 +974,10 @@ def prepare_quantization_config(
             revision=revision,
             token=token,
         )
-        quantization_config = prepare_model_size_based_quantization_config(output, model_cls)
+        quantization_config = model_cls._prepare_model_size_based_quantization_config(output)
         return quantization_config
 
     return None
-
-
-def prepare_model_size_based_quantization_config(
-    model_dir: Union[str, Path],
-    model_cls: Type["OVBaseModel"],  # noqa: F821
-) -> Optional["OVPipelineQuantizationConfig"]:  # noqa: F821
-    """
-    Prepare a quantization configuration based on the model size. If a model has more than 1 billion parameters,
-    an 8-bit weight-only quantization configuration will be returned for it. Otherwise, no quantization will be applied.
-
-    Args:
-        model_dir (`Union[str, Path]`):
-            Path indicating the directory where the exported OpenVINO model is stored.
-        model_cls (`Type[OVBaseModel]`):
-            The OpenVINO model class.
-    Returns:
-        `Optional[OVPipelineQuantizationConfig]`: The quantization configuration to use or None if no quantization is needed.
-    """
-    from optimum.intel.openvino.configuration import OVPipelineQuantizationConfig, OVWeightQuantizationConfig
-
-    model_dir = Path(model_dir)
-    ov_model_names_to_quantize = []
-    for ov_model_name, ov_model_rel_path in model_cls._all_ov_model_paths.items():
-        ov_model_path = model_dir / ov_model_rel_path
-        if not ov_model_path.exists():
-            continue
-        ov_model = core.read_model(ov_model_path)
-        num_parameters = 0
-        for op in ov_model.get_ops():
-            if op.get_type_name() == "Constant" and op.get_element_type() in [
-                ov_Type.f16,
-                ov_Type.f32,
-                ov_Type.bf16,
-            ]:
-                num_parameters += reduce(operator.mul, op.shape, 1)
-        if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
-            ov_model_names_to_quantize.append(ov_model_name)
-    quantization_config = None
-    if ov_model_names_to_quantize:
-        wq_config = OVWeightQuantizationConfig(bits=8)
-        quantization_config = OVPipelineQuantizationConfig(
-            {model_name: wq_config for model_name in ov_model_names_to_quantize}
-        )
-    return quantization_config
 
 
 def _prepare_wc_config(

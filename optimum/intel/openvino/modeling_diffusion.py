@@ -62,7 +62,7 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 
-from ...exporters.openvino import main_export, prepare_model_size_based_quantization_config
+from ...exporters.openvino import main_export
 from ..utils.import_utils import is_diffusers_version
 from .configuration import OVConfig, OVQuantizationConfigBase, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
@@ -533,7 +533,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
         if quantization_config is None and load_in_8bit is None:
-            quantization_config = prepare_model_size_based_quantization_config(model_save_path, cls)
+            quantization_config = cls._prepare_model_size_based_quantization_config(model_save_path)
         compile_model = kwargs.pop("compile", True)
         ov_pipeline = ov_pipeline_class(
             **models,

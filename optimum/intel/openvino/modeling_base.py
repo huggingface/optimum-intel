@@ -12,8 +12,10 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import logging
+import operator
 import os
 import warnings
+from functools import reduce
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Dict, List, Optional, Union
@@ -22,6 +24,7 @@ import openvino
 import torch
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import CompiledModel, Core, Model, convert_model
+from openvino import Type as ov_Type
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
@@ -30,9 +33,10 @@ from transformers.utils import is_offline_mode
 from transformers.utils.hub import cached_file
 
 from optimum.exporters.base import ExportConfig
+from optimum.exporters.openvino.utils import _MAX_UNCOMPRESSED_SIZE
 from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
 
-from ...exporters.openvino import export, main_export, prepare_model_size_based_quantization_config
+from ...exporters.openvino import export, main_export
 from ..utils.import_utils import is_nncf_available
 from ..utils.modeling_utils import _find_files_matching_pattern
 from .configuration import (
@@ -535,7 +539,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
         if quantization_config is None and load_in_8bit is None:
-            quantization_config = prepare_model_size_based_quantization_config(model_path, cls)
+            quantization_config = cls._prepare_model_size_based_quantization_config(model_path)
         compile_model = kwargs.pop("compile", True)
         model = cls(
             ov_model,
@@ -639,6 +643,48 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             revision=revision,
             **kwargs,
         )
+
+    @classmethod
+    def _prepare_model_size_based_quantization_config(
+        cls,
+        model_dir: Union[str, Path],
+    ) -> Optional["OVPipelineQuantizationConfig"]:  # noqa: F821
+        """
+        Prepare a quantization configuration based on the model size. If a model has more than 1 billion parameters,
+        an 8-bit weight-only quantization configuration will be returned for it. Otherwise, no quantization will be applied.
+
+        Args:
+            model_dir (`Union[str, Path]`):
+                Path indicating the directory where the exported OpenVINO model is stored.
+        Returns:
+            `Optional[OVPipelineQuantizationConfig]`: The quantization configuration to use or None if no quantization is needed.
+        """
+        from optimum.intel.openvino.configuration import OVPipelineQuantizationConfig, OVWeightQuantizationConfig
+
+        model_dir = Path(model_dir)
+        ov_model_names_to_quantize = []
+        for ov_model_name, ov_model_rel_path in cls._all_ov_model_paths.items():
+            ov_model_path = model_dir / ov_model_rel_path
+            if not ov_model_path.exists():
+                continue
+            ov_model = core.read_model(ov_model_path)
+            num_parameters = 0
+            for op in ov_model.get_ops():
+                if op.get_type_name() == "Constant" and op.get_element_type() in [
+                    ov_Type.f16,
+                    ov_Type.f32,
+                    ov_Type.bf16,
+                ]:
+                    num_parameters += reduce(operator.mul, op.shape, 1)
+            if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
+                ov_model_names_to_quantize.append(ov_model_name)
+        quantization_config = None
+        if ov_model_names_to_quantize:
+            wq_config = OVWeightQuantizationConfig(bits=8)
+            quantization_config = OVPipelineQuantizationConfig(
+                {model_name: wq_config for model_name in ov_model_names_to_quantize}
+            )
+        return quantization_config
 
     @staticmethod
     def _resolve_default_quantization_config(

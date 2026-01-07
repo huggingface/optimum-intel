@@ -17,7 +17,6 @@ import optimum.exporters.openvino.model_configs
 from .__main__ import (
     main_export,
     main_quantize,
-    prepare_model_size_based_quantization_config,
     prepare_quantization_config,
 )
 from .convert import export, export_from_model, export_models, export_pytorch_via_onnx
@@ -30,5 +29,4 @@ __all__ = [
     "export_models",
     "main_quantize",
     "prepare_quantization_config",
-    "prepare_model_size_based_quantization_config",
 ]

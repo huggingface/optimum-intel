@@ -13,7 +13,6 @@ from transformers import AutoConfig, PretrainedConfig, SamModel
 from transformers.modeling_outputs import ModelOutput
 from transformers.models.sam.modeling_sam import SamImageSegmentationOutput, SamPositionalEmbedding
 
-from ...exporters.openvino import prepare_model_size_based_quantization_config
 from ...exporters.openvino.utils import save_config
 from .configuration import OVConfig, OVQuantizationConfigBase, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
@@ -279,7 +278,7 @@ class OVSamModel(OVBaseModel):
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
         if quantization_config is None and load_in_8bit is None:
-            quantization_config = prepare_model_size_based_quantization_config(model_save_dir, cls)
+            quantization_config = cls._prepare_model_size_based_quantization_config(model_save_dir)
         compile_model = kwargs.pop("compile", True)
         model = cls(
             vision_encoder_model=vision_encoder_model,
