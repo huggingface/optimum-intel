@@ -572,9 +572,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
         # Apply 8-bit weight quantization if load_in_8bit is True
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
-        # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
-        if quantization_config is None and load_in_8bit is None:
-            quantization_config = cls._prepare_model_size_based_quantization_config(model_save_dir)
         compile_model = kwargs.pop("compile", True)
         model = model_cls(
             language_model=language_model,
@@ -658,6 +655,9 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
         # Keep the original name_or_path to be able to resolve default quantization config later
         config.name_or_path = name_or_path
+        # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
+        if quantization_config is None and load_in_8bit is None:
+            quantization_config = cls._prepare_model_size_based_quantization_config(save_dir_path)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,

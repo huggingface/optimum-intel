@@ -358,6 +358,9 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
         ):
             config.max_position_embeddings = config.original_max_position_embeddings
 
+        # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
+        if quantization_config is None and load_in_8bit is None:
+            quantization_config = cls._prepare_model_size_based_quantization_config(save_dir_path)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
@@ -901,9 +904,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         # Apply 8-bit weight quantization if load_in_8bit is True
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
-        # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
-        if quantization_config is None and load_in_8bit is None:
-            quantization_config = cls._prepare_model_size_based_quantization_config(model_path)
         compile_model = kwargs.pop("compile", True)
         causal_model = init_cls(
             model=model,

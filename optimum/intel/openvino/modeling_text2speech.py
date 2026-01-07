@@ -364,9 +364,6 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
 
         # Apply 8-bit weight quantization if load_in_8bit is True
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
-        # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
-        if quantization_config is None and load_in_8bit is None:
-            quantization_config = cls._prepare_model_size_based_quantization_config(model_save_dir)
         model = _OVModelForSpeechT5ForTextToSpeech(
             encoder=encoder_model,
             decoder=decoder_model,
