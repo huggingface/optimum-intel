@@ -918,7 +918,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         if self.group_size is not None and self.group_size != -1 and self.group_size <= 0:
             raise ValueError("`group_size` must be greater than 0 or equal to -1")
         if self.dq_group_size is not None and self.dq_group_size < 0:
-            raise ValueError("`dq_group_size` must not be less than 0")
+            raise ValueError(f"`dq_group_size` must not be less than 0, but found {self.dq_group_size}")
         if not (self.dataset is None or isinstance(self.dataset, (str, list))):
             raise ValueError(
                 f"Dataset must be a instance of either string or list of strings, but found {type(self.dataset)}. "
