@@ -19,7 +19,13 @@ from typing import Dict
 from unittest.mock import Mock
 
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM, AutoModelForZeroShotImageClassification, AutoProcessor, AutoTokenizer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForTextToSpectrogram,
+    AutoModelForZeroShotImageClassification,
+    AutoProcessor,
+    AutoTokenizer,
+)
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
@@ -59,7 +65,11 @@ from optimum.intel import (  # noqa
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
 )
-from optimum.intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIGS, _DEFAULT_INT8_FQ_CONFIGS
+from optimum.intel.openvino.configuration import (
+    _DEFAULT_4BIT_WQ_CONFIGS,
+    _DEFAULT_IGNORED_SCOPE_CONFIGS,
+    _DEFAULT_INT8_FQ_CONFIGS,
+)
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
@@ -67,6 +77,7 @@ from optimum.intel.utils.import_utils import (
     is_openvino_version,
     is_transformers_version,
 )
+from optimum.utils.save_utils import maybe_save_preprocessors
 
 
 class OVCLIExportTestCase(unittest.TestCase):
@@ -388,7 +399,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "feature-extraction",
             "blenderbot",
             "int8",
-            "--dataset wikitext2 --num-samples 1",
+            "--dataset wikitext2:seq_len=64 --num-samples 1",
             {
                 "model": 33,
             },
@@ -412,7 +423,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "fill-mask",
             "roberta",
             "int8",
-            "--dataset wikitext2 --num-samples 1",
+            "--dataset wikitext2:seq_len=64 --num-samples 1",
             {
                 "model": 32,
             },
@@ -436,7 +447,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "zero-shot-image-classification",
             "clip",
             "int8",
-            "--dataset conceptual_captions --num-samples 1",
+            "--dataset conceptual_captions:seq_len=64 --num-samples 1",
             {
                 "model": 65,
             },
@@ -448,7 +459,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "text2text-generation-with-past",
             "t5",
             "int8",
-            "--dataset c4 --num-samples 1",
+            "--dataset c4:seq_len=64 --num-samples 1",
             {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
             if is_transformers_version("<=", "4.45")
             else {
@@ -558,7 +569,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         (
             "text-generation-with-past",
             "llama_awq",
-            "int4 --ratio 1.0 --sym --group-size 16 --gptq --dataset wikitext2 --num-samples 100 ",
+            "int4 --ratio 1.0 --sym --group-size 16 --gptq --dataset wikitext2:seq_len=64 --num-samples 100 ",
             {"model": {"int8": 4, "int4": 14}},
         ),
         (
@@ -1185,14 +1196,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             pt_model = auto_model_cls.from_pretrained(MODEL_NAMES[model_name])
             # overload for matching with default configuration
             pt_model.save_pretrained(tmpdir)
-            try:
-                AutoTokenizer.from_pretrained(MODEL_NAMES[model_name]).save_pretrained(tmpdir)
-            except Exception:
-                pass
-            try:
-                AutoProcessor.from_pretrained(MODEL_NAMES[model_name]).save_pretrained(tmpdir)
-            except Exception:
-                pass
+            maybe_save_preprocessors(MODEL_NAMES[model_name], tmpdir)
             with open(Path(tmpdir) / "config.json", "r") as f:
                 config = json.load(f)
                 config["_name_or_path"] = model_id
@@ -1214,7 +1218,7 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             check_compression_state_per_model(
                 self,
-                model.ov_submodels,
+                model.ov_models,
                 expected_num_weight_nodes_per_model,
                 expected_fake_nodes_per_model,
             )
@@ -1260,6 +1264,72 @@ class OVCLIExportTestCase(unittest.TestCase):
                     str(value),
                     f"Parameter {key} not matched with expected, {model_quantization_config[key].value} != {value}",
                 )
+
+    DEFAULT_IGNORED_SCOPE_TEST_CONFIGURATIONS = [
+        (
+            "speecht5",
+            "microsoft/speecht5_tts",
+            "decoder",
+            AutoModelForTextToSpectrogram,
+            OVModelForSpeechSeq2Seq,
+            '--task text-to-speech --weight-format int8 --model-kwargs \'{"vocoder": "fxmarty/speecht5-hifigan-tiny"}\'',
+        ),
+    ]
+
+    # Filter by supported models, same pattern as for the other test
+    SUPPORTED_DEFAULT_IGNORED_SCOPE_TEST_CONFIGURATIONS = [
+        config
+        for config in DEFAULT_IGNORED_SCOPE_TEST_CONFIGURATIONS
+        if TEST_NAME_TO_MODEL_TYPE.get(config[0], config[0]) in get_supported_model_for_library("transformers")
+    ]
+
+    @parameterized.expand(SUPPORTED_DEFAULT_IGNORED_SCOPE_TEST_CONFIGURATIONS)
+    def test_exporters_cli_with_default_ignored_scope(
+        self,
+        test_model_id,
+        model_id,
+        ov_model_name,
+        auto_model_cls,
+        ov_model_cls,
+        options,
+    ):
+        with TemporaryDirectory() as tmpdir:
+            # 1. Create a local copy of the model so that we can override _name_or_path
+            pt_model = auto_model_cls.from_pretrained(MODEL_NAMES[test_model_id])
+            pt_model.save_pretrained(tmpdir)
+            maybe_save_preprocessors(MODEL_NAMES[test_model_id], tmpdir)
+
+            # 2. Overwrite config.json so that _name_or_path matches the HF model id
+            config_path = Path(tmpdir) / "config.json"
+            with config_path.open("r") as f:
+                config = json.load(f)
+            config["_name_or_path"] = model_id
+            with config_path.open("w") as wf:
+                json.dump(config, wf)
+
+            # 3. Run export with quantization enabled so ignored_scope is actually used
+            run_command = f"optimum-cli export openvino --model {tmpdir} {options} {tmpdir}"
+            subprocess.run(run_command, shell=True, check=True)
+
+            # 4. Load OV model and inspect rt_info
+            model = ov_model_cls.from_pretrained(tmpdir)
+            rt_info = model.ov_models[ov_model_name].get_rt_info()
+            nncf_info = rt_info["nncf"]
+            quantization_info = nncf_info["weight_compression"]
+
+            # 5. Extract ignored_scope from rt_info
+            self.assertIsInstance(
+                quantization_info["ignored_scope"], dict, "Ignored scope is not found in the runtime info"
+            )
+            ignored_scope = {k: eval(v.value) for k, v in quantization_info["ignored_scope"].items()}
+
+            # 6. Compare structure and contents
+            expected_ignored_scope = _DEFAULT_IGNORED_SCOPE_CONFIGS[model_id][ov_model_name]
+            self.assertEqual(
+                expected_ignored_scope,
+                ignored_scope,
+                f"Ignored scope {ignored_scope} does not match expected {expected_ignored_scope}",
+            )
 
     def test_exporters_cli_help(self):
         subprocess.run(

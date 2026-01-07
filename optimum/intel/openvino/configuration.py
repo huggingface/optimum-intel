@@ -348,7 +348,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     "Qwen/Qwen3-30B-A3B": {
         "bits": 4,
         "sym": False,
-        "group_size": -1,
+        "group_size": 128,
     },
     "inceptionai/jais-13b": {
         "bits": 4,
@@ -473,20 +473,44 @@ _DEFAULT_INT8_FQ_CONFIGS = {
 }
 
 
-def get_default_int4_config(model_id_or_path: str):
-    """
-    Args:
-        model_id_or_path (`str`):
-            id of the model or path to it.
-    Returns:
-        Default int4 config for the given model or generic default int4 config.
-    """
-    logger.warning(
-        "The `get_default_int4_config` function is deprecated and will be removed in optimum-intel v1.25.0. "
-        "Please use `get_default_quantization_config` instead."
-    )
+_DEFAULT_IGNORED_SCOPE_CONFIGS = {
+    "Qwen/Qwen3-Embedding-0.6B": {
+        "model": {
+            "names": [
+                "__module.layers.27.mlp.up_proj/aten::linear/MatMul",
+                "__module.layers.27.mlp.gate_proj/aten::linear/MatMul",
+            ],
+        },
+    },
+    "microsoft/speecht5_tts": {
+        "decoder": {
+            "patterns": [
+                "__module.speech_decoder_postnet",
+                "__module.speecht5.decoder.prenet",
+            ],
+        },
+    },
+}
 
-    return get_default_quantization_config(model_id_or_path, "int4") or _DEFAULT_4BIT_WQ_CONFIG
+
+def _get_model_id_candidates(model_id_or_path: str) -> List[str]:
+    """
+    Get possible model id candidates from the given model id or path.
+    Returns a list containing `model_id_or_path` itself and possibly the model id extracted from config.json file.
+    """
+    candidates = [model_id_or_path]
+
+    # Try to extract model_id from config.json
+    model_path = Path(model_id_or_path)
+    config_path = model_path / "config.json"
+    if config_path.exists():
+        with config_path.open("r") as config_f:
+            config = json.load(config_f)
+            original_model_name = config.get("_name_or_path", "")
+        if original_model_name:
+            candidates.append(original_model_name)
+
+    return candidates
 
 
 def get_default_quantization_config(
@@ -515,26 +539,86 @@ def get_default_quantization_config(
         return None
 
     # Check if the model_id_or_path is in the default configs
-    if model_id_or_path in default_configs_dict:
-        return default_configs_dict[model_id_or_path]
-
-    # Try to match by config.json
-    model_path = Path(model_id_or_path)
-    config_path = model_path / "config.json"
-    if config_path.exists():
-        with config_path.open("r") as config_f:
-            config = json.load(config_f)
-            original_model_name = config.get("_name_or_path", "")
-        if original_model_name in default_configs_dict:
-            return default_configs_dict[original_model_name]
+    model_id_candidates = _get_model_id_candidates(model_id_or_path)
+    for model_id in model_id_candidates:
+        if model_id in default_configs_dict:
+            return default_configs_dict[model_id]
 
     # Try to match by folder name
+    model_path = Path(model_id_or_path)
     for model_id, config in default_configs_dict.items():
         short_id = model_id.split("/")[-1]
         if model_path.name == short_id:
             return config
 
     return None
+
+
+def _merge_ignored_scopes(
+    ignored_scope_1: Union[Dict[str, List[str]], None], ignored_scope_2: Union[Dict[str, List[str]], None]
+) -> Dict[str, List[str]]:
+    """
+    Merges two ignored scopes represented as dictionaries. If a key exists in both dictionaries, the corresponding lists
+    are merged and duplicates are removed.
+    Args:
+        ignored_scope_1 (`dict` or `None`):
+            The first ignored scope dictionary.
+        ignored_scope_2 (`dict` or `None`):
+            The second ignored scope dictionary.
+    Returns:
+        Merged ignored scope dictionary.
+    """
+    if ignored_scope_1 is None:
+        return copy.deepcopy(ignored_scope_2) if ignored_scope_2 is not None else None
+    if ignored_scope_2 is None:
+        return copy.deepcopy(ignored_scope_1)
+    merged_ignored_scope = {}
+    for key in set(ignored_scope_1) | set(ignored_scope_2):
+        merged_ignored_scope[key] = list(set(ignored_scope_1.get(key, []) + ignored_scope_2.get(key, [])))
+    return merged_ignored_scope
+
+
+def _apply_default_ignored_scope_config(
+    model_id_or_path: str, quantization_config: "OVPipelineQuantizationConfig"
+) -> "OVPipelineQuantizationConfig":
+    """
+    Applies default ignored scope configuration to the given quantization configuration based on the model ID or path.
+    Args:
+        model_id_or_path (`str`):
+            id of the model or path to it.
+        quantization_config (`OVPipelineQuantizationConfig`):
+            The quantization configuration to which the default ignored scope will be applied.
+    Returns:
+        Updated quantization configuration with the default ignored scope applied.
+    """
+    if not isinstance(quantization_config, OVPipelineQuantizationConfig):
+        raise ValueError(
+            "`_apply_default_ignored_scope_config` function expects `OVPipelineQuantizationConfig` instance as "
+            f"`quantization_config` argument, but got: {type(quantization_config)}"
+        )
+    quantization_config_copy = None
+    model_id_candidates = _get_model_id_candidates(model_id_or_path)
+    for model_id in model_id_candidates:
+        default_ignored_scopes_per_model = _DEFAULT_IGNORED_SCOPE_CONFIGS.get(model_id)
+        if not default_ignored_scopes_per_model:
+            continue
+        quantization_config_copy = quantization_config.clone()
+        for ov_model_name, default_ignored_scope in default_ignored_scopes_per_model.items():
+            q_config = quantization_config_copy.quantization_configs.get(
+                ov_model_name, quantization_config_copy.default_config
+            )
+            if not q_config:
+                raise RuntimeError(
+                    "Can't apply default quantization config because corresponding model quantization config is missing."
+                )
+            if ov_model_name not in quantization_config_copy.quantization_configs:
+                # If submodel quantization config is not explicitly defined, clone and modify the default one
+                q_config = q_config.clone()
+                quantization_config_copy.quantization_configs[ov_model_name] = q_config
+
+            merged_ignored_scope = _merge_ignored_scopes(q_config.ignored_scope, default_ignored_scope)
+            q_config.ignored_scope = merged_ignored_scope
+    return quantization_config_copy or quantization_config
 
 
 @dataclass
@@ -562,14 +646,56 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
             num_samples (`int`, *optional*):
                 The maximum number of samples composing the calibration dataset.
             dataset (`str or List[str]`, *optional*):
-                The dataset used for data-aware optimization with NNCF.
+                The dataset used for data-aware optimization with NNCF. Can be a dataset name (e.g., 'wikitext2')
+                or a string with options (e.g., 'wikitext2:seq_len=128'). The only currently supported option is `seq_len`
+                which represents a length of an input sample sequence (sentence).
             tokenizer (`str`, *optional*):
                 The tokenizer used to process the dataset.
             processor (`str`, *optional*):
                 A transformers processor used to process the dataset inputs.
         """
         self.num_samples = num_samples
-        self.dataset = dataset
+
+        # Handle dataset_kwargs from deserialization
+        self._dataset_kwargs = kwargs.pop("_dataset_kwargs", {})
+
+        if not self._dataset_kwargs and isinstance(dataset, str) and ":" in dataset:
+            # Parse dataset with options: "dataset_name:key1=value1,key2=value2"
+            parts = dataset.split(":", 1)
+            self.dataset = parts[0]
+            options_str = parts[1]
+
+            for option in options_str.split(","):
+                option = option.strip()
+                if not option:
+                    continue
+                if "=" not in option:
+                    raise ValueError(
+                        f"Malformed dataset option '{option}' in dataset spec '{dataset}'. "
+                        f"Expected format: 'key=value'."
+                    )
+                key, value = option.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+
+                # Validate and parse known options
+                if key == "seq_len":
+                    try:
+                        self._dataset_kwargs[key] = int(value)
+                    except ValueError:
+                        raise ValueError(
+                            f"Invalid value '{value}' for seq_len in dataset spec '{dataset}'. "
+                            f"Expected an integer."
+                        )
+                else:
+                    raise ValueError(
+                        f"Unsupported dataset option '{key}' in dataset spec '{dataset}'. "
+                        f"Only 'seq_len' is supported."
+                    )
+        else:
+            # No options or list-of-str dataset
+            self.dataset = dataset
+
         self.tokenizer = tokenizer
         self.processor = processor
         if isinstance(ignored_scope, nncf.IgnoredScope):
@@ -636,7 +762,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 - A path to a *directory* containing vocabulary files required by the tokenizer, for instance saved
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
         dataset (`str or List[str]`, *optional*):
-            The dataset used for data-aware compression with NNCF.
+            The dataset used for data-aware compression with NNCF. Can be a dataset name (e.g., 'wikitext2'),
+            a string with options (e.g., 'wikitext2:seq_len=128') or a list of string-typed dataset elements.
+            The only currently supported option is `seq_len` which represents a length of an input sample sequence (sentence).
             - For language models you can provide your own dataset in a list of strings or just use one from the list
                 ['auto', 'wikitext2','c4','c4-new']. With 'auto' the dataset will be collected from model's generations.
             - For diffusion models the dataset must be one of ['conceptual_captions',
@@ -1005,8 +1133,11 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             overflow_fix (`str`, default to "disable"):
                 Parameter for controlling overflow fix setting.
             dataset (`str`, *optional*):
-                The dataset used for quantization. For language models the allowed values are
-                ['auto', 'wikitext2','c4','c4-new']. For text-to-speech model quantization the allowed value is 'librispeech'.
+                The dataset used for quantization. Can be a dataset name (e.g., 'wikitext2') or a string with options
+                (e.g., 'wikitext2:seq_len=128'). The only currently supported option is `seq_len` which represents a
+                length of an input sample sequence (sentence). For language models the allowed
+                values are ['auto', 'wikitext2','c4','c4-new']. For text-to-speech model quantization the allowed value
+                is 'librispeech'.
             tokenizer (`str`, *optional*):
                 The tokenizer used to process the dataset. You can pass either:
                     - A string, the *model id* of a predefined tokenizer hosted inside a model repo on huggingface.co.
@@ -1235,7 +1366,9 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
             num_samples (`int`, *optional*):
                 The maximum number of samples composing the calibration dataset.
             dataset (`str or List[str]`, *optional*):
-                The dataset used for data-aware optimization with NNCF.
+                The dataset used for data-aware optimization with NNCF. Can be a dataset name (e.g., 'wikitext2')
+                or a string with options (e.g., 'wikitext2:seq_len=128'). The only currently supported option is `seq_len`
+                which represents a length of an input sample sequence (sentence).
             tokenizer (`str`, *optional*):
                 The tokenizer used to process the dataset.
             processor (`str`, *optional*):
@@ -1266,6 +1399,9 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         dataset = dataset or wqc.dataset or fqc.dataset
         tokenizer = tokenizer or wqc.tokenizer or fqc.tokenizer
         processor = processor or wqc.processor or fqc.processor
+        dataset_kwargs = kwargs.get("_dataset_kwargs", {}) or wqc._dataset_kwargs or fqc._dataset_kwargs
+        if dataset_kwargs:
+            kwargs["_dataset_kwargs"] = dataset_kwargs
         super().__init__(
             ignored_scope=ignored_scope,
             num_samples=num_samples,
@@ -1328,7 +1464,9 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
             num_samples (Optional[int]):
                 The maximum number of samples composing the calibration dataset. Defaults to None.
             dataset (Optional[Union[str, List[str]]]):
-                The dataset used for data-aware optimization with NNCF. Can be a string or a list of strings. Defaults to None.
+                The dataset used for data-aware optimization with NNCF. Can be a dataset name (e.g., 'wikitext2'),
+                a string with options (e.g., 'wikitext2:seq_len=128'), or a list of strings. The only currently supported
+                option is `seq_len` which represents a length of an input sample sequence (sentence). Defaults to None.
             tokenizer (Optional[str]):
                 The tokenizer used to process the dataset. Can be a model ID or a path to a directory containing
                 tokenizer files. Defaults to None.
@@ -1357,10 +1495,17 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
 
         # Pull dataset-related parameters from child configs
         configs = quantization_configs.values()
+        if default_config is not None:
+            configs = tuple(configs) + (default_config,)
         num_samples = max((num_samples or 0, *(config.num_samples or 0 for config in configs))) or None
         dataset = reduce(or_op, (dataset, *(config.dataset for config in configs)))
         tokenizer = reduce(or_op, (tokenizer, *(config.tokenizer for config in configs)))
         processor = reduce(or_op, (processor, *(config.processor for config in configs)))
+        dataset_kwargs = reduce(
+            or_op, (kwargs.get("_dataset_kwargs", {}), *(config._dataset_kwargs for config in configs))
+        )
+        if dataset_kwargs:
+            kwargs["_dataset_kwargs"] = dataset_kwargs
 
         super().__init__(
             ignored_scope=None,

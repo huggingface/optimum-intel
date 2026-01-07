@@ -49,7 +49,6 @@ from .configuration import (
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import (
     ONNX_WEIGHTS_NAME,
-    OV_XML_FILE_NAME,
     STR_TO_OV_TYPE,
     TemporaryDirectory,
     get_export_transformers_version,
@@ -271,7 +270,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             if self._pkv_precision == Type.f32
             else self._get_model_with_updated_pkv_precision(self.model.clone(), Type.f32)
         )
-        dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
+        dst_path = os.path.join(save_directory, self._ov_model_paths["model"])
         openvino.save_model(model_to_save, dst_path, compress_to_fp16=False)
 
         if self.generation_config is not None:
@@ -852,7 +851,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     ):
         generation_config = kwargs.pop("generation_config", None)
         model_path = Path(model_id)
-        default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
+        default_file_name = ONNX_WEIGHTS_NAME if from_onnx else cls._all_ov_model_paths["model"]
         file_name = file_name or default_file_name
 
         model_cache_path = cls._cached_file(
@@ -916,11 +915,16 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         )
 
         if quantization_config:
-            quantization_config = cls._resolve_default_quantization_config(
-                str(config.name_or_path), quantization_config
-            )
+            if hasattr(config, "name_or_path"):
+                model_id = config.name_or_path
+            else:
+                logger.warning(
+                    "`model_id` could not be determined from the config. In the case there are default quantization "
+                    "configurations for this model, they will not be applied."
+                )
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
             causal_model._apply_quantization(
-                quantization_config, compile_only, compile_model, str(config.name_or_path), trust_remote_code
+                quantization_config, compile_only, compile_model, model_id, trust_remote_code
             )
 
         return causal_model
