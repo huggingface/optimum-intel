@@ -650,7 +650,10 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         """
         if quantization_config == {"bits": 4} or quantization_config == {"bits": 8}:
             # If config is given as {"bits": N}, use the default N-bit quantization config
-            if quantization_config == {"bits": 4} and model_name_or_path in ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]:
+            if quantization_config == {"bits": 4} and model_name_or_path in [
+                "openai/gpt-oss-20b",
+                "openai/gpt-oss-120b",
+            ]:
                 raise NotImplementedError(
                     "Quantization with the default 4-bit config is not supported through Python API for openai/gpt-oss-20b model. "
                     "Please export the model via optimum-cli with `--weight-format int4` argument. This way the "
