@@ -3095,10 +3095,10 @@ class Phi4MMConfigBehavior(str, enum.Enum):
 
 
 @register_in_tasks_manager(
-    "phi4_multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
+    "phi4mm", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
 )
 @register_in_tasks_manager(
-    "phi4mm", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
+    "phi4_multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
 )
 class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Phi4MMConfigBehavior]
