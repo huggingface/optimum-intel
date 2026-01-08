@@ -407,7 +407,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "feature-extraction",
             "blenderbot",
             "int8",
-            "--dataset wikitext2 --num-samples 1",
+            "--dataset wikitext2:seq_len=64 --num-samples 1",
             {
                 "model": 33,
             },
@@ -431,7 +431,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "fill-mask",
             "roberta",
             "int8",
-            "--dataset wikitext2 --num-samples 1",
+            "--dataset wikitext2:seq_len=64 --num-samples 1",
             {
                 "model": 32,
             },
@@ -455,7 +455,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "zero-shot-image-classification",
             "clip",
             "int8",
-            "--dataset conceptual_captions --num-samples 1",
+            "--dataset conceptual_captions:seq_len=64 --num-samples 1",
             {
                 "model": 65,
             },
@@ -467,7 +467,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "text2text-generation-with-past",
             "t5",
             "int8",
-            "--dataset c4 --num-samples 1",
+            "--dataset c4:seq_len=64 --num-samples 1",
             {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
             if is_transformers_version("<=", "4.45")
             else {
@@ -577,7 +577,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         (
             "text-generation-with-past",
             "llama_awq",
-            "int4 --ratio 1.0 --sym --group-size 16 --gptq --dataset wikitext2 --num-samples 100 ",
+            "int4 --ratio 1.0 --sym --group-size 16 --gptq --dataset wikitext2:seq_len=64 --num-samples 100 ",
             {"model": {"int8": 4, "int4": 14}},
         ),
         (
@@ -1226,7 +1226,7 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             check_compression_state_per_model(
                 self,
-                model.ov_submodels,
+                model.ov_models,
                 expected_num_weight_nodes_per_model,
                 expected_fake_nodes_per_model,
             )
