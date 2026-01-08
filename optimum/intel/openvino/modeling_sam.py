@@ -274,6 +274,7 @@ class OVSamModel(OVBaseModel):
                 model_save_dir,
             )
 
+        # Apply 8-bit weight quantization if load_in_8bit is True
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         compile_model = kwargs.pop("compile", True)
         model = cls(
