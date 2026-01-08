@@ -41,6 +41,7 @@ usage: optimum-cli export openvino [-h] -m MODEL [--task TASK] [--framework {pt}
                                    [--quantization-statistics-path QUANTIZATION_STATISTICS_PATH]
                                    [--num-samples NUM_SAMPLES] [--disable-stateful] [--disable-convert-tokenizer]
                                    [--smooth-quant-alpha SMOOTH_QUANT_ALPHA]
+                                   [--submodel {vision,text,full}]
                                    output
 
 optional arguments:
@@ -167,6 +168,10 @@ Optional arguments:
   --smooth-quant-alpha SMOOTH_QUANT_ALPHA
                         SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers
                         and reduces quantization error. Valid only when activations quantization is enabled.
+  --submodel {vision,text,full}
+                        For CLIP models (Transformers) with `feature-extraction`, export only the specified
+                        submodule. Use `vision` to export the vision encoder, `text` for the text encoder,
+                        or `full` to export the default combined behavior. Default is `full`.
 ```
 
 You can also apply fp16, 8-bit or 4-bit weight-only quantization on the Linear, Convolutional and Embedding layers when exporting your model by setting `--weight-format` to respectively `fp16`, `int8` or `int4`.
@@ -221,6 +226,26 @@ or
 ```bash
 optimum-cli export openvino -m openai/clip-vit-base-patch16 --quant-mode int8 ./clip-vit-base-patch16
 ```
+
+### CLIP submodules
+
+For CLIP models loaded via Transformers and exported for `feature-extraction`, you can export only the vision or only the text encoder using `--submodel`:
+
+- Vision encoder only:
+
+```bash
+optimum-cli export openvino --model openai/clip-vit-base-patch32 \
+  --task feature-extraction --submodel vision ov_clip_vision/
+```
+
+- Text encoder only:
+
+```bash
+optimum-cli export openvino --model openai/clip-vit-base-patch32 \
+  --task feature-extraction --submodel text ov_clip_text/
+```
+
+If `--submodel` is omitted or set to `full`, the default combined CLIP export is used.
 
 
 ### Decoder models
