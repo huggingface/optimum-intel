@@ -121,6 +121,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "ratio": 1.0,
         "dataset": "wikitext2",
         "scale_estimation": True,
+        "dq_group_size": 128,
     },
     "Qwen/Qwen3-1.7B": {
         "bits": 4,
@@ -366,6 +367,9 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     },
 }
 
+_DEFAULT_8BIT_WQ_CONFIGS = {
+    "Qwen/Qwen2.5-Coder-3B-Instruct": {"bits": 8, "sym": False, "dq_group_size": 128},
+}
 
 # Add configs for model id aliases
 # The list below contains pairs of model ids: config for the second model id will be copied from the first model id.
@@ -472,7 +476,8 @@ _DEFAULT_INT8_FQ_CONFIGS = {
     },
 }
 
-
+# Default quantization ignored scope configs. For each model id it is a dict of `{ov_model_name: ignored_scope}`.
+# For possible values of `ov_model_name` please take a look at `_ov_model_names` property of corresponding OVModel class.
 _DEFAULT_IGNORED_SCOPE_CONFIGS = {
     "Qwen/Qwen3-Embedding-0.6B": {
         "model": {
@@ -521,7 +526,7 @@ def get_default_quantization_config(
         model_id_or_path (`str`):
             id of the model or path to it.
         weight_format (`str`, *optional*):
-            The format of the weights. Currently only "int4" value is supported.
+            The format of the weights. Currently only "int4" and "int8" values are supported.
         quant_mode (`str`, *optional*):
             The quantization mode. Currently only "int8" value is supported.
     Returns:
@@ -533,6 +538,8 @@ def get_default_quantization_config(
 
     if weight_format == "int4":
         default_configs_dict = _DEFAULT_4BIT_WQ_CONFIGS
+    elif weight_format == "int8":
+        default_configs_dict = _DEFAULT_8BIT_WQ_CONFIGS
     elif quant_mode == "int8":
         default_configs_dict = _DEFAULT_INT8_FQ_CONFIGS
     else:
@@ -837,6 +844,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             - "adjust": automatically adjusts the group size to the maximum compatible value for each weight tensor,
                 if there is no valid value greater than or equal to 32, then the node is quantized to the backup precision
                 which is int8_asym by default.
+        dq_group_size (`int`, *optional*):
+            Group size to be used for dynamic quantization of activations. Applied by setting
+            "DYNAMIC_QUANTIZATION_GROUP_SIZE" runtime info value in the OpenVINO model IR. If not explicitly set,
+            dynamic quantization of activations may still be applied by OpenVINO runtime. Value 0 disables dynamic
+            quantization of activations.
         kwargs: Additional parameters for nncf.compress_weights() call.
     """
 
@@ -861,6 +873,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         backup_precision: Optional[str] = None,
         statistics_path: Optional[str] = None,
         group_size_fallback: Optional[str] = None,
+        dq_group_size: Optional[int] = None,
         **kwargs,
     ):
         weight_format = kwargs.pop("weight_format", None)
@@ -892,6 +905,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.dtype = dtype
         self.statistics_path = statistics_path
         self.group_size_fallback = group_size_fallback
+        self.dq_group_size = dq_group_size
         self.post_init()
 
     def post_init(self):
@@ -903,6 +917,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             raise ValueError("`ratio` must between 0 and 1.")
         if self.group_size is not None and self.group_size != -1 and self.group_size <= 0:
             raise ValueError("`group_size` must be greater than 0 or equal to -1")
+        if self.dq_group_size is not None and self.dq_group_size < 0:
+            raise ValueError(f"`dq_group_size` must not be less than 0, but found {self.dq_group_size}")
         if not (self.dataset is None or isinstance(self.dataset, (str, list))):
             raise ValueError(
                 f"Dataset must be a instance of either string or list of strings, but found {type(self.dataset)}. "
@@ -1071,27 +1087,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             **kwargs,
         }
         return result
-
-
-@dataclass
-class OVDynamicQuantizationConfig(OVWeightQuantizationConfig):
-    def __init__(
-        self,
-        bits: int = 8,
-        sym: bool = False,
-        weights_group_size: Optional[int] = None,
-        activations_group_size: int = 32,
-        **kwargs,
-    ):
-        super().__init__(bits=bits, sym=sym, group_size=weights_group_size, **kwargs)
-        self.activations_group_size = activations_group_size
-        logger.warning(
-            "OVDynamicQuantizationConfig is deprecated and will be removed in optimum-intel v1.24.0. "
-            "Dynamic quantization and KV cache compression are enabled by default starting from OpenVINO 2024.6 and "
-            "there is no need to enable them manually. If you need precise control over these parameters, please "
-            "provide `DYNAMIC_QUANTIZATION_GROUP_SIZE` and `KV_CACHE_PRECISION` with `ov_config` argument during model "
-            "inference."
-        )
 
 
 @dataclass

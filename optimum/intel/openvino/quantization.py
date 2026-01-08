@@ -1767,6 +1767,8 @@ def _weight_only_quantization(
         dataset=dataset,
         **wc_kwargs,
     )
+    if config.dq_group_size is not None:
+        compressed_model.set_rt_info(str(config.dq_group_size), ["runtime_options", "DYNAMIC_QUANTIZATION_GROUP_SIZE"])
 
     _remove_f16_kv_cache_precision_flag(compressed_model)
     _add_nncf_version_flag(compressed_model)
