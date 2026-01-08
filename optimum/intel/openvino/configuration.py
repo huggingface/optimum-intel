@@ -363,7 +363,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     "Qwen/Qwen3-30B-A3B": {
         "bits": 4,
         "sym": False,
-        "group_size": -1,
+        "group_size": 128,
     },
     "inceptionai/jais-13b": {
         "bits": 4,
@@ -661,14 +661,56 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
             num_samples (`int`, *optional*):
                 The maximum number of samples composing the calibration dataset.
             dataset (`str or List[str]`, *optional*):
-                The dataset used for data-aware optimization with NNCF.
+                The dataset used for data-aware optimization with NNCF. Can be a dataset name (e.g., 'wikitext2')
+                or a string with options (e.g., 'wikitext2:seq_len=128'). The only currently supported option is `seq_len`
+                which represents a length of an input sample sequence (sentence).
             tokenizer (`str`, *optional*):
                 The tokenizer used to process the dataset.
             processor (`str`, *optional*):
                 A transformers processor used to process the dataset inputs.
         """
         self.num_samples = num_samples
-        self.dataset = dataset
+
+        # Handle dataset_kwargs from deserialization
+        self._dataset_kwargs = kwargs.pop("_dataset_kwargs", {})
+
+        if not self._dataset_kwargs and isinstance(dataset, str) and ":" in dataset:
+            # Parse dataset with options: "dataset_name:key1=value1,key2=value2"
+            parts = dataset.split(":", 1)
+            self.dataset = parts[0]
+            options_str = parts[1]
+
+            for option in options_str.split(","):
+                option = option.strip()
+                if not option:
+                    continue
+                if "=" not in option:
+                    raise ValueError(
+                        f"Malformed dataset option '{option}' in dataset spec '{dataset}'. "
+                        f"Expected format: 'key=value'."
+                    )
+                key, value = option.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+
+                # Validate and parse known options
+                if key == "seq_len":
+                    try:
+                        self._dataset_kwargs[key] = int(value)
+                    except ValueError:
+                        raise ValueError(
+                            f"Invalid value '{value}' for seq_len in dataset spec '{dataset}'. "
+                            f"Expected an integer."
+                        )
+                else:
+                    raise ValueError(
+                        f"Unsupported dataset option '{key}' in dataset spec '{dataset}'. "
+                        f"Only 'seq_len' is supported."
+                    )
+        else:
+            # No options or list-of-str dataset
+            self.dataset = dataset
+
         self.tokenizer = tokenizer
         self.processor = processor
         if isinstance(ignored_scope, nncf.IgnoredScope):
@@ -735,7 +777,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 - A path to a *directory* containing vocabulary files required by the tokenizer, for instance saved
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
         dataset (`str or List[str]`, *optional*):
-            The dataset used for data-aware compression with NNCF.
+            The dataset used for data-aware compression with NNCF. Can be a dataset name (e.g., 'wikitext2'),
+            a string with options (e.g., 'wikitext2:seq_len=128') or a list of string-typed dataset elements.
+            The only currently supported option is `seq_len` which represents a length of an input sample sequence (sentence).
             - For language models you can provide your own dataset in a list of strings or just use one from the list
                 ['auto', 'wikitext2','c4','c4-new']. With 'auto' the dataset will be collected from model's generations.
             - For diffusion models the dataset must be one of ['conceptual_captions',
@@ -1104,8 +1148,11 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             overflow_fix (`str`, default to "disable"):
                 Parameter for controlling overflow fix setting.
             dataset (`str`, *optional*):
-                The dataset used for quantization. For language models the allowed values are
-                ['auto', 'wikitext2','c4','c4-new']. For text-to-speech model quantization the allowed value is 'librispeech'.
+                The dataset used for quantization. Can be a dataset name (e.g., 'wikitext2') or a string with options
+                (e.g., 'wikitext2:seq_len=128'). The only currently supported option is `seq_len` which represents a
+                length of an input sample sequence (sentence). For language models the allowed
+                values are ['auto', 'wikitext2','c4','c4-new']. For text-to-speech model quantization the allowed value
+                is 'librispeech'.
             tokenizer (`str`, *optional*):
                 The tokenizer used to process the dataset. You can pass either:
                     - A string, the *model id* of a predefined tokenizer hosted inside a model repo on huggingface.co.
@@ -1334,7 +1381,9 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
             num_samples (`int`, *optional*):
                 The maximum number of samples composing the calibration dataset.
             dataset (`str or List[str]`, *optional*):
-                The dataset used for data-aware optimization with NNCF.
+                The dataset used for data-aware optimization with NNCF. Can be a dataset name (e.g., 'wikitext2')
+                or a string with options (e.g., 'wikitext2:seq_len=128'). The only currently supported option is `seq_len`
+                which represents a length of an input sample sequence (sentence).
             tokenizer (`str`, *optional*):
                 The tokenizer used to process the dataset.
             processor (`str`, *optional*):
@@ -1365,6 +1414,9 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         dataset = dataset or wqc.dataset or fqc.dataset
         tokenizer = tokenizer or wqc.tokenizer or fqc.tokenizer
         processor = processor or wqc.processor or fqc.processor
+        dataset_kwargs = kwargs.get("_dataset_kwargs", {}) or wqc._dataset_kwargs or fqc._dataset_kwargs
+        if dataset_kwargs:
+            kwargs["_dataset_kwargs"] = dataset_kwargs
         super().__init__(
             ignored_scope=ignored_scope,
             num_samples=num_samples,
@@ -1427,7 +1479,9 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
             num_samples (Optional[int]):
                 The maximum number of samples composing the calibration dataset. Defaults to None.
             dataset (Optional[Union[str, List[str]]]):
-                The dataset used for data-aware optimization with NNCF. Can be a string or a list of strings. Defaults to None.
+                The dataset used for data-aware optimization with NNCF. Can be a dataset name (e.g., 'wikitext2'),
+                a string with options (e.g., 'wikitext2:seq_len=128'), or a list of strings. The only currently supported
+                option is `seq_len` which represents a length of an input sample sequence (sentence). Defaults to None.
             tokenizer (Optional[str]):
                 The tokenizer used to process the dataset. Can be a model ID or a path to a directory containing
                 tokenizer files. Defaults to None.
@@ -1462,6 +1516,11 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
         dataset = reduce(or_op, (dataset, *(config.dataset for config in configs)))
         tokenizer = reduce(or_op, (tokenizer, *(config.tokenizer for config in configs)))
         processor = reduce(or_op, (processor, *(config.processor for config in configs)))
+        dataset_kwargs = reduce(
+            or_op, (kwargs.get("_dataset_kwargs", {}), *(config._dataset_kwargs for config in configs))
+        )
+        if dataset_kwargs:
+            kwargs["_dataset_kwargs"] = dataset_kwargs
 
         super().__init__(
             ignored_scope=None,

@@ -145,7 +145,7 @@ class OVQuantizerTest(unittest.TestCase):
             OVModelForCausalLM,
             "llama",
             dict(
-                dataset="wikitext2",
+                dataset="wikitext2:seq_len=64",
                 num_samples=1,
                 dtype="f8e4m3",
             ),
@@ -263,7 +263,7 @@ class OVQuantizerTest(unittest.TestCase):
             "blenderbot",
             OVQuantizationConfig(
                 dtype="int8",
-                dataset="wikitext2",
+                dataset="wikitext2:seq_len=64",
                 num_samples=1,
             ),
             {
@@ -293,7 +293,7 @@ class OVQuantizerTest(unittest.TestCase):
             "roberta",
             OVQuantizationConfig(
                 dtype="int8",
-                dataset="wikitext2",
+                dataset="wikitext2:seq_len=64",
                 num_samples=1,
             ),
             {
@@ -323,7 +323,7 @@ class OVQuantizerTest(unittest.TestCase):
             "clip",
             OVQuantizationConfig(
                 dtype="int8",
-                dataset="conceptual_captions",
+                dataset="conceptual_captions:seq_len=64",
                 num_samples=1,
             ),
             {
@@ -338,7 +338,7 @@ class OVQuantizerTest(unittest.TestCase):
             "t5",
             OVQuantizationConfig(
                 dtype="int8",
-                dataset="wikitext2",
+                dataset="wikitext2:seq_len=64",
                 num_samples=1,
             ),
             {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
@@ -1590,6 +1590,20 @@ class OVWeightCompressionTest(unittest.TestCase):
             openvino_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.assertEqual(openvino_config.quantization_config.to_dict(), ref_quantization_config.to_dict())
 
+    @parameterized.expand([(MODEL_NAMES["gpt2"],)])
+    def test_dataset_seq_len_option(self, model_id):
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, load_in_8bit=False)
+        dataset_builder = OVCalibrationDatasetBuilder(model)
+        dataset = dataset_builder.build_from_quantization_config(
+            OVWeightQuantizationConfig(
+                bits=4,
+                dataset="c4:seq_len=64",
+                tokenizer=model_id,
+                num_samples=1,
+            ),
+        )
+        self.assertTrue(all(len(sample["input_ids"][0]) == 64 for sample in dataset["model"].get_data()))
+
 
 class OVPipelineQuantizationTest(unittest.TestCase):
     maxDiff = None
@@ -2475,3 +2489,97 @@ def check_model_inference(ov_model, model_id, trust_remote_code):
         ov_model(**inputs)
     else:
         raise Exception("Unexpected model class.")
+
+
+class TestDatasetParsing(unittest.TestCase):
+    """Test suite for dataset option parsing in OVQuantizationConfigBase."""
+
+    def test_dataset_no_options(self):
+        """Test that a simple dataset name without options is preserved."""
+        config = OVQuantizationConfigBase(dataset="wikitext")
+        self.assertEqual(config.dataset, "wikitext")
+        self.assertEqual(config._dataset_kwargs, {})
+
+    def test_dataset_with_seq_len_option(self):
+        """Test parsing of seq_len option from dataset string."""
+        config = OVQuantizationConfigBase(dataset="wikitext2:seq_len=128")
+        for _ in range(2):
+            self.assertEqual(config.dataset, "wikitext2")
+            self.assertEqual(config._dataset_kwargs, {"seq_len": 128})
+            config = _quantization_config_from_dict(config.to_dict())
+
+    def test_dataset_with_seq_len_option_mixed_q_config(self):
+        """Test parsing of seq_len option from dataset string."""
+        config = OVMixedQuantizationConfig(
+            OVWeightQuantizationConfig(dataset="wikitext2:seq_len=128"), OVQuantizationConfig()
+        )
+        for _ in range(2):
+            self.assertEqual(config.dataset, "wikitext2")
+            self.assertEqual(config._dataset_kwargs, {"seq_len": 128})
+            config = _quantization_config_from_dict(config.to_dict())
+
+    def test_dataset_with_seq_len_option_pipeline_q_config(self):
+        """Test parsing of seq_len option from dataset string."""
+        config = OVPipelineQuantizationConfig({"model": OVWeightQuantizationConfig(dataset="wikitext2:seq_len=128")})
+        for _ in range(2):
+            self.assertEqual(config.dataset, "wikitext2")
+            self.assertEqual(config._dataset_kwargs, {"seq_len": 128})
+            config = _quantization_config_from_dict(config.to_dict())
+
+    def test_dataset_gsm8k_with_seq_len(self):
+        """Test parsing of seq_len option for gsm8k dataset."""
+        config = OVQuantizationConfigBase(dataset="gsm8k:seq_len=512")
+        self.assertEqual(config.dataset, "gsm8k")
+        self.assertEqual(config._dataset_kwargs, {"seq_len": 512})
+
+    def test_dataset_with_multiple_spaces(self):
+        """Test parsing with spaces around the option."""
+        config = OVQuantizationConfigBase(dataset="wikitext:seq_len = 64")
+        self.assertEqual(config.dataset, "wikitext")
+        self.assertEqual(config._dataset_kwargs, {"seq_len": 64})
+
+    def test_dataset_list_no_parsing(self):
+        """Test that list datasets skip parsing and remain unchanged."""
+        dataset_list = ["sample text 1", "sample text 2", "sample text 3"]
+        config = OVQuantizationConfigBase(dataset=dataset_list)
+        self.assertEqual(config.dataset, dataset_list)
+        self.assertEqual(config._dataset_kwargs, {})
+
+    def test_dataset_unsupported_option(self):
+        """Test that unsupported options raise ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            OVQuantizationConfigBase(dataset="wikitext:foo=bar")
+        self.assertIn("Unsupported dataset option 'foo'", str(exc_info.value))
+        self.assertIn("Only 'seq_len' is supported", str(exc_info.value))
+
+    def test_dataset_malformed_option_no_equals(self):
+        """Test that options without '=' raise ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            OVQuantizationConfigBase(dataset="wikitext:seq_len")
+        self.assertIn("Malformed dataset option", str(exc_info.value))
+        self.assertIn("Expected format: 'key=value'", str(exc_info.value))
+
+    def test_dataset_invalid_seq_len_value(self):
+        """Test that non-integer seq_len values raise ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            OVQuantizationConfigBase(dataset="wikitext:seq_len=abc")
+        self.assertIn("Invalid value 'abc' for seq_len", str(exc_info.value))
+        self.assertIn("Expected an integer", str(exc_info.value))
+
+    def test_dataset_empty_string_option(self):
+        """Test that empty seq_len value raises ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            OVQuantizationConfigBase(dataset="wikitext:seq_len=")
+        self.assertIn("Invalid value '' for seq_len", str(exc_info.value))
+
+    def test_dataset_none(self):
+        """Test that None dataset is handled correctly."""
+        config = OVQuantizationConfigBase(dataset=None)
+        self.assertIsNone(config.dataset)
+        self.assertEqual(config._dataset_kwargs, {})
+
+    def test_dataset_with_colon_in_name_only(self):
+        """Test handling of dataset string with trailing colon but no options."""
+        config = OVQuantizationConfigBase(dataset="wikitext:")
+        self.assertEqual(config.dataset, "wikitext")
+        self.assertEqual(config._dataset_kwargs, {})

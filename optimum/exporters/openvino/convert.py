@@ -63,8 +63,11 @@ from .stateful import (
 from .utils import (
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     OV_XML_FILE_NAME,
+    _get_dynamic_shapes_info,
     _get_input_info,
+    _get_model_dtype,
     _get_open_clip_submodels_fn_and_export_configs,
+    _normalize_dummy_inputs,
     allow_skip_tracing_check,
     clear_class_registry,
     remove_none_from_dummy_inputs,
@@ -399,18 +402,32 @@ def export_pytorch(
             ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
 
         with patcher:
-            if patch_16bit_model:
-                from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
-
-                __make_16bit_traceable(model)
             check_dummy_inputs_are_allowed(model, dummy_inputs)
             input_info = _get_input_info(model, config, dummy_inputs)
-            ts_decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **ts_decoder_kwargs)
-            ov_model = convert_model(
-                ts_decoder,
-                example_input=dummy_inputs,
-                input=[(item.shape, item.type) for item in input_info],
-            )
+            torch_export = os.getenv("OPENVINO_DYNAMO_EXPORT", "false").lower() == "true"
+            if torch_export:
+                if hasattr(torch.ops, "_prepare_4d_causal_attention_mask_for_sdpa"):
+                    # patch_everywhere breaks torch.ops namespace
+                    del torch.ops._prepare_4d_causal_attention_mask_for_sdpa
+                dynamic_shapes = _get_dynamic_shapes_info(model, config, dummy_inputs)
+                _export_kwargs = {"args": (), "kwargs": _normalize_dummy_inputs(dummy_inputs, _get_model_dtype(model))}
+                _export_kwargs["dynamic_shapes"] = dynamic_shapes
+
+                ep = torch.export.export_for_training(model, **_export_kwargs)
+
+                ov_model = convert_model(ep)
+            else:
+                if patch_16bit_model:
+                    from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
+
+                    __make_16bit_traceable(model)
+
+                ts_decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **ts_decoder_kwargs)
+                ov_model = convert_model(
+                    ts_decoder,
+                    example_input=dummy_inputs,
+                    input=[(item.shape, item.type) for item in input_info],
+                )
 
         ov_model.validate_nodes_and_infer_types()  # TODO: remove as unnecessary validation?
 
