@@ -357,6 +357,30 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
 
+REMOTE_CODE_MODELS = (
+    "afmoe",
+    "chatglm",
+    "minicpm",
+    "baichuan2",
+    "baichuan2-13b",
+    "jais",
+    "qwen",
+    "internlm2",
+    "orion",
+    "aquila",
+    "aquila2",
+    "xverse",
+    "internlm",
+    "codegen2",
+    "arctic",
+    "chatglm4",
+    "exaone",
+    "exaone4",
+    "decilm",
+    "minicpm3",
+    "deepseek",
+)
+
 
 def get_num_quantized_nodes(model):
     num_fake_nodes = 0

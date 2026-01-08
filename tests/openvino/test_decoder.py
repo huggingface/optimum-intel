@@ -13,6 +13,7 @@ from utils_tests import (
     F32_CONFIG,
     MODEL_NAMES,
     OPENVINO_DEVICE,
+    REMOTE_CODE_MODELS,
     SEED,
     get_num_sdpa,
     mock_torch_cuda_is_available,
@@ -138,29 +139,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("qwen", "chatglm", "chatglm4")
 
     GENERATION_LENGTH = 100
-    REMOTE_CODE_MODELS = (
-        "afmoe",
-        "chatglm",
-        "minicpm",
-        "baichuan2",
-        "baichuan2-13b",
-        "jais",
-        "qwen",
-        "internlm2",
-        "orion",
-        "aquila",
-        "aquila2",
-        "xverse",
-        "internlm",
-        "codegen2",
-        "arctic",
-        "chatglm4",
-        "exaone",
-        "exaone4",
-        "decilm",
-        "minicpm3",
-        "deepseek",
-    )
 
     EXPECTED_NUM_SDPA = {
         "afmoe": 4,
@@ -255,7 +233,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
 
         model_kwargs = {}
-        if model_arch in self.REMOTE_CODE_MODELS:
+        if model_arch in REMOTE_CODE_MODELS:
             model_kwargs = {"trust_remote_code": True}
 
         # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
@@ -267,7 +245,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
         tokens = tokenizer("This is a sample output", return_tensors="pt")
 
         ov_outputs = ov_model(**tokens)
@@ -404,9 +382,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
-        if model_arch in self.REMOTE_CODE_MODELS:
+        if model_arch in REMOTE_CODE_MODELS:
             model_kwargs = {"trust_remote_code": True}
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
 
         if model_arch == "qwen":
             tokenizer._convert_tokens_to_ids = lambda x: 0
@@ -434,7 +412,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "text-generation",
             model_id,
             accelerator="openvino",
-            trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
+            trust_remote_code=model_arch in REMOTE_CODE_MODELS,
             tokenizer=(
                 # in older transformers versions, qwen tokenizer didn't have a _convert_tokens_to_ids
                 # method, which made it fail during inference using pipelines
@@ -444,7 +422,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 # were not loaded in pipelines because they were not registered in TOKENIZER_MAPPING
                 else model_id
                 if is_transformers_version("<=", "4.46")
-                and model_arch in self.REMOTE_CODE_MODELS + ("granite", "granite-moe")
+                and model_arch in REMOTE_CODE_MODELS + ("granite", "granite-moe")
                 else None
             ),
         )
@@ -589,7 +567,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.mock_torch_compile(model_arch)
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
-        if model_arch in self.REMOTE_CODE_MODELS:
+        if model_arch in REMOTE_CODE_MODELS:
             model_kwargs = {"trust_remote_code": True}
 
         # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
@@ -610,7 +588,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
             self.skipTest("Incompatible modeling code")
 
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
         if model_arch == "persimmon":
             tokenizer.pad_token_id = tokenizer.bos_token_id
             tokenizer.eos_token_id = tokenizer.bos_token_id
