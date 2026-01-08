@@ -62,7 +62,6 @@ from optimum.intel import (
     OVQuantizationConfig,
     OVMixedQuantizationConfig,
     OVWeightQuantizationConfig,
-    OVDynamicQuantizationConfig,
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelForVisualCausalLM,
     OVSentenceTransformer,
@@ -1038,18 +1037,27 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVSanaPipeline, "sana", 19, 53),
     ]
 
-    DEFAULT_4BIT_COMPRESSION_CONFIGURATIONS = [
-        (OVModelForCausalLM, "llama", {"bits": 4, "group_size": 8, "ratio": 0.5}, {"model": {"int8": 26, "int4": 6}}),
+    DEFAULT_COMPRESSION_CONFIGURATIONS = [
+        (OVModelForCausalLM, "llama", 8, {"bits": 8, "dq_group_size": 128}, {"model": {"int8": 32}}),
+        (
+            OVModelForCausalLM,
+            "llama",
+            4,
+            {"bits": 4, "group_size": 8, "ratio": 0.5, "dq_group_size": 64},
+            {"model": {"int8": 26, "int4": 6}},
+        ),
         (
             OVModelForFeatureExtraction,
             "llama",
+            4,
             {"bits": 4, "group_size": 8, "ratio": 0.5},
             {"model": {"int8": 22, "int4": 8}},
         ),
         (
             OVStableDiffusionPipeline,
             "stable-diffusion",
-            {"quantization_configs": {"unet": {"bits": 4, "group_size": -1, "ratio": 0.5}}},
+            4,
+            {"quantization_configs": {"unet": {"bits": 4, "group_size": -1, "ratio": 0.5, "dq_group_size": 64}}},
             {
                 "unet": {"int8": 182, "int4": 60},
                 "vae_decoder": {},
@@ -1060,6 +1068,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (
             OVModelForVisualCausalLM,
             "llava",
+            4,
             {"bits": 4, "group_size": 8, "ratio": 0.5},
             {
                 "lm_model": {"int8": 22, "int4": 8},
@@ -1070,6 +1079,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (
             OVSamModel,
             "sam",
+            4,
             {"bits": 4, "group_size": 8, "ratio": 0.5},
             {
                 "vision_encoder": {"int8": 112, "int4": 38},
@@ -1079,6 +1089,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (
             OVModelForSpeechSeq2Seq,
             "whisper",
+            4,
             {"bits": 4, "group_size": 8, "ratio": 0.5},
             {
                 "decoder": {"int8": 40, "int4": 4},
@@ -1389,17 +1400,45 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
         self.assertEqual(0, num_weight_nodes["int4"])
 
-    @parameterized.expand(DEFAULT_4BIT_COMPRESSION_CONFIGURATIONS)
-    def test_ovmodel_4bit_default_compression(
-        self, model_cls, model_type, default_config, expected_num_weight_nodes_per_model
+    @parameterized.expand(DEFAULT_COMPRESSION_CONFIGURATIONS)
+    def test_ovmodel_default_compression(
+        self, model_cls, model_type, bits, default_config, expected_num_weight_nodes_per_model
     ):
         with unittest.mock.patch.dict(
-            "optimum.intel.openvino.configuration._DEFAULT_4BIT_WQ_CONFIGS",
+            f"optimum.intel.openvino.configuration._DEFAULT_{bits}BIT_WQ_CONFIGS",
             {MODEL_NAMES[model_type]: default_config},
             clear=False,
         ):
-            model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, quantization_config={"bits": 4})
+            model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, quantization_config={"bits": bits})
             check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
+
+            # Check that dynamic quantization group size is correctly set in the runtime info
+            if isinstance(default_config, dict):
+                default_config = _quantization_config_from_dict(default_config)
+            ref_dq_data = []
+            if isinstance(default_config, OVWeightQuantizationConfig) and default_config.dq_group_size is not None:
+                ref_dq_data = [("model", default_config.dq_group_size)]
+            elif isinstance(default_config, OVPipelineQuantizationConfig):
+                ref_dq_data = []
+                for ov_model_name, q_config in default_config.quantization_configs.items():
+                    if isinstance(q_config, OVWeightQuantizationConfig) and q_config.dq_group_size is not None:
+                        ref_dq_data.append((ov_model_name, q_config.dq_group_size))
+            for ov_model_name, ref_dq_group_size in ref_dq_data:
+                rt_info = model.ov_models[ov_model_name].get_rt_info()
+                runtime_options = rt_info["runtime_options"]
+                self.assertIsInstance(
+                    runtime_options,
+                    dict,
+                    "Runtime options are not found in the runtime info",
+                )
+                dq_group_size = runtime_options.get("DYNAMIC_QUANTIZATION_GROUP_SIZE", None)
+                if dq_group_size is None:
+                    self.fail("DYNAMIC_QUANTIZATION_GROUP_SIZE is not found in the runtime options")
+                self.assertEqual(
+                    ref_dq_group_size,
+                    int(dq_group_size.value),
+                    f"Dynamic quantization group size {dq_group_size.value} does not match expected {ref_dq_group_size}",
+                )
 
     @parameterized.expand(DEFAULT_IGNORED_SCOPE_CONFIGURATIONS)
     def test_ovmodel_default_ignored_scope(self, model_cls, model_type, expected_ignored_scope_per_model):
@@ -1566,29 +1605,6 @@ class OVWeightCompressionTest(unittest.TestCase):
                     "backup_mode": None,
                 }
                 compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
-
-    @parameterized.expand(LOAD_IN_4_BITS_SCOPE[::5])
-    def test_ovmodel_4bit_dynamic_with_config(
-        self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes_per_model
-    ):
-        model_id = MODEL_NAMES[model_name]
-        with TemporaryDirectory() as tmp_dir:
-            group_size = quantization_config.pop("group_size", 32)
-            quantization_config = OVDynamicQuantizationConfig(
-                weights_group_size=group_size, activations_group_size=group_size, **quantization_config
-            )
-            model = model_cls.from_pretrained(
-                model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code
-            )
-            ref_quantization_config = model._openvino_config.quantization_config
-            self.assertEqual(model.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"], str(group_size))
-            self.assertEqual(model.ov_config["KV_CACHE_PRECISION"], "u8")
-
-            check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
-
-            model.save_pretrained(tmp_dir)
-            openvino_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
-            self.assertEqual(openvino_config.quantization_config.to_dict(), ref_quantization_config.to_dict())
 
     @parameterized.expand([(MODEL_NAMES["gpt2"],)])
     def test_dataset_seq_len_option(self, model_id):
@@ -2299,9 +2315,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
         with unittest.mock.patch(mock_method_name) as mock_method:
             mock_model = unittest.mock.Mock([])
             mock_model.get_rt_info = unittest.mock.Mock(return_value={})
+            mock_model.set_rt_info = unittest.mock.Mock(return_value={})
 
             mock_quantization_config = unittest.mock.Mock(config_type)
             mock_quantization_config.to_nncf_dict.return_value = {"param1": "value1", "param2": "value2"}
+            mock_quantization_config.dq_group_size = None
 
             additional_kwargs = {"param2": "new_value2", "param3": "value3"}
 

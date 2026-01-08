@@ -386,7 +386,6 @@ class OVExportCommand(BaseOptimumCLICommand):
             ov_config = OVConfig(dtype=self.args.weight_format)
         else:
             ov_config = OVConfig(dtype="auto")
-
         temporary_directory = None
         original_output = None
         if (
