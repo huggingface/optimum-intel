@@ -862,7 +862,9 @@ class OVCalibrationDatasetBuilder:
                         raise tokenizer_error
                     raise value_error
 
-                inputs_embeds, attention_mask, position_ids = self.model.get_multimodal_embeddings(**inputs)
+                inputs_embeds, attention_mask, position_ids, *extra_outputs = self.model.get_multimodal_embeddings(
+                    **inputs
+                )
 
                 language_model_inputs = self.model.language_model.prepare_inputs(
                     input_ids=None,
