@@ -139,6 +139,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
+        "afmoe",
         "chatglm",
         "minicpm",
         "baichuan2",
