@@ -161,10 +161,9 @@ class ExportModelTest(unittest.TestCase):
                 )
 
                 use_cache = supported_task.endswith("-with-past")
-                ov_model = auto_model.from_pretrained(tmpdirname,
-                                                      use_cache=use_cache,
-                                                      trust_remote_code=model_type in REMOTE_CODE_MODELS
-                                                      )
+                ov_model = auto_model.from_pretrained(
+                    tmpdirname, use_cache=use_cache, trust_remote_code=model_type in REMOTE_CODE_MODELS
+                )
                 self.assertIsInstance(ov_model, OVBaseModel)
 
                 if "text-generation" in task:
