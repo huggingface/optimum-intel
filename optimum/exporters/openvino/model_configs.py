@@ -4522,5 +4522,6 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
     library_name="transformers",
 )
 class AfmoeOpenVINOConfig(LlamaOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = "4.55.4"
+    MIN_TRANSFORMERS_VERSION = "4.55.0"
+    MAX_TRANSFORMERS_VERSION = "4.57.3"
     _MODEL_PATCHER = AfmoeModelPatcher
