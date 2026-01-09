@@ -7442,19 +7442,13 @@ def afmoe_moe_forward_patched(self, hidden_states):
 
     # combine weights from all experts to get the common gate, up and down weights
     down_projs = torch.concat(
-        tuple(self.experts[i].down_proj.weight.float().unsqueeze(0)
-              for i in range(num_experts)),
-        dim=0
+        tuple(self.experts[i].down_proj.weight.float().unsqueeze(0) for i in range(num_experts)), dim=0
     ).transpose(1, 2)
     gate_projs = torch.concat(
-        tuple(self.experts[i].gate_proj.weight.float().unsqueeze(0)
-              for i in range(num_experts)),
-        dim=0
+        tuple(self.experts[i].gate_proj.weight.float().unsqueeze(0) for i in range(num_experts)), dim=0
     ).transpose(1, 2)
     up_projs = torch.concat(
-        tuple(self.experts[i].up_proj.weight.float().unsqueeze(0)
-              for i in range(num_experts)),
-        dim=0
+        tuple(self.experts[i].up_proj.weight.float().unsqueeze(0) for i in range(num_experts)), dim=0
     ).transpose(1, 2)
 
     # compute experts outputs in a vectorized form
