@@ -361,8 +361,10 @@ def export_pytorch(
                 logger.info(f"\t- {override_config_key} -> {override_config_value}")
                 setattr(model.config, override_config_key, override_config_value)
 
+        static_shapes = True
         if input_shapes is None:
             input_shapes = {}  # will use the defaults from DEFAULT_DUMMY_SHAPES
+            static_shapes = False  # User did not explicit input shapes, produce dynamic shapes in the model
 
         # Check that inputs match, and order them properly
         dummy_inputs = config.generate_dummy_inputs(framework="pt", **input_shapes)
@@ -411,7 +413,7 @@ def export_pytorch(
 
         with patcher:
             check_dummy_inputs_are_allowed(model, dummy_inputs)
-            input_info = _get_input_info(model, config, dummy_inputs)
+            input_info = _get_input_info(model, config, dummy_inputs, static_shapes=static_shapes)
             torch_export = os.getenv("OPENVINO_DYNAMO_EXPORT", "false").lower() == "true"
             if torch_export:
                 if hasattr(torch.ops, "_prepare_4d_causal_attention_mask_for_sdpa"):
@@ -633,7 +635,7 @@ def export_from_model(
     # Get the shapes to be used to generate dummy inputs
     input_shapes = {}
     for input_name in DEFAULT_DUMMY_SHAPES.keys():
-        if input_name in ["height", "width"]:
+        if input_name in ["height", "width"] and kwargs_shapes is None:
             # use H and W from generator defaults
             continue
         input_shapes[input_name] = (

@@ -87,7 +87,10 @@ def flattenize_inputs(inputs: List[Any]):
 
 
 def _get_input_info(
-    model: Union["PreTrainedModel", "ModelMixin"], config: OnnxConfig, dummy_inputs: Dict[str, Any]
+    model: Union["PreTrainedModel", "ModelMixin"],
+    config: OnnxConfig,
+    dummy_inputs: Dict[str, Any],
+    static_shapes: bool = False
 ) -> List[InputInfo]:
     sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
     inputs = config.ordered_inputs(model)
@@ -105,7 +108,8 @@ def _get_input_info(
         example = flatten_inputs[i]
         type = get_element_type(example.cpu().numpy().dtype)
         shape = PartialShape(example.shape)
-        if name in inputs:
+        # Set dynamic axes from config, unless user requested static shapes
+        if name in inputs and not static_shapes:
             named_dims = inputs[name]
             for idx, dim_name in named_dims.items():
                 if dim_name in name_to_symbol:
