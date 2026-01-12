@@ -3816,54 +3816,6 @@ class Qwen3_VLOpenVINOConfig(BaseVLMOpenVINOConfig):
 
 
 @register_in_tasks_manager(
-    "qwen3_vl_moe",
-    *["image-text-to-text"],
-    library_name="transformers",
-)
-class Qwen3_VL_MOEOpenVINOConfig(Qwen3_VLOpenVINOConfig):
-    def with_behavior(
-        self,
-        behavior: Union[str, Qwen3VLConfigBehavior],
-    ):
-        """
-        Creates a config for different behaviour.
-        Args:
-            behavior ([`ConfigBehavior`]):
-                The behavior to use for the new instance.
-        """
-        if isinstance(behavior, str) and not isinstance(behavior, Qwen3VLConfigBehavior):
-            behavior = Qwen3VLConfigBehavior(behavior)
-
-        if behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS:
-            return self.__class__(
-                self._orig_config,
-                task=self.task,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-                behavior=behavior,
-                preprocessors=self._preprocessors,
-            )
-        if behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
-            return self.__class__(
-                self._orig_config,
-                task=self.task,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-                behavior=behavior,
-                preprocessors=self._preprocessors,
-            )
-        if behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS:
-            return self.__class__(
-                self._orig_config,
-                task=self.task,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-                behavior=behavior,
-                preprocessors=self._preprocessors,
-            )
-
-
-@register_in_tasks_manager(
     "glm",
     *[
         "feature-extraction",
