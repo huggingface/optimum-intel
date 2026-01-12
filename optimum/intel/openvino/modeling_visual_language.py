@@ -193,7 +193,6 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             if (
                 self.config.model_type == "qwen2_vl"
                 or self.config.model_type == "qwen3_vl"
-                or self.config.model_type == "qwen3_vl_moe"
             ) and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
 
@@ -798,7 +797,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
         # Prepare additional kwargs for qwen3_vl models
         additional_kwargs = {}
-        if self.config.model_type in ("qwen3_vl", "qwen3_vl_moe") and extra_outputs:
+        if self.config.model_type in ("qwen3_vl",) and extra_outputs:
             additional_kwargs["visual_pos_masks"] = extra_outputs[0]
             additional_kwargs["deepstack_visual_embeds"] = extra_outputs[1]
 
@@ -5069,7 +5068,6 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen2_vl_text": _OVQwen2VLForCausalLM,
     "qwen2_5_vl": _OVQwen2_5_VLForCausalLM,
     "qwen3_vl": _OVQwen3VLForCausalLM,
-    "qwen3_vl_moe": _OVQwen3VLForCausalLM,
     "qwen2_5_vl_text": _OVQwen2_5_VLForCausalLM,
     "got_ocr2": _OVGotOCR2ForCausalLM,
     "gemma3": _OVGemma3ForCausalLM,

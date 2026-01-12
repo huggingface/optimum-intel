@@ -177,10 +177,6 @@ def init_model_configs():
         "transformers",
         "AutoModelForImageTextToText",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen3_vl_moe", "image-text-to-text")] = (
-        "transformers",
-        "AutoModelForImageTextToText",
-    )
     TasksManager._CUSTOM_CLASSES[("pt", "llava_next_video", "image-text-to-text")] = (
         "transformers",
         "AutoModelForVision2Seq",
@@ -321,7 +317,6 @@ class DummyQwen3VLLMInputGenerator(DummyTextInputGenerator):
     SUPPORTED_INPUT_NAMES = (
         "input_ids",
         "attention_mask",
-        "encoder_attention_mask",
         "token_type_ids",
         "position_ids",
         "visual_pos_masks",
@@ -379,14 +374,6 @@ class DummyQwen3VLLMInputGenerator(DummyTextInputGenerator):
 
 @register_in_tasks_manager(
     "qwen3_vl_text",
-    *[
-        "text-generation",
-        "text-generation-with-past",
-    ],
-    library_name="transformers",
-)
-@register_in_tasks_manager(
-    "qwen3_vl_moe_text",
     *[
         "text-generation",
         "text-generation-with-past",
@@ -3438,8 +3425,6 @@ class DummyQwen3VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = (
         "hidden_states",
         "attention_mask",
-        "window_attention_mask",
-        "window_index",
         "rotary_pos_emb",
         "input",
     )
@@ -3482,7 +3467,7 @@ class DummyQwen3VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
                 [grid_t * grid_h * grid_w, self.embed_dim], framework=framework, dtype=float_dtype
             )
 
-        if input_name in ["attention_mask", "window_attention_mask"]:
+        if input_name in ["attention_mask"]:
             return self.random_mask_tensor(
                 [1, grid_t * grid_h * grid_w, grid_t * grid_h * grid_w], framework=framework, dtype=float_dtype
             )
@@ -3493,15 +3478,6 @@ class DummyQwen3VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
 
         if input_name == "input":
             return self.constant_tensor([4, 2520], framework=framework, value=0, dtype=DTYPE_MAPPER.pt(int_dtype))
-
-        if input_name == "window_index":
-            if self.spatial_merge_size is None:
-                raise ValueError(
-                    "`spatial_merge_size` parameter is not found in model config. Can not generate dummy input data for `window_index` input"
-                )
-            spatial_merge_unit = self.spatial_merge_size * self.spatial_merge_size
-            hidden_size = (grid_t * grid_h * grid_w) // spatial_merge_unit
-            return self.random_int_tensor([hidden_size], max_value=hidden_size)
 
 
 class Qwen2VLConfigBehavior(str, enum.Enum):
@@ -3857,22 +3833,6 @@ class Qwen3_VL_MOEOpenVINOConfig(Qwen3_VLOpenVINOConfig):
         """
         if isinstance(behavior, str) and not isinstance(behavior, Qwen3VLConfigBehavior):
             behavior = Qwen3VLConfigBehavior(behavior)
-
-        if behavior == Qwen3VLConfigBehavior.TEXT_EMBEDDINGS:
-            return get_vlm_text_embeddings_config(
-                "qwen3_vl_moe_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
-            )
-
-        if behavior == Qwen3VLConfigBehavior.LANGUAGE:
-            return get_vlm_text_generation_config(
-                "qwen3_vl_moe_text",
-                self._orig_config.text_config,
-                self.int_dtype,
-                self.float_dtype,
-                model_patcher=Qwen3VLLanguageModelPatcher,
-                dummy_input_generator=DummyQwen2VLLMInputGenerator,
-                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
-            )
 
         if behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
