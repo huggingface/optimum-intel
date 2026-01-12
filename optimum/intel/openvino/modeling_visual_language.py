@@ -191,7 +191,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
                 position_ids = position_ids[:, -inputs_embeds.shape[1] :]
 
             if (
-                self.config.model_type == "qwen2_vl" or self.config.model_type == "qwen3_vl"
+                self.config.model_type in ["qwen2_vl", "qwen3_vl"]
             ) and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
 
