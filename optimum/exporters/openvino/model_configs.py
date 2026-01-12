@@ -3654,7 +3654,7 @@ class Qwen3VLConfigBehavior(str, enum.Enum):
     *["image-text-to-text"],
     library_name="transformers",
 )
-class Qwen3_VLOpenVINOConfig(BaseVLMOpenVINOConfig):
+class Qwen3VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen3VLConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
