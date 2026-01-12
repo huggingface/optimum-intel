@@ -74,7 +74,7 @@ from optimum.intel.utils.import_utils import is_openvino_version, is_transformer
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # TODO : Add phi4_multimodal (transformers modeling) not tested and needs to be fixed (converted model outputs not matching original model)
-MODEL_NOT_TESTED = {"phi4_multimodal"}
+MODEL_NOT_TESTED = {"phi4_multimodal", "pix2struct"}
 
 if is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2025.5.0"):
     MODEL_NOT_TESTED.add("marian")
@@ -419,11 +419,9 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
 class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = [
         "donut",
-        "pix2struct",
         "trocr",
         "vision-encoder-decoder",
     ]
-
     TASK = "image-to-text"
     OVMODEL_CLASS = OVModelForVision2Seq
     AUTOMODEL_CLASS = AutoModelForVision2Seq
@@ -481,23 +479,16 @@ class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
         start_token = "<s>"
         decoder_start_token_id = tokenizer.encode(start_token)[0]
+        features = feature_extractor(data, return_tensors="pt")
+        decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
 
-        extra_inputs = [{}, {}]
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**features, **decoder_inputs, use_cache=True)
 
-        for extra_inps in extra_inputs:
-            features = feature_extractor(data, return_tensors="pt")
-            decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
-
-            with torch.no_grad():
-                transformers_outputs = transformers_model(**features, **decoder_inputs, **extra_inps, use_cache=True)
-            input_type = "pt"
-            features = feature_extractor(data, return_tensors=input_type)
-            ov_outputs = ov_model(**features, **decoder_inputs, **extra_inps)
-
-            self.assertTrue("logits" in ov_outputs)
-
-            # Compare tensor outputs
-            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3))
+        ov_outputs = ov_model(**features, **decoder_inputs)
+        self.assertTrue("logits" in ov_outputs)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3))
 
         gc.collect()
 
@@ -1067,8 +1058,8 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
 class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ["pix2struct"]
     TASK = "image-to-text"  # is it fine as well with visual-question-answering?
-    OVMODEL_CLASS = OVModelForPix2Struct
-    AUTOMODEL_CLASS = Pix2StructForConditionalGeneration
+    OVMODEL_CLASS = OVModelForVision2Seq
+    AUTOMODEL_CLASS = AutoModelForVision2Seq
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
