@@ -4650,4 +4650,4 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
                     f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model ONNX config.'
                 )
 
-        return
+        return dummy_inputs
