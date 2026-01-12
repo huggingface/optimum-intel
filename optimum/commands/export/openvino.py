@@ -294,6 +294,16 @@ def parse_args_openvino(parser: "ArgumentParser"):
         type=json.loads,
         help=("Any kwargs passed to the model forward, or used to customize the export for a given model."),
     )
+    optional_group.add_argument(
+        "--input-shapes",
+        type=json.loads,
+        default=None,
+        help=(
+            "Override the default shapes used during export. Provide shapes as JSON, e.g., "
+            '\'{{"batch_size": 1, "sequence_length": 128}}\' for static shapes. '
+            "Common shape parameters include: batch_size, sequence_length, height, width, num_channels."
+        ),
+    )
 
 
 def no_compression_parameter_provided(args):
@@ -464,7 +474,6 @@ class OVExportCommand(BaseOptimumCLICommand):
             output = Path(self.args.output)
 
         try:
-            # TODO : add input shapes
             main_export(
                 model_name_or_path=self.args.model,
                 output=output,
@@ -479,7 +488,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 library_name=library_name,
                 variant=self.args.variant,
                 model_kwargs=self.args.model_kwargs,
-                # **input_shapes,
+                **(self.args.input_shapes or {}),
             )
             if apply_main_quantize:
                 _main_quantize(
