@@ -7484,3 +7484,4 @@ class AfmoeModelPatcher(ModelPatcher):
             if layer.moe_enabled:
                 afmoe_moe = layer.mlp
                 afmoe_moe.forward = afmoe_moe._orig_forward
+                del afmoe_moe.down_projs, afmoe_moe.gate_projs, afmoe_moe.up_projs
