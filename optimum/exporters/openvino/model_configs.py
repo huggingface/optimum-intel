@@ -3682,11 +3682,7 @@ class Qwen3VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self._normalized_config.use_embed_dim = False
-        if self._behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_MERGER and hasattr(config, "vision_config"):
-            self._config = config.vision_config
-            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
-            self._normalized_config.use_embed_dim = True
-        if self._behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS and hasattr(config, "vision_config"):
+        if self._behavior in (Qwen3VLConfigBehavior.VISION_EMBEDDINGS_MERGER, Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS) and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self._normalized_config.use_embed_dim = True
@@ -3750,25 +3746,7 @@ class Qwen3VLOpenVINOConfig(BaseVLMOpenVINOConfig):
                 inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
             )
 
-        if behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS:
-            return self.__class__(
-                self._orig_config,
-                task=self.task,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-                behavior=behavior,
-                preprocessors=self._preprocessors,
-            )
-        if behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
-            return self.__class__(
-                self._orig_config,
-                task=self.task,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-                behavior=behavior,
-                preprocessors=self._preprocessors,
-            )
-        if behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS:
+        if behavior in (Qwen3VLConfigBehavior.VISION_EMBEDDINGS, Qwen3VLConfigBehavior.VISION_EMBEDDINGS_MERGER, Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS):
             return self.__class__(
                 self._orig_config,
                 task=self.task,
