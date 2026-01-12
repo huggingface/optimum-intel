@@ -37,7 +37,6 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
-    Pix2StructForConditionalGeneration,
     PretrainedConfig,
     pipeline,
     set_seed,
@@ -52,7 +51,6 @@ from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.stateful import model_has_state
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
-    OVModelForPix2Struct,
     OVModelForSeq2SeqLM,
     OVModelForSpeechSeq2Seq,
     OVModelForTextToSpeechSeq2Seq,
