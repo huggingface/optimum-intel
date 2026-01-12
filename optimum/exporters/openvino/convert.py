@@ -49,8 +49,6 @@ from optimum.intel.utils.import_utils import (
     _torch_version,
     _transformers_version,
     compare_versions,
-    is_openvino_tokenizers_version,
-    is_tokenizers_version,
     is_transformers_version,
 )
 from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
@@ -66,8 +64,11 @@ from .stateful import (
 from .utils import (
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     OV_XML_FILE_NAME,
+    _get_dynamic_shapes_info,
     _get_input_info,
+    _get_model_dtype,
     _get_open_clip_submodels_fn_and_export_configs,
+    _normalize_dummy_inputs,
     allow_skip_tracing_check,
     clear_class_registry,
     remove_none_from_dummy_inputs,
@@ -409,23 +410,37 @@ def export_pytorch(
             ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
 
         with patcher:
-            if patch_16bit_model:
-                from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
-
-                __make_16bit_traceable(model)
             check_dummy_inputs_are_allowed(model, dummy_inputs)
             input_info = _get_input_info(model, config, dummy_inputs)
-            conversion_extensions = getattr(patcher, "conversion_extensions", [])
-            module_extensions = getattr(patcher, "module_extensions", None)
-            if module_extensions is not None:
-                ts_decoder_kwargs["module_extensions"] = module_extensions
-            ts_decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **ts_decoder_kwargs)
-            ov_model = convert_model(
-                ts_decoder,
-                example_input=dummy_inputs,
-                input=[(item.shape, item.type) for item in input_info],
-                extension=conversion_extensions,
-            )
+            torch_export = os.getenv("OPENVINO_DYNAMO_EXPORT", "false").lower() == "true"
+            if torch_export:
+                if hasattr(torch.ops, "_prepare_4d_causal_attention_mask_for_sdpa"):
+                    # patch_everywhere breaks torch.ops namespace
+                    del torch.ops._prepare_4d_causal_attention_mask_for_sdpa
+                dynamic_shapes = _get_dynamic_shapes_info(model, config, dummy_inputs)
+                _export_kwargs = {"args": (), "kwargs": _normalize_dummy_inputs(dummy_inputs, _get_model_dtype(model))}
+                _export_kwargs["dynamic_shapes"] = dynamic_shapes
+
+                ep = torch.export.export_for_training(model, **_export_kwargs)
+
+                ov_model = convert_model(ep)
+            else:
+                if patch_16bit_model:
+                    from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
+
+                    __make_16bit_traceable(model)
+
+                conversion_extensions = getattr(patcher, "conversion_extensions", [])
+                module_extensions = getattr(patcher, "module_extensions", None)
+                if module_extensions is not None:
+                    ts_decoder_kwargs["module_extensions"] = module_extensions
+                ts_decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **ts_decoder_kwargs)
+                ov_model = convert_model(
+                    ts_decoder,
+                    example_input=dummy_inputs,
+                    input=[(item.shape, item.type) for item in input_info],
+                    extension=conversion_extensions,
+                )
 
         ov_model.validate_nodes_and_infer_types()  # TODO: remove as unnecessary validation?
 
@@ -776,12 +791,6 @@ def export_tokenizer(
         from openvino_tokenizers import convert_tokenizer
     except ModuleNotFoundError:
         return
-
-    if is_tokenizers_version(">", "0.19") and is_openvino_tokenizers_version("<", "2024.5.0.0"):
-        logger.warning(
-            "Exporting tokenizers to OpenVINO is not supported for tokenizers version > 0.19 and openvino version <= 2024.4. "
-            "Please downgrade to tokenizers version <= 0.19 to export tokenizers to OpenVINO."
-        )
 
     if not isinstance(output, Path):
         output = Path(output)

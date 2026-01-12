@@ -27,10 +27,9 @@ from .utils import (
 from .version import __version__
 
 
+# Base objects, independent of any specific backend
+# TODO: add openvino once ipex and inc officially deprecated
 _import_structure = {
-    "ipex": [],
-    "neural_compressor": [],
-    "openvino": [],
     "pipelines": ["pipeline"],
     # dummy objects
     "utils.dummy_ipex_objects": [],
@@ -60,19 +59,17 @@ except OptionalDependencyNotAvailable:
         ]
     )
 else:
-    _import_structure["ipex"].extend(
-        [
-            "IPEXModelForCausalLM",
-            "IPEXModelForSeq2SeqLM",
-            "IPEXModelForSequenceClassification",
-            "IPEXModelForMaskedLM",
-            "IPEXModelForTokenClassification",
-            "IPEXModelForQuestionAnswering",
-            "IPEXModelForImageClassification",
-            "IPEXModelForAudioClassification",
-            "IPEXModel",
-        ]
-    )
+    _import_structure["ipex"] = [
+        "IPEXModelForCausalLM",
+        "IPEXModelForSeq2SeqLM",
+        "IPEXModelForSequenceClassification",
+        "IPEXModelForMaskedLM",
+        "IPEXModelForTokenClassification",
+        "IPEXModelForQuestionAnswering",
+        "IPEXModelForImageClassification",
+        "IPEXModelForAudioClassification",
+        "IPEXModel",
+    ]
 
 
 try:
@@ -83,93 +80,6 @@ except OptionalDependencyNotAvailable:
 else:
     _import_structure["ipex"].extend(["IPEXSentenceTransformer"])
 
-
-try:
-    if not (is_openvino_available() and is_nncf_available()):
-        raise OptionalDependencyNotAvailable()
-except OptionalDependencyNotAvailable:
-    _import_structure["utils.dummy_openvino_and_nncf_objects"].extend(
-        [
-            "OVQuantizer",
-            "OVCalibrationDataset",
-            "OVPipelineQuantizationConfig",
-            "OVQuantizationConfig",
-            "OVWeightQuantizationConfig",
-            "OVDynamicQuantizationConfig",
-            "OVMixedQuantizationConfig",
-        ]
-    )
-else:
-    _import_structure["openvino"].extend(
-        [
-            "OVQuantizer",
-            "OVCalibrationDataset",
-            "OVPipelineQuantizationConfig",
-            "OVQuantizationConfig",
-            "OVWeightQuantizationConfig",
-            "OVDynamicQuantizationConfig",
-            "OVMixedQuantizationConfig",
-        ]
-    )
-
-
-try:
-    if not (is_openvino_available() and is_diffusers_available()):
-        raise OptionalDependencyNotAvailable()
-except OptionalDependencyNotAvailable:
-    _import_structure["utils.dummy_openvino_and_diffusers_objects"].extend(
-        [
-            "OVStableDiffusionPipeline",
-            "OVStableDiffusionImg2ImgPipeline",
-            "OVStableDiffusionInpaintPipeline",
-            "OVStableDiffusionXLPipeline",
-            "OVStableDiffusionXLImg2ImgPipeline",
-            "OVStableDiffusionXLInpaintPipeline",
-            "OVStableDiffusion3Pipeline",
-            "OVStableDiffusion3Image2ImagePipeline",
-            "OVStableDiffusion3InpaintPipeline",
-            "OVLatentConsistencyModelPipeline",
-            "OVLatentConsistencyModelImg2ImgPipeline",
-            "OVLTXPipeline",
-            "OVFluxPipeline",
-            "OVFluxImg2ImgPipeline",
-            "OVFluxInpaintPipeline",
-            "OVFluxFillPipeline",
-            "OVSanaPipeline",
-            "OVPipelineForImage2Image",
-            "OVPipelineForText2Image",
-            "OVPipelineForInpainting",
-            "OVPipelineForText2Video",
-            "OVDiffusionPipeline",
-        ]
-    )
-else:
-    _import_structure["openvino"].extend(
-        [
-            "OVStableDiffusionPipeline",
-            "OVStableDiffusionImg2ImgPipeline",
-            "OVStableDiffusionInpaintPipeline",
-            "OVStableDiffusionXLPipeline",
-            "OVStableDiffusionXLImg2ImgPipeline",
-            "OVStableDiffusionXLInpaintPipeline",
-            "OVStableDiffusion3Pipeline",
-            "OVStableDiffusion3Image2ImagePipeline",
-            "OVStableDiffusion3InpaintPipeline",
-            "OVLatentConsistencyModelPipeline",
-            "OVLatentConsistencyModelImg2ImgPipeline",
-            "OVLTXPipeline",
-            "OVFluxPipeline",
-            "OVFluxImg2ImgPipeline",
-            "OVFluxInpaintPipeline",
-            "OVFluxFillPipeline",
-            "OVSanaPipeline",
-            "OVPipelineForImage2Image",
-            "OVPipelineForText2Image",
-            "OVPipelineForInpainting",
-            "OVPipelineForText2Video",
-            "OVDiffusionPipeline",
-        ]
-    )
 
 try:
     if not is_openvino_available():
@@ -206,34 +116,119 @@ except OptionalDependencyNotAvailable:
         ]
     )
 else:
-    _import_structure["openvino"].extend(
+    _import_structure["openvino"] = [
+        "OVModelForAudioClassification",
+        "OVModelForAudioFrameClassification",
+        "OVModelForAudioXVector",
+        "OVModelForCausalLM",
+        "OVModelForCTC",
+        "OVModelForCustomTasks",
+        "OVModelForFeatureExtraction",
+        "OVModelForImageClassification",
+        "OVModelForMaskedLM",
+        "OVModelForPix2Struct",
+        "OVModelForQuestionAnswering",
+        "OVModelForSeq2SeqLM",
+        "OVModelForSpeechSeq2Seq",
+        "OVModelForTextToSpeechSeq2Seq",
+        "OVModelForVision2Seq",
+        "OVModelForVisualCausalLM",
+        "OVModelForSequenceClassification",
+        "OVModelForTokenClassification",
+        "OVConfig",
+        "OVModelOpenCLIPVisual",
+        "OVModelOpenCLIPText",
+        "OVModelOpenCLIPForZeroShotImageClassification",
+        "OVModelForZeroShotImageClassification",
+        "OVSamModel",
+    ]
+
+
+try:
+    if not (is_openvino_available() and is_nncf_available()):
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    _import_structure["utils.dummy_openvino_and_nncf_objects"].extend(
         [
-            "OVModelForAudioClassification",
-            "OVModelForAudioFrameClassification",
-            "OVModelForAudioXVector",
-            "OVModelForCausalLM",
-            "OVModelForCTC",
-            "OVModelForCustomTasks",
-            "OVModelForFeatureExtraction",
-            "OVModelForImageClassification",
-            "OVModelForMaskedLM",
-            "OVModelForPix2Struct",
-            "OVModelForQuestionAnswering",
-            "OVModelForSeq2SeqLM",
-            "OVModelForSpeechSeq2Seq",
-            "OVModelForTextToSpeechSeq2Seq",
-            "OVModelForVision2Seq",
-            "OVModelForVisualCausalLM",
-            "OVModelForSequenceClassification",
-            "OVModelForTokenClassification",
-            "OVConfig",
-            "OVModelOpenCLIPVisual",
-            "OVModelOpenCLIPText",
-            "OVModelOpenCLIPForZeroShotImageClassification",
-            "OVModelForZeroShotImageClassification",
-            "OVSamModel",
+            "OVQuantizer",
+            "OVCalibrationDataset",
+            "OVPipelineQuantizationConfig",
+            "OVQuantizationConfig",
+            "OVWeightQuantizationConfig",
+            "OVMixedQuantizationConfig",
         ]
     )
+else:
+    _import_structure["openvino"].extend(
+        [
+            "OVQuantizer",
+            "OVCalibrationDataset",
+            "OVPipelineQuantizationConfig",
+            "OVQuantizationConfig",
+            "OVWeightQuantizationConfig",
+            "OVMixedQuantizationConfig",
+        ]
+    )
+
+
+try:
+    if not (is_openvino_available() and is_diffusers_available()):
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    _import_structure["utils.dummy_openvino_and_diffusers_objects"].extend(
+        [
+            "OVStableDiffusionPipeline",
+            "OVStableDiffusionImg2ImgPipeline",
+            "OVStableDiffusionInpaintPipeline",
+            "OVStableDiffusionXLPipeline",
+            "OVStableDiffusionXLImg2ImgPipeline",
+            "OVStableDiffusionXLInpaintPipeline",
+            "OVStableDiffusion3Pipeline",
+            "OVStableDiffusion3Img2ImgPipeline",
+            "OVStableDiffusion3InpaintPipeline",
+            "OVLatentConsistencyModelPipeline",
+            "OVLatentConsistencyModelImg2ImgPipeline",
+            "OVLTXPipeline",
+            "OVFluxPipeline",
+            "OVFluxImg2ImgPipeline",
+            "OVFluxInpaintPipeline",
+            "OVFluxFillPipeline",
+            "OVSanaPipeline",
+            "OVPipelineForImage2Image",
+            "OVPipelineForText2Image",
+            "OVPipelineForInpainting",
+            "OVPipelineForText2Video",
+            "OVDiffusionPipeline",
+        ]
+    )
+else:
+    _import_structure["openvino"].extend(
+        [
+            "OVStableDiffusionPipeline",
+            "OVStableDiffusionImg2ImgPipeline",
+            "OVStableDiffusionInpaintPipeline",
+            "OVStableDiffusionXLPipeline",
+            "OVStableDiffusionXLImg2ImgPipeline",
+            "OVStableDiffusionXLInpaintPipeline",
+            "OVStableDiffusion3Pipeline",
+            "OVStableDiffusion3Img2ImgPipeline",
+            "OVStableDiffusion3InpaintPipeline",
+            "OVLatentConsistencyModelPipeline",
+            "OVLatentConsistencyModelImg2ImgPipeline",
+            "OVLTXPipeline",
+            "OVFluxPipeline",
+            "OVFluxImg2ImgPipeline",
+            "OVFluxInpaintPipeline",
+            "OVFluxFillPipeline",
+            "OVSanaPipeline",
+            "OVPipelineForImage2Image",
+            "OVPipelineForText2Image",
+            "OVPipelineForInpainting",
+            "OVPipelineForText2Video",
+            "OVDiffusionPipeline",
+        ]
+    )
+
 
 try:
     if not is_neural_compressor_available():
@@ -257,23 +252,21 @@ except OptionalDependencyNotAvailable:
         ]
     )
 else:
-    _import_structure["neural_compressor"].extend(
-        [
-            "INCConfig",
-            "INCModel",
-            "INCModelForCausalLM",
-            "INCModelForMaskedLM",
-            "INCModelForMultipleChoice",
-            "INCModelForQuestionAnswering",
-            "INCModelForSeq2SeqLM",
-            "INCModelForSequenceClassification",
-            "INCModelForTokenClassification",
-            "INCModelForVision2Seq",
-            "INCQuantizer",
-            "INCSeq2SeqTrainer",
-            "INCTrainer",
-        ]
-    )
+    _import_structure["neural_compressor"] = [
+        "INCConfig",
+        "INCModel",
+        "INCModelForCausalLM",
+        "INCModelForMaskedLM",
+        "INCModelForMultipleChoice",
+        "INCModelForQuestionAnswering",
+        "INCModelForSeq2SeqLM",
+        "INCModelForSequenceClassification",
+        "INCModelForTokenClassification",
+        "INCModelForVision2Seq",
+        "INCQuantizer",
+        "INCSeq2SeqTrainer",
+        "INCTrainer",
+    ]
 
 try:
     if not (is_neural_compressor_available() and is_diffusers_available()):
@@ -338,7 +331,6 @@ if TYPE_CHECKING:
     except OptionalDependencyNotAvailable:
         from .utils.dummy_openvino_and_nncf_objects import (
             OVCalibrationDataset,
-            OVDynamicQuantizationConfig,
             OVMixedQuantizationConfig,
             OVPipelineQuantizationConfig,
             OVQuantizationConfig,
@@ -348,7 +340,6 @@ if TYPE_CHECKING:
     else:
         from .openvino import (
             OVCalibrationDataset,
-            OVDynamicQuantizationConfig,
             OVMixedQuantizationConfig,
             OVPipelineQuantizationConfig,
             OVQuantizationConfig,

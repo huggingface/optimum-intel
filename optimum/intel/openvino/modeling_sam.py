@@ -14,7 +14,7 @@ from transformers.modeling_outputs import ModelOutput
 from transformers.models.sam.modeling_sam import SamImageSegmentationOutput, SamPositionalEmbedding
 
 from ...exporters.openvino.utils import save_config
-from .configuration import OVConfig, OVQuantizationConfigBase
+from .configuration import OVConfig, OVQuantizationConfigBase, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .utils import (
     ONNX_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
@@ -22,6 +22,7 @@ from .utils import (
     OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
     OV_VISION_ENCODER_MODEL_NAME,
     TemporaryDirectory,
+    classproperty,
     model_has_dynamic_inputs,
 )
 
@@ -74,6 +75,13 @@ class OVSamPromptEncoder(OVModelPart):
 class OVSamModel(OVBaseModel):
     export_feature = "feature-extraction"
     auto_model_class = SamModel
+
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        return {
+            "vision_encoder": OV_VISION_ENCODER_MODEL_NAME,
+            "prompt_encoder_mask_decoder": OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
+        }
 
     def __init__(
         self,
@@ -136,25 +144,6 @@ class OVSamModel(OVBaseModel):
         """
         save_config(self.config, save_directory)
 
-    def _save_pretrained(self, save_directory: Union[str, Path]):
-        """
-        Saves the model to the OpenVINO IR format so that it can be re-loaded using the
-        [`~optimum.intel.openvino.modeling.OVModel.from_pretrained`] class method.
-
-        Arguments:
-            save_directory (`str` or `Path`):
-                The directory where to save the model files.
-        """
-        dst_file_names = {
-            "vision_encoder": OV_VISION_ENCODER_MODEL_NAME,
-            "prompt_encoder_mask_decoder": OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
-        }
-        for name, model in self.ov_models.items():
-            dst_file_name = dst_file_names[name]
-            dst_path = os.path.join(save_directory, dst_file_name)
-            ov.save_model(model, dst_path, compress_to_fp16=False)
-        self._save_openvino_config(save_directory)
-
     @classmethod
     def _from_pretrained(
         cls,
@@ -170,6 +159,7 @@ class OVSamModel(OVBaseModel):
         local_files_only: bool = False,
         load_in_8bit: bool = False,
         quantization_config: Union[OVQuantizationConfigBase, Dict] = None,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         """
@@ -206,6 +196,8 @@ class OVSamModel(OVBaseModel):
                 Whether or not to apply 8-bit weight quantization.
             quantization_config(`Union[OVQuantizationConfigBase, Dict]`, *optional*, defaults to `None`):
                 Quantization configuration to apply to the model.
+            trust_remote_code (`bool`, *optional*, defaults to `False`):
+                Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
         if use_auth_token is not None:
             warnings.warn(
@@ -219,10 +211,12 @@ class OVSamModel(OVBaseModel):
         from_onnx = kwargs.get("from_onnx", False)
 
         default_vision_encoder_file_name = (
-            ONNX_VISION_ENCODER_MODEL_NAME if from_onnx else OV_VISION_ENCODER_MODEL_NAME
+            ONNX_VISION_ENCODER_MODEL_NAME if from_onnx else cls._all_ov_model_paths["vision_encoder"]
         )
         default_prompt_encoder_mask_decoder_file_name = (
-            ONNX_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME if from_onnx else OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME
+            ONNX_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME
+            if from_onnx
+            else cls._all_ov_model_paths["prompt_encoder_mask_decoder"]
         )
         vision_encoder_file_name = vision_encoder_file_name or default_vision_encoder_file_name
         prompt_encoder_mask_decoder_file_name = (
@@ -280,24 +274,28 @@ class OVSamModel(OVBaseModel):
                 model_save_dir,
             )
 
-        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+        quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
+        compile_model = kwargs.pop("compile", True)
         model = cls(
             vision_encoder_model=vision_encoder_model,
             prompt_encoder_mask_decoder_model=prompt_encoder_model,
             config=config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
+            compile=compile_model and not quantization_config,
             **kwargs,
         )
 
-        if quantization_config is not None:
-            from optimum.intel import OVQuantizer
-
-            quantizer = OVQuantizer(model)
-            quantization_config_copy = quantization_config.clone()
-            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
-            quantization_config_copy.processor = str(quantization_config.processor or model_id)
-            quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+        if quantization_config:
+            if hasattr(config, "name_or_path"):
+                model_id = config.name_or_path
+            else:
+                logger.warning(
+                    "`model_id` could not be determined from the config. In the case there are default quantization "
+                    "configurations for this model, they will not be applied."
+                )
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
+            model._apply_quantization(quantization_config, compile_only, compile_model, model_id, trust_remote_code)
 
         return model
 
@@ -429,3 +427,13 @@ class OVSamModel(OVBaseModel):
             if model_has_dynamic_inputs(ov_model):
                 return True
         return False
+
+    def _preprocess_quantization_config(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        model_name_or_path: str,
+    ) -> OVQuantizationConfigBase:
+        if quantization_config.processor is None:
+            quantization_config = quantization_config.clone()
+            quantization_config.processor = model_name_or_path
+        return quantization_config

@@ -16,8 +16,11 @@ import logging
 import warnings
 
 from ..utils.import_utils import (
+    _openvino_version,
     is_diffusers_available,
     is_nncf_available,
+    is_nncf_version,
+    is_openvino_version,
     is_sentence_transformers_available,
 )
 from .utils import (
@@ -32,10 +35,15 @@ from .utils import (
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
+if is_openvino_version("<", "2025.4.0"):
+    raise ImportError(
+        "Optimum-intel requires OpenVINO version 2025.4.0 or higher. "
+        "Please upgrade OpenVINO to version 2025.4 or later. "
+        f"The current version of OpenVINO is {_openvino_version}."
+    )
 
 from .configuration import (
     OVConfig,
-    OVDynamicQuantizationConfig,
     OVMixedQuantizationConfig,
     OVPipelineQuantizationConfig,
     OVQuantizationConfig,
@@ -43,20 +51,16 @@ from .configuration import (
 )
 
 
+logger = logging.getLogger(__name__)
+
 if is_nncf_available():
-    logging.disable(logging.INFO)
     import nncf
 
-    logging.disable(logging.NOTSET)
-
-    # Suppress version mismatch logging
-    nncf.set_log_level(logging.ERROR)
-    from nncf.torch import patch_torch_operators
-
-    nncf.set_log_level(logging.INFO)
-
-    patch_torch_operators()
-
+    if is_nncf_version("<", "2.19"):
+        logger.warning(
+            "NNCF version 2.19 or higher is required to use NNCF-based quantization. "
+            f"Please upgrade your NNCF installation. The current version of NNCF is {nncf.__version__}."
+        )
     from .quantization import OVCalibrationDataset, OVQuantizer
 
 

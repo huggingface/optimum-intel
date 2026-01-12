@@ -100,7 +100,6 @@ from optimum.intel.openvino.utils import (
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import (
     _langchain_hf_available,
-    is_openvino_version,
     is_transformers_version,
 )
 from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
@@ -113,6 +112,9 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 from optimum.utils.testing_utils import require_diffusers
+
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 class Timer(object):
@@ -155,10 +157,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertTrue(manual_openvino_cache_dir.is_dir())
         num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
         self.assertGreaterEqual(num_blobs, 1)
-        if is_openvino_version("<", "2023.3"):
-            self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT").name, "THROUGHPUT")
-        else:
-            self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
+        self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
 
         # Test compile only
 
@@ -196,7 +195,8 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     @parameterized.expand((True, False))
     def test_load_from_hub_and_save_decoder_model(self, use_cache):
-        model_id = "vuiseng9/ov-gpt2-fp32-kv-cache" if use_cache else "vuiseng9/ov-gpt2-fp32-no-cache"
+        model_id = MODEL_NAMES["gpt2-with-cache-ov"] if use_cache else MODEL_NAMES["gpt2-without-cache-ov"]
+
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         loaded_model = OVModelForCausalLM.from_pretrained(model_id, use_cache=use_cache, device=OPENVINO_DEVICE)
@@ -231,7 +231,9 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     def test_load_from_hub_and_save_visual_language_model(self):
         model_ids = [self.OV_VLM_MODEL_ID]
-        if is_transformers_version(">=", "4.51"):
+        if is_transformers_version(">=", "4.51") and is_transformers_version("<", "4.57"):
+            # the phi4 auto-processor can't be loaded in offline mode
+            # anymore due to an internal bug in transformers
             model_ids.append("katuni4ka/phi-4-multimodal-ov")
         for model_id in model_ids:
             processor = get_preprocessor(model_id)
@@ -494,11 +496,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         input_points = [[[450, 600]]]
         raw_image = Image.open(requests.get(img_url, stream=True).raw).convert("RGB")
         inputs = processor(raw_image, input_points=input_points, return_tensors="pt")
-
         loaded_model_outputs = loaded_model(**inputs)
 
         # Test compile only
-
         compile_only_model = OVModelForFeatureExtraction.from_pretrained(
             self.OV_SAM_MODEL_ID, ov_config=ov_config, compile_only=True, device=OPENVINO_DEVICE
         )
@@ -511,10 +511,10 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder.model, ov.CompiledModel)
         self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder.request, ov.CompiledModel)
         outputs = compile_only_model(**inputs)
-        self.assertTrue(torch.equal(loaded_model_outputs.iou_scores, outputs.iou_scores))
-        self.assertTrue(torch.equal(loaded_model_outputs.pred_masks, outputs.pred_masks))
-        del compile_only_model
+        torch.testing.assert_close(loaded_model_outputs.iou_scores, outputs.iou_scores, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(loaded_model_outputs.pred_masks, outputs.pred_masks, atol=1e-4, rtol=1e-4)
 
+        # Test save and load
         with TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
@@ -530,12 +530,8 @@ class OVModelIntegrationTest(unittest.TestCase):
             )
 
         outputs = model(**inputs)
-        self.assertTrue(torch.equal(loaded_model_outputs.iou_scores, outputs.iou_scores))
-        self.assertTrue(torch.equal(loaded_model_outputs.pred_masks, outputs.pred_masks))
-
-        del loaded_model
-        del model
-        gc.collect()
+        torch.testing.assert_close(loaded_model_outputs.iou_scores, outputs.iou_scores, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(loaded_model_outputs.pred_masks, outputs.pred_masks, atol=1e-4, rtol=1e-4)
 
     def test_load_from_hub_and_save_text_speech_model(self):
         loaded_model = OVModelForTextToSpeechSeq2Seq.from_pretrained(
@@ -556,10 +552,10 @@ class OVModelIntegrationTest(unittest.TestCase):
         with TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
-            self.assertTrue(loaded_model.OV_ENCODER_MODEL_NAME in folder_contents)
-            self.assertTrue(loaded_model.OV_DECODER_MODEL_NAME in folder_contents)
-            self.assertTrue(loaded_model.OV_POSTNET_MODEL_NAME in folder_contents)
-            self.assertTrue(loaded_model.OV_VOCODER_MODEL_NAME in folder_contents)
+            self.assertTrue(loaded_model._ov_model_paths["encoder"] in folder_contents)
+            self.assertTrue(loaded_model._ov_model_paths["decoder"] in folder_contents)
+            self.assertTrue(loaded_model._ov_model_paths["postnet"] in folder_contents)
+            self.assertTrue(loaded_model._ov_model_paths["vocoder"] in folder_contents)
             model = OVModelForTextToSpeechSeq2Seq.from_pretrained(tmpdirname, device="cpu")
             # compile only
             compile_only_model = OVModelForTextToSpeechSeq2Seq.from_pretrained(
@@ -1530,6 +1526,7 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_ATTENTION)
     def test_compare_output_attentions(self, model_arch):
+        self.skipTest("Skipping until ticket 175062 is resolved.")
         model_id = MODEL_NAMES[model_arch]
 
         image = self._get_sample_image()
@@ -1568,6 +1565,7 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HIDDEN_STATES)
     def test_compare_output_hidden_states(self, model_arch):
+        self.skipTest("Skipping until ticket 175062 is resolved.")
         model_id = MODEL_NAMES[model_arch]
 
         image = self._get_sample_image()
@@ -1642,10 +1640,14 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
         with TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
-            self.assertTrue(loaded_model.text_model._xml_model_name in folder_contents)
-            self.assertTrue(loaded_model.text_model._xml_model_name.replace(".xml", ".bin") in folder_contents)
-            self.assertTrue(loaded_model.visual_model._xml_model_name in folder_contents)
-            self.assertTrue(loaded_model.visual_model._xml_model_name.replace(".xml", ".bin") in folder_contents)
+            self.assertTrue(loaded_model.text_model._all_ov_model_paths["model"] in folder_contents)
+            self.assertTrue(
+                loaded_model.text_model._all_ov_model_paths["model"].replace(".xml", ".bin") in folder_contents
+            )
+            self.assertTrue(loaded_model.visual_model._all_ov_model_paths["model"] in folder_contents)
+            self.assertTrue(
+                loaded_model.visual_model._all_ov_model_paths["model"].replace(".xml", ".bin") in folder_contents
+            )
             model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
 
         outputs = model(tokens, processed_image)

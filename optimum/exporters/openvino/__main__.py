@@ -15,10 +15,11 @@
 import gc
 import logging
 import operator
+import shutil
 import warnings
 from functools import reduce
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
@@ -29,9 +30,10 @@ from openvino import Core, Type, save_model
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
+    DIFFUSERS_IMPORT_ERROR,
+    is_diffusers_available,
     is_nncf_available,
     is_openvino_tokenizers_available,
-    is_openvino_version,
     is_transformers_version,
 )
 from optimum.intel.utils.modeling_utils import (
@@ -45,6 +47,7 @@ from .utils import (
     clear_class_registry,
     deduce_diffusers_dtype,
     load_preprocessors,
+    patch_qwenvl_configs,
 )
 
 
@@ -75,7 +78,9 @@ def infer_task(
     cache_dir: str = HUGGINGFACE_HUB_CACHE,
     token: Optional[Union[bool, str]] = None,
     library_name: Optional[str] = None,
+    trust_remote_code: bool = False,
 ):
+    original_task = task
     task = TasksManager.map_from_synonym(task)
     if task == "auto":
         if library_name == "open_clip":
@@ -104,7 +109,56 @@ def infer_task(
                 raise RequestsConnectionError(
                     f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
                 )
+
+    if library_name == "transformers":
+        config = AutoConfig.from_pretrained(
+            model_name_or_path,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+            trust_remote_code=trust_remote_code,
+        )
+        if hasattr(config, "export_model_type"):
+            model_type = config.export_model_type
+        else:
+            model_type = config.model_type
+        custom_architecture = model_type not in TasksManager._SUPPORTED_MODEL_TYPE
+        if not custom_architecture and task + "-with-past" in TasksManager.get_supported_tasks_for_model_type(
+            model_type, exporter="openvino", library_name=library_name
+        ):
+            # Make -with-past the default if --task was not explicitly specified
+            if original_task == "auto":
+                task = task + "-with-past"
+            else:
+                logger.info(
+                    f"The task `{task}` was manually specified, and past key values will not be reused in the decoding."
+                    f" if needed, please pass `--task {task}-with-past` to export using the past key values."
+                )
     return task
+
+
+def infer_library_name(
+    model_name_or_path: str,
+    subfolder: str = "",
+    revision: Optional[str] = None,
+    cache_dir: str = HUGGINGFACE_HUB_CACHE,
+    token: Optional[Union[bool, str]] = None,
+) -> str:
+    library_name = _infer_library_from_model_name_or_path(
+        model_name_or_path=model_name_or_path,
+        subfolder=subfolder,
+        revision=revision,
+        cache_dir=cache_dir,
+        token=token,
+    )
+    if library_name == "sentence_transformers":
+        logger.warning(
+            "Library name is not specified. There are multiple possible variants: `sentence_tenasformers`, `transformers`."
+            "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
+        )
+        library_name = "transformers"
+    return library_name
 
 
 def main_export(
@@ -199,6 +253,7 @@ def main_export(
     ```
     """
     from optimum.exporters.openvino.convert import export_from_model
+    from optimum.intel.openvino.configuration import _GPTOSSQuantizationConfig
 
     if use_auth_token is not None:
         warnings.warn(
@@ -215,19 +270,13 @@ def main_export(
         )
 
     if library_name is None:
-        library_name = _infer_library_from_model_name_or_path(
-            model_name_or_path=model_name_or_path,
+        library_name = infer_library_name(
+            model_name_or_path,
             subfolder=subfolder,
             revision=revision,
             cache_dir=cache_dir,
             token=token,
         )
-        if library_name == "sentence_transformers":
-            logger.warning(
-                "Library name is not specified. There are multiple possible variants: `sentence_tenasformers`, `transformers`."
-                "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
-            )
-            library_name = "transformers"
 
     original_task = task
     task = infer_task(
@@ -238,11 +287,11 @@ def main_export(
         cache_dir=cache_dir,
         token=token,
         library_name=library_name,
+        trust_remote_code=trust_remote_code,
     )
 
     do_gptq_patching = False
     do_quant_patching = False
-    custom_architecture = False
     patch_16bit = False
     loading_kwargs = model_loading_kwargs or {}
     if variant is not None:
@@ -270,21 +319,24 @@ def main_export(
             dtype = torch.bfloat16
             loading_kwargs["quantization_config"] = Mxfp4Config(dequantize=True)
 
-        supported_quant_methods = ["gptq"]
-        if is_openvino_version(">=", "2024.6.0"):
-            supported_quant_methods.append("awq")
-        if is_openvino_version(">=", "2025.4.0"):
-            supported_quant_methods.append("bitnet")
+        supported_quant_methods = ["gptq", "awq", "bitnet"]
         do_quant_patching = quant_method in supported_quant_methods
         do_gptq_patching = quant_method == "gptq"
         do_bitnet_patching = quant_method == "bitnet"
 
+        if is_transformers_version(">=", "4.56") and config.model_type in {"qwen2_vl_text", "qwen2_5_vl_text"}:
+            patch_qwenvl_configs()
+
         model_type = config.model_type
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
-            custom_architecture = True
             if custom_export_configs is None:
                 raise ValueError(
-                    f"Trying to export a {model_type} model, that is a custom or unsupported architecture, but no custom export configuration was passed as `custom_export_configs`. Please refer to https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models for an example on how to export custom models. Please open an issue at https://github.com/huggingface/optimum-intel/issues if you would like the model type {model_type} to be supported natively in the OpenVINO export."
+                    f"Trying to export a {model_type} model, that is a custom or unsupported architecture, but no "
+                    "custom export configuration was passed as `custom_export_configs`. Please refer to "
+                    "https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models "
+                    "for an example on how to export custom models. Please open an issue at "
+                    "https://github.com/huggingface/optimum-intel/issues if you would like the model type "
+                    f"{model_type} to be supported natively in the OpenVINO export."
                 )
         elif task not in TasksManager.get_supported_tasks_for_model_type(
             model_type, exporter="openvino", library_name=library_name
@@ -336,9 +388,9 @@ def main_export(
         ):
             if ov_config is not None and ov_config.dtype in {"fp16", "fp32"}:
                 dtype = torch.float16 if ov_config.dtype == "fp16" else torch.float32
-            elif is_openvino_version(">=", "2024.2") and config.torch_dtype == torch.float16:
+            elif config.torch_dtype == torch.float16:
                 dtype = torch.float16
-            elif is_openvino_version(">=", "2024.3") and config.torch_dtype == torch.bfloat16:
+            elif config.torch_dtype == torch.bfloat16:
                 dtype = torch.bfloat16
 
         if dtype is not None:
@@ -384,7 +436,7 @@ def main_export(
                     return state_dict
 
                 AutoBitLinear.load_hook = bitnet_load_hook
-    elif library_name == "diffusers" and is_openvino_version(">=", "2024.6"):
+    elif library_name == "diffusers":
         _loading_kwargs = {} if variant is None else {"variant": variant}
         if dtype == "auto" or dtype is None:
             dtype = deduce_diffusers_dtype(
@@ -456,23 +508,6 @@ def main_export(
         else:
             model_type = model.config.model_type
 
-        if (
-            not custom_architecture
-            and library_name != "diffusers"
-            and task + "-with-past"
-            in TasksManager.get_supported_tasks_for_model_type(
-                model_type, exporter="openvino", library_name=library_name
-            )
-        ):
-            # Make -with-past the default if --task was not explicitely specified
-            if original_task == "auto":
-                task = task + "-with-past"
-            else:
-                logger.info(
-                    f"The task `{task}` was manually specified, and past key values will not be reused in the decoding."
-                    f" if needed, please pass `--task {task}-with-past` to export using the past key values."
-                )
-
         if original_task == "auto":
             synonyms_for_task = sorted(TasksManager.synonyms_for_task(task))
             if synonyms_for_task:
@@ -509,67 +544,10 @@ def main_export(
         del model
         gc.collect()
 
-        for submodel_path in submodel_paths:
-            submodel_path = Path(output) / submodel_path
-
-            if (not submodel_path.is_file()) or (submodel_path.stat().st_size == 0):
-                raise RuntimeError(
-                    f"An issue happenned during export : {submodel_path.name} was not converted and saved as expected."
-                )
-
-            submodel = core.read_model(submodel_path)
-
-            quantization_config = None
-            if ov_config is None:
-                num_parameters = 0
-                for op in submodel.get_ops():
-                    if op.get_type_name() == "Constant" and op.get_element_type() in [Type.f16, Type.f32, Type.bf16]:
-                        num_parameters += reduce(operator.mul, op.shape, 1)
-                    del op
-                if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
-                    if is_nncf_available():
-                        quantization_config = {"bits": 8, "sym": False}
-                        logger.info("The model weights will be quantized to int8_asym.")
-                    else:
-                        logger.warning(
-                            "The model will be converted with no weights quantization. Quantization of the weights to int8 "
-                            "requires nncf. Please install it with `pip install nncf`"
-                        )
-                        break
-            else:
-                quantization_config = ov_config.quantization_config
-            if quantization_config is None:
-                del submodel
-                gc.collect()
-                continue
-
-            if not is_nncf_available():
-                raise ImportError(
-                    "Quantization of the weights requires nncf, please install it with `pip install nncf`"
-                )
-
-            from optimum.intel.openvino.configuration import _GPTOSSQuantizationConfig
-            from optimum.intel.openvino.quantization import _weight_only_quantization
-
-            if isinstance(quantization_config, _GPTOSSQuantizationConfig):
-                # A workaround for GPT-OSS model is required to run quantization twice, this way it is possible to
-                # selectively quantize some weights to 4 bits and some to 8 bits.
-                _weight_only_quantization(submodel, quantization_config.quantization_config1)
-                _weight_only_quantization(
-                    submodel, quantization_config.quantization_config2, verify_not_optimized=False
-                )
-            else:
-                _weight_only_quantization(submodel, quantization_config)
-            compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
-            save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
-            del submodel
-            gc.collect()
-
-            submodel_path.unlink()
-            submodel_path.with_suffix(".bin").unlink()
-            compressed_submodel_path.rename(submodel_path)
-            compressed_submodel_path.with_suffix(".bin").rename(submodel_path.with_suffix(".bin"))
-
+        # TODO: Remove GPT-OSS workaround when possible
+        quantization_config = None if ov_config is None else ov_config.quantization_config
+        if not quantization_config or isinstance(quantization_config, _GPTOSSQuantizationConfig):
+            _apply_model_size_based_quantization(submodel_paths, ov_config, output)
     finally:
         # Unpatch modules after quantized model export
         if do_quant_patching:
@@ -578,6 +556,123 @@ def main_export(
                 GPTQQuantizer.post_init_model = orig_post_init_model
             if do_bitnet_patching:
                 AutoBitLinear.load_hook = orig_load_hook
+
+
+def _main_quantize(
+    model_name_or_path: str,
+    task: str,
+    library_name: str,
+    quantization_config: Union[Dict, "OVQuantizationConfigBase"],  # noqa: F821
+    output: Path,
+    cache_dir: str,
+    trust_remote_code: bool = False,
+    subfolder: str = "",
+    revision: str = "main",
+    token: Optional[Union[bool, str]] = None,
+    model_kwargs: Optional[Dict[str, Any]] = None,
+):
+    """
+    Apply quantization to the OpenVINO model exported to `output` directory.
+
+    Args:
+        model_name_or_path (`str`):
+            Model ID on huggingface.co or path on disk to the model repository.
+        task (`str`):
+            The task to export the model for.
+        library_name (`str`):
+            The library name.
+        quantization_config (`Union[Dict, OVQuantizationConfigBase]`):
+            The quantization configuration to use.
+        output (`Path`):
+            Path indicating the directory where the exported OpenVINO model is stored and where to save the
+            quantized model.
+        cache_dir (`Optional[str]`, defaults to `None`):
+            Path indicating where to store cache. The default Hugging Face cache path will be used by default.
+        trust_remote_code (`bool`, defaults to `False`):
+            Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories
+            you trust and in which you have read the code, as it will execute on your local machine arbitrary code present in the
+            model repository.
+        subfolder (`str`, defaults to `""`):
+            In case the relevant files are located inside a subfolder of the model repo either locally or on huggingface.co, you can
+            specify the folder name here.
+        revision (`str`, defaults to `"main"`):
+            Revision is the specific model version to use. It can be a branch name, a tag name, or a commit id.
+        token (Optional[Union[bool, str]], defaults to `None`):
+            The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
+            when running `huggingface-cli login` (stored in `~/.huggingface`).
+        model_kwargs (`Optional[Dict[str, Any]]`, defaults to `None`):
+            Experimental usage: keyword arguments to pass to the model during
+            the export. This argument should be used along the `custom_export_configs` argument
+            in case, for example, the model inputs/outputs are changed (for example, if
+            `model_kwargs={"output_attentions": True}` is passed).
+
+    """
+    from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
+
+    # Step 0. Infer task and library name if needed
+    original_task = task
+    task = infer_task(
+        task,
+        model_name_or_path,
+        subfolder=subfolder,
+        revision=revision,
+        cache_dir=cache_dir,
+        token=token,
+        library_name=library_name,
+        trust_remote_code=trust_remote_code,
+    )
+    if library_name is None:
+        library_name = infer_library_name(
+            model_name_or_path,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+        )
+
+    # Step 1. Obtain the correct OpenVINO model class
+    if library_name == "diffusers":
+        if not is_diffusers_available():
+            raise ValueError(DIFFUSERS_IMPORT_ERROR.format("Export of diffusers models"))
+
+        from diffusers import DiffusionPipeline
+
+        diffusers_config = DiffusionPipeline.load_config(model_name_or_path)
+        class_name = diffusers_config.get("_class_name", None)
+        ov_class_name = f"OV{class_name}"
+        try:
+            model_cls = getattr(__import__("optimum.intel", fromlist=[ov_class_name]), ov_class_name)
+        except (AttributeError, ImportError) as e:
+            raise RuntimeError(f"Wasn't able to locate OpenVINO class for {class_name} diffusion model.") from e
+    else:
+        try:
+            model_cls_name = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+            if library_name == "sentence_transformers":
+                model_cls_name = "OVSentenceTransformer"
+            model_cls = getattr(__import__("optimum.intel", fromlist=[model_cls_name]), model_cls_name)
+        except (AttributeError, ImportError, KeyError) as e:
+            raise RuntimeError(f"Wasn't able to locate OpenVINO class for task {original_task} ({task}).") from e
+
+    # Step 2. Load the exported model
+    model = model_cls.from_pretrained(
+        output,
+        compile=False,
+        trust_remote_code=trust_remote_code,
+        cache_dir=cache_dir,
+        use_cache=task.endswith("with-past"),
+        **(model_kwargs or {}),
+    )
+
+    # Step 3. Apply quantization and save the quantized model
+    model._apply_quantization(
+        quantization_config,
+        compile_only=False,
+        compile_model=False,
+        model_name_or_path=model_name_or_path,
+        trust_remote_code=trust_remote_code,
+        save_directory=output,
+        immediate_save=True,
+    )
 
 
 def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):
@@ -621,3 +716,122 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
                     export_tokenizer(tokenizer, output / tokenizer_name, task=task)
     else:
         logger.warning("Tokenizer won't be converted.")
+
+
+def _apply_model_size_based_quantization(submodel_paths: List[str], ov_config: "OVConfig", output: Union[str, Path]):
+    """
+    Apply weight-only quantization to int8_asym to submodels larger than 1B parameters.
+    """
+    # TODO: Refactor the code below in the following way:
+    #   1. Create a OVPipelineQuantizationConfig based on each submodel size
+    #   2. Run _main_quantize() with the created quantization config
+    # TODO: Apply default int8 and ignored scope configs from configuration.py if matches
+    for submodel_path in submodel_paths:
+        submodel_path = Path(output) / submodel_path
+
+        if (not submodel_path.is_file()) or (submodel_path.stat().st_size == 0):
+            raise RuntimeError(
+                f"An issue happened during export : {submodel_path.name} was not converted and saved as expected."
+            )
+
+        submodel = core.read_model(submodel_path)
+
+        quantization_config = None
+        if ov_config is None:
+            num_parameters = 0
+            for op in submodel.get_ops():
+                if op.get_type_name() == "Constant" and op.get_element_type() in [Type.f16, Type.f32, Type.bf16]:
+                    num_parameters += reduce(operator.mul, op.shape, 1)
+                del op
+            if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
+                if is_nncf_available():
+                    quantization_config = {"bits": 8, "sym": False}
+                    logger.info("The model weights will be quantized to int8_asym.")
+                else:
+                    logger.warning(
+                        "The model will be converted with no weights quantization. Quantization of the weights to int8 "
+                        "requires nncf. Please install it with `pip install nncf`"
+                    )
+                    break
+        else:
+            # TODO: Remove this case when the workaround for GPT-OSS is removed
+            quantization_config = ov_config.quantization_config
+        if quantization_config is None:
+            del submodel
+            gc.collect()
+            continue
+
+        if not is_nncf_available():
+            raise ImportError("Quantization of the weights requires nncf, please install it with `pip install nncf`")
+
+        from optimum.intel.openvino.configuration import _GPTOSSQuantizationConfig
+        from optimum.intel.openvino.quantization import _weight_only_quantization
+
+        if isinstance(quantization_config, _GPTOSSQuantizationConfig):
+            # A workaround for GPT-OSS model is required to run quantization twice, this way it is possible to
+            # selectively quantize some weights to 4 bits and some to 8 bits.
+            _weight_only_quantization(submodel, quantization_config.quantization_config1)
+            _weight_only_quantization(submodel, quantization_config.quantization_config2, verify_not_optimized=False)
+        else:
+            _weight_only_quantization(submodel, quantization_config)
+        compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
+        save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
+        del submodel
+        gc.collect()
+
+        submodel_path.unlink()
+        submodel_path.with_suffix(".bin").unlink()
+        compressed_submodel_path.rename(submodel_path)
+        compressed_submodel_path.with_suffix(".bin").rename(submodel_path.with_suffix(".bin"))
+
+
+def _merge_move(src: Path, dest: Path):
+    """
+    Move src to dest.
+
+    - If src is a directory:
+        - If dest does not exist: rename src -> dest.
+        - If dest is a directory: merge src into dest recursively.
+        - If dest is a file: replace file with src directory (delete file, then rename).
+
+    - If src is a file:
+        - If dest does not exist: rename src -> dest.
+        - If dest is a file: overwrite file (delete dest, then rename).
+        - If dest is a directory: replace directory with src file (delete directory recursively, then rename).
+    """
+
+    def _safe_rename(src: Path, dest: Path):
+        # Try to rename first, fall back to shutil.move if it fails (e.g., cross-device move)
+        try:
+            src.rename(dest)
+        except OSError:
+            shutil.move(str(src), str(dest))
+
+    dest_exists = dest.exists()
+    dest_is_dir = dest_exists and dest.is_dir()
+    if src.is_dir():
+        if not dest_exists:
+            # No conflict: just rename
+            _safe_rename(src, dest)
+        elif dest_is_dir:
+            # Merge src into dest recursively
+            for child in src.iterdir():
+                _merge_move(child, dest / child.name)
+            # Remove src once empty
+            src.rmdir()
+        else:
+            # dest exists and is a file: replace file with directory
+            dest.unlink()
+            _safe_rename(src, dest)
+    else:
+        if not dest_exists:
+            # No conflict: just rename
+            _safe_rename(src, dest)
+        elif dest_is_dir:
+            # Replace directory (recursively) with file
+            shutil.rmtree(dest)
+            _safe_rename(src, dest)
+        else:
+            # dest is a file: overwrite
+            dest.unlink()
+            _safe_rename(src, dest)
