@@ -7436,26 +7436,15 @@ def afmoe_moe_forward_patched(self, hidden_states):
     else:
         shared_output = torch.zeros_like(hidden_states)
 
-    hidden_states = hidden_states.repeat(self.config.num_experts, 1)
-    hidden_states = hidden_states.view(self.config.num_experts, -1, hidden_dim)
+    hidden_states = hidden_states.repeat(num_experts, 1)
+    hidden_states = hidden_states.view(num_experts, -1, hidden_dim)
     act_fn = self.experts[0].act_fn
 
-    # combine weights from all experts to get the common gate, up and down weights
-    down_projs = torch.concat(
-        tuple(self.experts[i].down_proj.weight.float().unsqueeze(0) for i in range(num_experts)), dim=0
-    ).transpose(1, 2)
-    gate_projs = torch.concat(
-        tuple(self.experts[i].gate_proj.weight.float().unsqueeze(0) for i in range(num_experts)), dim=0
-    ).transpose(1, 2)
-    up_projs = torch.concat(
-        tuple(self.experts[i].up_proj.weight.float().unsqueeze(0) for i in range(num_experts)), dim=0
-    ).transpose(1, 2)
-
     # compute experts outputs in a vectorized form
-    gate = torch.bmm(hidden_states, gate_projs)
-    up = torch.bmm(hidden_states, up_projs)
+    gate = torch.bmm(hidden_states, self.gate_projs)
+    up = torch.bmm(hidden_states, self.up_projs)
     gate_up = act_fn(gate) * up
-    next_states = torch.bmm(gate_up, down_projs)
+    next_states = torch.bmm(gate_up, self.down_projs)
     next_states = next_states.view(num_experts, batch_size, -1, hidden_dim)
     next_states = next_states * new_routing_weights.transpose(0, 1).view(num_experts, batch_size, -1)[..., None]
     next_states = next_states.sum(dim=0)
@@ -7471,8 +7460,22 @@ class AfmoeModelPatcher(ModelPatcher):
         for idx, layer in enumerate(self._model.model.layers):
             if layer.moe_enabled:
                 afmoe_moe = layer.mlp
+                num_experts = afmoe_moe.config.num_experts
                 afmoe_moe._orig_forward = afmoe_moe.forward
                 afmoe_moe.forward = types.MethodType(afmoe_moe_forward_patched, afmoe_moe)
+
+                # prepare weigths to combine them from all experts to get the common gate, up and down weights
+                # this is required for vectorized batched matmul representation of MoE
+                afmoe_moe.down_projs = torch.concat(
+                    tuple(afmoe_moe.experts[i].down_proj.weight.float().unsqueeze(0) for i in range(num_experts)), dim=0
+                ).transpose(1, 2)
+                afmoe_moe.gate_projs = torch.concat(
+                    tuple(afmoe_moe.experts[i].gate_proj.weight.float().unsqueeze(0) for i in range(num_experts)), dim=0
+                ).transpose(1, 2)
+                afmoe_moe.up_projs = torch.concat(
+                    tuple(afmoe_moe.experts[i].up_proj.weight.float().unsqueeze(0) for i in range(num_experts)), dim=0
+                ).transpose(1, 2)
+
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
