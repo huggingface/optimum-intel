@@ -7485,11 +7485,11 @@ def patched_chunk_gated_delta_rule(
         if initial_state is None
         else initial_state.to(value)
     )
-    #core_attn_out = torch.zeros_like(value)
+    # core_attn_out = torch.zeros_like(value)
     mask = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=query.device), diagonal=1)
 
     # for each chunk
-    #for i in range(0, total_sequence_length // chunk_size):
+    # for i in range(0, total_sequence_length // chunk_size):
     #    q_i, k_i, v_i = query[:, :, i], key[:, :, i], value[:, :, i]
     #    attn = (q_i @ k_i.transpose(-1, -2) * decay_mask[:, :, i]).masked_fill_(mask, 0)
     #    v_prime = (k_cumdecay[:, :, i]) @ last_recurrent_state
@@ -7502,7 +7502,7 @@ def patched_chunk_gated_delta_rule(
     #    )
     num_chunks = total_sequence_length // chunk_size
 
-    #core_attn_out, last_recurrent_state = self.chunked_attention_cell(
+    # core_attn_out, last_recurrent_state = self.chunked_attention_cell(
     #    query,
     #    key,
     #    value,
@@ -7512,19 +7512,11 @@ def patched_chunk_gated_delta_rule(
     #    g,
     #    last_recurrent_state,
     #    num_chunks
-    #)
+    # )
 
     # final_output = ops.concat([core_attn_out_new, last_recurrent_state_new], 0)
     output_cell = self.chunked_attention_cell(
-        query,
-        key,
-        value,
-        decay_mask,
-        mask,
-        k_cumdecay,
-        g,
-        last_recurrent_state,
-        num_chunks
+        query, key, value, decay_mask, mask, k_cumdecay, g, last_recurrent_state, num_chunks
     )
 
     num_elems = value.numel()
@@ -7586,11 +7578,11 @@ def patched_recurrent_gated_delta_rule(
 
 
 def qwen3_next_gated_delta_net_forward(
-        self,
-        hidden_states: torch.Tensor,
-        cache_params = None,
-        cache_position: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
+    self,
+    hidden_states: torch.Tensor,
+    cache_params=None,
+    cache_position: Optional[torch.LongTensor] = None,
+    attention_mask: Optional[torch.Tensor] = None,
 ):
     def apply_mask_to_padding_states(hidden_states, attention_mask):
         """
@@ -7657,7 +7649,6 @@ def qwen3_next_gated_delta_net_forward(
     else:
         mixed_qkv = F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
 
-
     mixed_qkv = mixed_qkv.transpose(1, 2)
     query, key, value = torch.split(
         mixed_qkv,
@@ -7703,7 +7694,9 @@ def qwen3_next_gated_delta_net_forward(
     )
 
     core_attn_out = core_attn_out_dec * use_precomputed_states + core_attn_out_prefill * (1.0 - use_precomputed_states)
-    last_recurrent_state = last_recurrent_state_dec * use_precomputed_states + last_recurrent_state_prefill * (1.0 - use_precomputed_states)
+    last_recurrent_state = last_recurrent_state_dec * use_precomputed_states + last_recurrent_state_prefill * (
+        1.0 - use_precomputed_states
+    )
 
     # Update cache
     if cache_params is not None:
@@ -7744,39 +7737,33 @@ def patched_qwen3_next_sparse_moe_block(self, hidden_states: torch.Tensor) -> to
     expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
 
     num_experts = self.num_experts
-    #down_projs = []
-    #gate_projs = []
-    #up_projs = []
-    #for idx in range(num_experts):
+    # down_projs = []
+    # gate_projs = []
+    # up_projs = []
+    # for idx in range(num_experts):
     #    down_projs.append(self.experts[idx].down_proj.weight)
     #    gate_projs.append(self.experts[idx].gate_proj.weight)
     #    up_projs.append(self.experts[idx].up_proj.weight)
 
-    #down_projs = torch.stack(down_projs, dim=0)
-    #up_projs = torch.stack(up_projs, dim=0)
-    #gate_projs = torch.stack(gate_projs, dim=0)
+    # down_projs = torch.stack(down_projs, dim=0)
+    # up_projs = torch.stack(up_projs, dim=0)
+    # gate_projs = torch.stack(gate_projs, dim=0)
 
     down_projs = torch.concat(
-        tuple(self.experts[i].down_proj.weight.float().unsqueeze(0)
-              for i in range(num_experts)),
-        dim=0
+        tuple(self.experts[i].down_proj.weight.float().unsqueeze(0) for i in range(num_experts)), dim=0
     )
 
     gate_projs = torch.concat(
-        tuple(self.experts[i].gate_proj.weight.float().unsqueeze(0)
-              for i in range(num_experts)),
-        dim=0
+        tuple(self.experts[i].gate_proj.weight.float().unsqueeze(0) for i in range(num_experts)), dim=0
     )
 
     up_projs = torch.concat(
-        tuple(self.experts[i].up_proj.weight.float().unsqueeze(0)
-              for i in range(num_experts)),
-        dim=0
+        tuple(self.experts[i].up_proj.weight.float().unsqueeze(0) for i in range(num_experts)), dim=0
     )
 
-    #down_projs = torch.zeros((4, 32, 16), dtype=torch.float32)
-    #up_projs = torch.zeros((4, 16, 32), dtype=torch.float32)
-    #gate_projs = torch.zeros((4, 16, 32), dtype=torch.float32)
+    # down_projs = torch.zeros((4, 32, 16), dtype=torch.float32)
+    # up_projs = torch.zeros((4, 16, 32), dtype=torch.float32)
+    # gate_projs = torch.zeros((4, 16, 32), dtype=torch.float32)
 
     final_hidden_states_res = self.moe_cell(
         expert_hit,
@@ -7790,9 +7777,9 @@ def patched_qwen3_next_sparse_moe_block(self, hidden_states: torch.Tensor) -> to
     )
 
     # Loop over all available experts in the model and perform the computation on each expert
-    #is_active_expert = torch.greater(expert_mask.sum(dim=(-1, -2)), 0)
+    # is_active_expert = torch.greater(expert_mask.sum(dim=(-1, -2)), 0)
 
-    #for expert_idx in range(self.num_experts):
+    # for expert_idx in range(self.num_experts):
     #    is_activated = is_active_expert[expert_idx]
     #    expert_layer = self.experts[expert_idx]
     #    idx, top_x = torch.where(expert_mask[expert_idx].squeeze(0))
@@ -7837,19 +7824,18 @@ class LoopBasedMoECell(torch.nn.Module):
         routing_weights,
         final_hidden_states,
     ):
-
         _, hidden_dim = hidden_states.shape
         final_hidden_states_res = final_hidden_states.clone()
 
         for expert_idx in expert_hit:
-            #expert_layer = self.experts[expert_idx]
+            # expert_layer = self.experts[expert_idx]
             idx, top_x = torch.where(expert_mask[expert_idx].squeeze(0))
 
             # Index the correct hidden states and compute the expert hidden state for
             # the current expert. We need to make sure to multiply the output hidden
             # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
             current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
-            #current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+            # current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
             # down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
             act_fn_res = torch.nn.functional.silu(torch.nn.functional.linear(current_state, gate_projs[expert_idx[0]]))
             up_proj_res = torch.nn.functional.linear(current_state, up_projs[expert_idx[0]])
@@ -7863,10 +7849,12 @@ class LoopBasedMoECell(torch.nn.Module):
 
         return final_hidden_states_res
 
+
 def convert_moe_cell(context):
-    import openvino.opset15 as ops
-    import openvino as ov
     import numpy as np
+
+    import openvino as ov
+    import openvino.opset15 as ops
 
     idx_param = ops.parameter([], np.int32, "idx_param")
     expert_hit_param = ops.parameter([-1], np.int32, "expert_hit_param")
@@ -7878,7 +7866,7 @@ def convert_moe_cell(context):
     routing_weights_param = ops.parameter([-1, -1], np.float32, "routing_weights_param")
     final_hidden_states_param = ops.parameter([-1, -1], np.float32, "final_hidden_states_param")
 
-    #batch_size, hidden_dim = hidden_states_param.shape
+    # batch_size, hidden_dim = hidden_states_param.shape
     hidden_states_shape = ops.shape_of(hidden_states_param)
     const_zero = ops.constant(0, dtype=np.int32)
     const_one = ops.constant([1], dtype=np.int32)
@@ -7895,7 +7883,7 @@ def convert_moe_cell(context):
 
     split_axis = ops.constant(0, dtype=np.int32)
     split_res = ops.split(non_zeros, split_axis, 2)
-    #idx = ops.squeeze(split_res.output(0), const_zero)
+    # idx = ops.squeeze(split_res.output(0), const_zero)
     top_x = ops.squeeze(split_res.output(1), const_zero)
     transpose_order = ops.constant([1, 0], dtype=np.int32)
     top_x_idx = ops.transpose(non_zeros, transpose_order)
@@ -7929,29 +7917,38 @@ def convert_moe_cell(context):
 
     # current_hidden_states = current_hidden_states * routing_weights[top_x, idx, None]
     # routing_weights[top_x, idx, None]
-    #routing_weights = ops.gather(routing_weights_param, top_x, const_zero)
-    #routing_weights = ops.gather(routing_weights, idx, const_zero)
-    #routing_weights = ops.unsqueeze(routing_weights, const_zero)
+    # routing_weights = ops.gather(routing_weights_param, top_x, const_zero)
+    # routing_weights = ops.gather(routing_weights, idx, const_zero)
+    # routing_weights = ops.unsqueeze(routing_weights, const_zero)
     routing_weights = ops.gather_nd(routing_weights_param, top_x_idx)
     routing_weights = ops.unsqueeze(routing_weights, const_one)
     current_hidden_states = ops.multiply(current_hidden_states, routing_weights)
 
-    #current_hidden_states = current_state
+    # current_hidden_states = current_state
 
     # final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
     top_x = ops.unsqueeze(top_x, const_one)
-    #current_hidden_states = ops.reshape(current_hidden_states, new_shape, False)
+    # current_hidden_states = ops.reshape(current_hidden_states, new_shape, False)
 
-    final_hidden_states_res = ops.scatter_nd_update(final_hidden_states_param,
-                                                top_x, current_hidden_states, "sum")
+    final_hidden_states_res = ops.scatter_nd_update(final_hidden_states_param, top_x, current_hidden_states, "sum")
 
     body_cond = ops.constant([True], dtype=bool)
 
-    body_model = ov.Model([body_cond, final_hidden_states_res],
-                          [idx_param, expert_hit_param, expert_mask_param, hidden_states_param,
-                           gate_projs_param, up_projs_param, down_projs_param,
-                           routing_weights_param, final_hidden_states_param],
-                          "body_model")
+    body_model = ov.Model(
+        [body_cond, final_hidden_states_res],
+        [
+            idx_param,
+            expert_hit_param,
+            expert_mask_param,
+            hidden_states_param,
+            gate_projs_param,
+            up_projs_param,
+            down_projs_param,
+            routing_weights_param,
+            final_hidden_states_param,
+        ],
+        "body_model",
+    )
 
     # context.get_input(0)
     expert_hit = context.get_input(0)
@@ -7971,10 +7968,7 @@ def convert_moe_cell(context):
     const_zero = ops.constant(0, dtype=np.int32)
     num_active_experts = ops.gather(num_active_experts, const_zero, const_zero)
 
-    loop = ops.loop(
-        num_active_experts,
-        ops.constant(True, dtype="bool")
-    )
+    loop = ops.loop(num_active_experts, ops.constant(True, dtype="bool"))
 
     loop.set_function(body_model)
     loop.set_invariant_input(expert_hit_param, expert_hit.output(0))
@@ -7999,21 +7993,21 @@ class ChunkedAttentionCell(torch.nn.Module):
 
     def forward(
         self,
-        query,                 # (B, H, T, D)
-        key,                   # (B, H, T, D)
-        value,                 # (B, H, T, D)
-        decay_mask,            # (B, H, T)
-        mask,                  # (B, H, D, D) or broadcastable
-        k_cumdecay,            # (B, H, T, D, D)
-        g,                     # (B, H, T, G)
+        query,  # (B, H, T, D)
+        key,  # (B, H, T, D)
+        value,  # (B, H, T, D)
+        decay_mask,  # (B, H, T)
+        mask,  # (B, H, D, D) or broadcastable
+        k_cumdecay,  # (B, H, T, D, D)
+        g,  # (B, H, T, G)
         last_recurrent_state,  # (B, H, D, D)
-        num_chunks  # int
+        num_chunks,  # int
     ):
         core_attn_out = torch.zeros_like(value)
 
         # Loop over chunks using total_sequence_length instead of T
         for i in range(0, num_chunks):
-            q_i = query[:, :, i]              # (B, H, D)
+            q_i = query[:, :, i]  # (B, H, D)
             k_i = key[:, :, i]
             v_i = value[:, :, i]
             dec_i = decay_mask[:, :, i]
@@ -8027,31 +8021,30 @@ class ChunkedAttentionCell(torch.nn.Module):
             v_new = v_i - v_prime
 
             # intermediate attention term
-            g_i = g[:, :, i]                         # (B, H, G)
+            g_i = g[:, :, i]  # (B, H, G)
             attn_inter = (q_i * g_i[..., None].exp()) @ last_recurrent_state
 
             # final output
             core_attn_out[:, :, i] = attn_inter + attn @ v_new
 
             # update recurrent state
-            g_last = g[:, :, i, -1]                  # (B, H)
+            g_last = g[:, :, i, -1]  # (B, H)
             decay_factor = g_last[..., None, None].exp()
 
-            g_diff = (g_last[..., None] - g_i).exp()     # (B, H, G)
+            g_diff = (g_last[..., None] - g_i).exp()  # (B, H, G)
             update_term = (k_i * g_diff[..., None]).transpose(-1, -2) @ v_new
 
-            last_recurrent_state = (
-                last_recurrent_state * decay_factor + update_term
-            )
+            last_recurrent_state = last_recurrent_state * decay_factor + update_term
 
         output_cell = torch.cat([core_attn_out.flatten(), last_recurrent_state.flatten()], dim=0)
         return output_cell
 
 
 def convert_chunked_attention_cell(context):
-    import openvino.opset14 as ops
-    import openvino as ov
     import numpy as np
+
+    import openvino as ov
+    import openvino.opset14 as ops
 
     # context.get_input(0)
     query = context.get_input(0)
@@ -8065,15 +8058,15 @@ def convert_chunked_attention_cell(context):
     num_chunks_param = context.get_input(8)
 
     # context.get_input(0)
-    #query = ops.parameter([-1, -1, -1, 64, -1], np.float32, "query")
-    #key = ops.parameter([-1, -1, -1, 64, -1], np.float32, "key")
-    #value = ops.parameter([-1, -1, -1, 64, -1], np.float32, "value")
-    #decay_mask = ops.parameter([-1, -1, -1, 64, -1], np.float32, "decay_mask")
-    #mask = ops.parameter([64, 64], bool, "mask")
-    #k_cumdecay = ops.parameter([-1, -1, -1, 64, -1], np.float32, "k_cumdecay")
-    #g = ops.parameter([-1, -1, -1, 64], np.float32, "g")
-    #last_recurrent_state = ops.parameter([-1, -1, 8, 8], np.float32, "last_recurrent_state")
-    #num_chunks_param = ops.parameter([], np.int64, "num_chunks")
+    # query = ops.parameter([-1, -1, -1, 64, -1], np.float32, "query")
+    # key = ops.parameter([-1, -1, -1, 64, -1], np.float32, "key")
+    # value = ops.parameter([-1, -1, -1, 64, -1], np.float32, "value")
+    # decay_mask = ops.parameter([-1, -1, -1, 64, -1], np.float32, "decay_mask")
+    # mask = ops.parameter([64, 64], bool, "mask")
+    # k_cumdecay = ops.parameter([-1, -1, -1, 64, -1], np.float32, "k_cumdecay")
+    # g = ops.parameter([-1, -1, -1, 64], np.float32, "g")
+    # last_recurrent_state = ops.parameter([-1, -1, 8, 8], np.float32, "last_recurrent_state")
+    # num_chunks_param = ops.parameter([], np.int64, "num_chunks")
 
     value_shape = ops.shape_of(value)
     const_zero = ops.constant(0, dtype=np.float32)
@@ -8121,8 +8114,9 @@ def convert_chunked_attention_cell(context):
     v_new = ops.subtract(v_i, v_prime)
 
     const_three = ops.constant(3, dtype=np.int32)
-    attn_inter = ops.einsum([ops.multiply(q_i, ops.exp(ops.unsqueeze(g_i, const_three))), last_recurrent_state_i],
-                            "bhwd,bhdl->bhwl")
+    attn_inter = ops.einsum(
+        [ops.multiply(q_i, ops.exp(ops.unsqueeze(g_i, const_three))), last_recurrent_state_i], "bhwd,bhdl->bhwl"
+    )
 
     update_core_attn = ops.add(attn_inter, ops.einsum([attn, v_new], "bhwd,bhdl->bhwl"))
     update_core_attn = ops.unsqueeze(update_core_attn, const_two)
@@ -8140,16 +8134,25 @@ def convert_chunked_attention_cell(context):
 
     body_cond = ops.constant([True], dtype=bool)
 
-    body_model = ov.Model([body_cond, last_recurrent_state_res, core_attn_out_res],
-                          [timestep, q_i_param, k_i_param, v_i_param, decay_mask_i_param, mask_i, k_cumdecay_i_param,
-                           last_recurrent_state_i,
-                           g_i_param, core_attn_out_i], "body_model")
+    body_model = ov.Model(
+        [body_cond, last_recurrent_state_res, core_attn_out_res],
+        [
+            timestep,
+            q_i_param,
+            k_i_param,
+            v_i_param,
+            decay_mask_i_param,
+            mask_i,
+            k_cumdecay_i_param,
+            last_recurrent_state_i,
+            g_i_param,
+            core_attn_out_i,
+        ],
+        "body_model",
+    )
 
     num_chunks = ops.convert(num_chunks_param, "i32")
-    loop = ops.loop(
-        num_chunks,
-        ops.constant(True, dtype="bool")
-    )
+    loop = ops.loop(num_chunks, ops.constant(True, dtype="bool"))
     loop.set_function(body_model)
     loop.set_sliced_input(q_i_param, query, 0, 1, 1, -1, 2)
     loop.set_sliced_input(k_i_param, key, 0, 1, 1, -1, 2)
@@ -8183,7 +8186,8 @@ class Qwen3NextModelPatcher(ModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextDynamicCache
-        from openvino.frontend.pytorch import ModuleExtension, ConversionExtension
+
+        from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
 
         super().__init__(config, model, model_kwargs)
 
@@ -8313,6 +8317,7 @@ class Qwen3NextModelPatcher(ModelPatcher):
 
     def __enter__(self):
         from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextSparseMoeBlock
+
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
@@ -8337,6 +8342,7 @@ class Qwen3NextModelPatcher(ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextSparseMoeBlock
+
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
         for idx, decoder_layer in enumerate(self._model.model.layers):
