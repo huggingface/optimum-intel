@@ -3790,7 +3790,11 @@ class Qwen3VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return {"last_hidden_state": {0: "seq_len"}, "deepstack_feature_lists": {0: "seq_len"}}
         if self._behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS:
             return {"last_hidden_state": {0: "seq_len", 1: "seq_len"}}
-        return {}
+        if self._behavior == Qwen3VLConfigBehavior.TEXT_EMBEDDINGS:
+            return {'inputs_embeds': {0: 'batch_size', 1: 'sequence_length'}}
+        if self._behavior == Qwen3VLConfigBehavior.LANGUAGE:
+            return {'logits': {0: 'batch_size', 1: 'sequence_length'}}
+        raise Exception("Unknown Qwen3VL behavior type.")
 
 
 @register_in_tasks_manager(
