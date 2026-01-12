@@ -735,6 +735,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model_stateful output {ov_stateful_outputs}",
             )
 
+            # beam search does not work for stateless afmoe
+            # won't be fixed since it is not used in OpenVINO GenAI
+            if model_arch in ["afmoe"]:
+                continue
+
             set_seed(SEED)
             ov_stateless_outputs = ov_model_stateless.generate(**tokens, generation_config=gen_config)
             self.assertTrue(
