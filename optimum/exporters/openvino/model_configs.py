@@ -3793,7 +3793,7 @@ class Qwen3VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == Qwen3VLConfigBehavior.TEXT_EMBEDDINGS:
             return {'inputs_embeds': {0: 'batch_size', 1: 'sequence_length'}}
         if self._behavior == Qwen3VLConfigBehavior.LANGUAGE:
-            return {'logits': {0: 'batch_size', 1: 'sequence_length'}}
+            return get_vlm_internal_text_generation_config("qwen3_vl_text", self._orig_config.text_config, self.int_dtype, self.float_dtype).outputs
         raise Exception("Unknown Qwen3VL behavior type.")
 
 
