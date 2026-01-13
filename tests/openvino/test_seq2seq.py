@@ -71,15 +71,15 @@ from optimum.intel.utils.import_utils import is_openvino_version, is_transformer
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-# TODO : Add phi4_multimodal (transformers modeling) not tested and needs to be fixed (converted model outputs not matching original model)
-MODEL_NOT_TESTED = {"phi4_multimodal", "pix2struct"}
-
-if is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2025.5.0"):
-    MODEL_NOT_TESTED.add("marian")
 
 
 class OVSeq2SeqTestMixin(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = None
+
+    # TODO : Add phi4_multimodal (transformers modeling) not tested and needs to be fixed (converted model outputs not matching original model)
+    UNSUPPORTED_ARCHITECTURES = {"phi4_multimodal"}
+    if is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2025.5.0"):
+        UNSUPPORTED_ARCHITECTURES.add("marian")
 
     def _check_openvino_model_attributes(self, openvino_model, use_cache: bool = True, stateful: bool = True):
         self.assertIsInstance(openvino_model, self.OVMODEL_CLASS)
@@ -119,7 +119,7 @@ class OVSeq2SeqTestMixin(unittest.TestCase):
 
         untested_architectures = supported_architectures - tested_architectures
 
-        if len(untested_architectures - MODEL_NOT_TESTED) > 0:
+        if len(untested_architectures - self.UNSUPPORTED_ARCHITECTURES) > 0:
             raise ValueError(
                 f"For the task `{self.TASK}`, the OpenVINO exporter supports {untested_architectures} which are not tested"
             )
@@ -420,6 +420,7 @@ class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
         "trocr",
         "vision-encoder-decoder",
     ]
+    UNSUPPORTED_ARCHITECTURES = {"got_ocr2", "pix2struct"}
     TASK = "image-to-text"
     OVMODEL_CLASS = OVModelForVision2Seq
     AUTOMODEL_CLASS = AutoModelForVision2Seq
