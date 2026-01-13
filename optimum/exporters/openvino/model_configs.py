@@ -3735,7 +3735,7 @@ class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
     _MODEL_PATCHER = DeepseekPatcher
 
 
-@register_in_tasks_manager("got_ocr2", *["image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("got_ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")
 class GotOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.49.0"
 
@@ -3749,6 +3749,11 @@ class GotOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
         preprocessors: Optional[List[Any]] = None,
         **kwargs,
     ):
+        if task == "image-to-text":
+            logger.warning(
+                "Support of task 'image-to-text' will be deprecated in optimum-intel v1.29 for GOT-OCR2 models, please update it to 'image-text-to-text'."
+            )
+
         super().__init__(
             config=config,
             task=task,
