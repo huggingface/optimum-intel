@@ -72,7 +72,6 @@ from optimum.intel.utils.import_utils import is_openvino_version, is_transformer
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
-
 class OVSeq2SeqTestMixin(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = None
 
