@@ -90,7 +90,7 @@ def _get_input_info(
     model: Union["PreTrainedModel", "ModelMixin"],
     config: OnnxConfig,
     dummy_inputs: Dict[str, Any],
-    static_shapes: bool = False
+    static_shapes: bool = False,
 ) -> List[InputInfo]:
     sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
     inputs = config.ordered_inputs(model)
