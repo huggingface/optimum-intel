@@ -3683,7 +3683,10 @@ class Qwen3VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self._normalized_config.use_embed_dim = False
-        if self._behavior in (Qwen3VLConfigBehavior.VISION_EMBEDDINGS_MERGER, Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS) and hasattr(config, "vision_config"):
+        if self._behavior in (
+            Qwen3VLConfigBehavior.VISION_EMBEDDINGS_MERGER,
+            Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS,
+        ) and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self._normalized_config.use_embed_dim = True
@@ -3746,10 +3749,16 @@ class Qwen3VLOpenVINOConfig(BaseVLMOpenVINOConfig):
                 dummy_input_generator=DummyQwen2VLLMInputGenerator,
                 inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
             )
-            config._normalized_config.deepstack_visual_indexes = self._orig_config.vision_config.deepstack_visual_indexes
+            config._normalized_config.deepstack_visual_indexes = (
+                self._orig_config.vision_config.deepstack_visual_indexes
+            )
             return config
 
-        if behavior in (Qwen3VLConfigBehavior.VISION_EMBEDDINGS, Qwen3VLConfigBehavior.VISION_EMBEDDINGS_MERGER, Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS):
+        if behavior in (
+            Qwen3VLConfigBehavior.VISION_EMBEDDINGS,
+            Qwen3VLConfigBehavior.VISION_EMBEDDINGS_MERGER,
+            Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS,
+        ):
             return self.__class__(
                 self._orig_config,
                 task=self.task,
@@ -3794,9 +3803,11 @@ class Qwen3VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS:
             return {"last_hidden_state": {0: "seq_len", 1: "seq_len"}}
         if self._behavior == Qwen3VLConfigBehavior.TEXT_EMBEDDINGS:
-            return {'inputs_embeds': {0: 'batch_size', 1: 'sequence_length'}}
+            return {"inputs_embeds": {0: "batch_size", 1: "sequence_length"}}
         if self._behavior == Qwen3VLConfigBehavior.LANGUAGE:
-            return get_vlm_internal_text_generation_config("qwen3_vl_text", self._orig_config.text_config, self.int_dtype, self.float_dtype).outputs
+            return get_vlm_internal_text_generation_config(
+                "qwen3_vl_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
+            ).outputs
         raise Exception("Unknown Qwen3VL behavior type.")
 
 
