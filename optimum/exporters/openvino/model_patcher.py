@@ -7409,3 +7409,79 @@ class GraniteMoeHybridModelPatcher(ModelPatcher):
             else:
                 continue
             mamba_layer.forward = mamba_layer._orig_forward
+
+
+# Patch MoE implementation to enable correct Torch tracing:
+# https://huggingface.co/arcee-ai/Trinity-Nano-Preview/blob/main/modeling_afmoe.py#L265
+#
+# The original code contains a conditional branch inside a Python for-loop.
+# For certain example inputs, this branch may be skipped during tracing,
+# resulting in an incorrect or incomplete final graph.
+#
+# Additionally, the non-vectorized implementation produces a very large
+# OpenVINO graph with excessive nodes, which is expensive for graph
+# transformations and significantly increases model conversion time.
+# So the patch provides a vectorized form of MoE.
+def afmoe_moe_forward_patched(self, hidden_states):
+    num_experts = self.config.num_experts
+    batch_size, seq_len, hidden_dim = hidden_states.shape
+    routing_weights, selected_experts = self.router(hidden_states, self.expert_bias)
+    new_routing_weights = torch.zeros(batch_size * seq_len, self.config.num_experts, dtype=routing_weights.dtype)
+    new_routing_weights.scatter_(dim=1, index=selected_experts, src=routing_weights)
+    hidden_states = hidden_states.view(-1, hidden_dim)
+
+    # Process through shared experts
+    if self.shared_experts is not None:
+        shared_output = self.shared_experts(hidden_states)
+    else:
+        shared_output = torch.zeros_like(hidden_states)
+
+    hidden_states = hidden_states.repeat(num_experts, 1)
+    hidden_states = hidden_states.view(num_experts, -1, hidden_dim)
+    act_fn = self.experts[0].act_fn
+
+    # compute experts outputs in a vectorized form
+    gate = torch.bmm(hidden_states, self.gate_projs)
+    up = torch.bmm(hidden_states, self.up_projs)
+    gate_up = act_fn(gate) * up
+    next_states = torch.bmm(gate_up, self.down_projs)
+    next_states = next_states.view(num_experts, batch_size, -1, hidden_dim)
+    next_states = next_states * new_routing_weights.transpose(0, 1).view(num_experts, batch_size, -1)[..., None]
+    next_states = next_states.sum(dim=0)
+
+    shared_output = shared_output.view(batch_size, -1, hidden_dim)
+    output = shared_output + next_states
+    return output.view(batch_size, seq_len, hidden_dim)
+
+
+class AfmoeModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        for idx, layer in enumerate(self._model.model.layers):
+            if layer.moe_enabled:
+                afmoe_moe = layer.mlp
+                num_experts = afmoe_moe.config.num_experts
+                afmoe_moe._orig_forward = afmoe_moe.forward
+                afmoe_moe.forward = types.MethodType(afmoe_moe_forward_patched, afmoe_moe)
+
+                # prepare weigths to combine them from all experts to get the common gate, up and down weights
+                # this is required for vectorized batched matmul representation of MoE
+                afmoe_moe.down_projs = torch.concat(
+                    tuple(afmoe_moe.experts[i].down_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                    dim=0,
+                ).transpose(1, 2)
+                afmoe_moe.gate_projs = torch.concat(
+                    tuple(afmoe_moe.experts[i].gate_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                    dim=0,
+                ).transpose(1, 2)
+                afmoe_moe.up_projs = torch.concat(
+                    tuple(afmoe_moe.experts[i].up_proj.weight.unsqueeze(0) for i in range(num_experts)), dim=0
+                ).transpose(1, 2)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for idx, layer in enumerate(self._model.model.layers):
+            if layer.moe_enabled:
+                afmoe_moe = layer.mlp
+                afmoe_moe.forward = afmoe_moe._orig_forward
+                del afmoe_moe.down_projs, afmoe_moe.gate_projs, afmoe_moe.up_projs

@@ -20,7 +20,11 @@ import torch
 from parameterized import parameterized
 from sentence_transformers import SentenceTransformer, models
 from transformers import AutoConfig, AutoTokenizer, GenerationConfig
-from utils_tests import MODEL_NAMES, OPENVINO_DEVICE
+from utils_tests import (
+    MODEL_NAMES,
+    OPENVINO_DEVICE,
+    REMOTE_CODE_MODELS,
+)
 
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.onnx.model_configs import BertOnnxConfig
@@ -96,6 +100,9 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.54"):
         SUPPORTED_ARCHITECTURES.update({"exaone4": OVModelForCausalLM, "lfm2": OVModelForCausalLM})
 
+    if is_transformers_version(">=", "4.55.0") and is_transformers_version("<=", "4.57.3"):
+        SUPPORTED_ARCHITECTURES.update({"afmoe": OVModelForCausalLM})
+
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "stable-diffusion-3": {"text_encoder_3": "8.0"},
@@ -121,6 +128,9 @@ class ExportModelTest(unittest.TestCase):
         model_name = MODEL_NAMES[model_type]
         library_name = TasksManager.infer_library_from_model(model_name)
         loading_kwargs = {"attn_implementation": "eager"} if model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED else {}
+
+        if model_type in REMOTE_CODE_MODELS:
+            loading_kwargs["trust_remote_code"] = True
 
         if library_name == "timm":
             model_class = TasksManager.get_model_class_for_task(task, library=library_name)
@@ -151,7 +161,9 @@ class ExportModelTest(unittest.TestCase):
                 )
 
                 use_cache = supported_task.endswith("-with-past")
-                ov_model = auto_model.from_pretrained(tmpdirname, use_cache=use_cache)
+                ov_model = auto_model.from_pretrained(
+                    tmpdirname, use_cache=use_cache, trust_remote_code=model_type in REMOTE_CODE_MODELS
+                )
                 self.assertIsInstance(ov_model, OVBaseModel)
 
                 if "text-generation" in task:
