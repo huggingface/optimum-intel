@@ -4610,6 +4610,7 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
 class ASTOpenVINOConfig(ASTOnnxConfig):
     pass
 
+
 @register_in_tasks_manager(
     "afmoe",
     *[

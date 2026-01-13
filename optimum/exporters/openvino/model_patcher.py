@@ -7411,7 +7411,6 @@ class GraniteMoeHybridModelPatcher(ModelPatcher):
             mamba_layer.forward = mamba_layer._orig_forward
 
 
-
 class BigBirdPegasusModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
