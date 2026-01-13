@@ -359,8 +359,9 @@ class DummyQwen3VLLMInputGenerator(DummyTextInputGenerator):
         bool_dtype: str = "bool",
     ):
         if input_name == "deepstack_visual_embeds":
+            num_layers = len(self.normalized_config.deepstack_visual_indexes)
             return self.random_float_tensor(
-                [3, 2 * self.sequence_length, self.embed_dim], framework=framework, dtype=float_dtype
+                [num_layers, 2 * self.sequence_length, self.embed_dim], framework=framework, dtype=float_dtype
             )
         if input_name == "visual_pos_masks":
             return self.constant_tensor(
@@ -3736,7 +3737,7 @@ class Qwen3VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             )
 
         if behavior == Qwen3VLConfigBehavior.LANGUAGE:
-            return get_vlm_text_generation_config(
+            config = get_vlm_text_generation_config(
                 "qwen3_vl_text",
                 self._orig_config.text_config,
                 self.int_dtype,
@@ -3745,6 +3746,8 @@ class Qwen3VLOpenVINOConfig(BaseVLMOpenVINOConfig):
                 dummy_input_generator=DummyQwen2VLLMInputGenerator,
                 inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
             )
+            config._normalized_config.deepstack_visual_indexes = self._orig_config.vision_config.deepstack_visual_indexes
+            return config
 
         if behavior in (Qwen3VLConfigBehavior.VISION_EMBEDDINGS, Qwen3VLConfigBehavior.VISION_EMBEDDINGS_MERGER, Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS):
             return self.__class__(
