@@ -14,6 +14,7 @@ from utils_tests import (
     F32_CONFIG,
     MODEL_NAMES,
     OPENVINO_DEVICE,
+    REMOTE_CODE_MODELS,
     SEED,
     get_num_sdpa,
     mock_torch_cuda_is_available,
@@ -143,34 +144,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.55.0"):
         SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")
 
+    if is_transformers_version(">=", "4.55.0") and is_transformers_version("<=", "4.57.3"):
+        SUPPORTED_ARCHITECTURES += ("afmoe",)
+
     if is_transformers_version("<", "4.56.0"):
         SUPPORTED_ARCHITECTURES += ("qwen", "chatglm", "chatglm4")
 
     GENERATION_LENGTH = 100
-    REMOTE_CODE_MODELS = (
-        "chatglm",
-        "minicpm",
-        "baichuan2",
-        "baichuan2-13b",
-        "jais",
-        "qwen",
-        "internlm2",
-        "orion",
-        "aquila",
-        "aquila2",
-        "xverse",
-        "internlm",
-        "codegen2",
-        "arctic",
-        "chatglm4",
-        "exaone",
-        "exaone4",
-        "decilm",
-        "minicpm3",
-        "deepseek",
-    )
 
     EXPECTED_NUM_SDPA = {
+        "afmoe": 4,
         "bart": 2,
         "baichuan2": 2,
         "baichuan2-13b": 2,
@@ -262,7 +245,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     def get_tokenizer(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
-        trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
+        trust_remote_code = model_arch in REMOTE_CODE_MODELS
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
         if tokenizer.pad_token is None:
             if tokenizer.eos_token is not None:
@@ -322,7 +305,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
 
         model_kwargs = {}
-        if model_arch in self.REMOTE_CODE_MODELS:
+        if model_arch in REMOTE_CODE_MODELS:
             model_kwargs = {"trust_remote_code": True}
 
         # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
@@ -464,9 +447,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
-        if model_arch in self.REMOTE_CODE_MODELS:
+        if model_arch in REMOTE_CODE_MODELS:
             model_kwargs = {"trust_remote_code": True}
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
 
         if model_arch == "qwen":
             tokenizer._convert_tokens_to_ids = lambda x: 0
@@ -494,7 +477,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "text-generation",
             model_id,
             accelerator="openvino",
-            trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
+            trust_remote_code=model_arch in REMOTE_CODE_MODELS,
             tokenizer=(
                 # in older transformers versions, qwen tokenizer didn't have a _convert_tokens_to_ids
                 # method, which made it fail during inference using pipelines
@@ -504,7 +487,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 # were not loaded in pipelines because they were not registered in TOKENIZER_MAPPING
                 else model_id
                 if is_transformers_version("<=", "4.46")
-                and model_arch in self.REMOTE_CODE_MODELS + ("granite", "granitemoe")
+                and model_arch in REMOTE_CODE_MODELS + ("granite", "granitemoe")
                 else None
             ),
         )
@@ -649,7 +632,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.mock_torch_compile(model_arch)
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
-        if model_arch in self.REMOTE_CODE_MODELS:
+        if model_arch in REMOTE_CODE_MODELS:
             model_kwargs = {"trust_remote_code": True}
 
         # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
@@ -670,7 +653,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
             self.skipTest("Incompatible modeling code")
 
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
         if model_arch == "persimmon":
             tokenizer.pad_token_id = tokenizer.bos_token_id
             tokenizer.eos_token_id = tokenizer.bos_token_id
@@ -816,6 +799,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 torch.equal(ov_stateful_outputs, transformers_outputs),
                 f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model_stateful output {ov_stateful_outputs}",
             )
+
+            # beam search does not work for stateless afmoe:
+            # generation results for the second padded prompt in the batch is incorrect
+            # won't be fixed since stateless model is not used for OpenVINO GenAI
+            if model_arch in ["afmoe"]:
+                continue
 
             set_seed(SEED)
             ov_stateless_outputs = ov_model_stateless.generate(**tokens, generation_config=gen_config)

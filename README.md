@@ -104,8 +104,3 @@ Do not forget to install requirements for every example:
 cd <example-folder>
 pip install -r requirements.txt
 ```
-
-
-## Gaudi
-
-To train your model on [Intel Gaudi AI Accelerators (HPU)](https://docs.habana.ai/en/latest/index.html), check out [Optimum Habana](https://github.com/huggingface/optimum-habana) which provides a set of tools enabling easy model loading, training and inference on single- and multi-HPU settings for different downstream tasks. After training your model, feel free to submit it to the Intel [leaderboard](https://huggingface.co/spaces/Intel/powered_by_intel_llm_leaderboard) which is designed to evaluate, score, and rank open-source LLMs that have been pre-trained or fine-tuned on Intel Hardwares. Models submitted to the leaderboard will be evaluated on the Intel Developer Cloud. The evaluation platform consists of Gaudi Accelerators and Xeon CPUs running benchmarks from the Eleuther AI Language Model Evaluation Harness.

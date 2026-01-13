@@ -127,6 +127,7 @@ from optimum.utils.normalized_config import (
 
 from ...intel.utils.import_utils import is_diffusers_available, is_diffusers_version, is_transformers_version
 from .model_patcher import (
+    AfmoeModelPatcher,
     AquilaModelPatcher,
     ArcticModelPatcher,
     BaichuanModelPatcher,
@@ -4605,6 +4606,24 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
         return common_inputs
 
 
+@register_in_tasks_manager("audio-spectrogram-transformer", *["feature-extraction", "audio-classification"])
+class ASTOpenVINOConfig(ASTOnnxConfig):
+    pass
+
+@register_in_tasks_manager(
+    "afmoe",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class AfmoeOpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.55.0"
+    MAX_TRANSFORMERS_VERSION = "4.57.3"
+    _MODEL_PATCHER = AfmoeModelPatcher
+
+
 @register_in_tasks_manager("olmo2", *COMMON_TEXT_GENERATION_TASKS, library_name="transformers")
 class Olmo2OOpenVINOConfig(Olmo2OnnxConfig):
     pass
@@ -4919,9 +4938,4 @@ class SiglipOpenVINOConfig(SiglipOnnxConfig):
     "transformer", *["feature-extraction", "sentence-similarity"], library_name="sentence_transformers"
 )
 class SentenceTransformersTransformerOpenVINOConfig(SentenceTransformersTransformerOnnxConfig):
-    pass
-
-
-@register_in_tasks_manager("audio-spectrogram-transformer", *["feature-extraction", "audio-classification"])
-class ASTOpenVINOConfig(ASTOnnxConfig):
     pass
