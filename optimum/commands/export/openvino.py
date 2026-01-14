@@ -560,7 +560,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 library_name=library_name,
                 variant=self.args.variant,
                 model_kwargs=self.args.model_kwargs,
-                **input_shapes
+                **input_shapes,
             )
             if apply_main_quantize:
                 _main_quantize(
