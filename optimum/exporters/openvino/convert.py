@@ -363,7 +363,7 @@ def export_pytorch(
 
         static_shapes = True
         if input_shapes["static_shapes"] == False:
-            input_shapes = {}  # will dynamic shapes in the OpenVINO IR
+            input_shapes = {}  # will use dynamic shapes in the OpenVINO IR
             static_shapes = False  # User did not explicit input shapes, produce dynamic shapes in the model
 
         # Check that inputs match, and order them properly
