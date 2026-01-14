@@ -453,6 +453,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         compile_only = kwargs.pop("compile_only", False)
         device = kwargs.pop("device", "CPU")
         ov_config = kwargs.pop("ov_config", None)
+        export_model_id = kwargs.get("export_model_id", None)
 
         # Load model from hub
         if not os.path.isdir(model_id):
@@ -541,7 +542,9 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         )
 
         if quantization_config:
-            if hasattr(config, "name_or_path"):
+            if export_model_id is not None:
+                model_id = export_model_id
+            elif hasattr(config, "name_or_path"):
                 model_id = config.name_or_path
             else:
                 logger.warning(
@@ -626,6 +629,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             quantization_config=quantization_config,
             compile_only=compile_only,
             trust_remote_code=trust_remote_code,
+            export_model_id=model_id, # needed to resolve default quantization config during export
             **kwargs,
         )
 

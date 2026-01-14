@@ -502,11 +502,13 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
             token = use_auth_token
 
+        compile_only = kwargs.get("compile_only", False)
+        export_model_id = kwargs.get("export_model_id", None)
         model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
         model_file_names = model_cls._all_ov_model_paths.copy()
         for k in tuple(model_file_names):
             model_file_names[f"{k}_bin"] = model_file_names[k].replace(".xml", ".bin")
-        compile_only = kwargs.get("compile_only", False)
+
         if os.path.isdir(model_id):
             # Load model from a local directory
             model_save_dir = Path(model_id)
@@ -584,7 +586,9 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         )
 
         if quantization_config:
-            if hasattr(config, "name_or_path"):
+            if export_model_id is not None:
+                model_id = export_model_id
+            elif hasattr(config, "name_or_path"):
                 model_id = config.name_or_path
             else:
                 logger.warning(
@@ -657,10 +661,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             stateful=stateful,
             variant=variant,
         )
-        name_or_path = config.name_or_path
-        config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
-        # Keep the original name_or_path to be able to resolve default quantization config later
-        config.name_or_path = name_or_path
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
@@ -668,6 +668,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
             trust_remote_code=trust_remote_code,
+            export_model_id=model_id, # needed to resolve default quantization config during export
             **kwargs,
         )
 

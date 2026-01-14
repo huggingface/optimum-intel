@@ -296,6 +296,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         preprocessors = kwargs.pop("preprocessors", [])
         compile_only = kwargs.pop("compile_only", False)
         enable_compilation = kwargs.pop("compile", True)
+        export_model_id = kwargs.get("export_model_id", None)
 
         model_file_names = cls._all_ov_model_paths.copy()
         for k in tuple(model_file_names):
@@ -381,7 +382,9 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         )
 
         if quantization_config:
-            if hasattr(config, "name_or_path"):
+            if export_model_id is not None:
+                model_id = export_model_id
+            elif hasattr(config, "name_or_path"):
                 model_id = config.name_or_path
             else:
                 logger.warning(

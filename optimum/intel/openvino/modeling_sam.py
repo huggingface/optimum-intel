@@ -209,7 +209,7 @@ class OVSamModel(OVBaseModel):
             token = use_auth_token
 
         from_onnx = kwargs.get("from_onnx", False)
-
+        export_model_id = kwargs.get("export_model_id", None)
         default_vision_encoder_file_name = (
             ONNX_VISION_ENCODER_MODEL_NAME if from_onnx else cls._all_ov_model_paths["vision_encoder"]
         )
@@ -287,7 +287,9 @@ class OVSamModel(OVBaseModel):
         )
 
         if quantization_config:
-            if hasattr(config, "name_or_path"):
+            if export_model_id is not None:
+                model_id = export_model_id
+            elif hasattr(config, "name_or_path"):
                 model_id = config.name_or_path
             else:
                 logger.warning(

@@ -503,6 +503,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             trust_remote_code (`bool`, *optional*, defaults to `False`):
                 Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
+        export_model_id = kwargs.get("export_model_id", None)
         model_path = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else cls._all_ov_model_paths["model"]
         file_name = file_name or default_file_name
@@ -542,7 +543,9 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         )
 
         if quantization_config:
-            if hasattr(config, "name_or_path"):
+            if export_model_id is not None:
+                model_id = export_model_id
+            elif hasattr(config, "name_or_path"):
                 model_id = config.name_or_path
             else:
                 logger.warning(
@@ -867,6 +870,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             quantization_config=quantization_config,
             compile_only=compile_only,
             trust_remote_code=trust_remote_code,
+            export_model_id=model_id, # needed to resolve default quantization config during export
             **kwargs,
         )
 
