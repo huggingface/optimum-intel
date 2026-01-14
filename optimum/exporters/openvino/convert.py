@@ -362,8 +362,8 @@ def export_pytorch(
                 setattr(model.config, override_config_key, override_config_value)
 
         static_shapes = True
-        if input_shapes is None:
-            input_shapes = {}  # will use the defaults from DEFAULT_DUMMY_SHAPES
+        if input_shapes["static_shapes"] == False:
+            input_shapes = {}  # will dynamic shapes in the OpenVINO IR
             static_shapes = False  # User did not explicit input shapes, produce dynamic shapes in the model
 
         # Check that inputs match, and order them properly
@@ -641,6 +641,7 @@ def export_from_model(
         input_shapes[input_name] = (
             kwargs_shapes[input_name] if input_name in kwargs_shapes else DEFAULT_DUMMY_SHAPES[input_name]
         )
+    input_shapes["static_shapes"] = True if kwargs_shapes else False
 
     if library_name == "open_clip":
         custom_architecture = True
