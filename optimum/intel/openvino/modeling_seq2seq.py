@@ -629,7 +629,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             quantization_config=quantization_config,
             compile_only=compile_only,
             trust_remote_code=trust_remote_code,
-            export_model_id=model_id, # needed to resolve default quantization config during export
+            export_model_id=model_id,  # needed to resolve default quantization config during export
             **kwargs,
         )
 

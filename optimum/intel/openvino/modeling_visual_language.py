@@ -668,7 +668,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
             trust_remote_code=trust_remote_code,
-            export_model_id=model_id, # needed to resolve default quantization config during export
+            export_model_id=model_id,  # needed to resolve default quantization config during export
             **kwargs,
         )
 
