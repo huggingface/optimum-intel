@@ -4963,5 +4963,3 @@ class SiglipOpenVINOConfig(SiglipOnnxConfig):
 )
 class SentenceTransformersTransformerOpenVINOConfig(SentenceTransformersTransformerOnnxConfig):
     pass
-
-
