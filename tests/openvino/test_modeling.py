@@ -1097,6 +1097,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "albert",
         "bert",
+        "big_bird",
         "camembert",
         "convbert",
         "data2vec-text",
@@ -1108,15 +1109,16 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "flaubert",
         "ibert",
         "mobilebert",
+        "modernbert",
         "mpnet",
         "perceiver_text",
+        "rembert",
         "roberta",
         "roformer",
         "squeezebert",
         "xlm",
         "xlm-roberta",
     )
-
     # accuracy issue, need additional investigation
     if is_transformers_version("<", "4.51.0"):
         SUPPORTED_ARCHITECTURES += ("nystromformer",)
@@ -1173,9 +1175,11 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "beit",
         "convnext",
-        # "convnextv2",
+        "convnextv2",
         "data2vec-vision",
         "deit",
+        "dinov2",
+        "efficientnet",
         "levit",
         "mobilenet_v1",
         "mobilenet_v2",
@@ -1187,6 +1191,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         "swin",
         "vit",
     )
+
     TIMM_MODELS = ("timm/pit_s_distilled_224.in1k", "timm/vit_tiny_patch16_224.augreg_in21k")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -1352,6 +1357,7 @@ class OVModelForCTCIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [
         "data2vec-audio",
         "hubert",
+        "mctct",
         "sew",
         "sew-d",
         "unispeech",

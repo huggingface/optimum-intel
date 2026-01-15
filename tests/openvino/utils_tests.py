@@ -226,6 +226,13 @@ MODEL_NAMES = {
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
+    "big_bird": "hf-internal-testing/tiny-random-BigBirdModel",
+    "convnextv2": "hf-internal-testing/tiny-random-ConvNextV2Model",
+    "dinov2": "hf-internal-testing/tiny-random-Dinov2Model",
+    "efficientnet": "hf-internal-testing/tiny-random-EfficientNetForImageClassification",
+    "mctct": "hf-internal-testing/tiny-random-MCTCTModel",
+    "rembert": "hf-internal-testing/tiny-random-RemBertModel",
+    "modernbert": "hf-internal-testing/tiny-random-ModernBertForMaskedLM",
 }
 
 
