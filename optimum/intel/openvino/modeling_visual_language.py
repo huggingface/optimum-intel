@@ -661,6 +661,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             stateful=stateful,
             variant=variant,
         )
+        config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
