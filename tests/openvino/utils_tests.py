@@ -227,7 +227,6 @@ MODEL_NAMES = {
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "big_bird": "hf-internal-testing/tiny-random-BigBirdModel",
-    "convnextv2": "hf-internal-testing/tiny-random-ConvNextV2Model",
     "dinov2": "hf-internal-testing/tiny-random-Dinov2Model",
     "efficientnet": "hf-internal-testing/tiny-random-EfficientNetForImageClassification",
     "mctct": "hf-internal-testing/tiny-random-MCTCTModel",
