@@ -3436,8 +3436,8 @@ class DummyQwen3VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
         normalized_config: NormalizedVisionConfig,
         batch_size: int = 1,
         num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
-        width: int = 420,
-        height: int = 420,
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
         **kwargs,
     ):
         self.batch_size = batch_size
