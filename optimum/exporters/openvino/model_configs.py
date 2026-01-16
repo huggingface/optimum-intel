@@ -3721,23 +3721,16 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
-            return {"hidden_states": {0: "patch_thw_grid", 1: "patch_temporal_channels"}}
-        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
-            return {
-                "hidden_states": {0: "sequence_length"},
-                "attention_mask": {1: "sequence_length", 2: "sequence_length"},
-                "rotary_pos_emb": {0: "sequence_length"},
-            }
         if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
             return {
                 "input": {1: "sequence_length"},
             }
+        return super().inputs
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
-            return {"last_hidden_state": {0: "seq_len"}}
+            return super().outputs
         if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return {"last_hidden_state": {0: "seq_len"}, "deepstack_feature_lists": {0: "seq_len"}}
         if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
