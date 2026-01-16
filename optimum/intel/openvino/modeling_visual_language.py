@@ -3445,7 +3445,7 @@ if is_transformers_version(">=", "4.57.0"):
         Qwen3VLVisionRotaryEmbedding,
     )
 
-    class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
+    class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM, Qwen3VLModel, Qwen3VLVisionModel):
         additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
 
         def __init__(
@@ -3483,25 +3483,8 @@ if is_transformers_version(">=", "4.57.0"):
             head_dim = config.vision_config.hidden_size // config.vision_config.num_heads
             self.rotary_pos_emb = Qwen3VLVisionRotaryEmbedding(head_dim // 2)
 
-        # Copied from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1602
-        def _update_model_kwargs_for_generation(
-            self,
-            outputs: ModelOutput,
-            model_kwargs: Dict[str, Any],
-            is_encoder_decoder: bool = False,
-            num_new_tokens: int = 1,
-        ) -> Dict[str, Any]:
-            model_kwargs = super()._update_model_kwargs_for_generation(
-                outputs=outputs,
-                model_kwargs=model_kwargs,
-                is_encoder_decoder=is_encoder_decoder,
-                num_new_tokens=num_new_tokens,
-            )
-
-            if getattr(outputs, "rope_deltas", None) is not None:
-                model_kwargs["rope_deltas"] = outputs.rope_deltas
-
-            return model_kwargs
+        def __setattr__(self, name, value):
+            OVModelForVisualCausalLM.__setattr__(self, name, value)
 
         def prepare_inputs_for_generation(
             self,
@@ -3616,26 +3599,13 @@ if is_transformers_version(">=", "4.57.0"):
             patch_pos_embeds = torch.cat(patch_pos_embeds_permute)
             return patch_pos_embeds
 
-        def get_placeholder_mask(
-            self,
-            input_ids: torch.LongTensor,
-            inputs_embeds: torch.FloatTensor,
-            image_features: Optional[torch.FloatTensor] = None,
-            video_features: Optional[torch.FloatTensor] = None,
-        ):
-            """
-            Obtains multimodal placeholder mask from `input_ids` or `inputs_embeds`, and checks that the placeholder token count is
-            equal to the length of multimodal features. If the lengths are different, an error is raised.
-            """
-            return Qwen3VLModel.get_placeholder_mask(self, input_ids, inputs_embeds, image_features, video_features)
-
         def get_vision_embeddings(self, pixel_values, grid_thw, **kwargs):
             hidden_states = torch.from_numpy(self.vision_embeddings(pixel_values)[0])
 
             pos_embeds = self.fast_pos_embed_interpolate(grid_thw)
             hidden_states = hidden_states + pos_embeds
 
-            rotary_pos_emb = Qwen3VLVisionModel.rot_pos_emb(self, grid_thw)
+            rotary_pos_emb = self.rot_pos_emb(grid_thw)
             seq_len, _ = hidden_states.size()
             hidden_states = hidden_states.reshape(seq_len, -1)
             rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
@@ -3676,20 +3646,6 @@ if is_transformers_version(">=", "4.57.0"):
             split_sizes = (image_grid_thw.prod(-1) // self.spatial_merge_size**2).tolist()
             image_embeds = torch.split(image_embeds, split_sizes)
             return image_embeds, deepstack_image_embeds
-
-        def get_video_features(
-            self, pixel_values_videos: torch.FloatTensor, video_grid_thw: Optional[torch.LongTensor] = None
-        ):
-            """
-            Encodes videos into continuous embeddings that can be forwarded to the language model. The deepstack visual features are also returned.
-
-            Args:
-                pixel_values_videos (`torch.FloatTensor` of shape `(batch_size, num_channels, image_size, image_size)`):
-                    The tensors corresponding to the input videos.
-                video_grid_thw (`torch.LongTensor` of shape `(num_videos, 3)`, *optional*):
-                    The temporal, height and width of feature shape of each video in LLM.
-            """
-            return self.get_image_features(pixel_values_videos, video_grid_thw)
 
         def get_multimodal_embeddings(
             self,
@@ -3763,8 +3719,7 @@ if is_transformers_version(">=", "4.57.0"):
                 # It is safe to assume that `length!=1` means we're in pre-fill because compiled
                 # models currently cannot do asssisted decoding
                 if self.rope_deltas is None:
-                    position_ids, rope_deltas = Qwen3VLModel.get_rope_index(
-                        self,
+                    position_ids, rope_deltas = self.get_rope_index(
                         input_ids,
                         image_grid_thw,
                         video_grid_thw,
