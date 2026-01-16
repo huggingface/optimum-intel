@@ -3439,7 +3439,11 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
 
 
 if is_transformers_version(">=", "4.57.0"):
-    from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLVisionRotaryEmbedding, Qwen3VLModel, Qwen3VLVisionModel
+    from transformers.models.qwen3_vl.modeling_qwen3_vl import (
+        Qwen3VLModel,
+        Qwen3VLVisionModel,
+        Qwen3VLVisionRotaryEmbedding,
+    )
 
     class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
         additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
@@ -3478,7 +3482,6 @@ if is_transformers_version(">=", "4.57.0"):
             self.spatial_merge_size = config.vision_config.spatial_merge_size
             head_dim = config.vision_config.hidden_size // config.vision_config.num_heads
             self.rotary_pos_emb = Qwen3VLVisionRotaryEmbedding(head_dim // 2)
-
 
         # Copied from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1602
         def _update_model_kwargs_for_generation(
@@ -3521,7 +3524,9 @@ if is_transformers_version(">=", "4.57.0"):
                     inputs_embeds = inputs_embeds[:, -cache_position.shape[0] :]
                 elif inputs_embeds is not None:
                     input_ids = input_ids[:, -cache_position.shape[0] :]
-                elif input_ids.shape[1] != cache_position.shape[0]:  # Default case (the "else", a no op, is Exception 2)
+                elif (
+                    input_ids.shape[1] != cache_position.shape[0]
+                ):  # Default case (the "else", a no op, is Exception 2)
                     input_ids = input_ids[:, cache_position]
 
             if cache_position[0] != 0:
@@ -3548,7 +3553,6 @@ if is_transformers_version(">=", "4.57.0"):
                 }
             )
             return model_inputs
-
 
         # Adapted from https://github.com/huggingface/transformers/blob/8ac2b916b042b1f78b75c9eb941c0f5d2cdd8e10/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L642
         # This method needs to be changed, as instead of running self.pos_embed of type nn.Embedding, openvino model needs to be inferred (self.vision_embeddings_pos)
@@ -3651,7 +3655,9 @@ if is_transformers_version(">=", "4.57.0"):
             )
             return res[0], res[1]
 
-        def get_image_features(self, pixel_values: torch.FloatTensor, image_grid_thw: Optional[torch.LongTensor] = None):
+        def get_image_features(
+            self, pixel_values: torch.FloatTensor, image_grid_thw: Optional[torch.LongTensor] = None
+        ):
             """
             Encodes images into continuous embeddings that can be forwarded to the language model. The deepstack visual features are also returned.
 
@@ -3662,7 +3668,10 @@ if is_transformers_version(">=", "4.57.0"):
                     The temporal, height and width of feature shape of each image in LLM.
             """
             image_embeds, deepstack_image_embeds = self.get_vision_embeddings(pixel_values, image_grid_thw)
-            image_embeds, deepstack_image_embeds = torch.from_numpy(image_embeds), torch.from_numpy(deepstack_image_embeds)
+            image_embeds, deepstack_image_embeds = (
+                torch.from_numpy(image_embeds),
+                torch.from_numpy(deepstack_image_embeds),
+            )
             deepstack_image_embeds = deepstack_image_embeds.tolist()
             split_sizes = (image_grid_thw.prod(-1) // self.spatial_merge_size**2).tolist()
             image_embeds = torch.split(image_embeds, split_sizes)
