@@ -384,6 +384,7 @@ class Qwen3VLTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLLMInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -391,11 +392,6 @@ class Qwen3VLTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         common_inputs["visual_pos_masks"] = {0: "batch_size", 1: "sequence_length"}
         common_inputs["deepstack_visual_embeds"] = {0: "num_layers", 1: "visual_seqlen"}
         return common_inputs
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> "ModelPatcher":
-        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager(
