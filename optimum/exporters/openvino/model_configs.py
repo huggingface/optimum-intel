@@ -346,6 +346,7 @@ class DummyQwen3VLLMInputGenerator(DummyTextInputGenerator):
             **kwargs,
         )
         self.embed_dim = normalized_config.hidden_size
+        self.num_layers = len(self.normalized_config.deepstack_visual_indexes)
 
     def generate(
         self,
@@ -356,9 +357,8 @@ class DummyQwen3VLLMInputGenerator(DummyTextInputGenerator):
         bool_dtype: str = "bool",
     ):
         if input_name == "deepstack_visual_embeds":
-            num_layers = len(self.normalized_config.deepstack_visual_indexes)
             return self.random_float_tensor(
-                [num_layers, 2 * self.sequence_length, self.embed_dim], framework=framework, dtype=float_dtype
+                [self.num_layers, 2 * self.sequence_length, self.embed_dim], framework=framework, dtype=float_dtype
             )
         if input_name == "visual_pos_masks":
             return self.constant_tensor(
@@ -3415,42 +3415,13 @@ class DummyQwen2VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
             return self.random_int_tensor([hidden_size], max_value=hidden_size)
 
 
-class DummyQwen3VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
+class DummyQwen3VLVisionEmbedInputGenerator(DummyQwen2VLVisionEmbedInputGenerator):
     SUPPORTED_INPUT_NAMES = (
         "hidden_states",
         "attention_mask",
         "rotary_pos_emb",
         "input",
     )
-
-    def __init__(
-        self,
-        task: str,
-        normalized_config: NormalizedVisionConfig,
-        batch_size: int = 1,
-        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
-        width: int = DEFAULT_DUMMY_SHAPES["width"],
-        height: int = DEFAULT_DUMMY_SHAPES["height"],
-        **kwargs,
-    ):
-        self.batch_size = batch_size
-        self.height = height
-        self.width = width
-        self.num_channels = num_channels
-        self.temporal_patch_size = normalized_config.config.temporal_patch_size
-        self.patch_size = normalized_config.config.patch_size
-        if normalized_config.use_embed_dim:
-            self.embed_dim = (
-                normalized_config.config.embed_dim
-                if hasattr(normalized_config.config, "embed_dim")
-                else normalized_config.hidden_size
-            )
-        else:
-            self.embed_dim = self.num_channels * self.temporal_patch_size * self.patch_size * self.patch_size
-        self.num_heads = normalized_config.config.num_heads
-        self.spatial_merge_size = None
-        if hasattr(normalized_config.config, "spatial_merge_size"):
-            self.spatial_merge_size = normalized_config.config.spatial_merge_size
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         grid_h, grid_w = self.height // self.patch_size, self.width // self.patch_size
@@ -3471,19 +3442,25 @@ class DummyQwen3VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
             return self.random_float_tensor([grid_h * grid_t * grid_w, dim], framework=framework, dtype=float_dtype)
 
         if input_name == "input":
-            return self.constant_tensor([4, DEFAULT_DUMMY_SHAPES["sequence_length"]], framework=framework, value=0, dtype=DTYPE_MAPPER.pt(int_dtype))
+            return self.constant_tensor(
+                [4, DEFAULT_DUMMY_SHAPES["sequence_length"]],
+                framework=framework,
+                value=0,
+                dtype=DTYPE_MAPPER.pt(int_dtype),
+            )
 
 
-class Qwen2VLConfigBehavior(str, enum.Enum):
+class QwenVLConfigBehavior(str, enum.Enum):
     LANGUAGE = "language"
     VISION_EMBEDDINGS = "vision_embeddings"
     VISION_EMBEDDINGS_MERGER = "vision_embeddings_merger"
     TEXT_EMBEDDINGS = "text_embeddings"
+    VISION_EMBEDDINGS_POS = "vision_embeddings_pos"
 
 
 @register_in_tasks_manager("qwen2_vl", *["image-text-to-text"], library_name="transformers")
 class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
-    SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen2VLConfigBehavior]
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLVisionEmbedInputGenerator,)
     MIN_TRANSFORMERS_VERSION = "4.45.0"
@@ -3494,7 +3471,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         task: str = "feature-extraction",
         int_dtype: str = "int64",
         float_dtype: str = "fp32",
-        behavior: Qwen2VLConfigBehavior = Qwen2VLConfigBehavior.VISION_EMBEDDINGS,
+        behavior: QwenVLConfigBehavior = QwenVLConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
     ):
         super().__init__(
@@ -3506,34 +3483,34 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         )
         self._behavior = behavior
         self._orig_config = config
-        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self._normalized_config.use_embed_dim = False
-        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER and hasattr(config, "vision_config"):
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self._normalized_config.use_embed_dim = True
 
     @staticmethod
-    def get_model_for_behavior(model, behavior: Union[str, Qwen2VLConfigBehavior]):
-        if isinstance(behavior, str) and not isinstance(behavior, Qwen2VLConfigBehavior):
-            behavior = Qwen2VLConfigBehavior(behavior)
+    def get_model_for_behavior(model, behavior: Union[str, QwenVLConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
 
-        if behavior == Qwen2VLConfigBehavior.LANGUAGE:
+        if behavior == QwenVLConfigBehavior.LANGUAGE:
             return model
 
-        if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
+        if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
             vision_embeddings = model.visual.patch_embed
             vision_embeddings.config = model.config.vision_config
             return vision_embeddings
 
-        if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+        if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             vision_emb_merger = model.visual
             vision_emb_merger.config = model.config.vision_config
             return vision_emb_merger
 
-        if behavior == Qwen2VLConfigBehavior.TEXT_EMBEDDINGS:
+        if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = (
                 model.model.embed_tokens if hasattr(model.model, "embed_tokens") else model.language_model.embed_tokens
             )
@@ -3542,7 +3519,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
 
     def with_behavior(
         self,
-        behavior: Union[str, Qwen2VLConfigBehavior],
+        behavior: Union[str, QwenVLConfigBehavior],
     ):
         """
         Creates a config for different behaviour.
@@ -3550,13 +3527,13 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             behavior ([`ConfigBehavior`]):
                 The behavior to use for the new instance.
         """
-        if isinstance(behavior, str) and not isinstance(behavior, Qwen2VLConfigBehavior):
-            behavior = Qwen2VLConfigBehavior(behavior)
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
 
-        if behavior == Qwen2VLConfigBehavior.TEXT_EMBEDDINGS:
+        if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
             return get_vlm_text_embeddings_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
 
-        if behavior == Qwen2VLConfigBehavior.LANGUAGE:
+        if behavior == QwenVLConfigBehavior.LANGUAGE:
             return get_vlm_text_generation_config(
                 "qwen2",
                 self._orig_config,
@@ -3567,7 +3544,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
                 inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
             )
 
-        if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
+        if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
                 self._orig_config,
                 task=self.task,
@@ -3576,7 +3553,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
                 behavior=behavior,
                 preprocessors=self._preprocessors,
             )
-        if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+        if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return self.__class__(
                 self._orig_config,
                 task=self.task,
@@ -3588,17 +3565,17 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
-        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return Qwen2VLVisionEmbMergerPatcher(self, model, model_kwargs)
-        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
             return ModelPatcher(self, model, model_kwargs=model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
             return {"hidden_states": {0: "patch_thw_grid", 1: "patch_temporal_channels"}}
-        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return {
                 "hidden_states": {0: "sequence_length"},
                 "attention_mask": {1: "sequence_length", 2: "sequence_length"},
@@ -3607,7 +3584,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        if self._behavior in [Qwen2VLConfigBehavior.VISION_EMBEDDINGS, Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER]:
+        if self._behavior in [QwenVLConfigBehavior.VISION_EMBEDDINGS, QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER]:
             return {"last_hidden_state": {0: "seq_len"}}
         return {}
 
@@ -3618,7 +3595,7 @@ class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return {
                 "hidden_states": {0: "sequence_length"},
                 "attention_mask": {1: "sequence_length", 2: "sequence_length"},
@@ -3630,17 +3607,9 @@ class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
-        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return Qwen2_5_VLVisionEmbMergerPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
-
-
-class Qwen3VLConfigBehavior(str, enum.Enum):
-    LANGUAGE = "language"
-    VISION_EMBEDDINGS = "vision_embeddings"
-    VISION_EMBEDDINGS_MERGER = "vision_embeddings_merger"
-    TEXT_EMBEDDINGS = "text_embeddings"
-    VISION_EMBEDDINGS_POS = "vision_embeddings_pos"
 
 
 @register_in_tasks_manager(
@@ -3648,9 +3617,8 @@ class Qwen3VLConfigBehavior(str, enum.Enum):
     *["image-text-to-text"],
     library_name="transformers",
 )
-class Qwen3VLOpenVINOConfig(BaseVLMOpenVINOConfig):
-    SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen3VLConfigBehavior]
-    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
     MIN_TRANSFORMERS_VERSION = "4.57.0"
 
@@ -3660,7 +3628,7 @@ class Qwen3VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         task: str = "feature-extraction",
         int_dtype: str = "int64",
         float_dtype: str = "fp32",
-        behavior: Qwen3VLConfigBehavior = Qwen3VLConfigBehavior.VISION_EMBEDDINGS,
+        behavior: QwenVLConfigBehavior = QwenVLConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
     ):
         super().__init__(
@@ -3672,51 +3640,30 @@ class Qwen3VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         )
         self._behavior = behavior
         self._orig_config = config
-        if self._behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self._normalized_config.use_embed_dim = False
         if self._behavior in (
-            Qwen3VLConfigBehavior.VISION_EMBEDDINGS_MERGER,
-            Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS_POS,
         ) and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self._normalized_config.use_embed_dim = True
 
     @staticmethod
-    def get_model_for_behavior(model, behavior: Union[str, Qwen3VLConfigBehavior]):
-        if isinstance(behavior, str) and not isinstance(behavior, Qwen3VLConfigBehavior):
-            behavior = Qwen3VLConfigBehavior(behavior)
-
-        if behavior == Qwen3VLConfigBehavior.LANGUAGE:
-            return model
-
-        if behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS:
-            vision_embeddings = model.visual.patch_embed
-            vision_embeddings.config = model.config.vision_config
-            return vision_embeddings
-
-        if behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
-            vision_emb_merger = model.visual
-            vision_emb_merger.config = model.config.vision_config
-            return vision_emb_merger
-
-        if behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS:
+    def get_model_for_behavior(model, behavior: Union[str, QwenVLConfigBehavior]):
+        if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
             vision_emb_pos = model.visual.pos_embed
             vision_emb_pos.config = model.config.vision_config
             return vision_emb_pos
 
-        if behavior == Qwen3VLConfigBehavior.TEXT_EMBEDDINGS:
-            text_embedding = (
-                model.model.embed_tokens if hasattr(model.model, "embed_tokens") else model.language_model.embed_tokens
-            )
-            text_embedding.config = model.config
-            return text_embedding
+        return Qwen2VLOpenVINOConfig.get_model_for_behavior(model, behavior)
 
     def with_behavior(
         self,
-        behavior: Union[str, Qwen3VLConfigBehavior],
+        behavior: Union[str, QwenVLConfigBehavior],
     ):
         """
         Creates a config for different behaviour.
@@ -3724,15 +3671,15 @@ class Qwen3VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             behavior ([`ConfigBehavior`]):
                 The behavior to use for the new instance.
         """
-        if isinstance(behavior, str) and not isinstance(behavior, Qwen3VLConfigBehavior):
-            behavior = Qwen3VLConfigBehavior(behavior)
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
 
-        if behavior == Qwen3VLConfigBehavior.TEXT_EMBEDDINGS:
+        if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
             return get_vlm_text_embeddings_config(
                 "qwen3_vl_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
             )
 
-        if behavior == Qwen3VLConfigBehavior.LANGUAGE:
+        if behavior == QwenVLConfigBehavior.LANGUAGE:
             config = get_vlm_text_generation_config(
                 "qwen3_vl_text",
                 self._orig_config.text_config,
@@ -3748,9 +3695,9 @@ class Qwen3VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return config
 
         if behavior in (
-            Qwen3VLConfigBehavior.VISION_EMBEDDINGS,
-            Qwen3VLConfigBehavior.VISION_EMBEDDINGS_MERGER,
-            Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS_POS,
         ):
             return self.__class__(
                 self._orig_config,
@@ -3763,41 +3710,41 @@ class Qwen3VLOpenVINOConfig(BaseVLMOpenVINOConfig):
 
     def patch_model_for_export(self, model: Union["PreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
-        if self._behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return Qwen3VLVisionEmbMergerPatcher(self, model, model_kwargs)
         if (
-            self._behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS
-            or self._behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS
+            self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS
+            or self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS
         ):
             return ModelPatcher(self, model, model_kwargs=model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        if self._behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
             return {"hidden_states": {0: "patch_thw_grid", 1: "patch_temporal_channels"}}
-        if self._behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return {
                 "hidden_states": {0: "sequence_length"},
                 "attention_mask": {1: "sequence_length", 2: "sequence_length"},
                 "rotary_pos_emb": {0: "sequence_length"},
             }
-        if self._behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
             return {
                 "input": {1: "sequence_length"},
             }
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        if self._behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
             return {"last_hidden_state": {0: "seq_len"}}
-        if self._behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return {"last_hidden_state": {0: "seq_len"}, "deepstack_feature_lists": {0: "seq_len"}}
-        if self._behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
             return {"last_hidden_state": {0: "seq_len", 1: "seq_len"}}
-        if self._behavior == Qwen3VLConfigBehavior.TEXT_EMBEDDINGS:
+        if self._behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
             return {"inputs_embeds": {0: "batch_size", 1: "sequence_length"}}
-        if self._behavior == Qwen3VLConfigBehavior.LANGUAGE:
+        if self._behavior == QwenVLConfigBehavior.LANGUAGE:
             return get_vlm_internal_text_generation_config(
                 "qwen3_vl_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
             ).outputs
