@@ -450,14 +450,15 @@ class OVExportCommand(BaseOptimumCLICommand):
             if quantization_config:
                 main_quantize(
                     model_name_or_path=self.args.model,
-                    task=self.args.task,
-                    library_name=self.args.library,
-                    quantization_config=quantization_config,
                     output=output,
+                    quantization_config=quantization_config,
+                    task=self.args.task,
                     cache_dir=self.args.cache_dir,
                     trust_remote_code=self.args.trust_remote_code,
                     model_kwargs=self.args.model_kwargs,
+                    library_name=self.args.library,
                 )
+
             if original_output is not None:
                 # If exported to temporary directory, move exported model to the original output directory
                 original_output.mkdir(parents=True, exist_ok=True)

@@ -613,12 +613,12 @@ def main_quantize(
     quantization_config: Union[Dict, "OVQuantizationConfigBase"],  # noqa: F821
     task: str,
     cache_dir: Optional[str] = HUGGINGFACE_HUB_CACHE,
-    library_name: Optional[str] = None,
     trust_remote_code: bool = False,
     subfolder: str = "",
     revision: str = "main",
     token: Optional[Union[bool, str]] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
+    library_name: Optional[str] = None,
 ):
     """
     Apply quantization to the OpenVINO model exported to `output` directory.
@@ -635,8 +635,6 @@ def main_quantize(
             The task to export the model for.
         cache_dir (`Optional[str]`, defaults to `HUGGINGFACE_HUB_CACHE`):
             Path indicating where to store cache. The default Hugging Face cache path will be used by default.
-        library_name (`Optional[str]`, defaults to `None`):
-            The library name.
         trust_remote_code (`bool`, defaults to `False`):
             Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories
             you trust and in which you have read the code, as it will execute on your local machine arbitrary code present in the
@@ -654,6 +652,8 @@ def main_quantize(
             the export. This argument should be used along the `custom_export_configs` argument
             in case, for example, the model inputs/outputs are changed (for example, if
             `model_kwargs={"output_attentions": True}` is passed).
+        library_name (`Optional[str]`, defaults to `None`):
+            The library name.
     """
     from optimum.intel.openvino.configuration import _GPTOSSQuantizationConfig
 
