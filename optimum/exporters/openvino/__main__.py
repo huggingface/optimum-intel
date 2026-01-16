@@ -607,7 +607,7 @@ def main_export(
                 AutoBitLinear.load_hook = orig_load_hook
 
 
-def main_quantize(
+def _main_quantize(
     model_name_or_path: str,
     output: Union[str, Path],
     quantization_config: Union[Dict, "OVQuantizationConfigBase"],  # noqa: F821
@@ -743,7 +743,7 @@ def main_quantize(
     )
 
 
-def prepare_quantization_config(
+def _prepare_quantization_config(
     model_name_or_path: str,
     output: Union[str, Path],
     task: str,

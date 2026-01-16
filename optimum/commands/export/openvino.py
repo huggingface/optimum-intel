@@ -346,8 +346,8 @@ class OVExportCommand(BaseOptimumCLICommand):
             _no_compression_parameter_provided,
             _no_quantization_parameter_provided,
             main_export,
-            main_quantize,
-            prepare_quantization_config,
+            _main_quantize,
+            _prepare_quantization_config,
         )
         from ...exporters.openvino.utils import _merge_move
         from ...intel.openvino.configuration import OVConfig
@@ -422,7 +422,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 # **input_shapes,
             )
 
-            quantization_config = prepare_quantization_config(
+            quantization_config = _prepare_quantization_config(
                 output=output,
                 model_name_or_path=self.args.model,
                 task=self.args.task,
@@ -448,7 +448,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 smooth_quant_alpha=self.args.smooth_quant_alpha,
             )
             if quantization_config:
-                main_quantize(
+                _main_quantize(
                     model_name_or_path=self.args.model,
                     output=output,
                     quantization_config=quantization_config,
