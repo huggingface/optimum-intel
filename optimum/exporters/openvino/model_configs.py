@@ -174,10 +174,6 @@ def init_model_configs():
         "transformers",
         "AutoModelForImageTextToText",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen3_vl", "image-text-to-text")] = (
-        "transformers",
-        "AutoModelForImageTextToText",
-    )
     TasksManager._CUSTOM_CLASSES[("pt", "llava_next_video", "image-text-to-text")] = (
         "transformers",
         "AutoModelForVision2Seq",
