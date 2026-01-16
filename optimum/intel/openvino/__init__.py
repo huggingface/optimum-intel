@@ -44,7 +44,6 @@ if is_openvino_version("<", "2025.4.0"):
 
 from .configuration import (
     OVConfig,
-    OVDynamicQuantizationConfig,
     OVMixedQuantizationConfig,
     OVPipelineQuantizationConfig,
     OVQuantizationConfig,

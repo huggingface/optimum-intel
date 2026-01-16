@@ -725,7 +725,7 @@ def _apply_model_size_based_quantization(submodel_paths: List[str], ov_config: "
     # TODO: Refactor the code below in the following way:
     #   1. Create a OVPipelineQuantizationConfig based on each submodel size
     #   2. Run _main_quantize() with the created quantization config
-    # TODO: Apply default ignored scope from configuration.py if matches
+    # TODO: Apply default int8 and ignored scope configs from configuration.py if matches
     for submodel_path in submodel_paths:
         submodel_path = Path(output) / submodel_path
 
