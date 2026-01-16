@@ -343,11 +343,11 @@ class OVExportCommand(BaseOptimumCLICommand):
 
     def run(self):
         from ...exporters.openvino.__main__ import (
+            _main_quantize,
             _no_compression_parameter_provided,
             _no_quantization_parameter_provided,
-            main_export,
-            _main_quantize,
             _prepare_quantization_config,
+            main_export,
         )
         from ...exporters.openvino.utils import _merge_move
         from ...intel.openvino.configuration import OVConfig
