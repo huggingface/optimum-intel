@@ -3479,7 +3479,7 @@ class DummyQwen3VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
             return self.random_float_tensor([grid_h * grid_t * grid_w, dim], framework=framework, dtype=float_dtype)
 
         if input_name == "input":
-            return self.constant_tensor([4, 2520], framework=framework, value=0, dtype=DTYPE_MAPPER.pt(int_dtype))
+            return self.constant_tensor([4, DEFAULT_DUMMY_SHAPES["sequence_length"]], framework=framework, value=0, dtype=DTYPE_MAPPER.pt(int_dtype))
 
 
 class Qwen2VLConfigBehavior(str, enum.Enum):
