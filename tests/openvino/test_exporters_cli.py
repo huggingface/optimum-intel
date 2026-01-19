@@ -113,7 +113,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
-        ("text-generation-with-past", "eagle3"),
     ]
 
     if is_transformers_version(">=", "4.54.0"):
@@ -121,6 +120,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             [
                 ("text-generation", "lfm2"),
                 ("text-generation-with-past", "lfm2"),
+                ("text-generation-with-past", "eagle3"),
             ]
         )
 

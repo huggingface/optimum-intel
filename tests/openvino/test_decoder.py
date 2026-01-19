@@ -773,7 +773,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             )
 
     EAGLE_DRAFT_AND_TARGET_MODELS = {"AngelSlim/Qwen3-1.7B_eagle3": "Qwen/Qwen3-1.7B"}
-
+    @pytest.mark.skipif(
+        not is_transformers_version(">=", "4.54"),
+        reason="Eagle3 requires transformers >= 4.54",
+    )
     def test_load_and_infer_with_eagle3_model(self):
         draft_model_id = MODEL_NAMES["eagle3"]
         target_model_id = self.EAGLE_DRAFT_AND_TARGET_MODELS.get(draft_model_id)
