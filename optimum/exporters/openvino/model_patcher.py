@@ -39,7 +39,7 @@ from transformers.models.llama.modeling_llama import LlamaRMSNorm
 from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
 from transformers.processing_utils import Unpack
-from transformers.utils import ModelOutput, can_return_tuple
+from transformers.utils import ModelOutput
 
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.model_patcher import (
@@ -7982,7 +7982,6 @@ class LlamaEagle3Model(LlamaEagle3PreTrainedModel):
     def set_input_embeddings(self, value):
         self.embed_tokens = value
 
-    @can_return_tuple
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -8154,7 +8153,6 @@ class LlamaEagle3ForCausalLM(LlamaEagle3PreTrainedModel, GenerationMixin):
     def get_decoder(self):
         return self.model
 
-    @can_return_tuple
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
