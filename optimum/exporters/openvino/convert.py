@@ -62,6 +62,7 @@ from .stateful import (
 )
 from .utils import (
     MULTI_MODAL_TEXT_GENERATION_MODELS,
+    ONNX_SUPPORTED_ARCHITECTURES,
     OV_XML_FILE_NAME,
     _get_dynamic_shapes_info,
     _get_input_info,
@@ -560,6 +561,12 @@ def export_from_model(
         model_type = model.config.export_model_type
     else:
         model_type = getattr(model.config, "model_type", None) or ""
+
+    if model_type in ONNX_SUPPORTED_ARCHITECTURES:
+        logger.warning(
+            f"The OpenVINO export of {model_type} models is not officially supported and will be deprecated in optimum-intel v1.29.\n"
+            f"If you want to support {model_type} please propose a PR or open up an issue."
+        )
 
     custom_architecture = library_name == "transformers" and model_type not in TasksManager._SUPPORTED_MODEL_TYPE
 
