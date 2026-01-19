@@ -144,7 +144,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.55.0"):
         SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")
 
-    if is_transformers_version(">=", "4.55.0") and is_transformers_version("<=", "4.57.3"):
+    if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "4.58.0"):
         SUPPORTED_ARCHITECTURES += ("afmoe",)
 
     if is_transformers_version("<", "4.56.0"):
