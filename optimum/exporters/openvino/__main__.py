@@ -641,6 +641,8 @@ def main_export(
                 GPTQQuantizer.post_init_model = orig_post_init_model
             if do_bitnet_patching:
                 AutoBitLinear.load_hook = orig_load_hook
+        if eagle3 and library_name == "transformers":
+            remove_config(model_name_or_path, output, download_to_local)
 
 
 def _main_quantize(
@@ -737,8 +739,6 @@ def _main_quantize(
             model_cls = getattr(__import__("optimum.intel", fromlist=[model_cls_name]), model_cls_name)
         except (AttributeError, ImportError, KeyError) as e:
             raise RuntimeError(f"Wasn't able to locate OpenVINO class for task {original_task} ({task}).") from e
-        if eagle3 and library_name == "transformers":
-            remove_config(model_name_or_path, output, download_to_local)
 
     # Step 2. Load the exported model
     model = model_cls.from_pretrained(
