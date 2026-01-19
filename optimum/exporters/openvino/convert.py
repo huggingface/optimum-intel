@@ -132,6 +132,9 @@ def _save_model(
 
     runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}
     model = _add_runtime_options_to_rt_info(model, runtime_options)
+
+    if getattr(getattr(config, "_config", {}), "is_eagle3", False):
+        model = _add_eagle3_mode_to_rt_info(model)
     save_model(model, path, compress_to_fp16)
     del model
     gc.collect()
@@ -364,8 +367,16 @@ def export_pytorch(
         if input_shapes is None:
             input_shapes = {}  # will use the defaults from DEFAULT_DUMMY_SHAPES
 
+        model_config = getattr(model, "config", {})
+        model_type = getattr(model_config, "model_type", "")
+
         # Check that inputs match, and order them properly
         dummy_inputs = config.generate_dummy_inputs(framework="pt", **input_shapes)
+        # Remove hidden_states input for other standard llama model
+        if model_type == "llama" and not getattr(model_config, "is_eagle3", False):
+            if 'hidden_states' in dummy_inputs.keys():
+                dummy_inputs.pop('hidden_states')
+
         device = torch.device(device)
         if device.type == "cuda" and torch.cuda.is_available():
             model.to(device)
@@ -404,8 +415,6 @@ def export_pytorch(
         patcher.patched_forward = ts_patched_forward
 
         ts_decoder_kwargs = {}
-        model_config = getattr(model, "config", {})
-        model_type = getattr(model_config, "model_type", "")
         if allow_skip_tracing_check(library_name, model_type):
             ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
 
@@ -840,6 +849,16 @@ def _add_runtime_options_to_rt_info(model: Model, options: Dict):
 
     return model
 
+def _add_eagle3_mode_to_rt_info(model: Model):
+    """
+    Add eagle3 mode
+    """
+    try:
+        model.set_rt_info("True", ["eagle3_mode"])
+    except Exception:
+        pass
+
+    return model
 
 def _add_version_info_to_model(model: Model, library_name: Optional[str] = None):
     """

@@ -113,6 +113,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
+        ("text-generation-with-past", "eagle3"),
     ]
 
     if is_transformers_version(">=", "4.54.0"):
@@ -782,9 +783,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
     ]
 
-    def _openvino_export(self, model_name: str, task: str, model_kwargs: Dict = None):
+    def _openvino_export(self, model_name: str, task: str, model_kwargs: Dict = None, eagle3: bool = None, trust_remote_code: bool = None):
         with TemporaryDirectory() as tmpdir:
-            main_export(model_name_or_path=model_name, output=tmpdir, task=task, model_kwargs=model_kwargs)
+            main_export(model_name_or_path=model_name, output=tmpdir, task=task, eagle3=eagle3, trust_remote_code=trust_remote_code, model_kwargs=model_kwargs)
 
     def test_filtered_architectures(cls):
         if is_transformers_version("<", "4.49"):
@@ -806,7 +807,10 @@ class OVCLIExportTestCase(unittest.TestCase):
         model_kwargs = None
         if task == "text-to-audio" and model_type == "speecht5":
             model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
-        self._openvino_export(MODEL_NAMES[model_type], task, model_kwargs)
+        if task == "text-generation-with-past" and model_type == "eagle3":
+            self._openvino_export(MODEL_NAMES[model_type], task, eagle3=True, trust_remote_code=True)
+        else:
+            self._openvino_export(MODEL_NAMES[model_type], task, model_kwargs=model_kwargs)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli(self, task: str, model_type: str):
@@ -814,6 +818,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":
                 add_ops = '--model-kwargs "{\\"vocoder\\": \\"fxmarty/speecht5-hifigan-tiny\\"}"'
+            if task == "text-generation-with-past" and model_type == "eagle3":
+                add_ops = '--eagle3 --trust-remote-code'
             subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} {tmpdir}",
                 shell=True,
@@ -997,6 +1003,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":
                 add_ops = '--model-kwargs "{\\"vocoder\\": \\"fxmarty/speecht5-hifigan-tiny\\"}"'
+            if task == "text-generation-with-past" and model_type == "eagle3":
+                add_ops = '--eagle3 --trust-remote-code'
             subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} --weight-format fp16 {tmpdir}",
                 shell=True,
@@ -1017,6 +1025,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":
                 add_ops = '--model-kwargs "{\\"vocoder\\": \\"fxmarty/speecht5-hifigan-tiny\\"}"'
+            if task == "text-generation-with-past" and model_type == "eagle3":
+                add_ops = '--eagle3 --trust-remote-code'
             subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} --weight-format int8 {tmpdir}",
                 shell=True,
@@ -1028,7 +1038,8 @@ class OVCLIExportTestCase(unittest.TestCase):
                 if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
-
+            if model_type == "eagle3":
+                return
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
             expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):

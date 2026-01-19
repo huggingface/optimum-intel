@@ -559,6 +559,36 @@ class GemmaOpenVINOConfig(GemmaOnnxConfig):
         return inputs
 
 
+class EAGLE3DummyGenerator(DummyInputGenerator):
+    """
+    Generates dummy hidden_states inputs.
+    """
+
+
+
+
+
+
+    SUPPORTED_INPUT_NAMES = ("hidden_states",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.hidden_size = normalized_config.hidden_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        shape = (
+            self.batch_size,
+            self.sequence_length,
+            self.hidden_size*3,
+        )
 @register_in_tasks_manager(
     "llama",
     *[
@@ -571,8 +601,21 @@ class GemmaOpenVINOConfig(GemmaOnnxConfig):
     library_name="transformers",
 )
 class LlamaOpenVINOConfig(LlamaOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = LlamaOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES + (EAGLE3DummyGenerator,)
     _MODEL_PATCHER = OVDecoderModelPatcher
 
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = super().inputs
+        common_inputs["hidden_states"] = {0: "batch_size", 1: "sequence_length", 2: "hidden_size"}
+        return common_inputs
+
+    @property
+    def outputs(self) -> dict[str, dict[int, str]]:
+        common_outputs = super().outputs
+        # Add d2t buffer as eagle3 draft output
+        common_outputs['d2t'] = {0: "vocab_size"}
+        return common_outputs
 
 @register_in_tasks_manager(
     "gpt_oss",
