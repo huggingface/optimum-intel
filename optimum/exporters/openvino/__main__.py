@@ -17,7 +17,6 @@ import gc
 import importlib.util
 import json
 import logging
-import operator
 import os
 import shutil
 import tempfile
