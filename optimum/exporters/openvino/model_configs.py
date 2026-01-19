@@ -4963,3 +4963,8 @@ class SiglipOpenVINOConfig(SiglipOnnxConfig):
 )
 class SentenceTransformersTransformerOpenVINOConfig(SentenceTransformersTransformerOnnxConfig):
     pass
+
+
+@register_in_tasks_manager("rembert", *COMMON_TEXT_TASKS)
+class RemBertOpenVINOConfig(RemBertOnnxConfig):
+    pass
