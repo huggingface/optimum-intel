@@ -292,9 +292,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--eagle3",
         action="store_true",
-        help=(
-            "the original model is a draft model of eagle3 pipeline."
-        ),
+        help=("the original model is a draft model of eagle3 pipeline."),
     )
     optional_group.add_argument(
         "--model-kwargs",

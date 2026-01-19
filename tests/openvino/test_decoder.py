@@ -772,9 +772,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 f"values are not close for {dtype if dtype is not None else 'None'}, max diff = {torch.abs(ov_logits - ref_logits).max()}",
             )
 
-    EAGLE_DRAFT_AND_TARGET_MODELS = {
-        "AngelSlim/Qwen3-1.7B_eagle3": "Qwen/Qwen3-1.7B"
-    }
+    EAGLE_DRAFT_AND_TARGET_MODELS = {"AngelSlim/Qwen3-1.7B_eagle3": "Qwen/Qwen3-1.7B"}
+
     def test_load_and_infer_with_eagle3_model(self):
         draft_model_id = MODEL_NAMES["eagle3"]
         target_model_id = self.EAGLE_DRAFT_AND_TARGET_MODELS.get(draft_model_id)

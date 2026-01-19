@@ -559,7 +559,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             if self.is_eagle3:
                 hidden_states = kwargs.get("hidden_states", None)
                 if hidden_states is None:
-                    hidden_states = np.zeros((batch_size, input_ids.shape[1], self.config.hidden_size * 3), dtype=np.float32)
+                    hidden_states = np.zeros(
+                        (batch_size, input_ids.shape[1], self.config.hidden_size * 3), dtype=np.float32
+                    )
                 inputs["hidden_states"] = hidden_states
 
         return inputs

@@ -783,9 +783,23 @@ class OVCLIExportTestCase(unittest.TestCase):
         if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
     ]
 
-    def _openvino_export(self, model_name: str, task: str, model_kwargs: Dict = None, eagle3: bool = None, trust_remote_code: bool = None):
+    def _openvino_export(
+        self,
+        model_name: str,
+        task: str,
+        model_kwargs: Dict = None,
+        eagle3: bool = None,
+        trust_remote_code: bool = None,
+    ):
         with TemporaryDirectory() as tmpdir:
-            main_export(model_name_or_path=model_name, output=tmpdir, task=task, eagle3=eagle3, trust_remote_code=trust_remote_code, model_kwargs=model_kwargs)
+            main_export(
+                model_name_or_path=model_name,
+                output=tmpdir,
+                task=task,
+                eagle3=eagle3,
+                trust_remote_code=trust_remote_code,
+                model_kwargs=model_kwargs,
+            )
 
     def test_filtered_architectures(cls):
         if is_transformers_version("<", "4.49"):
@@ -819,7 +833,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             if task == "text-to-audio" and model_type == "speecht5":
                 add_ops = '--model-kwargs "{\\"vocoder\\": \\"fxmarty/speecht5-hifigan-tiny\\"}"'
             if task == "text-generation-with-past" and model_type == "eagle3":
-                add_ops = '--eagle3 --trust-remote-code'
+                add_ops = "--eagle3 --trust-remote-code"
             subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} {tmpdir}",
                 shell=True,
@@ -1004,7 +1018,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             if task == "text-to-audio" and model_type == "speecht5":
                 add_ops = '--model-kwargs "{\\"vocoder\\": \\"fxmarty/speecht5-hifigan-tiny\\"}"'
             if task == "text-generation-with-past" and model_type == "eagle3":
-                add_ops = '--eagle3 --trust-remote-code'
+                add_ops = "--eagle3 --trust-remote-code"
             subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} --weight-format fp16 {tmpdir}",
                 shell=True,
@@ -1026,7 +1040,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             if task == "text-to-audio" and model_type == "speecht5":
                 add_ops = '--model-kwargs "{\\"vocoder\\": \\"fxmarty/speecht5-hifigan-tiny\\"}"'
             if task == "text-generation-with-past" and model_type == "eagle3":
-                add_ops = '--eagle3 --trust-remote-code'
+                add_ops = "--eagle3 --trust-remote-code"
             subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} --weight-format int8 {tmpdir}",
                 shell=True,

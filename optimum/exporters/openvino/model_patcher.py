@@ -24,20 +24,23 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn.functional as F
 from torch import nn
-from transformers.cache_utils import DynamicCache, EncoderDecoderCache, Cache
-from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPast, BaseModelOutputWithPooling, CausalLMOutputWithPast
+from transformers.activations import ACT2FN
+from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache
+from transformers.configuration_utils import PretrainedConfig
+from transformers.generation import GenerationMixin
+from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
+from transformers.modeling_outputs import (
+    BaseModelOutput,
+    BaseModelOutputWithPast,
+    BaseModelOutputWithPooling,
+)
+from transformers.modeling_utils import PreTrainedModel
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import LlamaRMSNorm
 from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
-from transformers.modeling_utils import PreTrainedModel
-from transformers.configuration_utils import PretrainedConfig
-from transformers.utils import can_return_tuple, ModelOutput
 from transformers.processing_utils import Unpack
-from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
-from transformers.generation import GenerationMixin
-from transformers.activations import ACT2FN
-
+from transformers.utils import ModelOutput, can_return_tuple
 
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.model_patcher import (
@@ -48,7 +51,6 @@ from optimum.exporters.onnx.model_patcher import (
     sdpa_mask_without_vmap,
 )
 from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_version, is_transformers_version
-
 
 
 if is_transformers_version(">=", "4.53"):
@@ -67,9 +69,11 @@ if is_transformers_version(">=", "4.54"):
     from transformers.utils import TransformersKwargs
 else:
     from transformers.utils import LossKwargs
+
     class TransformersKwargs(FlashAttentionKwargs, LossKwargs):
         output_hidden_states: Optional[bool]
         output_attentions: Optional[bool]
+
 
 logger = logging.getLogger(__name__)
 
@@ -6343,7 +6347,6 @@ class MambaPatcher(ModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers import PretrainedConfig
         from transformers.models.mamba.modeling_mamba import MambaCache
 
         super().__init__(config, model, model_kwargs)
@@ -7507,7 +7510,6 @@ class AfmoeModelPatcher(ModelPatcher):
                 del afmoe_moe.down_projs, afmoe_moe.gate_projs, afmoe_moe.up_projs
 
 
-
 class LlamaEagle3RotaryEmbedding(torch.nn.Module):
     def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
         super().__init__()
@@ -7523,10 +7525,10 @@ class LlamaEagle3RotaryEmbedding(torch.nn.Module):
         # self._set_cos_sin_cache(
         #     seq_len=max_position_embeddings, device=self.inv_freq.device, dtype=torch.get_default_dtype()
         # )
-        
+
     @torch.no_grad()
     def forward(self, x, position_ids):
-        # Different with eagle code on github to fix the issue of long prompt (> max_seq_len_cached) 
+        # Different with eagle code on github to fix the issue of long prompt (> max_seq_len_cached)
         inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
         position_ids_expanded = position_ids[:, None, :].float()
 
@@ -7538,6 +7540,8 @@ class LlamaEagle3RotaryEmbedding(torch.nn.Module):
             sin = emb.sin() * self.attention_scaling
 
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+
+
 class LlamaLinearScalingRotaryEmbedding(LlamaEagle3RotaryEmbedding):
     """LlamaRotaryEmbedding extended with linear scaling. Credits to the Reddit user /u/kaiokendev"""
 
@@ -7546,12 +7550,14 @@ class LlamaLinearScalingRotaryEmbedding(LlamaEagle3RotaryEmbedding):
         super().__init__(dim, max_position_embeddings, base, device)
         self.inv_freq /= self.scaling_factor
 
+
 class LlamaDynamicNTKScalingRotaryEmbedding(LlamaEagle3RotaryEmbedding):
     """LlamaRotaryEmbedding extended with Dynamic NTK scaling. Credits to the Reddit users /u/bloc97 and /u/emozilla"""
 
     def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None, scaling_factor=1.0):
         self.scaling_factor = scaling_factor
         super().__init__(dim, max_position_embeddings, base, device)
+
 
 class LlamaMutiRotaryEmbedding(LlamaEagle3RotaryEmbedding):
     def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None, scaling_factor=1.0):
@@ -7561,29 +7567,18 @@ class LlamaMutiRotaryEmbedding(LlamaEagle3RotaryEmbedding):
     def forward(self, x, position_ids):
         # In contrast to other models, Qwen2_5_VL has different position ids for the grids
         # So we expand the inv_freq to shape (3, ...)
-        inv_freq_expanded = (
-            self.inv_freq[None, None, :, None]
-            .float()
-            .expand(3, position_ids.shape[1], -1, 1)
-        )
-        position_ids_expanded = position_ids[
-            :, :, None, :
-        ].float()  # shape (3, bs, 1, positions)
+        inv_freq_expanded = self.inv_freq[None, None, :, None].float().expand(3, position_ids.shape[1], -1, 1)
+        position_ids_expanded = position_ids[:, :, None, :].float()  # shape (3, bs, 1, positions)
 
-        device_type = (
-            x.device.type
-            if isinstance(x.device.type, str) and x.device.type != "mps"
-            else "cpu"
-        )
+        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
         with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (
-                inv_freq_expanded.float() @ position_ids_expanded.float()
-            ).transpose(2, 3)
+            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)
             emb = torch.cat((freqs, freqs), dim=-1)
             cos = emb.cos() * self.scaling_factor
             sin = emb.sin() * self.scaling_factor
 
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+
 
 class LlamaEagle3MLP(nn.Module):
     def __init__(self, config):
@@ -7618,6 +7613,7 @@ class LlamaEagle3MLP(nn.Module):
 
         return down_proj
 
+
 def apply_multimodal_rotary_pos_emb(q, k, cos, sin, mrope_section, unsqueeze_dim=1):
     """Applies Rotary Position Embedding with Multimodal Sections to the query and key tensors (https://qwenlm.github.io/blog/qwen2-vl/).
 
@@ -7651,17 +7647,19 @@ def apply_multimodal_rotary_pos_emb(q, k, cos, sin, mrope_section, unsqueeze_dim
         `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
     """
     from transformers.models.llama.modeling_llama import rotate_half
+
     mrope_section = mrope_section * 2
-    cos = torch.cat(
-        [m[i % 3] for i, m in enumerate(cos.split(mrope_section, dim=-1))], dim=-1
-    ).unsqueeze(unsqueeze_dim)
-    sin = torch.cat(
-        [m[i % 3] for i, m in enumerate(sin.split(mrope_section, dim=-1))], dim=-1
-    ).unsqueeze(unsqueeze_dim)
+    cos = torch.cat([m[i % 3] for i, m in enumerate(cos.split(mrope_section, dim=-1))], dim=-1).unsqueeze(
+        unsqueeze_dim
+    )
+    sin = torch.cat([m[i % 3] for i, m in enumerate(sin.split(mrope_section, dim=-1))], dim=-1).unsqueeze(
+        unsqueeze_dim
+    )
 
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
+
 
 class LlamaEagle3Attention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -7691,14 +7689,15 @@ class LlamaEagle3Attention(nn.Module):
     def _init_rope(self):
         if self.config.rope_scaling is None:
             if hasattr(self.config, "rope_theta"):
-                self.rotary_emb = LlamaEagle3RotaryEmbedding(self.head_dim,
-                                                       max_position_embeddings=self.max_position_embeddings,
-                                                       base=self.config.rope_theta)
+                self.rotary_emb = LlamaEagle3RotaryEmbedding(
+                    self.head_dim, max_position_embeddings=self.max_position_embeddings, base=self.config.rope_theta
+                )
             else:
-                self.rotary_emb = LlamaEagle3RotaryEmbedding(self.head_dim,
-                                                       max_position_embeddings=self.max_position_embeddings)
+                self.rotary_emb = LlamaEagle3RotaryEmbedding(
+                    self.head_dim, max_position_embeddings=self.max_position_embeddings
+                )
         else:
-            scaling_type = self.config.rope_scaling.get("rope_type", self.config.rope_scaling.get("type")) 
+            scaling_type = self.config.rope_scaling.get("rope_type", self.config.rope_scaling.get("type"))
             scaling_factor = self.config.rope_scaling["factor"]
             if scaling_type == "linear":
                 self.rotary_emb = LlamaLinearScalingRotaryEmbedding(
@@ -7708,7 +7707,7 @@ class LlamaEagle3Attention(nn.Module):
                 self.rotary_emb = LlamaDynamicNTKScalingRotaryEmbedding(
                     self.head_dim, max_position_embeddings=self.max_position_embeddings, scaling_factor=scaling_factor
                 )
-            elif scaling_type == "llama3": # Reference SpecForge.llama3_eagle
+            elif scaling_type == "llama3":  # Reference SpecForge.llama3_eagle
                 self.rotary_emb = LlamaEagle3RotaryEmbedding(
                     self.head_dim, max_position_embeddings=self.max_position_embeddings
                 )
@@ -7723,16 +7722,16 @@ class LlamaEagle3Attention(nn.Module):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
     def forward(
-            self,
-            hidden_states: torch.Tensor,
-            attention_mask: Optional[torch.Tensor] = None,
-            position_ids: Optional[torch.LongTensor] = None,
-            past_key_value: Optional[Tuple[torch.Tensor]] = None,
-            use_cache: bool = False,
-            **kwargs: Unpack[TransformersKwargs]
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        use_cache: bool = False,
+        **kwargs: Unpack[TransformersKwargs],
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
-        from transformers.models.llama.modeling_llama import eager_attention_forward, apply_rotary_pos_emb
+        from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, eager_attention_forward
 
         bsz, q_len, _ = hidden_states.size()
 
@@ -7784,9 +7783,9 @@ class LlamaEagle3Attention(nn.Module):
             value_states = torch.cat([past_key_value[1], value_states], dim=2)
 
         past_key_value = (key_states, value_states) if use_cache else None
-        
+
         attention_interface: Callable = eager_attention_forward
-        
+
         if self.config._attn_implementation != "eager":
             if self.config._attn_implementation == "sdpa" and kwargs.get("output_attentions", False):
                 logger.warning_once(
@@ -7822,6 +7821,7 @@ class LlamaEagle3Attention(nn.Module):
 
         return attn_output, attn_weights, past_key_value
 
+
 class LlamaEagle3DecoderLayeremb(nn.Module):
     def __init__(self, config, last=True):
         super().__init__()
@@ -7837,14 +7837,14 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
         self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
-            self,
-            input_emb: torch.Tensor,
-            hidden_states: torch.Tensor,
-            attention_mask: Optional[torch.Tensor] = None,
-            position_ids: Optional[torch.LongTensor] = None,
-            past_key_value: Optional[Tuple[torch.Tensor]] = None,
-            output_attentions: Optional[bool] = False,
-            use_cache: Optional[bool] = False,
+        self,
+        input_emb: torch.Tensor,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        output_attentions: Optional[bool] = False,
+        use_cache: Optional[bool] = False,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """
         Args:
@@ -7866,7 +7866,6 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
         input_emb = self.input_layernorm(input_emb)
 
         hidden_states = torch.cat((input_emb, hidden_states), dim=-1)
-
 
         # cache_hidden.append(hidden_states)
 
@@ -7897,6 +7896,7 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
 
         return outputs
 
+
 class LlamaEagle3PreTrainedModel(PreTrainedModel):
     config_class = LlamaConfig
     base_model_prefix = "model"
@@ -7924,8 +7924,9 @@ class LlamaEagle3PreTrainedModel(PreTrainedModel):
         elif isinstance(module, LlamaRMSNorm):
             module.weight.data.fill_(1.0)
 
+
 def _make_causal_mask(
-        input_ids_shape: torch.Size, dtype: torch.dtype, device: torch.device, past_key_values_length: int = 0
+    input_ids_shape: torch.Size, dtype: torch.dtype, device: torch.device, past_key_values_length: int = 0
 ):
     """
     Make causal mask used for bi-directional self-attention.
@@ -7940,6 +7941,7 @@ def _make_causal_mask(
         mask = torch.cat([torch.zeros(tgt_len, past_key_values_length, dtype=dtype, device=device), mask], dim=-1)
     return mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len + past_key_values_length)
 
+
 def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):
     """
     Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`.
@@ -7952,6 +7954,7 @@ def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] 
     inverted_mask = 1.0 - expanded_mask
 
     return inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
+
 
 class LlamaEagle3Model(LlamaEagle3PreTrainedModel):
     def __init__(self, config: LlamaConfig):
@@ -7968,8 +7971,8 @@ class LlamaEagle3Model(LlamaEagle3PreTrainedModel):
             self.fc = nn.Linear(config.hidden_size * 3, self.hidden_size, bias=False)
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.gradient_checkpointing = False
-        d2t=torch.zeros((config.draft_vocab_size),dtype=torch.long)
-        t2d=torch.zeros((config.vocab_size),dtype=torch.bool)
+        d2t = torch.zeros((config.draft_vocab_size), dtype=torch.long)
+        t2d = torch.zeros((config.vocab_size), dtype=torch.bool)
         self.register_buffer("d2t", d2t)
         self.register_buffer("t2d", t2d)
         self.lm_head = nn.Linear(config.hidden_size, config.draft_vocab_size, bias=False)
@@ -8007,7 +8010,7 @@ class LlamaEagle3Model(LlamaEagle3PreTrainedModel):
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         use_cache = use_cache if use_cache is not None else self.config.use_cache
-        
+
         if past_key_values is not None:
             past_key_values_length = past_key_values[0][0].shape[2]
             seq_length_with_past = seq_length_with_past + past_key_values_length
@@ -8020,7 +8023,7 @@ class LlamaEagle3Model(LlamaEagle3PreTrainedModel):
         else:
             position_ids = position_ids.view(-1, seq_length).long()
 
-        #position_ids=position_ids//4
+        # position_ids=position_ids//4
         if attention_mask is None:
             attention_mask = torch.ones(
                 (batch_size, seq_length_with_past), dtype=torch.bool, device=hidden_states.device
@@ -8031,11 +8034,11 @@ class LlamaEagle3Model(LlamaEagle3PreTrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
-        
+
         if hidden_states is None:
             hidden_states = torch.zeros(
                 [batch_size, seq_length, self.embed_dim],
-                # *inputs_embeds.shape[:-1], 
+                # *inputs_embeds.shape[:-1],
                 self.embed_dim,
                 dtype=inputs_embeds.dtype,
                 device=inputs_embeds.device,
@@ -8043,14 +8046,14 @@ class LlamaEagle3Model(LlamaEagle3PreTrainedModel):
 
         # hidden_states = inputs_embeds
         inputs_embeds = inputs_embeds.to(hidden_states.dtype)
-        if hidden_states.shape[-1]!=inputs_embeds.shape[-1]:
+        if hidden_states.shape[-1] != inputs_embeds.shape[-1]:
             hidden_states = self.fc(hidden_states)
 
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
         next_decoder_cache = () if use_cache else None
-        
+
         past_key_value = past_key_values[0] if past_key_values is not None else None
         layer_outputs = self.midlayer(
             input_emb=inputs_embeds,
@@ -8106,11 +8109,12 @@ class LlamaEagle3Model(LlamaEagle3PreTrainedModel):
         if hasattr(self, "tree_mask") and self.tree_mask is not None:
             tree_mask = self.tree_mask
             _, _, tree_shape0, tree_shape1 = tree_mask.shape
-            combined_attention_mask[:, :, -tree_shape0:, -tree_shape1:][
-                tree_mask == 0
-                ] = torch.finfo(torch.float32).min
+            combined_attention_mask[:, :, -tree_shape0:, -tree_shape1:][tree_mask == 0] = torch.finfo(
+                torch.float32
+            ).min
 
         return combined_attention_mask
+
 
 @dataclass
 class Eagle3Output(ModelOutput):
@@ -8120,6 +8124,7 @@ class Eagle3Output(ModelOutput):
     hidden_states: Optional[tuple[torch.FloatTensor, ...]] = None
     attentions: Optional[tuple[torch.FloatTensor, ...]] = None
     d2t: Optional[torch.LongTensor] = None
+
 
 class LlamaEagle3ForCausalLM(LlamaEagle3PreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
@@ -8223,4 +8228,3 @@ class LlamaEagle3ForCausalLM(LlamaEagle3PreTrainedModel, GenerationMixin):
             attentions=outputs.attentions,
             d2t=d2t_out,
         )
-

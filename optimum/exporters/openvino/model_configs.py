@@ -564,11 +564,6 @@ class EAGLE3DummyGenerator(DummyInputGenerator):
     Generates dummy hidden_states inputs.
     """
 
-
-
-
-
-
     SUPPORTED_INPUT_NAMES = ("hidden_states",)
 
     def __init__(
@@ -587,8 +582,10 @@ class EAGLE3DummyGenerator(DummyInputGenerator):
         shape = (
             self.batch_size,
             self.sequence_length,
-            self.hidden_size*3,
+            self.hidden_size * 3,
         )
+
+
 @register_in_tasks_manager(
     "llama",
     *[
@@ -614,8 +611,9 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
     def outputs(self) -> dict[str, dict[int, str]]:
         common_outputs = super().outputs
         # Add d2t buffer as eagle3 draft output
-        common_outputs['d2t'] = {0: "vocab_size"}
+        common_outputs["d2t"] = {0: "vocab_size"}
         return common_outputs
+
 
 @register_in_tasks_manager(
     "gpt_oss",

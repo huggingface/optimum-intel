@@ -374,8 +374,8 @@ def export_pytorch(
         dummy_inputs = config.generate_dummy_inputs(framework="pt", **input_shapes)
         # Remove hidden_states input for other standard llama model
         if model_type == "llama" and not getattr(model_config, "is_eagle3", False):
-            if 'hidden_states' in dummy_inputs.keys():
-                dummy_inputs.pop('hidden_states')
+            if "hidden_states" in dummy_inputs.keys():
+                dummy_inputs.pop("hidden_states")
 
         device = torch.device(device)
         if device.type == "cuda" and torch.cuda.is_available():
@@ -849,6 +849,7 @@ def _add_runtime_options_to_rt_info(model: Model, options: Dict):
 
     return model
 
+
 def _add_eagle3_mode_to_rt_info(model: Model):
     """
     Add eagle3 mode
@@ -859,6 +860,7 @@ def _add_eagle3_mode_to_rt_info(model: Model):
         pass
 
     return model
+
 
 def _add_version_info_to_model(model: Model, library_name: Optional[str] = None):
     """
