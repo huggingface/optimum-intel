@@ -28,7 +28,6 @@ from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache
 from transformers.configuration_utils import PretrainedConfig
 from transformers.generation import GenerationMixin
-from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPast,
@@ -68,11 +67,7 @@ if TYPE_CHECKING:
 if is_transformers_version(">=", "4.54"):
     from transformers.utils import TransformersKwargs
 else:
-    from transformers.utils import LossKwargs
-
-    class TransformersKwargs(FlashAttentionKwargs, LossKwargs):
-        output_hidden_states: Optional[bool]
-        output_attentions: Optional[bool]
+    TransformersKwargs = object
 
 
 logger = logging.getLogger(__name__)
