@@ -297,39 +297,40 @@ def parse_args_openvino(parser: "ArgumentParser"):
 
 
 def no_compression_parameter_provided(args):
-    # Except statistics path
-    return all(
-        (
-            it is None
-            for it in (
-                args.ratio,
-                args.group_size,
-                args.sym,
-                args.all_layers,
-                args.dataset,
-                args.num_samples,
-                args.awq,
-                args.scale_estimation,
-                args.gptq,
-                args.lora_correction,
-                args.sensitivity_metric,
-                args.backup_precision,
-            )
-        )
+    from optimum.exporters.openvino.__main__ import _no_compression_parameter_provided
+
+    logger.warning(
+        "Calling `no_compression_parameter_provided` from `openvino.py` is deprecated and will be removed in future versions."
+        "Please call it from `exporters.openvino.__main__` as `_no_compression_parameter_provided` instead."
+    )
+    return _no_compression_parameter_provided(
+        args.ratio,
+        args.group_size,
+        args.sym,
+        args.all_layers,
+        args.dataset,
+        args.num_samples,
+        args.awq,
+        args.scale_estimation,
+        args.gptq,
+        args.lora_correction,
+        args.sensitivity_metric,
+        args.backup_precision,
     )
 
 
 def no_quantization_parameter_provided(args):
-    return all(
-        (
-            it is None
-            for it in (
-                args.sym,
-                args.dataset,
-                args.num_samples,
-                args.smooth_quant_alpha,
-            )
-        )
+    from optimum.exporters.openvino.__main__ import _no_quantization_parameter_provided
+
+    logger.warning(
+        "Calling `no_quantization_parameter_provided` from `openvino.py` is deprecated and will be removed in future versions."
+        "Please call it from `exporters.openvino.__main__` as `_no_quantization_parameter_provided` instead."
+    )
+    return _no_quantization_parameter_provided(
+        args.sym,
+        args.dataset,
+        args.num_samples,
+        args.smooth_quant_alpha,
     )
 
 
@@ -341,39 +342,42 @@ class OVExportCommand(BaseOptimumCLICommand):
         return parse_args_openvino(parser)
 
     def run(self):
-        from ...exporters.openvino.__main__ import _main_quantize, _merge_move, main_export
-        from ...intel.openvino.configuration import (
-            _DEFAULT_4BIT_WQ_CONFIG,
-            OVConfig,
-            _GPTOSSQuantizationConfig,
-            get_default_quantization_config,
+        from ...exporters.openvino.__main__ import (
+            _main_quantize,
+            _no_compression_parameter_provided,
+            _no_quantization_parameter_provided,
+            _prepare_quantization_config,
+            main_export,
         )
+        from ...exporters.openvino.utils import _merge_move
+        from ...intel.openvino.configuration import OVConfig
         from ...intel.openvino.utils import TemporaryDirectory
-        from ...intel.utils.import_utils import is_nncf_available
-        from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
-
-        if self.args.library is None:
-            # TODO: add revision, subfolder and token to args
-            library_name = _infer_library_from_model_name_or_path(
-                model_name_or_path=self.args.model, cache_dir=self.args.cache_dir
-            )
-            if library_name == "sentence_transformers":
-                logger.warning(
-                    "Library name is not specified. There are multiple possible variants: `sentence_transformers`, `transformers`."
-                    "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
-                )
-                library_name = "transformers"
-        else:
-            library_name = self.args.library
 
         if self.args.weight_format is None and self.args.quant_mode is None:
             ov_config = None
-            if not no_compression_parameter_provided(self.args) or self.args.quantization_statistics_path is not None:
+            no_compression_parameter_was_provided = _no_compression_parameter_provided(
+                self.args.ratio,
+                self.args.group_size,
+                self.args.sym,
+                self.args.all_layers,
+                self.args.dataset,
+                self.args.num_samples,
+                self.args.awq,
+                self.args.scale_estimation,
+                self.args.gptq,
+                self.args.lora_correction,
+                self.args.sensitivity_metric,
+                self.args.backup_precision,
+            )
+            no_quantization_parameter_was_provided = _no_quantization_parameter_provided(
+                self.args.sym, self.args.dataset, self.args.num_samples, self.args.smooth_quant_alpha
+            )
+            if not no_compression_parameter_was_provided or self.args.quantization_statistics_path is not None:
                 raise ValueError(
                     "Some compression parameters are provided, but the weight format is not specified. "
                     "Please provide it with --weight-format argument."
                 )
-            if not no_quantization_parameter_provided(self.args):
+            if not no_quantization_parameter_was_provided:
                 raise ValueError(
                     "Some quantization parameters are provided, but the quantization mode is not specified. "
                     "Please provide it with --quant-mode argument."
@@ -381,82 +385,17 @@ class OVExportCommand(BaseOptimumCLICommand):
         elif self.args.weight_format in {"fp16", "fp32"}:
             ov_config = OVConfig(dtype=self.args.weight_format)
         else:
-            if not is_nncf_available():
-                raise ImportError("Applying quantization requires nncf, please install it with `pip install nncf`")
-            if self.args.weight_format is not None and self.args.quant_mode is not None:
-                raise ValueError(
-                    "Both --weight-format and --quant-mode arguments are provided. Please provide only one of them."
-                )
-
-            default_quantization_config = get_default_quantization_config(
-                self.args.model, self.args.weight_format, self.args.quant_mode
-            )
-            if self.args.weight_format is not None:
-                quantization_config = prepare_wc_config(self.args, _DEFAULT_4BIT_WQ_CONFIG)
-                # For int4/int8 quantization if no parameter is provided, then use the default config if exists
-                if no_compression_parameter_provided(self.args) and self.args.weight_format in ["int4", "int8"]:
-                    if default_quantization_config is not None:
-                        quantization_config = default_quantization_config
-                        logger.info(
-                            f"Applying the default quantization config for {self.args.model}: {quantization_config}."
-                        )
-                    elif self.args.weight_format == "int4":
-                        quantization_config = _DEFAULT_4BIT_WQ_CONFIG
-                        logger.info(f"Applying a default quantization config: {quantization_config}.")
-                    if self.args.quantization_statistics_path is not None:
-                        quantization_config["statistics_path"] = self.args.quantization_statistics_path
-            else:
-                if no_quantization_parameter_provided(self.args) and default_quantization_config is not None:
-                    quantization_config = default_quantization_config
-                    logger.info(
-                        f"Applying the default quantization config for {self.args.model}: {quantization_config}."
-                    )
-                else:
-                    if self.args.dataset is None:
-                        raise ValueError(
-                            "Dataset is required for full quantization. Please provide it with --dataset argument."
-                        )
-                    if self.args.quant_mode in [
-                        "cb4_f8e4m3",
-                        "int4_f8e4m3",
-                        "int4_f8e5m2",
-                    ]:
-                        if library_name == "diffusers":
-                            raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
-
-                        wc_config = prepare_wc_config(self.args, _DEFAULT_4BIT_WQ_CONFIG)
-                        wc_dtype, q_dtype = self.args.quant_mode.split("_")
-                        wc_config["dtype"] = wc_dtype
-
-                        q_config = prepare_q_config(self.args)
-                        q_config["dtype"] = q_dtype
-
-                        quantization_config = {
-                            "weight_quantization_config": wc_config,
-                            "full_quantization_config": q_config,
-                            "num_samples": self.args.num_samples,
-                            "dataset": self.args.dataset,
-                        }
-                    else:
-                        if self.args.quantization_statistics_path is not None:
-                            logger.warning(
-                                "The --quantization-statistics-path argument is only applicable for weight-only "
-                                "quantization. It will be ignored."
-                            )
-                        quantization_config = prepare_q_config(self.args)
-            ov_config = OVConfig(quantization_config=quantization_config)
-
+            ov_config = OVConfig(dtype="auto")
         temporary_directory = None
         original_output = None
-        quantization_config = None if ov_config is None else ov_config.quantization_config
-        # We apply main_quantize only if quantization_config is explicitly provided and it is not a GPT-OSS workaround config.
-        # Otherwise, quantization can still be applied inside main_export if a model has more than 1B parameters.
-        # TODO: Remove GPT-OSS workaround when possible
-        apply_main_quantize = quantization_config and not isinstance(quantization_config, _GPTOSSQuantizationConfig)
-        if apply_main_quantize:
-            # In case main_quantize will be applied, export to a temporary directory first. This is to avoid confusion
-            # in the case when quantization unexpectedly fails, and an intermediate floating point model ends up at the
-            # target location.
+        if (
+            self.args.weight_format is not None
+            and self.args.weight_format not in {"fp16", "fp32"}
+            or self.args.quant_mode is not None
+        ):
+            # In case some quantization argument is provided, we export to a temporary directory first.
+            # This is to avoid confusion in the case when quantization unexpectedly fails, and an intermediate
+            # floating point model ends up at the target location.
             original_output = Path(self.args.output)
             temporary_directory = TemporaryDirectory()
             output = Path(temporary_directory.name)
@@ -465,6 +404,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
         try:
             # TODO : add input shapes
+            # TODO(@echarlaix): Consider replacing `ov_config` argument with `dtype` argument
             main_export(
                 model_name_or_path=self.args.model,
                 output=output,
@@ -476,23 +416,51 @@ class OVExportCommand(BaseOptimumCLICommand):
                 ov_config=ov_config,
                 stateful=not self.args.disable_stateful,
                 convert_tokenizer=not self.args.disable_convert_tokenizer,
-                library_name=library_name,
+                library_name=self.args.library,
                 variant=self.args.variant,
                 model_kwargs=self.args.model_kwargs,
                 # **input_shapes,
             )
-            if apply_main_quantize:
+
+            quantization_config = _prepare_quantization_config(
+                output=output,
+                model_name_or_path=self.args.model,
+                task=self.args.task,
+                library_name=self.args.library,
+                cache_dir=self.args.cache_dir,
+                trust_remote_code=self.args.trust_remote_code,
+                weight_format=self.args.weight_format,
+                quant_mode=self.args.quant_mode,
+                ratio=self.args.ratio,
+                sym=self.args.sym,
+                group_size=self.args.group_size,
+                all_layers=self.args.all_layers,
+                dataset=self.args.dataset,
+                num_samples=self.args.num_samples,
+                awq=self.args.awq,
+                sensitivity_metric=self.args.sensitivity_metric,
+                scale_estimation=self.args.scale_estimation,
+                gptq=self.args.gptq,
+                lora_correction=self.args.lora_correction,
+                quantization_statistics_path=self.args.quantization_statistics_path,
+                backup_precision=self.args.backup_precision,
+                group_size_fallback=self.args.group_size_fallback,
+                smooth_quant_alpha=self.args.smooth_quant_alpha,
+            )
+            if quantization_config:
                 _main_quantize(
                     model_name_or_path=self.args.model,
-                    task=self.args.task,
-                    library_name=library_name,
-                    quantization_config=quantization_config,
                     output=output,
+                    quantization_config=quantization_config,
+                    task=self.args.task,
                     cache_dir=self.args.cache_dir,
                     trust_remote_code=self.args.trust_remote_code,
                     model_kwargs=self.args.model_kwargs,
+                    library_name=self.args.library,
                 )
-                # Move exported model to the original output directory
+
+            if original_output is not None:
+                # If exported to temporary directory, move exported model to the original output directory
                 original_output.mkdir(parents=True, exist_ok=True)
                 _merge_move(output, original_output)
         finally:
@@ -501,33 +469,43 @@ class OVExportCommand(BaseOptimumCLICommand):
 
 
 def prepare_wc_config(args, default_configs):
-    is_int8 = args.weight_format == "int8"
-    return {
-        "bits": 8 if is_int8 else 4,
-        "ratio": 1.0 if is_int8 else (args.ratio or default_configs["ratio"]),
-        "sym": args.sym or False,
-        "group_size": -1 if is_int8 else args.group_size,
-        "all_layers": None if is_int8 else args.all_layers,
-        "dataset": args.dataset,
-        "num_samples": args.num_samples,
-        "quant_method": "awq" if args.awq else "default",
-        "sensitivity_metric": args.sensitivity_metric,
-        "scale_estimation": args.scale_estimation,
-        "gptq": args.gptq,
-        "lora_correction": args.lora_correction,
-        "dtype": args.weight_format,
-        "backup_precision": args.backup_precision,
-        "statistics_path": args.quantization_statistics_path,
-        "group_size_fallback": args.group_size_fallback,
-    }
+    from optimum.exporters.openvino.__main__ import _prepare_wc_config
+
+    logger.warning(
+        "Calling `prepare_wc_config` from openvino.py is deprecated and will be removed in future versions."
+        "Please call it from `exporters.openvino.__main__` as `_prepare_wc_config` instead."
+    )
+    return _prepare_wc_config(
+        args.weight_format,
+        args.ratio,
+        args.sym,
+        args.group_size,
+        args.all_layers,
+        args.dataset,
+        args.num_samples,
+        args.awq,
+        args.sensitivity_metric,
+        args.scale_estimation,
+        args.gptq,
+        args.lora_correction,
+        args.quantization_statistics_path,
+        args.backup_precision,
+        args.group_size_fallback,
+        default_configs,
+    )
 
 
 def prepare_q_config(args):
-    return {
-        "dtype": args.quant_mode,
-        "bits": 8,
-        "sym": args.sym or False,
-        "dataset": args.dataset,
-        "num_samples": args.num_samples,
-        "smooth_quant_alpha": args.smooth_quant_alpha,
-    }
+    from optimum.exporters.openvino.__main__ import _prepare_q_config
+
+    logger.warning(
+        "Calling `prepare_q_config` from openvino.py is deprecated and will be removed in future versions."
+        "Please call it from `exporters.openvino.__main__` as `_prepare_q_config` instead."
+    )
+    return _prepare_q_config(
+        args.quant_mode,
+        args.sym,
+        args.dataset,
+        args.num_samples,
+        args.smooth_quant_alpha,
+    )
