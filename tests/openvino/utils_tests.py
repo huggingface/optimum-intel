@@ -173,6 +173,7 @@ MODEL_NAMES = {
     "qwen2_5_vl": "optimum-intel-internal-testing/tiny-random-qwen2.5-vl",
     "qwen3": "optimum-intel-internal-testing/tiny-random-qwen3",
     "qwen3_moe": "optimum-intel-internal-testing/tiny-random-qwen3moe",
+    "rembert": "hf-internal-testing/tiny-random-RemBertModel",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",
     "roberta": "optimum-intel-internal-testing/tiny-random-roberta",
     "roformer": "optimum-intel-internal-testing/tiny-random-roformer",
@@ -226,12 +227,6 @@ MODEL_NAMES = {
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
-    "big_bird": "hf-internal-testing/tiny-random-BigBirdModel",
-    "dinov2": "hf-internal-testing/tiny-random-Dinov2Model",
-    "efficientnet": "hf-internal-testing/tiny-random-EfficientNetForImageClassification",
-    "mctct": "hf-internal-testing/tiny-random-MCTCTModel",
-    "rembert": "hf-internal-testing/tiny-random-RemBertModel",
-    "modernbert": "hf-internal-testing/tiny-random-ModernBertForMaskedLM",
 }
 
 

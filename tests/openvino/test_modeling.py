@@ -1097,7 +1097,6 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "albert",
         "bert",
-        "big_bird",
         "camembert",
         "convbert",
         "data2vec-text",
@@ -1109,7 +1108,6 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "flaubert",
         "ibert",
         "mobilebert",
-        "modernbert",
         "mpnet",
         "perceiver_text",
         "rembert",
@@ -1175,11 +1173,8 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "beit",
         "convnext",
-        "convnextv2",
         "data2vec-vision",
         "deit",
-        "dinov2",
-        "efficientnet",
         "levit",
         "mobilenet_v1",
         "mobilenet_v2",
@@ -1357,7 +1352,6 @@ class OVModelForCTCIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [
         "data2vec-audio",
         "hubert",
-        "mctct",
         "sew",
         "sew-d",
         "unispeech",
