@@ -584,6 +584,7 @@ class EAGLE3DummyGenerator(DummyInputGenerator):
             self.sequence_length,
             self.hidden_size * 3,
         )
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
 
 @register_in_tasks_manager(
