@@ -49,6 +49,7 @@ from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TEST_IMA
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.stateful import model_has_state
+from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVModelForSeq2SeqLM,
@@ -115,6 +116,7 @@ class OVSeq2SeqTestMixin(unittest.TestCase):
             if self.TASK in TasksManager._SUPPORTED_MODEL_TYPE[model_type].get("openvino", {})
         }
         supported_architectures = ov_architectures & transformers_architectures
+        supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
 
         untested_architectures = supported_architectures - tested_architectures
 

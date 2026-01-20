@@ -24,6 +24,7 @@ from utils_tests import (
 from optimum.exporters.onnx.model_configs import NemotronOnnxConfig
 from optimum.exporters.openvino.model_configs import BitnetOpenVINOConfig, DeepseekOpenVINOConfig, LFM2OpenVINOConfig
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
+from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import OVModelForCausalLM, OVModelForSequenceClassification
 from optimum.intel.openvino.utils import _print_compiled_model_properties
@@ -288,6 +289,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         elif is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures.remove("lfm2")
 
+        supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
         untested_architectures = supported_architectures - tested_architectures
 
         if len(untested_architectures) > 0:
