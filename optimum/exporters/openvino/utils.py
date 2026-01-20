@@ -14,6 +14,8 @@
 
 import inspect
 import logging
+import re
+import shutil
 from collections import namedtuple
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -25,7 +27,7 @@ from openvino import Dimension, PartialShape, Symbol
 from openvino.utils.types import get_element_type
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.tasks import TasksManager
-from optimum.intel.utils.import_utils import is_openvino_version, is_safetensors_available
+from optimum.intel.utils.import_utils import is_safetensors_available
 from optimum.utils import is_diffusers_available
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
@@ -118,6 +120,72 @@ def _get_input_info(
         info = InputInfo(name=name, shape=shape, type=type, example=example)
         input_info.append(info)
     return input_info
+
+
+def _get_dynamic_shapes_info(
+    model: Union["PreTrainedModel", "ModelMixin"], config: OnnxConfig, dummy_inputs: Dict[str, Any]
+) -> List[InputInfo]:
+    import torch
+
+    sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
+    inputs = config.ordered_inputs(model)
+    input_info = {}
+    signature = set(sig.parameters)
+
+    name_to_symbol = {}
+
+    for name, named_dims in inputs.items():
+        info = {}
+        for idx, dim_name in named_dims.items():
+            if dim_name in name_to_symbol:
+                symbol = name_to_symbol[dim_name]
+            else:
+                symbol = torch.export.Dim.DYNAMIC
+                name_to_symbol[dim_name] = symbol
+            info[idx] = symbol
+        if name in signature:
+            input_info[name] = info
+        else:
+            pattern = r"^([a-zA-Z_]+)\.(\d+)\.(key|value)$"
+            match = re.match(pattern, name)
+
+            if match:
+                prefix, number, key_or_value = match.groups()
+                number = int(number)
+                assert prefix in signature
+                if prefix not in input_info:
+                    input_info[prefix] = []
+                if key_or_value == "key":
+                    assert len(input_info[prefix]) == number
+                    input_info[prefix].append((info,))
+                else:
+                    input_info[prefix][number] += (info,)
+    return input_info
+
+
+def _normalize_element(elem: Any, dtype: Any) -> Any:
+    import torch
+
+    if isinstance(elem, torch.Tensor):
+        return elem.to(dtype) if elem.dtype.is_floating_point else elem
+    if isinstance(elem, (list, tuple)):
+        return type(elem)(_normalize_element(e, dtype) for e in elem)
+    if isinstance(elem, dict):
+        return {k: _normalize_element(v, dtype) for k, v in elem.items()}
+    return elem
+
+
+def _normalize_dummy_inputs(dummy_inputs: Dict[str, Any], dtype: Any) -> Dict[str, Any]:
+    new_dummy = {}
+    for name, value in dummy_inputs.items():
+        new_dummy[name] = _normalize_element(value, dtype)
+    return new_dummy
+
+
+def _get_model_dtype(model):
+    for param in model.parameters():
+        return param.dtype
+    return getattr(model, "dtype", torch.float32)
 
 
 def remove_none_from_dummy_inputs(dummy_inputs: Dict[str, Any]):
@@ -237,7 +305,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "minicpmo",
 ]
 
-SSM_MODELS = ["mamba", "falcon_mamba", "zamba2", "lfm2"]
+SSM_MODELS = ["mamba", "falcon_mamba", "zamba2", "lfm2", "granitemoehybrid"]
 
 
 def save_config(config, save_dir):
@@ -380,8 +448,6 @@ SKIP_CHECK_TRACE_MODELS = (
 
 
 def allow_skip_tracing_check(library_name, model_type):
-    if is_openvino_version("<", "2025.0.0"):
-        return False
     if library_name in ["diffusers", "sentence_transformers"]:
         return True
     return model_type in SKIP_CHECK_TRACE_MODELS
@@ -405,3 +471,79 @@ def load_preprocessors(
         except Exception:
             pass
     return preprocessors
+
+
+def patch_qwenvl_configs():
+    from transformers import Qwen2_5_VLConfig, Qwen2VLConfig
+
+    original_getattribute_2 = Qwen2VLConfig.__getattribute__
+
+    def model_type_preserving_getattribute_2(self, name):
+        if name == "model_type":
+            return "qwen2_vl"
+        else:
+            return original_getattribute_2(self, name)
+
+    Qwen2VLConfig.__getattribute__ = model_type_preserving_getattribute_2
+
+    original_getattribute_25 = Qwen2_5_VLConfig.__getattribute__
+
+    def model_type_preserving_getattribute_25(self, name):
+        if name == "model_type":
+            return "qwen2_5_vl"
+        else:
+            return original_getattribute_25(self, name)
+
+    Qwen2_5_VLConfig.__getattribute__ = model_type_preserving_getattribute_25
+
+
+def _merge_move(src: Path, dest: Path):
+    """
+    Move src to dest.
+
+    - If src is a directory:
+        - If dest does not exist: rename src -> dest.
+        - If dest is a directory: merge src into dest recursively.
+        - If dest is a file: replace file with src directory (delete file, then rename).
+
+    - If src is a file:
+        - If dest does not exist: rename src -> dest.
+        - If dest is a file: overwrite file (delete dest, then rename).
+        - If dest is a directory: replace directory with src file (delete directory recursively, then rename).
+    """
+
+    def _safe_rename(src: Path, dest: Path):
+        # Try to rename first, fall back to shutil.move if it fails (e.g., cross-device move)
+        try:
+            src.rename(dest)
+        except OSError:
+            shutil.move(str(src), str(dest))
+
+    dest_exists = dest.exists()
+    dest_is_dir = dest_exists and dest.is_dir()
+    if src.is_dir():
+        if not dest_exists:
+            # No conflict: just rename
+            _safe_rename(src, dest)
+        elif dest_is_dir:
+            # Merge src into dest recursively
+            for child in src.iterdir():
+                _merge_move(child, dest / child.name)
+            # Remove src once empty
+            src.rmdir()
+        else:
+            # dest exists and is a file: replace file with directory
+            dest.unlink()
+            _safe_rename(src, dest)
+    else:
+        if not dest_exists:
+            # No conflict: just rename
+            _safe_rename(src, dest)
+        elif dest_is_dir:
+            # Replace directory (recursively) with file
+            shutil.rmtree(dest)
+            _safe_rename(src, dest)
+        else:
+            # dest is a file: overwrite
+            dest.unlink()
+            _safe_rename(src, dest)

@@ -33,7 +33,7 @@ from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
 from ...exporters.openvino.utils import save_config
 from ..utils.import_utils import is_transformers_version
-from .configuration import OVConfig, OVWeightQuantizationConfig
+from .configuration import OVConfig, OVQuantizationConfigBase, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
 from .utils import (
@@ -41,6 +41,7 @@ from .utils import (
     OV_TEXT_EMBEDDINGS_MODEL_NAME,
     OV_VISION_EMBEDDINGS_MODEL_NAME,
     TemporaryDirectory,
+    classproperty,
 )
 
 
@@ -346,6 +347,17 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     additional_parts = []
     auto_model_class = transformers_auto_class
 
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        model_paths = {
+            "lm_model": OV_LANGUAGE_MODEL_NAME,
+            "text_embeddings_model": OV_TEXT_EMBEDDINGS_MODEL_NAME,
+            "vision_embeddings_model": OV_VISION_EMBEDDINGS_MODEL_NAME,
+        }
+        for part in cls.additional_parts:
+            model_paths[f"{part}_model"] = f"openvino_{part}_model.xml"
+        return model_paths
+
     def __init__(
         self,
         language_model: ov.Model,
@@ -429,35 +441,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         """
         save_config(self.config, save_directory)
 
-    def _save_pretrained(self, save_directory: Union[str, Path]):
-        """
-        Saves the model to the OpenVINO IR format so that it can be re-loaded using the
-        [`~optimum.intel.openvino.modeling.OVModel.from_pretrained`] class method.
-
-        Arguments:
-            save_directory (`str` or `Path`):
-                The directory where to save the model files.
-        """
-        dst_file_names = {
-            "lm_model": OV_LANGUAGE_MODEL_NAME,
-            "text_embeddings_model": OV_TEXT_EMBEDDINGS_MODEL_NAME,
-            "vision_embeddings_model": OV_VISION_EMBEDDINGS_MODEL_NAME,
-        }
-
-        for name, model in self.ov_models.items():
-            dst_file_name = dst_file_names.get(name, f"openvino_{name}.xml")
-            dst_path = os.path.join(save_directory, dst_file_name)
-            ov.save_model(model, dst_path, compress_to_fp16=False)
-
-        self._save_openvino_config(save_directory)
-        if self.generation_config is not None:
-            try:
-                self.generation_config.save_pretrained(save_directory)
-            except Exception as exception:
-                logger.warning(
-                    f"The generation config will not be saved, saving failed with following error:\n{exception}"
-                )
-
     @classmethod
     def _from_pretrained(
         cls,
@@ -519,19 +502,10 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
             token = use_auth_token
 
-        model_file_names = {
-            "language_model": OV_LANGUAGE_MODEL_NAME,
-            "language_model_bin": OV_LANGUAGE_MODEL_NAME.replace(".xml", ".bin"),
-            "text_embeddings": OV_TEXT_EMBEDDINGS_MODEL_NAME,
-            "text_embeddings_bin": OV_TEXT_EMBEDDINGS_MODEL_NAME.replace(".xml", ".bin"),
-            "vision_embeddings": OV_VISION_EMBEDDINGS_MODEL_NAME,
-            "vision_embeddings_bin": OV_VISION_EMBEDDINGS_MODEL_NAME.replace(".xml", ".bin"),
-        }
-
         model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
-        for part in model_cls.additional_parts:
-            model_file_names[part] = f"openvino_{part}_model.xml"
-            model_file_names[part + "_bin"] = f"openvino_{part}_model.bin"
+        model_file_names = model_cls._all_ov_model_paths.copy()
+        for k in tuple(model_file_names):
+            model_file_names[f"{k}_bin"] = model_file_names[k].replace(".xml", ".bin")
         compile_only = kwargs.get("compile_only", False)
         if os.path.isdir(model_id):
             # Load model from a local directory
@@ -552,33 +526,33 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 file_names[name] = model_cache_path
             model_save_dir = Path(model_cache_path).parent
         if not compile_only:
-            language_model = model_cls.load_model(file_names["language_model"])
-            text_embeddings = model_cls.load_model(file_names["text_embeddings"])
-            vision_embeddings = model_cls.load_model(file_names["vision_embeddings"])
+            language_model = model_cls.load_model(file_names["lm_model"])
+            text_embeddings = model_cls.load_model(file_names["text_embeddings_model"])
+            vision_embeddings = model_cls.load_model(file_names["vision_embeddings_model"])
             for part in model_cls.additional_parts:
-                kwargs[part] = model_cls.load_model(file_names[part])
+                kwargs[part] = model_cls.load_model(file_names[f"{part}_model"])
         else:
             language_model = model_cls._compile_model(
-                file_names["language_model"],
+                file_names["lm_model"],
                 kwargs.get("device", "CPU"),
                 kwargs.get("ov_config"),
                 model_save_dir,
             )
             text_embeddings = model_cls._compile_model(
-                file_names["text_embeddings"],
+                file_names["text_embeddings_model"],
                 kwargs.get("device", "CPU"),
                 kwargs.get("ov_config"),
                 model_save_dir,
             )
             vision_embeddings = model_cls._compile_model(
-                file_names["vision_embeddings"],
+                file_names["vision_embeddings_model"],
                 kwargs.get("device", "CPU"),
                 kwargs.get("ov_config"),
                 model_save_dir,
             )
             for part in model_cls.additional_parts:
                 kwargs[part] = model_cls._compile_model(
-                    file_names[part],
+                    file_names[f"{part}_model"],
                     kwargs.get("device", "CPU"),
                     kwargs.get("ov_config"),
                     model_save_dir,
@@ -596,7 +570,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         except Exception:
             pass
 
-        quantization_config = model_cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
+        # Apply 8-bit weight quantization if load_in_8bit is True
+        quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         compile_model = kwargs.pop("compile", True)
         model = model_cls(
             language_model=language_model,
@@ -610,12 +585,15 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         )
 
         if quantization_config:
-            quantization_config_copy = copy.deepcopy(quantization_config)
-            potential_processor_id = config.mm_vision_tower if isinstance(model, _OVNanoLlavaForCausalLM) else model_id
-            quantization_config_copy.processor = str(quantization_config.processor or potential_processor_id)
-            cls._apply_quantization(
-                model, quantization_config_copy, compile_only, compile_model, model_id, trust_remote_code
-            )
+            if hasattr(config, "name_or_path"):
+                model_id = config.name_or_path
+            else:
+                logger.warning(
+                    "`model_id` could not be determined from the config. In the case there are default quantization "
+                    "configurations for this model, they will not be applied."
+                )
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
+            model._apply_quantization(quantization_config, compile_only, compile_model, model_id, trust_remote_code)
 
         return model
 
@@ -655,13 +633,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         if task is None:
             task = cls.export_feature
 
-        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
-            ov_config = None
-        else:
-            # Export in fp32 if compression won't be applied later
-            ov_config = OVConfig(dtype="fp32" if load_in_8bit is False else "auto")
-
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
         variant = kwargs.pop("variant", None)
 
@@ -676,11 +647,17 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            ov_config=ov_config,
+            ov_config=OVConfig(dtype="auto"),
             stateful=stateful,
             variant=variant,
         )
+        name_or_path = config.name_or_path
         config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
+        # Keep the original name_or_path to be able to resolve default quantization config later
+        config.name_or_path = name_or_path
+        # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
+        if quantization_config is None and load_in_8bit is None:
+            quantization_config = cls._prepare_model_size_based_quantization_config(save_dir_path)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
@@ -718,27 +695,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 ov_model = getattr(self, ov_model_name.replace("_model", "")).model
             ov_models[ov_model_name] = ov_model
         return ov_models
-
-    @property
-    def lm_model(self) -> ov.Model:
-        logger.warn(
-            "`lm_model` property is deprecated and will be removed in v1.27. Please use `.language_model.model` instead."
-        )
-        return self.language_model.model
-
-    @property
-    def text_embeddings_model(self) -> ov.Model:
-        logger.warn(
-            "`text_embeddings_model` property is deprecated and will be removed in v1.27. Please use `.language_model.text_emb_model` instead."
-        )
-        return self.language_model.text_emb_model
-
-    @property
-    def vision_embeddings_model(self) -> ov.Model:
-        logger.warn(
-            "`vision_embeddings_model` property is deprecated and will be removed in v1.27. Please use `.vision_embeddings.model` instead."
-        )
-        return self.vision_embeddings.model
 
     def reshape(self, batch_size: int, sequence_length: int):
         logger.warning("Static shapes are not supported for causal language model.")
@@ -952,6 +908,22 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         For OVModel, we don't want model_kwargs to be updated before generation.
         """
         return
+
+    def _preprocess_quantization_config(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        model_name_or_path: str,
+    ) -> OVQuantizationConfigBase:
+        if quantization_config.processor is None or quantization_config.tokenizer is None:
+            quantization_config = quantization_config.clone()
+            if quantization_config.processor is None:
+                potential_processor_id = (
+                    self.config.mm_vision_tower if isinstance(self, _OVNanoLlavaForCausalLM) else model_name_or_path
+                )
+                quantization_config.processor = potential_processor_id
+            if quantization_config.tokenizer is None:
+                quantization_config.tokenizer = model_name_or_path
+        return quantization_config
 
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
@@ -1851,7 +1823,7 @@ class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
         inputs.update(tokenizer(text, return_tensors="pt"))
         return inputs
 
-    # internvl has issue with check  _get_non_default_parameters, as wrkaraund override _prepare_generation_config
+    # internvl has issue with check  _get_non_default_parameters, as workaround override _prepare_generation_config
     def _prepare_generation_config(
         self, generation_config: Optional[GenerationConfig], use_model_defaults: Optional[bool] = None, **kwargs: Dict
     ) -> Tuple[GenerationConfig, Dict]:
@@ -4434,7 +4406,9 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "phi3_v": _OVPhi3VisionForCausalLM,
     "internvl_chat": _OVInternVLForCausalLM,
     "qwen2_vl": _OVQwen2VLForCausalLM,
+    "qwen2_vl_text": _OVQwen2VLForCausalLM,
     "qwen2_5_vl": _OVQwen2_5_VLForCausalLM,
+    "qwen2_5_vl_text": _OVQwen2_5_VLForCausalLM,
     "got_ocr2": _OVGotOCR2ForCausalLM,
     "gemma3": _OVGemma3ForCausalLM,
     "idefics3": _OVIdefics3ForCausalLM,

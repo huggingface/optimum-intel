@@ -17,6 +17,12 @@ limitations under the License.
 
 # Distributed training
 
+<Tip warning={true}>
+
+`optimum.intel.neural_compressor` is deprecated and will be removed in the next major release.
+
+</Tip>
+
 When training on a single CPU is too slow, we can use multiple CPUs. This guide focuses on PyTorch-based DDP enabling distributed CPU training efficiently.
 
 Distributed training on multiple CPUs is launched by mpirun which supports both Gloo and oneCCL as collective communication backends. And for performance seek, Intel recommends to use oneCCL backend.

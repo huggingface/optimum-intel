@@ -43,6 +43,7 @@ jobs:
         nncf-version: ["nncf-stable"]
         test-pattern:
           [
+            "*genai*",
             "*export*",
             "*decoder*",
             "*seq2seq*",
@@ -50,6 +51,7 @@ jobs:
             "*diffusion*",
             "*quantization*",
           ]
+        export-mode: ["torchscript"]
 
         include:
           # stable openvino + nncf develop tests
@@ -60,6 +62,26 @@ jobs:
           - nncf-version: "nncf-develop"
             openvino-version: "openvino-nightly"
             test-pattern: "*{quantization,export}*"
+          - nncf-version: "nncf-stable"
+            openvino-version: "openvino-stable"
+            export-mode: "torchdynamo"
+            test-pattern: "*{quantization,export}*"
+          - nncf-version: "nncf-stable"
+            openvino-version: "openvino-stable"
+            export-mode: "torchdynamo"
+            test-pattern: "*modeling*"
+          - nncf-version: "nncf-stable"
+            openvino-version: "openvino-stable"
+            export-mode: "torchdynamo"
+            test-pattern: "*decoder*"
+          - nncf-version: "nncf-stable"
+            openvino-version: "openvino-stable"
+            export-mode: "torchdynamo"
+            test-pattern: "*seq2seq*"
+          - nncf-version: "nncf-stable"
+            openvino-version: "openvino-stable"
+            export-mode: "torchdynamo"
+            test-pattern: "*diffusion*"
 
     runs-on: ubuntu-22.04
 
@@ -80,7 +102,7 @@ jobs:
       - if: ${{ matrix.openvino-version == 'openvino-nightly' }}
         name: Install OpenVINO Nightly
         run: |
-          uv pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+          uv pip install --upgrade --pre openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
       - if: ${{ matrix.nncf-version == 'nncf-develop' }}
         name: Install NNCF from main
@@ -102,5 +124,7 @@ jobs:
           pip freeze
 
       - name: Test with Pytest
+        env:
+          OPENVINO_DYNAMO_EXPORT: ${{ matrix.export-mode == 'torchdynamo' }}
         run: |
           pytest tests/openvino/${{ matrix.test-pattern }} --durations=0

@@ -40,7 +40,7 @@ from ..utils.modeling_utils import _find_files_matching_pattern, _OpenClipForZer
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling import MODEL_START_DOCSTRING, OVModel
 from .modeling_base import OVModelHostMixin
-from .utils import TemporaryDirectory
+from .utils import TemporaryDirectory, classproperty
 
 
 logger = logging.getLogger(__name__)
@@ -215,8 +215,11 @@ class OVModelOpenCLIPBase(OVModel):
     MODEL_START_DOCSTRING,
 )
 class OVModelOpenCLIPText(OVModelOpenCLIPBase):
-    _xml_model_name = "openvino_model_text.xml"
     export_feature = "feature-extraction"
+
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        return {"model": "openvino_model_text.xml"}
 
     def __init__(self, model=None, config=None, tokenize_cfg=None, **kwargs):
         super().__init__(model, config, **kwargs)
@@ -245,12 +248,6 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
         # would end-up removing the directory containing the underlying OpenVINO model
         cls._model_save_dir_tempdirectory_instance = save_dir
 
-        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
-            ov_config = None
-        else:
-            ov_config = OVConfig(dtype="fp32")
-
         def fn_get_submodels(model):
             return {"model_text": model.text}
 
@@ -269,7 +266,7 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            ov_config=ov_config,
+            ov_config=OVConfig(dtype="auto"),
             library_name=cls._library_name,
             framework="pt",
             fn_get_submodels=fn_get_submodels,
@@ -283,7 +280,7 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
             config=config,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
-            file_name=cls._xml_model_name,
+            file_name=cls._all_ov_model_paths["model"],
             **kwargs,
         )
 
@@ -340,8 +337,11 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
     MODEL_START_DOCSTRING,
 )
 class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
-    _xml_model_name = "openvino_model_vision.xml"
     export_feature = "feature-extraction"
+
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        return {"model": "openvino_model_vision.xml"}
 
     def __init__(self, model=None, config=None, preprocess_cfg=None, **kwargs):
         super().__init__(model, config, **kwargs)
@@ -370,12 +370,6 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
         # would end-up removing the directory containing the underlying OpenVINO model
         cls._model_save_dir_tempdirectory_instance = save_dir
 
-        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
-            ov_config = None
-        else:
-            ov_config = OVConfig(dtype="fp32")
-
         def fn_get_submodels(model):
             return {"model_vision": model.visual}
 
@@ -394,7 +388,7 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            ov_config=ov_config,
+            ov_config=OVConfig(dtype="auto"),
             library_name=cls._library_name,
             framework="pt",
             fn_get_submodels=fn_get_submodels,
@@ -408,7 +402,7 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
             config=config,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
-            file_name=cls._xml_model_name,
+            file_name=cls._all_ov_model_paths["model"],
             **kwargs,
         )
 

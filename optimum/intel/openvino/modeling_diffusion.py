@@ -63,8 +63,8 @@ from optimum.utils import (
 )
 
 from ...exporters.openvino import main_export
-from ..utils.import_utils import is_diffusers_version, is_openvino_version
-from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
+from ..utils.import_utils import is_diffusers_version
+from .configuration import OVConfig, OVQuantizationConfigBase, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel, OVModelHostMixin
 from .utils import (
@@ -73,7 +73,7 @@ from .utils import (
     OV_XML_FILE_NAME,
     TemporaryDirectory,
     _print_compiled_model_properties,
-    check_scale_available,
+    classproperty,
     model_has_dynamic_inputs,
     np_to_pt_generators,
 )
@@ -146,6 +146,19 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
     auto_model_class = DiffusionPipeline
     config_name = "model_index.json"
     _library_name = "diffusers"
+
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        models_paths = {
+            "unet": os.path.join(DIFFUSION_MODEL_UNET_SUBFOLDER, OV_XML_FILE_NAME),
+            "transformer": os.path.join(DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER, OV_XML_FILE_NAME),
+            "vae_decoder": os.path.join(DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER, OV_XML_FILE_NAME),
+            "vae_encoder": os.path.join(DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER, OV_XML_FILE_NAME),
+            "text_encoder": os.path.join(DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER, OV_XML_FILE_NAME),
+            "text_encoder_2": os.path.join(DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER, OV_XML_FILE_NAME),
+            "text_encoder_3": os.path.join(DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER, OV_XML_FILE_NAME),
+        }
+        return models_paths
 
     def __init__(
         self,
@@ -288,16 +301,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     @property
     def _component_names(self) -> List[str]:
-        component_name_candidates = [
-            "unet",
-            "transformer",
-            "vae_decoder",
-            "vae_encoder",
-            "text_encoder",
-            "text_encoder_2",
-            "text_encoder_3",
-        ]
-        component_names = [name for name in component_name_candidates if getattr(self, name) is not None]
+        component_names = [name for name in self._all_ov_model_paths if getattr(self, name) is not None]
         return component_names
 
     @property
@@ -325,33 +329,27 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         save_directory = Path(save_directory)
 
         models_to_save_paths = {
-            (self.unet, save_directory / DIFFUSION_MODEL_UNET_SUBFOLDER),
-            (self.vae_decoder, save_directory / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER),
-            (self.vae_encoder, save_directory / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER),
-            (self.text_encoder, save_directory / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER),
-            (self.text_encoder_2, save_directory / DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER),
-            (self.text_encoder_3, save_directory / DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER),
-            (self.transformer, save_directory / DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER),
+            component: save_directory / self._ov_model_paths[ov_component_name]
+            for ov_component_name, component in self.components.items()
         }
-        for model, save_path in models_to_save_paths:
-            if model is not None:
-                dst_path = save_path / OV_XML_FILE_NAME
-                dst_path.parent.mkdir(parents=True, exist_ok=True)
-                openvino.save_model(model.model, dst_path, compress_to_fp16=False)
-                model_dir = (
-                    self.model_save_dir
-                    if not isinstance(self.model_save_dir, TemporaryDirectory)
-                    else self.model_save_dir.name
-                )
-                config_path = Path(model_dir) / save_path.name / CONFIG_NAME
-                if config_path.is_file():
-                    config_save_path = save_path / CONFIG_NAME
-                    shutil.copyfile(config_path, config_save_path)
-                else:
-                    if hasattr(model, "save_config"):
-                        model.save_config(save_path)
-                    elif hasattr(model, "config") and hasattr(model.config, "save_pretrained"):
-                        model.config.save_pretrained(save_path)
+        for model, dst_path in models_to_save_paths.items():
+            save_path = dst_path.parent
+            save_path.mkdir(parents=True, exist_ok=True)
+            openvino.save_model(model.model, dst_path, compress_to_fp16=False)
+            model_dir = (
+                self.model_save_dir
+                if not isinstance(self.model_save_dir, TemporaryDirectory)
+                else self.model_save_dir.name
+            )
+            config_path = Path(model_dir) / save_path.name / CONFIG_NAME
+            if config_path.is_file():
+                config_save_path = save_path / CONFIG_NAME
+                shutil.copyfile(config_path, config_save_path)
+            else:
+                if hasattr(model, "save_config"):
+                    model.save_config(save_path)
+                elif hasattr(model, "config") and hasattr(model.config, "save_pretrained"):
+                    model.config.save_pretrained(save_path)
 
         self.scheduler.save_pretrained(save_directory / "scheduler")
 
@@ -410,6 +408,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         trust_remote_code: bool = False,
+        export_model_id: Optional[str] = None,
         **kwargs,
     ):
         # same as DiffusionPipeline.from_pretraoned, if called directly, it loads the class in the config
@@ -421,33 +420,23 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
 
-        unet_file_name = unet_file_name or default_file_name
-        vae_encoder_file_name = vae_encoder_file_name or default_file_name
-        vae_decoder_file_name = vae_decoder_file_name or default_file_name
-        text_encoder_file_name = text_encoder_file_name or default_file_name
-        text_encoder_2_file_name = text_encoder_2_file_name or default_file_name
-        text_encoder_3_file_name = text_encoder_3_file_name or default_file_name
-        transformer_file_name = transformer_file_name or default_file_name
+        file_names = {
+            "unet": unet_file_name or default_file_name,
+            "vae_encoder": vae_encoder_file_name or default_file_name,
+            "vae_decoder": vae_decoder_file_name or default_file_name,
+            "text_encoder": text_encoder_file_name or default_file_name,
+            "text_encoder_2": text_encoder_2_file_name or default_file_name,
+            "text_encoder_3": text_encoder_3_file_name or default_file_name,
+            "transformer": transformer_file_name or default_file_name,
+        }
 
         if not os.path.isdir(str(model_id)):
             all_components = {key for key in config.keys() if not key.startswith("_")} | {"vae_encoder", "vae_decoder"}
             allow_patterns = {os.path.join(component, "*") for component in all_components}
             allow_patterns.update(
                 {
-                    unet_file_name,
-                    transformer_file_name,
-                    vae_encoder_file_name,
-                    vae_decoder_file_name,
-                    text_encoder_file_name,
-                    text_encoder_2_file_name,
-                    text_encoder_3_file_name,
-                    unet_file_name.replace(".xml", ".bin"),
-                    transformer_file_name.replace(".xml", ".bin"),
-                    vae_encoder_file_name.replace(".xml", ".bin"),
-                    vae_decoder_file_name.replace(".xml", ".bin"),
-                    text_encoder_file_name.replace(".xml", ".bin"),
-                    text_encoder_2_file_name.replace(".xml", ".bin"),
-                    text_encoder_3_file_name.replace(".xml", ".bin"),
+                    *file_names.values(),
+                    *(file_name.replace(".xml", ".bin") for file_name in file_names.values()),
                     SCHEDULER_CONFIG_NAME,
                     cls.config_name,
                     CONFIG_NAME,
@@ -511,15 +500,9 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     submodels[name] = load_method(model_save_path)
 
         models = {
-            "unet": model_save_path / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name,
-            "transformer": model_save_path / DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER / transformer_file_name,
-            "vae_decoder": model_save_path / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name,
-            "vae_encoder": model_save_path / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
-            "text_encoder": model_save_path / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER / text_encoder_file_name,
-            "text_encoder_2": model_save_path / DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER / text_encoder_2_file_name,
-            "text_encoder_3": model_save_path / DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER / text_encoder_3_file_name,
+            ov_model_name: (model_save_path / ov_model_path).parent / file_names[ov_model_name]
+            for ov_model_name, ov_model_path in cls._all_ov_model_paths.items()
         }
-
         for config_key, value in config.items():
             if config_key not in models and config_key not in kwargs and config_key not in submodels:
                 kwargs[config_key] = value
@@ -529,15 +512,6 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             ov_config = kwargs.get("ov_config", {})
             device = kwargs.get("device", "CPU")
             vae_ov_conifg = {**ov_config}
-            if (
-                "GPU" in device.upper()
-                and "INFERENCE_PRECISION_HINT" not in vae_ov_conifg
-                and is_openvino_version("<=", "2025.0")
-            ):
-                vae_model_path = models["vae_decoder"]
-                required_upcast = check_scale_available(vae_model_path)
-                if required_upcast:
-                    vae_ov_conifg["INFERENCE_PRECISION_HINT"] = "f32"
             for name, path in models.items():
                 if name in kwargs:
                     models[name] = kwargs.pop(name)
@@ -560,10 +534,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     models[name] = cls.load_model(path) if path.is_file() else None
 
         name_or_path = config.get("_name_or_path", str(model_id))
-        quantization_config = cls._prepare_quantization_config(name_or_path, quantization_config, load_in_8bit)
-        if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.dataset is not None:
-            quantization_config = quantization_config.clone()
-            quantization_config.quant_method = OVQuantizationMethod.HYBRID
+        # Apply 8-bit weight quantization if load_in_8bit is True
+        quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         compile_model = kwargs.pop("compile", True)
         ov_pipeline = ov_pipeline_class(
             **models,
@@ -577,14 +549,21 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         ov_pipeline.register_to_config(_name_or_path=name_or_path)
 
         if quantization_config:
-            if quantization_config.dataset is not None and ov_pipeline_class.export_feature != "text-to-image":
+            quantization_dataset = (
+                quantization_config.dataset
+                if isinstance(quantization_config, OVQuantizationConfigBase)
+                else quantization_config.get("dataset", None)
+            )
+            if quantization_dataset is not None and ov_pipeline.export_feature != "text-to-image":
                 raise NotImplementedError(
                     f"Data-aware quantization is not supported for {cls.__name__} with "
                     f"{ov_pipeline_class.export_feature} task."
                 )
-
-            cls._apply_quantization(
-                ov_pipeline, quantization_config, compile_only, compile_model, trust_remote_code=trust_remote_code
+            # export_model_id is needed because _name_or_path is not necessarily present in the model config
+            model_id = export_model_id or name_or_path
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
+            ov_pipeline._apply_quantization(
+                quantization_config, compile_only, compile_model, model_id, trust_remote_code
             )
 
         return ov_pipeline
@@ -611,13 +590,6 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             )
             compile_only = False
 
-        # If load_in_8bit and quantization_config not specified then ov_config is set
-        # to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
-            ov_config = None
-        else:
-            ov_config = OVConfig(dtype="auto")
-
         torch_dtype = kwargs.pop("torch_dtype", None)
 
         model_loading_kwargs = {}
@@ -640,12 +612,15 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             token=token,
             local_files_only=local_files_only,
             force_download=force_download,
-            ov_config=ov_config,
+            ov_config=OVConfig(dtype="auto"),
             library_name=cls._library_name,
             variant=variant,
             model_loading_kwargs=model_loading_kwargs,
         )
 
+        # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
+        if quantization_config is None and load_in_8bit is None:
+            quantization_config = cls._prepare_model_size_based_quantization_config(model_save_path)
         return cls._from_pretrained(
             model_id=model_save_path,
             config=config,
@@ -659,6 +634,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             quantization_config=quantization_config,
             load_in_8bit=load_in_8bit,
             compile_only=compile_only,
+            export_model_id=model_id,  # needed to resolve default quantization config during export
             **kwargs,
         )
 
@@ -712,6 +688,16 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         if batch_size.is_dynamic:
             return -1
         return batch_size.get_length()
+
+    def _preprocess_quantization_config(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        model_name_or_path: str,
+    ) -> OVQuantizationConfigBase:
+        if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.dataset is not None:
+            quantization_config = quantization_config.clone()
+            quantization_config.quant_method = OVQuantizationMethod.HYBRID
+        return quantization_config
 
     def _reshape_unet(
         self,
@@ -1374,16 +1360,6 @@ class OVModelVaeEncoder(OVPipelinePart):
 
         return ModelOutput(**model_outputs)
 
-    def compile(self):
-        if (
-            "GPU" in self._device
-            and "INFERENCE_PRECISION_HINT" not in self.ov_config
-            and is_openvino_version("<", "2025.0")
-            and check_scale_available(self.model)
-        ):
-            self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
-        super().compile()
-
 
 class OVModelVaeDecoder(OVPipelinePart):
     def __init__(self, *args, **kwargs):
@@ -1421,16 +1397,6 @@ class OVModelVaeDecoder(OVPipelinePart):
             return model_outputs
 
         return ModelOutput(**model_outputs)
-
-    def compile(self):
-        if (
-            "GPU" in self._device
-            and "INFERENCE_PRECISION_HINT" not in self.ov_config
-            and is_openvino_version("<", "2025.0")
-            and check_scale_available(self.model)
-        ):
-            self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
-        super().compile()
 
 
 class OVModelVae(OVModelHostMixin):

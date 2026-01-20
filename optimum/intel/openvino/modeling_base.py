@@ -12,8 +12,10 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import logging
+import operator
 import os
 import warnings
+from functools import reduce
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Dict, List, Optional, Union
@@ -22,6 +24,7 @@ import openvino
 import torch
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import CompiledModel, Core, Model, convert_model
+from openvino import Type as ov_Type
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
@@ -30,6 +33,7 @@ from transformers.utils import is_offline_mode
 from transformers.utils.hub import cached_file
 
 from optimum.exporters.base import ExportConfig
+from optimum.exporters.openvino.utils import _MAX_UNCOMPRESSED_SIZE
 from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
 
 from ...exporters.openvino import export, main_export
@@ -38,9 +42,9 @@ from ..utils.modeling_utils import _find_files_matching_pattern
 from .configuration import (
     _DEFAULT_4BIT_WQ_CONFIG,
     OVConfig,
-    OVDynamicQuantizationConfig,
     OVQuantizationConfigBase,
     OVWeightQuantizationConfig,
+    _apply_default_ignored_scope_config,
     _quantization_config_from_dict,
     get_default_quantization_config,
 )
@@ -50,6 +54,7 @@ from .utils import (
     OV_XML_FILE_NAME,
     TemporaryDirectory,
     _print_compiled_model_properties,
+    classproperty,
     model_has_dynamic_inputs,
 )
 
@@ -64,6 +69,19 @@ class OVModelHostMixin:
     Mixin class for models that contain OpenVINO models as submodels.
     """
 
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        """
+        Returns a dictionary of all OpenVINO model file paths defined by this class.
+
+        The keys represent all possible OpenVINO submodel names supported by the class, and the values are the relative
+        file paths (inside the model directory) where those submodels would be stored.
+
+        This list is static and does not depend on which submodels are actually loaded in a particular instance.
+        Use `_ov_model_paths` to retrieve only the models that are present in a specific instance.
+        """
+        return {"model": OV_XML_FILE_NAME}
+
     @property
     def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
         """
@@ -74,11 +92,19 @@ class OVModelHostMixin:
         return {ov_model_name: getattr(self, ov_model_name) for ov_model_name in self._ov_model_names}
 
     @property
-    def ov_submodels(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
-        logger.warn(
-            "`ov_submodels` property is deprecated and will be removed in v1.27. Please use `ov_models` property instead."
-        )
-        return self.ov_models
+    def _ov_model_paths(self) -> Dict[str, str]:
+        """
+        Returns a dictionary of OpenVINO model file paths for the models that are actually present in this instance.
+
+        The keys correspond to `self._ov_model_names`, and the values are taken from the class-level `_all_ov_model_paths`
+        mapping. Only paths for instantiated submodels are included.
+
+        Use `_all_ov_model_paths` to see the complete set of possible model paths supported by the class.
+        """
+        model_paths = {}
+        for ov_model_name in self._ov_model_names:
+            model_paths[ov_model_name] = self._all_ov_model_paths[ov_model_name]
+        return model_paths
 
     @property
     def _ov_model_names(self) -> List[str]:
@@ -131,6 +157,18 @@ class OVModelHostMixin:
         # Clear requests to force recompilation with the new model
         self.clear_requests()
 
+    def _unload_ov_model(self, ov_model: openvino.Model):
+        """
+        Unload OpenVINO model from the model. Unloading is performed by object id. Allows Python garbage collector to
+        free the memory occupied by the OpenVINO model.
+        """
+        for ov_model_name in self.ov_models:
+            if id(getattr(self, ov_model_name, None)) == id(ov_model):
+                setattr(self, ov_model_name, None)
+        for component in self.components.values():
+            component._unload_ov_model(ov_model)
+        self.clear_requests()
+
     def clear_requests(self):
         """
         Clear model inference requests.
@@ -155,7 +193,6 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
     _supports_cache_class = False  # No loger defined/used in transformers
     _is_stateful = False  # for Transformers it's False, but True for SSMs
     _library_name = "transformers"
-    _xml_model_name = OV_XML_FILE_NAME
     _search_pattern = r"(.*)?openvino(.*)?\_(.*)?.xml$"
 
     def __init__(
@@ -400,8 +437,10 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             raise ValueError(
                 "`save_pretrained()` is not supported with `compile_only=True` mode, to save your model please initialize your model with compile_only=False"
             )
-        dst_path = os.path.join(save_directory, self._xml_model_name)
-        openvino.save_model(self.model, dst_path, compress_to_fp16=False)
+        for name, model in self.ov_models.items():
+            dst_path = os.path.join(save_directory, self._ov_model_paths[name])
+            openvino.save_model(model, dst_path, compress_to_fp16=False)
+
         generation_config = getattr(self, "generation_config", None)
         if generation_config is not None:
             try:
@@ -469,7 +508,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
                 Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
         model_path = Path(model_id)
-        default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
+        default_file_name = ONNX_WEIGHTS_NAME if from_onnx else cls._all_ov_model_paths["model"]
         file_name = file_name or default_file_name
 
         model_cache_path = cls._cached_file(
@@ -495,7 +534,8 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
                 model_save_dir=model_cache_path.parent,
             )
 
-        quantization_config = cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
+        # Apply 8-bit weight quantization if load_in_8bit is True
+        quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         compile_model = kwargs.pop("compile", True)
         model = cls(
             ov_model,
@@ -507,9 +547,15 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         )
 
         if quantization_config:
-            cls._apply_quantization(
-                model, quantization_config, compile_only, compile_model, model_id, trust_remote_code
-            )
+            if hasattr(config, "name_or_path"):
+                model_id = config.name_or_path
+            else:
+                logger.warning(
+                    "`model_id` could not be determined from the config. In the case there are default quantization "
+                    "configurations for this model, they will not be applied."
+                )
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
+            model._apply_quantization(quantization_config, compile_only, compile_model, model_id, trust_remote_code)
 
         return model
 
@@ -594,42 +640,89 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             **kwargs,
         )
 
-    @staticmethod
-    def _prepare_quantization_config(
-        model_name_or_path: str,
-        quantization_config: Optional[Union[OVQuantizationConfigBase, Dict]] = None,
-        load_in_8bit: bool = False,
-    ):
-        if not isinstance(quantization_config, (dict, OVQuantizationConfigBase, type(None))):
-            raise TypeError(
-                "Expected `quantization_config` to be either a dictionary, instance of `OVQuantizationConfigBase` object "
-                f"or None, got {type(quantization_config)}."
+    @classmethod
+    def _prepare_model_size_based_quantization_config(
+        cls,
+        model_dir: Union[str, Path],
+    ) -> Optional["OVPipelineQuantizationConfig"]:  # noqa: F821
+        """
+        Prepare a quantization configuration based on the model size. If a model has more than 1 billion parameters,
+        an 8-bit weight-only quantization configuration will be returned for it. Otherwise, no quantization will be applied.
+
+        Args:
+            model_dir (`Union[str, Path]`):
+                Path indicating the directory where the exported OpenVINO model is stored.
+        Returns:
+            `Optional[OVPipelineQuantizationConfig]`: The quantization configuration to use or None if no quantization is needed.
+        """
+        from optimum.intel.openvino.configuration import OVPipelineQuantizationConfig, OVWeightQuantizationConfig
+
+        model_dir = Path(model_dir)
+        ov_model_names_to_quantize = []
+        for ov_model_name, ov_model_rel_path in cls._all_ov_model_paths.items():
+            ov_model_path = model_dir / ov_model_rel_path
+            if not ov_model_path.exists():
+                continue
+            ov_model = core.read_model(ov_model_path)
+            num_parameters = 0
+            for op in ov_model.get_ops():
+                if op.get_type_name() == "Constant" and op.get_element_type() in [
+                    ov_Type.f16,
+                    ov_Type.f32,
+                    ov_Type.bf16,
+                ]:
+                    num_parameters += reduce(operator.mul, op.shape, 1)
+            if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
+                ov_model_names_to_quantize.append(ov_model_name)
+        quantization_config = None
+        if ov_model_names_to_quantize:
+            wq_config = OVWeightQuantizationConfig(bits=8)
+            quantization_config = OVPipelineQuantizationConfig(
+                {model_name: wq_config for model_name in ov_model_names_to_quantize}
             )
+        return quantization_config
 
-        # Return int8 weight-only quantization config if quantization config is not provided and load_in_8bit=True
-        if not quantization_config and load_in_8bit:
-            return OVWeightQuantizationConfig(bits=8)
-
-        # Nothing to do if quantization_config is already an OVQuantizationConfigBase instance or None
-        if isinstance(quantization_config, (OVQuantizationConfigBase, type(None))):
-            return quantization_config
-
-        # Quantization config is a dictionary
-        if quantization_config == {"bits": 4}:
-            # If config is given as {"bits": 4}, use the default 4-bit quantization config
-            if model_name_or_path in ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]:
+    @staticmethod
+    def _resolve_default_quantization_config(
+        model_name_or_path: str,
+        quantization_config: Union[OVQuantizationConfigBase, Dict],
+    ) -> Union[OVQuantizationConfigBase, Dict]:
+        """
+        Tries to match the given model name or path to a recommended quantization config if available.
+        Arguments:
+            model_name_or_path (`str`):
+                The model name or path.
+            quantization_config (`OVQuantizationConfigBase` or `Dict`):
+                The quantization config to resolve.
+        """
+        if quantization_config == {"bits": 4} or quantization_config == {"bits": 8}:
+            # If config is given as {"bits": N}, use the default N-bit quantization config
+            if quantization_config == {"bits": 4} and model_name_or_path in [
+                "openai/gpt-oss-20b",
+                "openai/gpt-oss-120b",
+            ]:
                 raise NotImplementedError(
                     "Quantization with the default 4-bit config is not supported through Python API for openai/gpt-oss-20b model. "
                     "Please export the model via optimum-cli with `--weight-format int4` argument. This way the "
                     "recommended quantization config will be used."
                 )
-            default_config = get_default_quantization_config(model_name_or_path, weight_format="int4")
-            quantization_config = _quantization_config_from_dict(default_config or _DEFAULT_4BIT_WQ_CONFIG)
+            default_config = get_default_quantization_config(
+                model_name_or_path, weight_format=f"int{quantization_config['bits']}"
+            )
+            quantization_config = default_config or (
+                _DEFAULT_4BIT_WQ_CONFIG if quantization_config == {"bits": 4} else quantization_config
+            )
         else:
-            quantization_config = _quantization_config_from_dict(quantization_config)
-            # Notify user if 4-bit quantization is requested and there is a recommended config for the model
-            if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.bits == 4:
-                default_config = get_default_quantization_config(model_name_or_path, weight_format="int4")
+            # Notify a user if 4 or 8 bit quantization is requested and there is a recommended config for the model
+            if isinstance(quantization_config, dict):
+                quantization_config = _quantization_config_from_dict(quantization_config)
+            if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.dtype in [
+                "int4",
+                "int8",
+            ]:
+                default_config = get_default_quantization_config(
+                    model_name_or_path, weight_format=quantization_config.dtype
+                )
                 if default_config is not None:
                     logger.info(
                         f"For the given model, we recommend the following `quantization_config` : {default_config}"
@@ -637,27 +730,41 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
 
         return quantization_config
 
-    @staticmethod
-    def _apply_quantization(
-        model: "OVBaseModel",
+    def _preprocess_quantization_config(
+        self,
         quantization_config: OVQuantizationConfigBase,
+        model_name_or_path: str,
+    ) -> OVQuantizationConfigBase:
+        """
+        Preprocess quantization config before applying quantization.
+        Usually sets tokenizer/processor in quantization config if they are not already set.
+        Arguments:
+            quantization_config (`OVQuantizationConfigBase`):
+                The quantization config to preprocess.
+            model_name_or_path (`str`):
+                The model name or path.
+        """
+        return quantization_config
+
+    def _apply_quantization(
+        self,
+        quantization_config: Union[Dict, OVQuantizationConfigBase],
         compile_only: bool,
         compile_model: bool,
-        model_name_or_path: Optional[str] = None,
+        model_name_or_path: str,
         trust_remote_code: Optional[bool] = False,
+        **kwargs,
     ):
         """
         Apply quantization to the model.
         Arguments:
-            model (`OVBaseModel`):
-                The model to quantize.
             quantization_config (`OVQuantizationConfigBase`):
                 The quantization config to use.
             compile_only (`bool`):
                 Whether the model was initialized with `compile_only=True`.
             compile_model (`bool`):
                 Whether to compile the model after quantization.
-            model_name_or_path (`str`, *optional*):
+            model_name_or_path (`str`):
                 The model name or path used to set tokenizer/processor in quantization config if they are not set.
             trust_remote_code (`bool`, *optional*, defaults to `False`):
                 Whether to trust remote code when loading model tokenizer/processor during quantization.
@@ -670,29 +777,24 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
                 "quantization is not supported with `compile_only` mode, please initialize model without this option"
             )
 
+        if isinstance(quantization_config, dict):
+            quantization_config = _quantization_config_from_dict(quantization_config)
+
         from optimum.intel.openvino.quantization import OVQuantizer
 
-        quantizer = OVQuantizer(model, trust_remote_code=trust_remote_code)
-        quantization_config_copy = quantization_config.clone()
-        # TODO: remove trust_remote_code from quantization config in v1.27.0
-        quantization_config_copy.trust_remote_code = trust_remote_code
-        if model_name_or_path is not None:
-            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_name_or_path)
-            quantization_config_copy.processor = str(quantization_config.processor or model_name_or_path)
-        quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+        quantizer = OVQuantizer(self, trust_remote_code=trust_remote_code)
+        quantization_config = self._preprocess_quantization_config(quantization_config, model_name_or_path)
+        quantization_config = quantizer._construct_pipeline_quantization_config(quantization_config)
+        quantization_config = _apply_default_ignored_scope_config(model_name_or_path, quantization_config)
+
+        quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config), **kwargs)
 
         if compile_model:
-            model.compile()
+            self.compile()
 
     def _set_ov_config_parameters(self):
         if self.ov_config.get("PERFORMANCE_HINT") is None:
             self.ov_config["PERFORMANCE_HINT"] = "LATENCY"
-
-        q_config = self._openvino_config.quantization_config if self._openvino_config else None
-        if isinstance(q_config, OVDynamicQuantizationConfig):
-            self.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"] = str(q_config.activations_group_size)
-            if self.can_generate() and "KV_CACHE_PRECISION" not in self.ov_config:
-                self.ov_config["KV_CACHE_PRECISION"] = "u8"
 
     @staticmethod
     def _cached_file(
@@ -781,12 +883,6 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             )
             compile_only = False
 
-        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
-            ov_config = None
-        else:
-            ov_config = OVConfig(dtype="fp32")
-
         variant = kwargs.pop("variant", None)
 
         main_export(
@@ -800,11 +896,14 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            ov_config=ov_config,
+            ov_config=OVConfig(dtype="auto"),
             library_name=cls._library_name,
             variant=variant,
         )
 
+        # Apply 8-bit weight quantization to models larger than 1B if load_in_8bit is not provided
+        if quantization_config is None and load_in_8bit is None:
+            quantization_config = cls._prepare_model_size_based_quantization_config(save_dir_path)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
@@ -844,7 +943,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             model=model,
             config=onnx_config,
             opset=onnx_config.DEFAULT_ONNX_OPSET,
-            output=save_dir_path / OV_XML_FILE_NAME,
+            output=save_dir_path / cls._all_ov_model_paths["model"],
             stateful=stateful,
         )
 

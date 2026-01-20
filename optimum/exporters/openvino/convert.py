@@ -49,13 +49,10 @@ from optimum.intel.utils.import_utils import (
     _torch_version,
     _transformers_version,
     compare_versions,
-    is_openvino_tokenizers_version,
-    is_tokenizers_version,
     is_transformers_version,
 )
 from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
 
-from ...intel.utils.import_utils import is_nncf_available
 from ...intel.utils.modeling_utils import _infer_library_from_model_or_model_class
 from .stateful import (
     ensure_export_task_support_stateful,
@@ -66,8 +63,11 @@ from .stateful import (
 from .utils import (
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     OV_XML_FILE_NAME,
+    _get_dynamic_shapes_info,
     _get_input_info,
+    _get_model_dtype,
     _get_open_clip_submodels_fn_and_export_configs,
+    _normalize_dummy_inputs,
     allow_skip_tracing_check,
     clear_class_registry,
     remove_none_from_dummy_inputs,
@@ -98,8 +98,6 @@ def _set_runtime_options(
         Tuple[Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"],
     ],
     task: str,
-    library_name: str,
-    quantized_model: bool,
 ):
     for model_name in models_and_export_configs.keys():
         _, sub_export_config = models_and_export_configs[model_name]
@@ -111,11 +109,6 @@ def _set_runtime_options(
             or getattr(sub_export_config, "stateful", False)
         ):
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
-        if not quantized_model and (
-            "text-generation" in task
-            or ("image-text-to-text" in task and model_name == "language_model")
-            or getattr(sub_export_config, "stateful", False)
-        ):
             sub_export_config.runtime_options["KV_CACHE_PRECISION"] = "f16"
 
 
@@ -403,18 +396,32 @@ def export_pytorch(
             ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
 
         with patcher:
-            if patch_16bit_model:
-                from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
-
-                __make_16bit_traceable(model)
             check_dummy_inputs_are_allowed(model, dummy_inputs)
             input_info = _get_input_info(model, config, dummy_inputs)
-            ts_decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **ts_decoder_kwargs)
-            ov_model = convert_model(
-                ts_decoder,
-                example_input=dummy_inputs,
-                input=[(item.shape, item.type) for item in input_info],
-            )
+            torch_export = os.getenv("OPENVINO_DYNAMO_EXPORT", "false").lower() == "true"
+            if torch_export:
+                if hasattr(torch.ops, "_prepare_4d_causal_attention_mask_for_sdpa"):
+                    # patch_everywhere breaks torch.ops namespace
+                    del torch.ops._prepare_4d_causal_attention_mask_for_sdpa
+                dynamic_shapes = _get_dynamic_shapes_info(model, config, dummy_inputs)
+                _export_kwargs = {"args": (), "kwargs": _normalize_dummy_inputs(dummy_inputs, _get_model_dtype(model))}
+                _export_kwargs["dynamic_shapes"] = dynamic_shapes
+
+                ep = torch.export.export_for_training(model, **_export_kwargs)
+
+                ov_model = convert_model(ep)
+            else:
+                if patch_16bit_model:
+                    from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
+
+                    __make_16bit_traceable(model)
+
+                ts_decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **ts_decoder_kwargs)
+                ov_model = convert_model(
+                    ts_decoder,
+                    example_input=dummy_inputs,
+                    input=[(item.shape, item.type) for item in input_info],
+                )
 
         ov_model.validate_nodes_and_infer_types()  # TODO: remove as unnecessary validation?
 
@@ -538,11 +545,6 @@ def export_from_model(
     **kwargs_shapes,
 ):
     model_kwargs = model_kwargs or {}
-
-    if ov_config is not None and ov_config.quantization_config and not is_nncf_available():
-        raise ImportError(
-            f"Compression of the weights to {ov_config.quantization_config} requires nncf, please install it with `pip install nncf`"
-        )
 
     library_name = _infer_library_from_model_or_model_class(model)
     if library_name != "open_clip":
@@ -726,12 +728,7 @@ def export_from_model(
 
         model.save_config(output)
 
-    _set_runtime_options(
-        models_and_export_configs,
-        task,
-        library_name,
-        hasattr(ov_config, "quantization_config") and ov_config.quantization_config,
-    )
+    _set_runtime_options(models_and_export_configs, task)
 
     export_models(
         models_and_export_configs=models_and_export_configs,
@@ -765,12 +762,6 @@ def export_tokenizer(
         from openvino_tokenizers import convert_tokenizer
     except ModuleNotFoundError:
         return
-
-    if is_tokenizers_version(">", "0.19") and is_openvino_tokenizers_version("<", "2024.5.0.0"):
-        logger.warning(
-            "Exporting tokenizers to OpenVINO is not supported for tokenizers version > 0.19 and openvino version <= 2024.4. "
-            "Please downgrade to tokenizers version <= 0.19 to export tokenizers to OpenVINO."
-        )
 
     if not isinstance(output, Path):
         output = Path(output)

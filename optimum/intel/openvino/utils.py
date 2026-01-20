@@ -151,7 +151,7 @@ _HEAD_TO_AUTOMODELS = {
     "qwen-image": "OVQwenImagePipeline",
 }
 
-PREDEFINED_CAUSAL_LANGUAGE_DATASETS = {"wikitext2", "c4", "c4-new", "auto"}
+PREDEFINED_CAUSAL_LANGUAGE_DATASETS = {"wikitext2", "c4", "c4-new", "auto", "gsm8k"}
 
 PREDEFINED_LANGUAGE_DATASETS = {
     "wikitext2": {"id": "wikitext", "name": "wikitext-2-raw-v1", "split": "train", "streaming": False},
@@ -207,6 +207,11 @@ PREDEFINED_SAM_DATASETS = {
 
 
 NEED_CONVERT_TO_FAST_TOKENIZER: Tuple[Type[PreTrainedTokenizer]] = (CLIPTokenizer, Qwen2Tokenizer)
+
+
+class classproperty(property):
+    def __get__(self, instance, owner=None):
+        return self.fget(owner)
 
 
 def maybe_convert_tokenizer_to_fast(
