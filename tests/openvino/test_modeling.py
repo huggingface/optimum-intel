@@ -1117,6 +1117,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "xlm",
         "xlm-roberta",
     )
+
     # accuracy issue, need additional investigation
     if is_transformers_version("<", "4.51.0"):
         SUPPORTED_ARCHITECTURES += ("nystromformer",)
@@ -1173,6 +1174,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "beit",
         "convnext",
+        # "convnextv2",
         "data2vec-vision",
         "deit",
         "levit",
@@ -1186,7 +1188,6 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         "swin",
         "vit",
     )
-
     TIMM_MODELS = ("timm/pit_s_distilled_224.in1k", "timm/vit_tiny_patch16_224.augreg_in21k")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)

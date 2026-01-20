@@ -416,11 +416,9 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
 
 class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
-    SUPPORTED_ARCHITECTURES = [
-        "donut",
-        "trocr",
-        "vision-encoder-decoder",
-    ]
+    SUPPORTED_ARCHITECTURES = ["vision-encoder-decoder", "trocr", "donut"]
+    # GOT-OCR2 models shouldn't be exported using the task image-to-text (currently equivalent to exporting the model using image-text-to-text) and will be deprecated v1.29
+    # TODO: move pix2struct tests from OVModelForPix2StructIntegrationTest
     UNSUPPORTED_ARCHITECTURES = {"got_ocr2", "pix2struct"}
     TASK = "image-to-text"
     OVMODEL_CLASS = OVModelForVision2Seq

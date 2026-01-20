@@ -3345,13 +3345,6 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
         return inputs
 
 
-# @register_in_tasks_manager(
-#     "phi4_multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
-# )
-# class Phi4MultimodalOpenVINOConfig(Phi4MMOpenVINOConfig):
-#     MIN_TRANSFORMERS_VERSION = "4.51.0"
-
-
 class DummyQwen2VLLMInputGenerator(DummyTextInputGenerator):
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         generated_input = super().generate(input_name, framework, int_dtype, float_dtype)
