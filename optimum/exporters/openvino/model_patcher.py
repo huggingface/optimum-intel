@@ -7013,7 +7013,7 @@ def lfm2_short_conv_forward_patched(
 #    for subsequent invocation of the model's `forward` method.
 # 2. Patches the Lfm2ShortConv so that the traced `slow_forward` function works correctly
 #    during both the prefill and decoding steps.
-class Lfm2ModelPatcher(ModelPatcher):
+class Lfm2ModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
