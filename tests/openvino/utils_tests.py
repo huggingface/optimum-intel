@@ -22,7 +22,7 @@ import openvino as ov
 import torch
 
 from optimum.exporters.tasks import TasksManager
-from optimum.intel.utils.import_utils import is_nncf_version, is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import is_transformers_version
 
 
 SEED = 42
@@ -34,6 +34,7 @@ TENSOR_ALIAS_TO_TYPE = {"pt": torch.Tensor, "np": np.ndarray}
 OPENVINO_DEVICE = os.getenv("OPENVINO_TEST_DEVICE", "CPU")
 
 MODEL_NAMES = {
+    "afmoe": "optimum-intel-internal-testing/tiny-random-trinity",
     "albert": "optimum-intel-internal-testing/tiny-random-albert",
     "aquila": "optimum-intel-internal-testing/tiny-random-aquilachat",
     "aquila2": "optimum-intel-internal-testing/tiny-random-aquila2",
@@ -43,7 +44,7 @@ MODEL_NAMES = {
     "bge": "optimum-intel-internal-testing/bge-small-en-v1.5",
     "beit": "optimum-intel-internal-testing/tiny-random-BeitForImageClassification",
     "bert": "optimum-intel-internal-testing/tiny-random-bert",
-    "bart": "optimum-intel-internal-testing/tiny-random-bart",
+    "bart": "hf-internal-testing/tiny-random-BartModel",
     "baichuan2": "optimum-intel-internal-testing/tiny-random-baichuan2",
     "baichuan2-13b": "optimum-intel-internal-testing/tiny-random-baichuan2-13b",
     "bigbird_pegasus": "optimum-intel-internal-testing/tiny-random-bigbird_pegasus",
@@ -73,12 +74,13 @@ MODEL_NAMES = {
     "convnextv2": "optimum-intel-internal-testing/tiny-random-ConvNextV2Model",
     "distilbert": "optimum-intel-internal-testing/tiny-random-distilbert",
     "distilbert-ov": "optimum-intel-internal-testing/ov-tiny-random-distilbert",
-    "donut": "optimum-intel-internal-testing/tiny-doc-qa-vision-encoder-decoder",
+    "donut": "optimum-internal-testing/tiny-random-VisionEncoderDecoderModel-donut",
     "donut-swin": "optimum-intel-internal-testing/tiny-random-DonutSwinModel",
     "detr": "optimum-intel-internal-testing/tiny-random-DetrModel",
     "electra": "optimum-intel-internal-testing/tiny-random-electra",
     "esm": "optimum-intel-internal-testing/tiny-random-EsmModel",
     "exaone": "optimum-intel-internal-testing/tiny-random-exaone",
+    "exaone4": "optimum-intel-internal-testing/tiny-random-exaone4",
     "gemma": "optimum-intel-internal-testing/tiny-random-GemmaForCausalLM",
     "gemma2": "optimum-intel-internal-testing/tiny-random-gemma2",
     "got_ocr2": "optimum-intel-internal-testing/tiny-random-got-ocr2-hf",
@@ -102,6 +104,7 @@ MODEL_NAMES = {
     "gptj": "optimum-intel-internal-testing/tiny-random-GPTJModel",
     "granite": "optimum-intel-internal-testing/tiny-random-granite",
     "granite-moe": "optimum-intel-internal-testing/tiny-random-granite-moe",
+    "granite-moe-hybrid": "optimum-intel-internal-testing/tiny-random-granitemoehybrid",
     "hubert": "optimum-intel-internal-testing/tiny-random-HubertModel",
     "ibert": "optimum-intel-internal-testing/tiny-random-ibert",
     "idefics3": "optimum-intel-internal-testing/tiny-random-Idefics3ForConditionalGeneration",
@@ -165,6 +168,7 @@ MODEL_NAMES = {
     "qwen2_5_vl": "optimum-intel-internal-testing/tiny-random-qwen2.5-vl",
     "qwen3": "optimum-intel-internal-testing/tiny-random-qwen3",
     "qwen3_moe": "optimum-intel-internal-testing/tiny-random-qwen3moe",
+    "qwen-image": "snake7gun/tiny-random-qwen-image",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",
     "roberta": "optimum-intel-internal-testing/tiny-random-roberta",
     "roformer": "optimum-intel-internal-testing/tiny-random-roformer",
@@ -222,12 +226,14 @@ MODEL_NAMES = {
 
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
+    "afmoe": {"model": 16},
     "bert": {"model": 68},
     "roberta": {"model": 68},
     "albert": {"model": 84},
     "vit": {"model": 64},
     "blenderbot": {"model": 70},
     "gpt2": {"model": 44},
+    "granite-moe-hybrid": {"model": 118},
     "wav2vec2": {"model": 34},
     "distilbert": {"model": 66},
     "t5": {
@@ -280,6 +286,13 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder": 64,
         "text_encoder_2": 64,
     },
+    "qwen-image": {
+        "transformer": 56,
+        "vae_decoder": 28,
+        "vae_encoder": 24,
+        "text_encoder": 64,
+        "text_encoder_2": 64,
+    },
     "llava": {
         "lm_model": 30,
         "text_embeddings_model": 1,
@@ -318,7 +331,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "transformer": 58,
         "vae_decoder": 28,
         "vae_encoder": 28,
-        "text_encoder": 16 if is_nncf_version(">", "2.17") else 18,
+        "text_encoder": 16,
     },
     "ltx-video": {
         "transformer": 34,
@@ -327,8 +340,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder": 64,
     },
     "sam": {
-        "vision_encoder": 102 if is_openvino_version("<", "2025.2.0") else 150,
-        "prompt_encoder_mask_decoder": 100 if is_nncf_version("<=", "2.18") else 98,
+        "vision_encoder": 150,
+        "prompt_encoder_mask_decoder": 98,
     },
     "speecht5": {
         "encoder": 28,
@@ -337,8 +350,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vocoder": 80,
     },
     "clip": {"model": 130},
-    "mamba": {"model": 386},
-    "falcon-mamba": {"model": 194},
+    "mamba": {"model": 322},
+    "falcon-mamba": {"model": 162},
     "minicpmo": {
         "lm_model": 16,
         "text_embeddings_model": 1,
@@ -346,10 +359,36 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "resampler_model": 6,
     },
     "zamba2": {"model": 44},
+    "exaone4": {"model": 16},
     "lfm2": {"model": 52},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
+
+REMOTE_CODE_MODELS = (
+    "afmoe",
+    "chatglm",
+    "minicpm",
+    "baichuan2",
+    "baichuan2-13b",
+    "jais",
+    "qwen",
+    "qwen-image",
+    "internlm2",
+    "orion",
+    "aquila",
+    "aquila2",
+    "xverse",
+    "internlm",
+    "codegen2",
+    "arctic",
+    "chatglm4",
+    "exaone",
+    "exaone4",
+    "decilm",
+    "minicpm3",
+    "deepseek",
+)
 
 
 def get_num_quantized_nodes(model):

@@ -19,7 +19,13 @@ from typing import Dict
 from unittest.mock import Mock
 
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM, AutoModelForZeroShotImageClassification, AutoProcessor, AutoTokenizer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForTextToSpectrogram,
+    AutoModelForZeroShotImageClassification,
+    AutoProcessor,
+    AutoTokenizer,
+)
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
@@ -53,22 +59,27 @@ from optimum.intel import (  # noqa
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelOpenCLIPText,
     OVModelOpenCLIPVisual,
+    OVQwenImagePipeline,
     OVSanaPipeline,
     OVSentenceTransformer,
     OVStableDiffusion3Pipeline,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
 )
-from optimum.intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIGS, _DEFAULT_INT8_FQ_CONFIGS
+from optimum.intel.openvino.configuration import (
+    _DEFAULT_4BIT_WQ_CONFIGS,
+    _DEFAULT_8BIT_WQ_CONFIGS,
+    _DEFAULT_IGNORED_SCOPE_CONFIGS,
+    _DEFAULT_INT8_FQ_CONFIGS,
+)
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
-    is_nncf_version,
     is_openvino_tokenizers_available,
     is_openvino_version,
-    is_tokenizers_version,
     is_transformers_version,
 )
+from optimum.utils.save_utils import maybe_save_preprocessors
 
 
 class OVCLIExportTestCase(unittest.TestCase):
@@ -103,9 +114,10 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
+        ("text-to-image", "qwen-image"),
     ]
 
-    if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
+    if is_transformers_version(">=", "4.54.0"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation", "lfm2"),
@@ -120,45 +132,63 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
-    if is_transformers_version(">=", "4.52.1") and is_openvino_version(">=", "2025.4.0"):
+    if is_transformers_version(">=", "4.54"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "exaone4"),
+            ]
+        )
+    if is_transformers_version(">=", "4.52.1"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "bitnet"),
             ]
         )
 
+    if is_transformers_version(">=", "4.53.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "granite-moe-hybrid"),
+            ]
+        )
+
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
-        "gpt2": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "t5": 0 if is_openvino_version("<", "2025.1") else 2,  # 2025.1 brings support for unigram tokenizers
-        "albert": 0 if is_openvino_version("<", "2025.1") else 2,  # 2025.1 brings support for unigram tokenizers
-        "distilbert": 1 if is_openvino_version("<", "2025.0") else 2,  # no detokenizer before 2025.0
-        "roberta": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "gpt2": 2,
+        "t5": 2,
+        "albert": 2,
+        "distilbert": 2,
+        "roberta": 2,
         "vit": 0,  # no tokenizer for image model
         "wav2vec2": 0,  # no tokenizer
-        "bert": 1 if is_openvino_version("<", "2025.0") else 2,  # no detokenizer before 2025.0
-        "blenderbot": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "stable-diffusion": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "stable-diffusion-xl": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 2,
-        "flux": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "flux-fill": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "lfm2": 0,  # Tokenizers fail to convert, ticket: CVS-176880
-        "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "sana": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
-        "ltx-video": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
+        "bert": 2,
+        "blenderbot": 2,
+        "stable-diffusion": 2,
+        "stable-diffusion-xl": 4,
+        "stable-diffusion-3": 6,
+        "flux": 4,
+        "flux-fill": 4,
+        "lfm2": 2
+        if is_openvino_version(">=", "2026.0")
+        else 0,  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
+        "llava": 2,
+        "sana": 2,
+        "ltx-video": 2,
         "sam": 0,  # no tokenizer
         "speecht5": 2,
-        "clip": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
+        "clip": 2,
         "mamba": 2,
         "falcon-mamba": 2,
         "qwen3": 2,
         "zamba2": 2,
+        "exaone4": 2,
         "bitnet": 2,
+        "granite-moe-hybrid": 2,
+        "qwen-image": 4,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
         "gpt2": {  # transformers, no chat template, no processor
-            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "num_tokenizers": 2,
             "task": "text-generation-with-past",
             "expected_chat_template": False,
             "simplified_chat_template": False,
@@ -166,7 +196,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "remote_code": False,
         },
         "stable-diffusion": {  # diffusers, no chat template
-            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "num_tokenizers": 2,
             "task": "text-to-image",
             "processor_chat_template": False,
             "remote_code": False,
@@ -174,7 +204,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "simplified_chat_template": False,
         },
         "llava": {  # transformers, chat template in processor, simplified chat template
-            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "num_tokenizers": 2,
             "task": "image-text-to-text",
             "processor_chat_template": True,
             "remote_code": False,
@@ -182,7 +212,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "simplified_chat_template": True,
         },
         "llava_next": {  # transformers, chat template in processor overrides tokinizer chat template, simplified chat template
-            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "num_tokenizers": 2,
             "task": "image-text-to-text",
             "processor_chat_template": True,
             "simplified_chat_template": True,
@@ -195,9 +225,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
             {
                 "glm": {  # transformers, no processor, no simplified chat template
-                    "num_tokenizers": 2
-                    if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5")
-                    else 0,
+                    "num_tokenizers": 2,
                     "task": "text-generation-with-past",
                     "expected_chat_template": True,
                     "simplified_chat_template": False,
@@ -211,9 +239,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
             {
                 "minicpm3": {  # transformers, no processor, simplified chat template
-                    "num_tokenizers": 2
-                    if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5")
-                    else 0,
+                    "num_tokenizers": 2,
                     "task": "text-generation-with-past",
                     "expected_chat_template": True,
                     "simplified_chat_template": True,
@@ -221,9 +247,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "remote_code": True,
                 },
                 "phi3_v": {  # transformers, no processor chat template, no simplified chat template
-                    "num_tokenizers": 2
-                    if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5")
-                    else 0,
+                    "num_tokenizers": 2,
                     "task": "image-text-to-text",
                     "expected_chat_template": True,
                     "simplified_chat_template": False,
@@ -272,7 +296,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             ),
         ),
         (
-            "text-generation",
+            "text-generation-with-past",
             "llama",
             "f8e4m3",
             "--dataset wikitext2 --smooth-quant-alpha 0.9 --trust-remote-code",
@@ -311,7 +335,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "text-generation",
             "llama",
             "int4_f8e5m2",
-            "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code",
+            "--dataset gsm8k --num-samples 1 --group-size 16 --trust-remote-code",
             {
                 "model": 15,
             },
@@ -379,7 +403,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "feature-extraction",
             "blenderbot",
             "int8",
-            "--dataset wikitext2 --num-samples 1",
+            "--dataset wikitext2:seq_len=64 --num-samples 1",
             {
                 "model": 33,
             },
@@ -403,7 +427,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "fill-mask",
             "roberta",
             "int8",
-            "--dataset wikitext2 --num-samples 1",
+            "--dataset wikitext2:seq_len=64 --num-samples 1",
             {
                 "model": 32,
             },
@@ -415,7 +439,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "fill-mask",
             "xlm-roberta",
             "int8",
-            "--library sentence_transformers --dataset c4 --num-samples 1",
+            "--dataset c4 --num-samples 1",
             {
                 "model": 14,
             },
@@ -427,7 +451,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "zero-shot-image-classification",
             "clip",
             "int8",
-            "--dataset conceptual_captions --num-samples 1",
+            "--dataset conceptual_captions:seq_len=64 --num-samples 1",
             {
                 "model": 65,
             },
@@ -439,7 +463,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "text2text-generation-with-past",
             "t5",
             "int8",
-            "--dataset c4 --num-samples 1",
+            "--dataset c4:seq_len=64 --num-samples 1",
             {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
             if is_transformers_version("<=", "4.45")
             else {
@@ -459,11 +483,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "--dataset coco --num-samples 1",
             {
                 "vision_encoder": 75,
-                "prompt_encoder_mask_decoder": 61 if is_nncf_version("<=", "2.18") else 60,
+                "prompt_encoder_mask_decoder": 60,
             },
             {
                 "vision_encoder": {"int8": 75},
-                "prompt_encoder_mask_decoder": {"int8": 50 if is_nncf_version("<=", "2.18") else 49},
+                "prompt_encoder_mask_decoder": {"int8": 49},
             },
         ),
         (
@@ -523,8 +547,14 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),
         (
             "text-generation-with-past",
+            "gpt2",
+            "int4 --sym --group-size-fallback adjust",
+            {"model": {"int8": 4, "int4": 20}},
+        ),
+        (
+            "text-generation-with-past",
             "llama_awq",
-            "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset wikitext2 --num-samples 100 "
+            "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset gsm8k --num-samples 100 "
             "--sensitivity-metric max_activation_variance",
             {"model": {"int8": 4, "int4": 14}},
         ),
@@ -543,7 +573,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         (
             "text-generation-with-past",
             "llama_awq",
-            "int4 --ratio 1.0 --sym --group-size 16 --gptq --dataset wikitext2 --num-samples 100 ",
+            "int4 --ratio 1.0 --sym --group-size 16 --gptq --dataset wikitext2:seq_len=64 --num-samples 100 ",
             {"model": {"int8": 4, "int4": 14}},
         ),
         (
@@ -1095,9 +1125,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             model_cls = (
                 OVSentenceTransformer
                 if "--library sentence_transformers" in option
-                else eval(_HEAD_TO_AUTOMODELS[task])
+                else eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")])
             )
-            model = model_cls.from_pretrained(tmpdir, trust_remote_code="--trust-remote-code" in option)
+            model = model_cls.from_pretrained(
+                tmpdir, trust_remote_code="--trust-remote-code" in option, use_cache="with-past" in task
+            )
 
             if (
                 "automatic-speech-recognition" in task or "text2text-generation" in task
@@ -1143,6 +1175,16 @@ class OVCLIExportTestCase(unittest.TestCase):
             {"model": {"int8": 22, "int4": 4}},
             {"model": 0},
         ),
+        (
+            "gpt2",
+            "Qwen/Qwen2.5-Coder-3B-Instruct",
+            AutoModelForCausalLM,
+            OVModelForCausalLM,
+            "--task text-generation-with-past --weight-format int8",
+            _DEFAULT_8BIT_WQ_CONFIGS,
+            {"model": {"int8": 44}},
+            {"model": 0},
+        ),
     ]
 
     # filter models type depending on min max transformers version
@@ -1168,14 +1210,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             pt_model = auto_model_cls.from_pretrained(MODEL_NAMES[model_name])
             # overload for matching with default configuration
             pt_model.save_pretrained(tmpdir)
-            try:
-                AutoTokenizer.from_pretrained(MODEL_NAMES[model_name]).save_pretrained(tmpdir)
-            except Exception:
-                pass
-            try:
-                AutoProcessor.from_pretrained(MODEL_NAMES[model_name]).save_pretrained(tmpdir)
-            except Exception:
-                pass
+            maybe_save_preprocessors(MODEL_NAMES[model_name], tmpdir)
             with open(Path(tmpdir) / "config.json", "r") as f:
                 config = json.load(f)
                 config["_name_or_path"] = model_id
@@ -1197,7 +1232,7 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             check_compression_state_per_model(
                 self,
-                model.ov_submodels,
+                model.ov_models,
                 expected_num_weight_nodes_per_model,
                 expected_fake_nodes_per_model,
             )
@@ -1224,6 +1259,15 @@ class OVCLIExportTestCase(unittest.TestCase):
                 model_quantization_config["statistics_path"].value = advanced_parameters["statistics_path"]
                 if dataset is not None:
                     default_config["statistics_path"] = f"{tmpdir}/statistics"
+
+                if "dq_group_size" in default_config:
+                    ref_dq_group_size = default_config.pop("dq_group_size")
+                    dq_group_size = int(rt_info["runtime_options"]["DYNAMIC_QUANTIZATION_GROUP_SIZE"].value)
+                    self.assertEqual(
+                        ref_dq_group_size,
+                        dq_group_size,
+                        f"DQ group size {dq_group_size} does not match expected {ref_dq_group_size}",
+                    )
             else:
                 dtype = default_config.pop("dtype", None)
                 self.assertEqual(dtype, "int8")
@@ -1243,6 +1287,71 @@ class OVCLIExportTestCase(unittest.TestCase):
                     str(value),
                     f"Parameter {key} not matched with expected, {model_quantization_config[key].value} != {value}",
                 )
+
+    DEFAULT_IGNORED_SCOPE_TEST_CONFIGURATIONS = [
+        (
+            "speecht5",
+            "microsoft/speecht5_tts",
+            "decoder",
+            AutoModelForTextToSpectrogram,
+            OVModelForSpeechSeq2Seq,
+            '--task text-to-speech --weight-format int8 --model-kwargs \'{"vocoder": "fxmarty/speecht5-hifigan-tiny"}\'',
+        ),
+    ]
+
+    SUPPORTED_DEFAULT_IGNORED_SCOPE_TEST_CONFIGURATIONS = [
+        config
+        for config in DEFAULT_IGNORED_SCOPE_TEST_CONFIGURATIONS
+        if TEST_NAME_TO_MODEL_TYPE.get(config[0], config[0]) in get_supported_model_for_library("transformers")
+    ]
+
+    @parameterized.expand(SUPPORTED_DEFAULT_IGNORED_SCOPE_TEST_CONFIGURATIONS)
+    def test_exporters_cli_with_default_ignored_scope(
+        self,
+        test_model_id,
+        model_id,
+        ov_model_name,
+        auto_model_cls,
+        ov_model_cls,
+        options,
+    ):
+        with TemporaryDirectory() as tmpdir:
+            # 1. Create a local copy of the model so that we can override _name_or_path
+            pt_model = auto_model_cls.from_pretrained(MODEL_NAMES[test_model_id])
+            pt_model.save_pretrained(tmpdir)
+            maybe_save_preprocessors(MODEL_NAMES[test_model_id], tmpdir)
+
+            # 2. Overwrite config.json so that _name_or_path matches the HF model id
+            config_path = Path(tmpdir) / "config.json"
+            with config_path.open("r") as f:
+                config = json.load(f)
+            config["_name_or_path"] = model_id
+            with config_path.open("w") as wf:
+                json.dump(config, wf)
+
+            # 3. Run export with quantization enabled so ignored_scope is actually used
+            run_command = f"optimum-cli export openvino --model {tmpdir} {options} {tmpdir}"
+            subprocess.run(run_command, shell=True, check=True)
+
+            # 4. Load OV model and inspect rt_info
+            model = ov_model_cls.from_pretrained(tmpdir)
+            rt_info = model.ov_models[ov_model_name].get_rt_info()
+            nncf_info = rt_info["nncf"]
+            quantization_info = nncf_info["weight_compression"]
+
+            # 5. Extract ignored_scope from rt_info
+            self.assertIsInstance(
+                quantization_info["ignored_scope"], dict, "Ignored scope is not found in the runtime info"
+            )
+            ignored_scope = {k: eval(v.value) for k, v in quantization_info["ignored_scope"].items()}
+
+            # 6. Compare structure and contents
+            expected_ignored_scope = _DEFAULT_IGNORED_SCOPE_CONFIGS[model_id][ov_model_name]
+            self.assertEqual(
+                expected_ignored_scope,
+                ignored_scope,
+                f"Ignored scope {ignored_scope} does not match expected {expected_ignored_scope}",
+            )
 
     def test_exporters_cli_help(self):
         subprocess.run(

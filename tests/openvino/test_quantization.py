@@ -21,11 +21,9 @@ import logging
 import unittest
 from collections import defaultdict
 from collections.abc import Iterable
-from enum import Enum
 from functools import partial
 from typing import Union, Type
 
-import openvino as ov
 import pytest
 import numpy as np
 import torch
@@ -33,7 +31,6 @@ from PIL import Image
 from parameterized import parameterized
 import nncf
 from transformers import (
-    AutoModelForQuestionAnswering,
     AutoTokenizer,
     AutoProcessor,
     AutoConfig,
@@ -56,6 +53,7 @@ from optimum.intel import (
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
     OVModelForSpeechSeq2Seq,
+    OVQwenImagePipeline,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
     OVStableDiffusion3Pipeline,
@@ -65,7 +63,6 @@ from optimum.intel import (
     OVQuantizationConfig,
     OVMixedQuantizationConfig,
     OVWeightQuantizationConfig,
-    OVDynamicQuantizationConfig,
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelForVisualCausalLM,
     OVSentenceTransformer,
@@ -85,7 +82,7 @@ from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
 
 from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrationDatasetBuilder
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version, is_nncf_version
+from optimum.intel.utils.import_utils import is_transformers_version, is_nncf_version
 from utils_tests import (
     MODEL_NAMES,
     get_num_quantized_nodes,
@@ -148,7 +145,7 @@ class OVQuantizerTest(unittest.TestCase):
             OVModelForCausalLM,
             "llama",
             dict(
-                dataset="wikitext2",
+                dataset="wikitext2:seq_len=64",
                 num_samples=1,
                 dtype="f8e4m3",
             ),
@@ -206,7 +203,7 @@ class OVQuantizerTest(unittest.TestCase):
             OVMixedQuantizationConfig(
                 weight_quantization_config=OVWeightQuantizationConfig(bits=4, group_size=16),
                 full_quantization_config=OVQuantizationConfig(dtype="f8e5m2"),
-                dataset="wikitext2",
+                dataset="gsm8k",
                 num_samples=1,
             ),
             {
@@ -266,7 +263,7 @@ class OVQuantizerTest(unittest.TestCase):
             "blenderbot",
             OVQuantizationConfig(
                 dtype="int8",
-                dataset="wikitext2",
+                dataset="wikitext2:seq_len=64",
                 num_samples=1,
             ),
             {
@@ -296,7 +293,7 @@ class OVQuantizerTest(unittest.TestCase):
             "roberta",
             OVQuantizationConfig(
                 dtype="int8",
-                dataset="wikitext2",
+                dataset="wikitext2:seq_len=64",
                 num_samples=1,
             ),
             {
@@ -326,7 +323,7 @@ class OVQuantizerTest(unittest.TestCase):
             "clip",
             OVQuantizationConfig(
                 dtype="int8",
-                dataset="conceptual_captions",
+                dataset="conceptual_captions:seq_len=64",
                 num_samples=1,
             ),
             {
@@ -341,7 +338,7 @@ class OVQuantizerTest(unittest.TestCase):
             "t5",
             OVQuantizationConfig(
                 dtype="int8",
-                dataset="wikitext2",
+                dataset="wikitext2:seq_len=64",
                 num_samples=1,
             ),
             {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
@@ -362,11 +359,11 @@ class OVQuantizerTest(unittest.TestCase):
             OVQuantizationConfig(bits=8, dataset="coco", num_samples=1),
             {
                 "vision_encoder": 75,
-                "prompt_encoder_mask_decoder": 61 if is_nncf_version("<=", "2.18") else 60,
+                "prompt_encoder_mask_decoder": 60,
             },
             {
                 "vision_encoder": {"int8": 75},
-                "prompt_encoder_mask_decoder": {"int8": 50 if is_nncf_version("<=", "2.18") else 49},
+                "prompt_encoder_mask_decoder": {"int8": 49},
             },
         ),
         (
@@ -388,6 +385,28 @@ class OVQuantizerTest(unittest.TestCase):
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 1},
                 "vision_embeddings_merger_model": {"int8": 10},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "qwen2_vl",
+            OVMixedQuantizationConfig(
+                weight_quantization_config=OVWeightQuantizationConfig(bits=4, group_size=16, ratio=0.7),
+                full_quantization_config=OVQuantizationConfig(dtype="f8e4m3", smooth_quant_alpha=0.9),
+                dataset="contextual",
+                num_samples=1,
+            ),
+            {
+                "lm_model": 16,
+                "text_embeddings_model": 0,
+                "vision_embeddings_model": 1,
+                "vision_embeddings_merger_model": 16,
+            },
+            {
+                "lm_model": {"f8e4m3": 8, "int4": 14},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"f8e4m3": 1},
+                "vision_embeddings_merger_model": {"f8e4m3": 2, "int4": 16},
             },
         ),
     ]
@@ -590,7 +609,13 @@ class OVWeightCompressionTest(unittest.TestCase):
                 bits=4,
                 sym=False,
                 group_size=32,
-                ignored_scope={"names": ["__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"]},
+                ignored_scope={
+                    "names": [
+                        "__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
+                        if is_transformers_version("<", "4.57")
+                        else "__module.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
+                    ]
+                },
             ),
             {"model": {"int8": 4, "int4": 38}},
         ),
@@ -735,7 +760,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             dict(bits=4, dataset="coco", num_samples=1, group_size=2),
             {
                 "vision_encoder": {"int8": 56, "int4": 94},
-                "prompt_encoder_mask_decoder": {"int8": 6, "int4": 94 if is_nncf_version("<=", "2.18") else 92},
+                "prompt_encoder_mask_decoder": {"int8": 6, "int4": 92},
             },
         ),
         (
@@ -931,6 +956,42 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "resampler_model": {"int8": 6},
             },
         ),
+        (
+            OVModelForCausalLM,
+            "exaone4",
+            True,
+            dict(bits=4, sym=False, group_size=32, ratio=1.0),
+            {"model": {"int8": 2, "int4": 14}},
+        ),
+        (
+            OVModelForCausalLM,
+            "gpt2",
+            False,
+            dict(bits=4, sym=True, group_size_fallback="adjust"),
+            {"model": {"int8": 4, "int4": 20}},
+        ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            False,
+            dict(
+                bits=4,
+                sym=True,
+                group_size_fallback="adjust",
+            ),
+            {"model": {"int8": 28, "int4": 2}},
+        ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            False,
+            dict(
+                bits=4,
+                sym=True,
+                group_size_fallback="ignore",
+            ),
+            {"model": {"int8": 4}},
+        ),
     ]
 
     # filter models type depending on min max transformers version
@@ -965,6 +1026,9 @@ class OVWeightCompressionTest(unittest.TestCase):
     if is_transformers_version("<", "4.52.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "minicpmo", True))
 
+    if is_transformers_version(">=", "4.54.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "exaone4", True))
+
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl", 84, 331),
@@ -972,21 +1036,140 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVStableDiffusion3Pipeline, "stable-diffusion-3", 9, 65),
         (OVFluxPipeline, "flux", 7, 56),
         (OVSanaPipeline, "sana", 19, 53),
+        (OVQwenImagePipeline, "qwen-image", 12, 45),
     ]
 
-    IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
+    DEFAULT_COMPRESSION_CONFIGURATIONS = [
+        (OVModelForCausalLM, "llama", 8, {"bits": 8, "dq_group_size": 128}, {"model": {"int8": 32}}),
+        (
+            OVModelForCausalLM,
+            "llama",
+            4,
+            {"bits": 4, "group_size": 8, "ratio": 0.5, "dq_group_size": 64},
+            {"model": {"int8": 26, "int4": 6}},
+        ),
+        (
+            OVModelForFeatureExtraction,
+            "llama",
+            4,
+            {"bits": 4, "group_size": 8, "ratio": 0.5},
+            {"model": {"int8": 22, "int4": 8}},
+        ),
+        (
+            OVStableDiffusionPipeline,
+            "stable-diffusion",
+            4,
+            {"quantization_configs": {"unet": {"bits": 4, "group_size": -1, "ratio": 0.5, "dq_group_size": 64}}},
+            {
+                "unet": {"int8": 182, "int4": 60},
+                "vae_decoder": {},
+                "vae_encoder": {},
+                "text_encoder": {},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "llava",
+            4,
+            {"bits": 4, "group_size": 8, "ratio": 0.5},
+            {
+                "lm_model": {"int8": 22, "int4": 8},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 9},
+            },
+        ),
+        (
+            OVSamModel,
+            "sam",
+            4,
+            {"bits": 4, "group_size": 8, "ratio": 0.5},
+            {
+                "vision_encoder": {"int8": 112, "int4": 38},
+                "prompt_encoder_mask_decoder": {"int8": 94, "int4": 4},
+            },
+        ),
+        (
+            OVModelForSpeechSeq2Seq,
+            "whisper",
+            4,
+            {"bits": 4, "group_size": 8, "ratio": 0.5},
+            {
+                "decoder": {"int8": 40, "int4": 4},
+                "encoder": {"int8": 24, "int4": 4},
+            },
+        ),
+    ]
 
-    DEFAULT_INT4_CONFIG = {"bits": 4, "sym": True, "group_size": 64, "all_layers": True}
+    DEFAULT_IGNORED_SCOPE_CONFIGURATIONS = [
+        (
+            OVModelForCausalLM,
+            "llama",
+            {
+                "model": {
+                    "names": ["__module.model.layers.1.self_attn.v_proj/ov_ext::linear/MatMul"],
+                    "patterns": ["__module.model.layers.\\d.self_attn.o_proj/ov_ext::linear/MatMul"],
+                }
+            },
+        ),
+        (
+            OVModelForFeatureExtraction,
+            "llama",
+            {
+                "model": {
+                    "names": ["__module.layers.1.self_attn.v_proj/aten::linear/MatMul"],
+                    "patterns": ["__module.layers.\\d.self_attn.o_proj/aten::linear/MatMul"],
+                }
+            },
+        ),
+        (
+            OVStableDiffusionPipeline,
+            "stable-diffusion",
+            {
+                "unet": {"names": ["__module.time_embedding.linear_1/aten::linear/MatMul"]},
+                "text_encoder": {
+                    "names": ["__module.text_model.encoder.layers.0.self_attn.q_proj/aten::linear/MatMul"]
+                },
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "llava",
+            {
+                "lm_model": {"patterns": [".*layers.0.self_attn.q_proj/aten::linear/MatMul"]},
+                "vision_embeddings_model": {"patterns": [".*layers.0.self_attn.q_proj/aten::linear/MatMul"]},
+                "text_embeddings_model": {"patterns": ["."]},
+            },
+        ),
+        (
+            OVSamModel,
+            "sam",
+            {
+                "prompt_encoder_mask_decoder": {
+                    "names": ["__module.model.prompt_encoder.shared_embedding/aten::matmul/MatMul"]
+                },
+                "vision_encoder": {"names": ["__module.vision_encoder.layers.0.attn.qkv/aten::linear/MatMul"]},
+            },
+        ),
+        (
+            OVModelForSpeechSeq2Seq,
+            "whisper",
+            {
+                "encoder": {"patterns": [".*layers.0.self_attn.q_proj/aten::linear/MatMul"]},
+                "decoder": {"patterns": [".*layers.0.encoder_attn.k_proj/aten::linear/MatMul"]},
+            },
+        ),
+    ]
 
     def test_filtered_architectures(cls):
+        expected = set()
         if is_transformers_version("<", "4.49"):
-            expected = {"llama4", "qwen2_5_vl"}
-        elif is_transformers_version("<", "4.51"):
-            expected = {"llama4"}
-        elif is_transformers_version("<", "4.52"):
-            expected = set()
-        else:
-            expected = {"llava-qwen2", "phi3_v", "minicpmo"}
+            expected.add("qwen2_5_vl")
+        if is_transformers_version("<", "4.51"):
+            expected.add("llama4")
+        if is_transformers_version("<", "4.54"):
+            expected.add("exaone4")
+        if is_transformers_version(">=", "4.54"):
+            expected.update({"llava-qwen2", "phi3_v", "minicpmo"})
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.LOAD_IN_4_BITS_SCOPE}
@@ -1083,15 +1266,19 @@ class OVWeightCompressionTest(unittest.TestCase):
             stateful=False,
             trust_remote_code=trust_remote_code,
         )
+        ref_config = OVWeightQuantizationConfig(bits=8, sym=isinstance(model, OVModelForVisualCausalLM)).to_dict()
 
         if model_type == "open-clip":
-            self.assertEqual(model.text_model._openvino_config.quantization_config.bits, 8)
-            self.assertEqual(model.text_model._openvino_config.dtype, "int8")
-            self.assertEqual(model.visual_model._openvino_config.quantization_config.bits, 8)
-            self.assertEqual(model.visual_model._openvino_config.dtype, "int8")
+            self.assertEqual(
+                model.text_model._openvino_config.quantization_config.default_config.to_dict(), ref_config
+            )
+            self.assertEqual(
+                model.visual_model._openvino_config.quantization_config.default_config.to_dict(), ref_config
+            )
         else:
-            self.assertEqual(model._openvino_config.quantization_config.bits, 8)
-            self.assertEqual(model._openvino_config.dtype, "int8")
+            actual_config = model._openvino_config.quantization_config.default_config.to_dict()
+            actual_config["tokenizer"] = actual_config["processor"] = None
+            self.assertEqual(actual_config, ref_config)
 
         if model_type != "open-clip":  # ticket 161043
             check_optimization_not_applicable_to_optimized_model(model, quantization_config={"bits": 8})
@@ -1171,30 +1358,80 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
         self.assertEqual(0, num_weight_nodes["int4"])
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS)
-    @unittest.mock.patch.dict(
-        "optimum.intel.openvino.configuration._DEFAULT_4BIT_WQ_CONFIGS", {"facebook/opt-125m": DEFAULT_INT4_CONFIG}
-    )
-    def test_ovmodel_4bit_auto_compression(self, model_cls, model_type, expected_ov_int8, expected_ov_int4):
-        with TemporaryDirectory() as tmp_dir:
-            model_id = MODEL_NAMES[model_type]
-            model = model_cls.from_pretrained(model_id, export=True, quantization_config={"bits": 4})
-            tokenizer = AutoTokenizer.from_pretrained(model_id)
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
+    @parameterized.expand(DEFAULT_COMPRESSION_CONFIGURATIONS)
+    def test_ovmodel_default_compression(
+        self, model_cls, model_type, bits, default_config, expected_num_weight_nodes_per_model
+    ):
+        with unittest.mock.patch.dict(
+            f"optimum.intel.openvino.configuration._DEFAULT_{bits}BIT_WQ_CONFIGS",
+            {MODEL_NAMES[model_type]: default_config},
+            clear=False,
+        ):
+            model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, quantization_config={"bits": bits})
+            check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
 
-            _, num_weight_nodes = get_num_quantized_nodes(model)
-            self.assertEqual(expected_ov_int4, num_weight_nodes["int4"])
-            self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
-            model.save_pretrained(tmp_dir)
+            # Check that dynamic quantization group size is correctly set in the runtime info
+            if isinstance(default_config, dict):
+                default_config = _quantization_config_from_dict(default_config)
+            ref_dq_data = []
+            if isinstance(default_config, OVWeightQuantizationConfig) and default_config.dq_group_size is not None:
+                ref_dq_data = [("model", default_config.dq_group_size)]
+            elif isinstance(default_config, OVPipelineQuantizationConfig):
+                ref_dq_data = []
+                for ov_model_name, q_config in default_config.quantization_configs.items():
+                    if isinstance(q_config, OVWeightQuantizationConfig) and q_config.dq_group_size is not None:
+                        ref_dq_data.append((ov_model_name, q_config.dq_group_size))
+            for ov_model_name, ref_dq_group_size in ref_dq_data:
+                rt_info = model.ov_models[ov_model_name].get_rt_info()
+                runtime_options = rt_info["runtime_options"]
+                self.assertIsInstance(
+                    runtime_options,
+                    dict,
+                    "Runtime options are not found in the runtime info",
+                )
+                dq_group_size = runtime_options.get("DYNAMIC_QUANTIZATION_GROUP_SIZE", None)
+                if dq_group_size is None:
+                    self.fail("DYNAMIC_QUANTIZATION_GROUP_SIZE is not found in the runtime options")
+                self.assertEqual(
+                    ref_dq_group_size,
+                    int(dq_group_size.value),
+                    f"Dynamic quantization group size {dq_group_size.value} does not match expected {ref_dq_group_size}",
+                )
 
-            openvino_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
-            self.assertEqual(openvino_config.quantization_config.bits, 4)
-            self.assertEqual(openvino_config.dtype, "int4")
-            if model_id == "facebook/opt-125m":
-                for key, value in self.DEFAULT_INT4_CONFIG.items():
-                    self.assertEqual(value, getattr(openvino_config.quantization_config, key))
-            check_optimization_not_applicable_to_optimized_model(model, quantization_config={"bits": 8})
+    @parameterized.expand(DEFAULT_IGNORED_SCOPE_CONFIGURATIONS)
+    def test_ovmodel_default_ignored_scope(self, model_cls, model_type, expected_ignored_scope_per_model):
+        with unittest.mock.patch.dict(
+            "optimum.intel.openvino.configuration._DEFAULT_IGNORED_SCOPE_CONFIGS",
+            {MODEL_NAMES[model_type]: expected_ignored_scope_per_model},
+            clear=False,
+        ):
+            with TemporaryDirectory() as tmp_dir:
+                model_id = MODEL_NAMES[model_type]
+                model = model_cls.from_pretrained(
+                    model_id,
+                    export=True,
+                    quantization_config={"bits": 8},
+                )
+                model.save_pretrained(tmp_dir)
+
+                model = model_cls.from_pretrained(tmp_dir)
+                for ov_model_name, expected_ignored_scope in expected_ignored_scope_per_model.items():
+                    rt_info = model.ov_models[ov_model_name].get_rt_info()
+                    nncf_info = rt_info["nncf"]
+                    quantization_info = nncf_info["weight_compression"]
+
+                    self.assertIsInstance(
+                        quantization_info["ignored_scope"],
+                        dict,
+                        "Ignored scope is not found in the runtime info",
+                    )
+
+                    ignored_scope = {k: eval(v.value) for k, v in quantization_info["ignored_scope"].items()}
+                    self.assertEqual(
+                        expected_ignored_scope,
+                        ignored_scope,
+                        f"Ignored scope {ignored_scope} does not match expected {expected_ignored_scope}",
+                    )
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
     def test_ovmodel_4bit_auto_compression_with_config(
@@ -1206,6 +1443,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             model = model_cls.from_pretrained(
                 model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code
             )
+            ref_quantization_config = model._openvino_config.quantization_config
             if quantization_config.quant_method.lower() == "awq":
                 # TODO: Check that AWQ was actually applied
                 pass
@@ -1228,8 +1466,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             )
 
             openvino_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
-            self.assertEqual(openvino_config.quantization_config.bits, 4)
-            self.assertEqual(openvino_config.dtype, quantization_config.dtype)
+            self.assertEqual(openvino_config.quantization_config.to_dict(), ref_quantization_config.to_dict())
 
     @parameterized.expand(((OVModelForCausalLM, "gpt2"),))
     def test_ovmodel_stateful_load_with_compressed_weights(self, model_cls, model_type):
@@ -1262,7 +1499,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
         def main_export_in_stacktrace(*args, **kwargs):
             # Compression was called from `main_export`
-            self.assertTrue(inspect.stack()[5].function == "main_export")
+            self.assertTrue(inspect.stack()[6].function == "main_export")
             return compressed_model_mock_obj
 
         with unittest.mock.patch(
@@ -1352,28 +1589,19 @@ class OVWeightCompressionTest(unittest.TestCase):
                 }
                 compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
-    @parameterized.expand(LOAD_IN_4_BITS_SCOPE[::5])
-    def test_ovmodel_4bit_dynamic_with_config(
-        self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes_per_model
-    ):
-        model_id = MODEL_NAMES[model_name]
-        with TemporaryDirectory() as tmp_dir:
-            group_size = quantization_config.pop("group_size", 32)
-            quantization_config = OVDynamicQuantizationConfig(
-                weights_group_size=group_size, activations_group_size=group_size, **quantization_config
-            )
-            model = model_cls.from_pretrained(
-                model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code
-            )
-            self.assertEqual(model.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"], str(group_size))
-            self.assertEqual(model.ov_config["KV_CACHE_PRECISION"], "u8")
-
-            check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
-
-            model.save_pretrained(tmp_dir)
-            openvino_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
-            self.assertEqual(openvino_config.quantization_config.bits, 4)
-            self.assertEqual(openvino_config.dtype, quantization_config.dtype)
+    @parameterized.expand([(MODEL_NAMES["gpt2"],)])
+    def test_dataset_seq_len_option(self, model_id):
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, load_in_8bit=False)
+        dataset_builder = OVCalibrationDatasetBuilder(model)
+        dataset = dataset_builder.build_from_quantization_config(
+            OVWeightQuantizationConfig(
+                bits=4,
+                dataset="c4:seq_len=64",
+                tokenizer=model_id,
+                num_samples=1,
+            ),
+        )
+        self.assertTrue(all(len(sample["input_ids"][0]) == 64 for sample in dataset["model"].get_data()))
 
 
 class OVPipelineQuantizationTest(unittest.TestCase):
@@ -1565,12 +1793,8 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                                 lora_correction=True,
                                 ignored_scope={
                                     "patterns": [
-                                        "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\.(qkv_proj|o_proj))"
-                                        + (
-                                            "/aten::mul/Multiply"
-                                            if is_openvino_version("<", "2025.2")
-                                            else "\\.lora_B\\.speech/aten::linear/MatMul"
-                                        ),
+                                        "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\."
+                                        "(qkv_proj|o_proj))\\.lora_B\\.speech/aten::linear/MatMul",
                                     ],
                                 },
                             ),
@@ -1805,7 +2029,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
                     dtype="f8e4m3", ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.mlp"]}
                 ),
                 ignored_scope={"patterns": [f"{pattern_prefix}.layers.1.self_attn"]},
-                dataset="wikitext2",
+                dataset="gsm8k",
                 num_samples=1,
             ),
         ),
@@ -1893,6 +2117,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
         ),
         (
             dict(bits=4, dataset="wikitext2"),
+            OVWeightQuantizationConfig,
+            None,
+        ),
+        (
+            dict(bits=4, dataset="gsm8k"),
             OVWeightQuantizationConfig,
             None,
         ),
@@ -2069,9 +2298,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
         with unittest.mock.patch(mock_method_name) as mock_method:
             mock_model = unittest.mock.Mock([])
             mock_model.get_rt_info = unittest.mock.Mock(return_value={})
+            mock_model.set_rt_info = unittest.mock.Mock(return_value={})
 
             mock_quantization_config = unittest.mock.Mock(config_type)
             mock_quantization_config.to_nncf_dict.return_value = {"param1": "value1", "param2": "value2"}
+            mock_quantization_config.dq_group_size = None
 
             additional_kwargs = {"param2": "new_value2", "param3": "value3"}
 
@@ -2119,6 +2350,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
 
 class InferRequestWrapperTest(unittest.TestCase):
     MODEL_NAME = ("whisper",)
+    STATEFUL = (False, True)
     APPLY_CACHING = (False, True)
 
     @staticmethod
@@ -2132,10 +2364,12 @@ class InferRequestWrapperTest(unittest.TestCase):
         ).input_features
         return input_features
 
-    @parameterized.expand(itertools.product(MODEL_NAME, APPLY_CACHING))
-    def test_calibration_data_uniqueness(self, model_name, apply_caching):
+    @parameterized.expand(itertools.product(MODEL_NAME, STATEFUL, APPLY_CACHING))
+    def test_calibration_data_uniqueness(self, model_name, stateful, apply_caching):
         model_id = MODEL_NAMES[model_name]
-        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, compile=True, device=OPENVINO_DEVICE)
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id, export=True, compile=True, stateful=stateful, device=OPENVINO_DEVICE
+        )
         processor = AutoProcessor.from_pretrained(model_id)
 
         calibration_data = []
@@ -2147,12 +2381,27 @@ class InferRequestWrapperTest(unittest.TestCase):
             ov_model.decoder.request = InferRequestWrapper(
                 ov_model.decoder.request, calibration_data, apply_caching=apply_caching
             )
-        for _ in range(2):
+        n_samples = 3
+        for _ in range(n_samples):
             input_features = self._generate_random_audio_data(processor)
             ov_model.generate(input_features, max_new_tokens=10, min_new_tokens=10)
 
         data_hashes_per_key = defaultdict(list)
         data_id_per_key = defaultdict(set)
+
+        # Check that reset state flag is present and correctly set in collected inputs
+        if stateful and is_nncf_version(">", "2.19"):
+            from nncf.definitions import NNCF_DATASET_RESET_STATE_KEY
+
+            # All inputs should have reset state key
+            self.assertTrue(all(NNCF_DATASET_RESET_STATE_KEY in inputs_dict for inputs_dict in calibration_data))
+            # The number of times reset state flag is set to True should be equal to (2 * n_samples), because
+            # for each sequence generation, the state is reset twice
+            self.assertEqual(
+                sum(int(inputs_dict[NNCF_DATASET_RESET_STATE_KEY]) for inputs_dict in calibration_data), 2 * n_samples
+            )
+            # Remove reset state key from inputs to avoid affecting data uniqueness checks
+            [input_dict.pop(NNCF_DATASET_RESET_STATE_KEY) for input_dict in calibration_data]
 
         for inputs_dict in calibration_data:
             for k, v in inputs_dict.items():
@@ -2163,14 +2412,14 @@ class InferRequestWrapperTest(unittest.TestCase):
                 data_hashes_per_key[k].append(hash(x.tobytes()))
                 data_id_per_key[k].add(id(v))
         for k, data_hashes in data_hashes_per_key.items():
-            # All hashes can not be equal because calibration dataset contains at least 2 different samples
+            # All hashes can not be equal because calibration dataset contains at least n_samples different samples
             self.assertTrue(any(data_hashes[0] != it for it in data_hashes))
         if apply_caching:
-            # With caching, encoder hidden states tensors should be cached, resulting in only 2 tensors stored
-            self.assertEqual(len(data_id_per_key["encoder_hidden_states"]), 2)
+            # With caching, encoder hidden states tensors should be cached, resulting in only n_samples tensors stored
+            self.assertEqual(len(data_id_per_key["encoder_hidden_states"]), n_samples)
         else:
             # Without caching, encoder hidden states tensors will be unique for each collected input
-            self.assertGreater(len(data_id_per_key["encoder_hidden_states"]), 2)
+            self.assertGreater(len(data_id_per_key["encoder_hidden_states"]), n_samples)
 
 
 def check_optimization_not_applicable_to_optimized_model(model, quantization_config):
@@ -2241,3 +2490,97 @@ def check_model_inference(ov_model, model_id, trust_remote_code):
         ov_model(**inputs)
     else:
         raise Exception("Unexpected model class.")
+
+
+class TestDatasetParsing(unittest.TestCase):
+    """Test suite for dataset option parsing in OVQuantizationConfigBase."""
+
+    def test_dataset_no_options(self):
+        """Test that a simple dataset name without options is preserved."""
+        config = OVQuantizationConfigBase(dataset="wikitext")
+        self.assertEqual(config.dataset, "wikitext")
+        self.assertEqual(config._dataset_kwargs, {})
+
+    def test_dataset_with_seq_len_option(self):
+        """Test parsing of seq_len option from dataset string."""
+        config = OVQuantizationConfigBase(dataset="wikitext2:seq_len=128")
+        for _ in range(2):
+            self.assertEqual(config.dataset, "wikitext2")
+            self.assertEqual(config._dataset_kwargs, {"seq_len": 128})
+            config = _quantization_config_from_dict(config.to_dict())
+
+    def test_dataset_with_seq_len_option_mixed_q_config(self):
+        """Test parsing of seq_len option from dataset string."""
+        config = OVMixedQuantizationConfig(
+            OVWeightQuantizationConfig(dataset="wikitext2:seq_len=128"), OVQuantizationConfig()
+        )
+        for _ in range(2):
+            self.assertEqual(config.dataset, "wikitext2")
+            self.assertEqual(config._dataset_kwargs, {"seq_len": 128})
+            config = _quantization_config_from_dict(config.to_dict())
+
+    def test_dataset_with_seq_len_option_pipeline_q_config(self):
+        """Test parsing of seq_len option from dataset string."""
+        config = OVPipelineQuantizationConfig({"model": OVWeightQuantizationConfig(dataset="wikitext2:seq_len=128")})
+        for _ in range(2):
+            self.assertEqual(config.dataset, "wikitext2")
+            self.assertEqual(config._dataset_kwargs, {"seq_len": 128})
+            config = _quantization_config_from_dict(config.to_dict())
+
+    def test_dataset_gsm8k_with_seq_len(self):
+        """Test parsing of seq_len option for gsm8k dataset."""
+        config = OVQuantizationConfigBase(dataset="gsm8k:seq_len=512")
+        self.assertEqual(config.dataset, "gsm8k")
+        self.assertEqual(config._dataset_kwargs, {"seq_len": 512})
+
+    def test_dataset_with_multiple_spaces(self):
+        """Test parsing with spaces around the option."""
+        config = OVQuantizationConfigBase(dataset="wikitext:seq_len = 64")
+        self.assertEqual(config.dataset, "wikitext")
+        self.assertEqual(config._dataset_kwargs, {"seq_len": 64})
+
+    def test_dataset_list_no_parsing(self):
+        """Test that list datasets skip parsing and remain unchanged."""
+        dataset_list = ["sample text 1", "sample text 2", "sample text 3"]
+        config = OVQuantizationConfigBase(dataset=dataset_list)
+        self.assertEqual(config.dataset, dataset_list)
+        self.assertEqual(config._dataset_kwargs, {})
+
+    def test_dataset_unsupported_option(self):
+        """Test that unsupported options raise ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            OVQuantizationConfigBase(dataset="wikitext:foo=bar")
+        self.assertIn("Unsupported dataset option 'foo'", str(exc_info.value))
+        self.assertIn("Only 'seq_len' is supported", str(exc_info.value))
+
+    def test_dataset_malformed_option_no_equals(self):
+        """Test that options without '=' raise ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            OVQuantizationConfigBase(dataset="wikitext:seq_len")
+        self.assertIn("Malformed dataset option", str(exc_info.value))
+        self.assertIn("Expected format: 'key=value'", str(exc_info.value))
+
+    def test_dataset_invalid_seq_len_value(self):
+        """Test that non-integer seq_len values raise ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            OVQuantizationConfigBase(dataset="wikitext:seq_len=abc")
+        self.assertIn("Invalid value 'abc' for seq_len", str(exc_info.value))
+        self.assertIn("Expected an integer", str(exc_info.value))
+
+    def test_dataset_empty_string_option(self):
+        """Test that empty seq_len value raises ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            OVQuantizationConfigBase(dataset="wikitext:seq_len=")
+        self.assertIn("Invalid value '' for seq_len", str(exc_info.value))
+
+    def test_dataset_none(self):
+        """Test that None dataset is handled correctly."""
+        config = OVQuantizationConfigBase(dataset=None)
+        self.assertIsNone(config.dataset)
+        self.assertEqual(config._dataset_kwargs, {})
+
+    def test_dataset_with_colon_in_name_only(self):
+        """Test handling of dataset string with trailing colon but no options."""
+        config = OVQuantizationConfigBase(dataset="wikitext:")
+        self.assertEqual(config.dataset, "wikitext")
+        self.assertEqual(config._dataset_kwargs, {})

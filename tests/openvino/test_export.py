@@ -20,7 +20,11 @@ import torch
 from parameterized import parameterized
 from sentence_transformers import SentenceTransformer, models
 from transformers import AutoConfig, AutoTokenizer, GenerationConfig
-from utils_tests import MODEL_NAMES, OPENVINO_DEVICE
+from utils_tests import (
+    MODEL_NAMES,
+    OPENVINO_DEVICE,
+    REMOTE_CODE_MODELS,
+)
 
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.onnx.model_configs import BertOnnxConfig
@@ -45,6 +49,7 @@ from optimum.intel import (
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
     OVModelForZeroShotImageClassification,
+    OVQwenImagePipeline,
     OVSamModel,
     OVStableDiffusion3Pipeline,
     OVStableDiffusionPipeline,
@@ -54,7 +59,7 @@ from optimum.intel import (
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import _transformers_version, is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version
 from optimum.utils.save_utils import maybe_load_preprocessors
 
 
@@ -85,13 +90,20 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-3": OVStableDiffusion3Pipeline,
         "flux": OVFluxPipeline,
         "ltx-video": OVLTXPipeline,
+        "qwen-image": OVQwenImagePipeline,
     }
 
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
 
-    if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
-        SUPPORTED_ARCHITECTURES.update({"lfm2": OVModelForCausalLM})
+    if is_transformers_version(">=", "4.53.0"):
+        SUPPORTED_ARCHITECTURES.update({"granite-moe-hybrid": OVModelForCausalLM})
+
+    if is_transformers_version(">=", "4.54"):
+        SUPPORTED_ARCHITECTURES.update({"exaone4": OVModelForCausalLM, "lfm2": OVModelForCausalLM})
+
+    if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "4.58.0"):
+        SUPPORTED_ARCHITECTURES.update({"afmoe": OVModelForCausalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
@@ -118,6 +130,9 @@ class ExportModelTest(unittest.TestCase):
         model_name = MODEL_NAMES[model_type]
         library_name = TasksManager.infer_library_from_model(model_name)
         loading_kwargs = {"attn_implementation": "eager"} if model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED else {}
+
+        if model_type in REMOTE_CODE_MODELS:
+            loading_kwargs["trust_remote_code"] = True
 
         if library_name == "timm":
             model_class = TasksManager.get_model_class_for_task(task, library=library_name)
@@ -148,7 +163,9 @@ class ExportModelTest(unittest.TestCase):
                 )
 
                 use_cache = supported_task.endswith("-with-past")
-                ov_model = auto_model.from_pretrained(tmpdirname, use_cache=use_cache)
+                ov_model = auto_model.from_pretrained(
+                    tmpdirname, use_cache=use_cache, trust_remote_code=model_type in REMOTE_CODE_MODELS
+                )
                 self.assertIsInstance(ov_model, OVBaseModel)
 
                 if "text-generation" in task:
