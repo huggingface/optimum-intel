@@ -53,7 +53,6 @@ from transformers import (
     pipeline,
     set_seed,
 )
-from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
 from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TENSOR_ALIAS_TO_TYPE, TEST_IMAGE_URL
@@ -236,7 +235,7 @@ class OVModelIntegrationTest(unittest.TestCase):
             # anymore due to an internal bug in transformers
             model_ids.append("katuni4ka/phi-4-multimodal-ov")
         for model_id in model_ids:
-            processor = get_preprocessor(model_id)
+            processor = AutoProcessor.from_pretrained(model_id)
             prompt = "What is shown in this image?"
             image = Image.open(
                 requests.get(
@@ -491,7 +490,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertEqual(
             loaded_model.prompt_encoder_mask_decoder.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT"
         )
-        processor = get_preprocessor(self.OV_SAM_MODEL_ID)
+        processor = AutoProcessor.from_pretrained(self.OV_SAM_MODEL_ID)
         img_url = "https://huggingface.co/ybelkada/segment-anything/resolve/main/assets/car.png"
         input_points = [[[450, 600]]]
         raw_image = Image.open(requests.get(img_url, stream=True).raw).convert("RGB")
@@ -1846,7 +1845,7 @@ class OVSamIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVSamModel.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE)
-        processor = get_preprocessor(model_id)
+        processor = AutoProcessor.from_pretrained(model_id)
 
         self.assertIsInstance(ov_model.vision_encoder, OVSamVisionEncoder)
         self.assertIsInstance(ov_model.prompt_encoder_mask_decoder, OVSamPromptEncoder)
@@ -1899,7 +1898,7 @@ class OVSamIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVSamModel.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE)
-        processor = get_preprocessor(model_id)
+        processor = AutoProcessor.from_pretrained(model_id)
         self.assertTrue(ov_model.is_dynamic)
         input_points = [[[450, 600]]]
         IMAGE = Image.open(
@@ -1935,7 +1934,7 @@ class OVModelForZeroShotImageClassificationIntegrationTest(unittest.TestCase):
         ov_model = OVModelForZeroShotImageClassification.from_pretrained(
             model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
         )
-        processor = get_preprocessor(model_id)
+        processor = AutoProcessor.from_pretrained(model_id)
 
         self.assertIsInstance(ov_model.config, PretrainedConfig)
 

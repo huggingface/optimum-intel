@@ -851,16 +851,14 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         **kwargs,
     ):
         """
-        Export a vanilla Transformers model into an ONNX model using `transformers.onnx.export_onnx`.
+        Load and export a model to the OpenVINO IR.
 
         Arguments:
             model_id (`str` or `Path`):
                 The directory from which to load the model.
                 Can be either:
                     - The model id of a pretrained model hosted inside a model repo on huggingface.co.
-                    - The path to a directory containing the model weights.            save_dir (`str` or `Path`):
-                The directory where the exported ONNX model should be saved, default to
-                `transformers.file_utils.default_cache_path`, which is the cache directory for transformers.
+                    - The path to a directory containing the model weights.
             token (Optional[Union[bool, str]], defaults to `None`):
                 The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
                 when running `huggingface-cli login` (stored in `~/.huggingface`).

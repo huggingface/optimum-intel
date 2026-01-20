@@ -32,7 +32,6 @@ from openvino import Core, Model, properties
 from openvino import Type as OVType
 from packaging.version import Version
 from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
-from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
 from optimum.intel.utils.import_utils import is_torch_version
 
@@ -226,18 +225,6 @@ def maybe_convert_tokenizer_to_fast(
             return hf_tokenizer
 
     return hf_tokenizer
-
-
-def use_external_data_format(num_parameters: int) -> bool:
-    """
-    Returns whether or not the model requires using external data format for the ONNX export
-    Args:
-        num_parameters: Number of parameter on the model
-    Returns:
-        True if model.num_parameters() * size_of(float32) >= 2Gb False otherwise
-    """
-
-    return compute_serialized_parameters_size(num_parameters, ParameterFormat.Float) >= EXTERNAL_DATA_FORMAT_SIZE_LIMIT
 
 
 def _is_timm_ov_dir(model_dir):
