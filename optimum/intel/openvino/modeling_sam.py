@@ -149,7 +149,6 @@ class OVSamModel(OVBaseModel):
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -171,8 +170,6 @@ class OVSamModel(OVBaseModel):
                 Can be either:
                     - The model id of a pretrained model hosted inside a model repo on huggingface.co.
                     - The path to a directory containing the model weights.
-            use_auth_token (Optional[Union[bool, str]], defaults to `None`):
-                Deprecated. Please use `token` instead.
             token (Optional[Union[bool, str]], defaults to `None`):
                 The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
                 when running `huggingface-cli login` (stored in `~/.huggingface`).
@@ -199,15 +196,6 @@ class OVSamModel(OVBaseModel):
             trust_remote_code (`bool`, *optional*, defaults to `False`):
                 Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
         from_onnx = kwargs.get("from_onnx", False)
 
         default_vision_encoder_file_name = (
