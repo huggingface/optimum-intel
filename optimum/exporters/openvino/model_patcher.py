@@ -7013,7 +7013,7 @@ def lfm2_short_conv_forward_patched(
 #    for subsequent invocation of the model's `forward` method.
 # 2. Patches the Lfm2ShortConv so that the traced `slow_forward` function works correctly
 #    during both the prefill and decoding steps.
-class Lfm2ModelPatcher(ModelPatcher):
+class Lfm2ModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -7153,16 +7153,6 @@ class Lfm2ModelPatcher(ModelPatcher):
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
-        if is_transformers_version(">=", "4.53.0"):
-            # for OpenVINO, we use torch.finfo(torch.float16).min instead of torch.finfo(dtype).min
-            # to avoid overflow issues on some hardware (e.g. Intel NPU)
-            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
-
-            # for decoder models, we use eager mask without vmap for sdpa as well
-            # to avoid a nan output issue in OpenVINO that only happens in case of:
-            # non-stateful models on cpu and stateful models on npu
-            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
-
         for layer in self._model.model.layers:
             if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2ShortConv):
                 conv_layer = layer.conv
@@ -7176,10 +7166,6 @@ class Lfm2ModelPatcher(ModelPatcher):
 
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
-
-        if is_transformers_version(">=", "4.53.0"):
-            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
-            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
 
         for layer in self._model.model.layers:
             if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2ShortConv):
