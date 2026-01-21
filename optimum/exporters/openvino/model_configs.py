@@ -54,7 +54,6 @@ from optimum.exporters.onnx.model_configs import (
     GPTJOnnxConfig,
     GPTNeoOnnxConfig,
     GPTNeoXOnnxConfig,
-    HeliumOnnxConfig,
     HubertOnnxConfig,
     IBertOnnxConfig,
     LevitOnnxConfig,
@@ -67,7 +66,6 @@ from optimum.exporters.onnx.model_configs import (
     MobileViTOnnxConfig,
     MPNetOnnxConfig,
     MPTOnnxConfig,
-    NemotronOnnxConfig,
     NystromformerOnnxConfig,
     Olmo2OnnxConfig,
     OPTOnnxConfig,
@@ -86,6 +84,8 @@ from optimum.exporters.onnx.model_configs import (
     SEWDOnnxConfig,
     SEWOnnxConfig,
     SiglipOnnxConfig,
+    SiglipTextOnnxConfig,
+    SiglipTextWithProjectionOnnxConfig,
     SpeechT5OnnxConfig,
     SqueezeBertOnnxConfig,
     SwinOnnxConfig,
@@ -4953,4 +4953,14 @@ class SentenceTransformersTransformerOpenVINOConfig(SentenceTransformersTransfor
 
 @register_in_tasks_manager("rembert", *COMMON_TEXT_TASKS)
 class RemBertOpenVINOConfig(RemBertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("siglip-text-with-projection", *["feature-extraction"])
+class SiglipTextWithProjectionOpenVINOConfig(SiglipTextWithProjectionOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("siglip-text", *["feature-extraction"])
+class SiglipTextOpenVINOConfig(SiglipTextOnnxConfig):
     pass

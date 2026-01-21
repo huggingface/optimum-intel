@@ -351,8 +351,6 @@ ONNX_SUPPORTED_ARCHITECTURES = {
     "regnet",
     "rt_detr",
     "rt_detr_v2",
-    "siglip-text",
-    "siglip-text-with-projection",
     "siglip_vision_model",
     "smollm3",
     "speech_to_text",
