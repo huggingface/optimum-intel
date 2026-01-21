@@ -37,6 +37,7 @@ jobs:
             "*modeling*",
             "*diffusion*",
             "*quantization*",
+            "*vision*",
           ]
         transformers-version: ["4.45.0", "latest"]
 
