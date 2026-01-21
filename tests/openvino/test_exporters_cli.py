@@ -142,6 +142,13 @@ class OVCLIExportTestCase(unittest.TestCase):
                 ("text-generation-with-past", "bitnet"),
             ]
         )
+        
+    if is_transformers_version(">=", "4.56"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("feature-extraction", "dinov3_vit"),
+            ]
+        )
 
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES.extend(
@@ -180,6 +187,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "zamba2": 2,
         "exaone4": 2,
         "bitnet": 2,
+        "dinov3_vit": 0,
         "granite-moe-hybrid": 2,
     }
 

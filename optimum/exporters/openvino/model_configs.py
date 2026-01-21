@@ -50,6 +50,7 @@ from optimum.exporters.onnx.model_configs import (
     VaeEncoderOnnxConfig,
     VisionEncoderDecoderOnnxConfig,
     VisionOnnxConfig,
+    ViTOnnxConfig,
     WhisperOnnxConfig,
 )
 from optimum.exporters.onnx.model_patcher import ModelPatcher
@@ -4233,6 +4234,12 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
 )
 class GPT2OpenVINOConfig(GPT2OnnxConfig):
     _MODEL_PATCHER = OVDecoderModelPatcher
+
+
+@register_in_tasks_manager("dinov3_vit", *["feature-extraction"], library_name="transformers")
+@register_in_tasks_manager("dinov3_convnext", *["feature-extraction"], library_name="transformers")
+class DinoV3OpenVINOConfig(CLIPVisionModelOnnxConfig):
+    MIN_TRANSFORMERS_VERSION = "4.56.0"
 
 
 @register_in_tasks_manager(
