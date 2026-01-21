@@ -164,7 +164,6 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
         self._past_length = 0
         self._first_iter_beam_search = False
         self._second_iter_beam_search = False
-        self.is_eagle3 = kwargs.pop("eagle3", False)
         self.update_pkv_precision()
 
         # reshape with dynamic shapes is needed for decoder_with_past model to be compatible with inference
@@ -335,7 +334,6 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             model_loading_kwargs["torch_dtype"] = torch_dtype
 
         variant = kwargs.pop("variant", None)
-        eagle3 = kwargs.get("eagle3", False)
 
         main_export(
             model_name_or_path=model_id,
@@ -353,7 +351,6 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             model_loading_kwargs=model_loading_kwargs,
             library_name=cls._library_name,
             variant=variant,
-            eagle3=eagle3,
         )
 
         if config.model_type == "phi3" and config.max_position_embeddings != getattr(
@@ -556,14 +553,14 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=int)
             )
 
+        # Eagle3 draft models have a conditional input that is a concatenated
+        # list of hidden states from a target model
         if "hidden_states" in self.input_names:
-            if self.is_eagle3:
-                hidden_states = kwargs.get("hidden_states", None)
-                if hidden_states is None:
-                    hidden_states = np.zeros(
-                        (batch_size, input_ids.shape[1], self.config.hidden_size * 3), dtype=np.float32
-                    )
-                inputs["hidden_states"] = hidden_states
+            hidden_states = kwargs.get("hidden_states", None)
+            if hidden_states is None:
+                hs_shape = (batch_size, input_ids.shape[1], self.config.hidden_size * 3)
+                hidden_states = torch.zeros(hs_shape, device=self.device, dtype=torch.float32)
+            inputs["hidden_states"] = hidden_states
 
         return inputs
 
