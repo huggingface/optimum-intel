@@ -53,6 +53,7 @@ from optimum.intel import (
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
     OVModelForSpeechSeq2Seq,
+    OVQwenImagePipeline,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
     OVStableDiffusion3Pipeline,
@@ -1035,6 +1036,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVStableDiffusion3Pipeline, "stable-diffusion-3", 9, 65),
         (OVFluxPipeline, "flux", 7, 56),
         (OVSanaPipeline, "sana", 19, 53),
+        (OVQwenImagePipeline, "qwen-image", 12, 45),
     ]
 
     DEFAULT_COMPRESSION_CONFIGURATIONS = [

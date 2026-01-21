@@ -49,6 +49,7 @@ from optimum.intel import (
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
     OVModelForZeroShotImageClassification,
+    OVQwenImagePipeline,
     OVSamModel,
     OVStableDiffusion3Pipeline,
     OVStableDiffusionPipeline,
@@ -89,6 +90,7 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-3": OVStableDiffusion3Pipeline,
         "flux": OVFluxPipeline,
         "ltx-video": OVLTXPipeline,
+        "qwen-image": OVQwenImagePipeline,
     }
 
     if is_transformers_version(">=", "4.49"):

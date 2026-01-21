@@ -59,6 +59,7 @@ from optimum.intel import (  # noqa
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelOpenCLIPText,
     OVModelOpenCLIPVisual,
+    OVQwenImagePipeline,
     OVSanaPipeline,
     OVSentenceTransformer,
     OVStableDiffusion3Pipeline,
@@ -113,6 +114,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
+        ("text-to-image", "qwen-image"),
     ]
 
     if is_transformers_version(">=", "4.54.0"):
@@ -181,6 +183,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "exaone4": 2,
         "bitnet": 2,
         "granite-moe-hybrid": 2,
+        "qwen-image": 4,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {

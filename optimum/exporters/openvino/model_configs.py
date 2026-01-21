@@ -141,6 +141,8 @@ from .model_patcher import (
     Qwen2VLVisionEmbMergerPatcher,
     Qwen3MoeModelPatcher,
     QwenModelPatcher,
+    QwenTransfromerModelPatcher,
+    QwenVAEPatcher,
     SanaTextEncoderModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
@@ -2156,6 +2158,7 @@ class T5EncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
 
 
 @register_in_tasks_manager("gemma2-text-encoder", *["feature-extraction"], library_name="diffusers")
+@register_in_tasks_manager("qwen2_5_vl_text", *["feature-extraction"], library_name="diffusers")
 class Gemma2TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
     _MODEL_PATCHER = SanaTextEncoderModelPatcher
 
@@ -3489,7 +3492,6 @@ class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
             return Qwen2_5_VLVisionEmbMergerPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
 
-
 @register_in_tasks_manager(
     "glm",
     *[
@@ -4234,6 +4236,131 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
 class GPT2OpenVINOConfig(GPT2OnnxConfig):
     _MODEL_PATCHER = OVDecoderModelPatcher
 
+
+class DummyQwenTransformerInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "hidden_states",
+        "img_shapes",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"] // 4,
+        height: int = DEFAULT_DUMMY_SHAPES["height"] // 4,
+        # Reduce img shape by 4 for FLUX to reduce memory usage on conversion
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        if getattr(normalized_config, "in_channels", None):
+            self.num_channels = normalized_config.in_channels // 4
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "hidden_states":
+            shape = [self.batch_size, (self.height // 2) * (self.width // 2), self.num_channels * 4]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "img_shapes":
+            import torch
+            return torch.tensor((1, self.height // 2, self.width // 2), dtype=DTYPE_MAPPER.pt(int_dtype))
+
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+class DummyQwenTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "decoder_input_ids",
+        "decoder_attention_mask",
+        "encoder_outputs",
+        "encoder_hidden_states",
+        "encoder_hidden_states_mask",
+        "txt_seq_lens",
+    )
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "txt_seq_lens":
+            import torch
+
+            shape = (
+                [self.batch_size]
+            )
+            dtype = DTYPE_MAPPER.pt(int_dtype)
+            return torch.full(shape, self.sequence_length, dtype=dtype)
+        if input_name == "encoder_hidden_states_mask":
+            import torch
+
+            shape = (
+                [self.batch_size, self.sequence_length]
+            )
+            dtype = DTYPE_MAPPER.pt(float_dtype)
+            return torch.full(shape, 1, dtype=dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+@register_in_tasks_manager("qwen-image-transformer-2d", *["semantic-segmentation"], library_name="diffusers")
+class QwenTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummyTransformerTimestpsInputGenerator,
+        DummyQwenTransformerInputGenerator,
+        DummyQwenTextInputGenerator,
+    )
+
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        common_inputs.pop("sample", None)
+        common_inputs.pop("pooled_projections", None)
+        common_inputs["hidden_states"] = {0: "batch_size", 1: "image_sequence_length"}
+        common_inputs["encoder_hidden_states_mask"] =  {0: "batch_size", 1: "text_sequence_length"}
+        common_inputs["img_shapes"] = {0: "batch_size"}
+        common_inputs["txt_seq_lens"] = {0: "batch_size"}
+        if getattr(self._normalized_config, "guidance_embeds", False):
+            common_inputs["guidance"] = {0: "batch_size"}
+        return common_inputs
+    
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        # OpenVINO can not handle complex data in this model
+        return QwenTransfromerModelPatcher(self, model, model_kwargs=model_kwargs)
+    
+class QwenVaeDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("sample", "latent_sample")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        num_frames: int = 1,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        self.num_frames = num_frames
+        self.num_channels = normalized_config.z_dim
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name in ["sample", "latent_sample"]:
+            return self.random_float_tensor(
+                [self.batch_size, self.num_channels, self.num_frames, self.height, self.width]
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+    
+@register_in_tasks_manager("qwen-image-decoder", *["semantic-segmentation"], library_name="diffusers")
+class QwenDecoderOpenVINOConfig(LTXVaeDecoderOpenVINOConfig):
+    _MODEL_PATCHER = QwenVAEPatcher
+    
+    # OpenVINO can not support torch.nn.Upsample with nearest-exact interpolation
+    DUMMY_INPUT_GENERATOR_CLASSES = (QwenVaeDummyInputGenerator,)
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        base_input = {
+            "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"},
+        }
+        return base_input
 
 @register_in_tasks_manager(
     "vision-encoder-decoder",

@@ -119,6 +119,11 @@ if is_diffusers_version(">=", "0.33.0"):
     from diffusers import SanaSprintPipeline
 else:
     SanaSprintPipeline = object
+    
+if is_diffusers_version(">=", "0.35.0"):
+    from diffusers import QwenImagePipeline
+else:
+    QwenImagePipeline = object
 
 
 if is_diffusers_version(">=", "0.35.0"):
@@ -760,7 +765,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             if "img_ids" not in {inputs.get_any_name() for inputs in model.inputs}:
                 batch_size *= 2
 
-        is_ltx = self.__class__.__name__.startswith("OVLTX")
+        is_ltx = self.__class__.__name__.startswith("OVLTX") or self.__class__.__name__.startswith("OVQwen")
         if is_ltx:
             height = height // self.vae_spatial_compression_ratio if height > 0 else -1
             width = width // self.vae_spatial_compression_ratio if width > 0 else -1
@@ -775,7 +780,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         shapes = {}
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
-            if inputs.get_any_name() in ["timestep", "guidance"]:
+            if inputs.get_any_name() in ["timestep", "guidance", "img_shapes", "txt_seq_lens"]:
                 shapes[inputs][0] = batch_size
             elif inputs.get_any_name() == "hidden_states":
                 in_channels = self.transformer.config.get("in_channels", None)
@@ -849,7 +854,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         num_images_per_prompt: int = -1,
         num_frames: int = -1,
     ):
-        is_ltx = self.__class__.__name__.startswith("OVLTX")
+        is_ltx = self.__class__.__name__.startswith("OVLTX") or self.__class__.__name__.startswith("OVQwen")
         if is_ltx:
             height = height // self.vae_spatial_compression_ratio if height > 0 else -1
             width = width // self.vae_spatial_compression_ratio if width > 0 else -1
@@ -1166,7 +1171,6 @@ class OVModelTextEncoder(OVPipelinePart):
 
         if "attention_mask" in self.input_names:
             model_inputs["attention_mask"] = attention_mask
-
         ov_outputs = self.request(model_inputs, share_inputs=True)
         main_out = ov_outputs[0]
         model_outputs = {}
@@ -1252,6 +1256,9 @@ class OVModelTransformer(OVPipelinePart):
         img_ids: torch.Tensor = None,
         txt_ids: torch.Tensor = None,
         guidance: torch.Tensor = None,
+        encoder_hidden_states_mask: torch.LongTensor = None,
+        img_shapes: torch.LongTensor = None,
+        txt_seq_lens: torch.LongTensor = None,
         block_controlnet_hidden_states: List = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         encoder_attention_mask: torch.LongTensor = None,
@@ -1279,7 +1286,12 @@ class OVModelTransformer(OVPipelinePart):
             model_inputs["txt_ids"] = txt_ids
         if guidance is not None:
             model_inputs["guidance"] = guidance
-
+        if encoder_hidden_states_mask is not None:
+            model_inputs["encoder_hidden_states_mask"] = encoder_hidden_states_mask
+        if img_shapes is not None:
+            model_inputs["img_shapes"] = (img_shapes if isinstance(img_shapes, torch.Tensor) else torch.tensor(img_shapes)).squeeze()
+        if txt_seq_lens is not None:
+            model_inputs["txt_seq_lens"] = txt_seq_lens if isinstance(txt_seq_lens, torch.Tensor) else torch.tensor(txt_seq_lens)
         if encoder_attention_mask is not None:
             model_inputs["encoder_attention_mask"] = encoder_attention_mask
         if num_frames is not None:
@@ -1293,6 +1305,9 @@ class OVModelTransformer(OVPipelinePart):
                 rope_interpolation_scale = torch.tensor(rope_interpolation_scale)
             model_inputs["rope_interpolation_scale"] = rope_interpolation_scale
 
+        if video_coords is not None:
+            model_inputs["video_coords"] = video_coords
+        
         ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
 
         model_outputs = {}
@@ -1349,9 +1364,9 @@ class OVModelVaeEncoder(OVPipelinePart):
 class OVModelVaeDecoder(OVPipelinePart):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
+        
         # can be missing from models exported long ago
-        if not hasattr(self.config, "scaling_factor"):
+        if not hasattr(self.config, "scaling_factor") and not hasattr(self.config, "z_dim"):
             logger.warning(
                 "The `scaling_factor` attribute is missing from the VAE decoder configuration. "
                 "Please re-export the model with newer version of optimum and diffusers."
@@ -1400,6 +1415,8 @@ class OVModelVae(OVModelHostMixin):
             self.latents_mean = torch.tensor(self.decoder.config.latents_mean_data)
         if hasattr(self.decoder.config, "latents_std_data"):
             self.latents_std = torch.tensor(self.decoder.config.latents_std_data)
+        if hasattr(self.decoder.config, "temperal_downsample"):
+            self.temperal_downsample = torch.tensor(self.decoder.config.temperal_downsample)
 
     @property
     def _component_names(self) -> List[str]:
@@ -1659,6 +1676,13 @@ class OVLTXPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTXPipel
     export_feature = "text-to-video"
     auto_model_class = LTXPipeline
 
+class OVQwenImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, QwenImagePipeline):
+    main_input_name = "prompt"
+    export_feature = "text-to-image"
+    auto_model_class = QwenImagePipeline
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
 
 SUPPORTED_OV_PIPELINES = [
     OVStableDiffusionPipeline,
@@ -1744,6 +1768,10 @@ if is_diffusers_version(">=", "0.32.0"):
 if is_diffusers_version(">=", "0.33.0"):
     SUPPORTED_OV_PIPELINES.append(OVSanaSprintPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana-sprint"] = OVSanaSprintPipeline
+    
+if is_diffusers_version(">=", "0.35.0"):
+    SUPPORTED_OV_PIPELINES.append(OVQwenImagePipeline)
+    OV_TEXT2IMAGE_PIPELINES_MAPPING["qwen-image"] = OVQwenImagePipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,

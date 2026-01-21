@@ -346,13 +346,7 @@ def export_pytorch(
             model.config.return_dict = True
         model.eval()
 
-        # Check if we need to override certain configuration item
-        if config.values_override is not None:
-            logger.info(f"Overriding {len(config.values_override)} configuration item(s)")
-            for override_config_key, override_config_value in config.values_override.items():
-                logger.info(f"\t- {override_config_key} -> {override_config_value}")
-                setattr(model.config, override_config_key, override_config_value)
-
+        # Check if we need to override certain configuration items
         if input_shapes is None:
             input_shapes = {}  # will use the defaults from DEFAULT_DUMMY_SHAPES
 
@@ -968,6 +962,7 @@ def get_diffusion_models_for_export_ext(
     is_flux = pipeline.__class__.__name__.startswith("Flux")
     is_sana = pipeline.__class__.__name__.startswith("Sana")
     is_ltx_video = pipeline.__class__.__name__.startswith("LTX")
+    is_qwen_image = pipeline.__class__.__name__.startswith("QwenImage")
     is_sd = pipeline.__class__.__name__.startswith("StableDiffusion") and not is_sd3
     is_lcm = pipeline.__class__.__name__.startswith("LatentConsistencyModel")
 
@@ -993,6 +988,8 @@ def get_diffusion_models_for_export_ext(
         models_for_export = get_sana_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_ltx_video:
         models_for_export = get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+    elif is_qwen_image:
+        models_for_export = get_qwen_image_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     else:
         raise ValueError(f"Unsupported pipeline type `{pipeline.__class__.__name__}` provided")
     return None, models_for_export
@@ -1405,3 +1402,56 @@ def _get_speecht5_tss_model_for_export(
     stateful_per_model = [False, True, False, False]
 
     return export_config, models_for_export, stateful_per_model
+
+def get_qwen_image_models_for_export(pipeline, exporter, int_dtype, float_dtype):
+    models_for_export = {}
+
+    # Text encoder
+    text_encoder = getattr(pipeline, "text_encoder", None)
+    if text_encoder is not None:
+        text_encoder.config.output_hidden_states = True
+        text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=text_encoder,
+            exporter=exporter,
+            library_name="diffusers",
+            task="feature-extraction",
+            model_type="qwen2_5_vl_text",
+        )
+        text_encoder_export_config = text_encoder_config_constructor(
+            pipeline.text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        models_for_export["text_encoder"] = (text_encoder, text_encoder_export_config)
+    transformer = pipeline.transformer
+    transformer.config.text_encoder_projection_dim = transformer.config.joint_attention_dim
+    transformer.config.requires_aesthetics_score = getattr(pipeline.config, "requires_aesthetics_score", False)
+    transformer.config.time_cond_proj_dim = None
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=transformer,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="qwen-image-transformer-2d",
+    )
+    transformer_export_config = export_config_constructor(
+        pipeline.transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    transformer_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["transformer"] = (transformer, transformer_export_config)
+
+    # VAE Decoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L600
+    vae_decoder = copy.deepcopy(pipeline.vae)
+    vae_decoder.forward = lambda latent_sample: vae_decoder.decode(z=latent_sample)
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_decoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="qwen-image-decoder",
+    )
+    vae_decoder_export_config = vae_config_constructor(
+        vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
+
+    return models_for_export
