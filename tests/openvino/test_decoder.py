@@ -648,7 +648,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
             self.skipTest("Incompatible modeling code")
 
-
         tokenizer = self.get_tokenizer(model_arch)
 
         beam_search_gen_config = GenerationConfig(
