@@ -278,9 +278,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             if "deepseek_v3" in supported_architectures:
                 supported_architectures.remove("deepseek_v3")
         if is_transformers_version("<", str(BitnetOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
-            supported_architectures.remove("bitnet")
+            supported_architectures -= {"bitnet"}
         if is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
-            supported_architectures.remove("lfm2")
+            supported_architectures -= {"lfm2"}
 
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
         untested_architectures = supported_architectures - tested_architectures
@@ -444,7 +444,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         if model_arch in REMOTE_CODE_MODELS:
             model_kwargs = {"trust_remote_code": True}
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
+        tokenizer = self.get_tokenizer(model_arch)
 
         if model_arch == "qwen":
             tokenizer._convert_tokens_to_ids = lambda x: 0
@@ -648,10 +648,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
             self.skipTest("Incompatible modeling code")
 
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
-        if model_arch == "persimmon":
-            tokenizer.pad_token_id = tokenizer.bos_token_id
-            tokenizer.eos_token_id = tokenizer.bos_token_id
+
+        tokenizer = self.get_tokenizer(model_arch)
 
         beam_search_gen_config = GenerationConfig(
             max_new_tokens=10,
@@ -729,7 +727,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
             transformers_model.generation_config.cache_implementation = None
-        tokenizer.pad_token_id = tokenizer.eos_token_id
+
         tokenization_args = {}
         if model_arch == "gpt_neo":
             tokenization_args["padding_side"] = "left"
