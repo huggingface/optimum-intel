@@ -382,20 +382,6 @@ def main_export(
             raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
         token = use_auth_token
 
-    download_to_local = False
-    if eagle3 and not os.path.isdir(model_name_or_path):
-        logger.warning(
-            "Currently eagle3 only supports local path conversion. The draft model will be downloaded to the local path."
-        )
-        model_name_or_path = download_eagle3_model(model_name_or_path)
-        if os.path.exists(model_name_or_path):
-            download_to_local = True
-            logger.info(f"Download eagle3 draft model to local path: {model_name_or_path}")
-
-    if download_to_local:
-        # Delete temporary directory on exit
-        atexit.register(lambda: clean_download(model_name_or_path))
-
     if framework is None:
         framework = TasksManager.determine_framework(
             model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
@@ -432,9 +418,6 @@ def main_export(
     if isinstance(dtype, str):
         dtype = getattr(torch, dtype) if dtype != "auto" else dtype
 
-    if eagle3 and library_name == "transformers":
-        loading_kwargs["_configuration_file"] = eagle3_config(model_name_or_path)
-
     if library_name == "transformers":
         config = AutoConfig.from_pretrained(
             model_name_or_path,
@@ -448,6 +431,18 @@ def main_export(
         )
         quantization_config = getattr(config, "quantization_config", None)
         quant_method = quantization_config.get("quant_method", None) if quantization_config else None
+
+        # check if model is used as a draft model for Eagle3
+        archs = getattr(config, "architectures", None)
+        eagle3 = False
+        if isinstance(archs, list) and len(archs) > 0 and "eagle3" in archs[0].lower():
+            eagle3 = True
+        if eagle3 and not os.path.isdir(model_name_or_path):
+            model_name_or_path = download_eagle3_model(model_name_or_path)
+            if os.path.exists(model_name_or_path):
+                download_to_local = True
+                logger.info(f"Download eagle3 draft model to local path: {model_name_or_path}")
+            loading_kwargs["_configuration_file"] = eagle3_config(model_name_or_path)
 
         # mxfp4 quantized model will be dequantized to bf16
         if quant_method == "mxfp4" and is_transformers_version(">=", "4.55"):
