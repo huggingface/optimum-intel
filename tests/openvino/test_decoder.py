@@ -121,7 +121,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("gemma3_text",)
 
     if is_transformers_version(">=", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("llama4", "llama4_text", "qwen3", "qwen3_moe")
+        SUPPORTED_ARCHITECTURES += ("llama4", "qwen3", "qwen3_moe")
 
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
@@ -169,7 +169,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "lfm2": 1,
         "llama": 2,
         "llama4": 5,
-        "llama4_text": 2,
         "marian": 2,
         "mbart": 2,
         "minicpm": 4,
@@ -271,6 +270,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         }
         supported_architectures = ov_architectures & transformers_architectures
 
+        if "llama4_text" in supported_architectures:
+            supported_architectures.remove("llama4_text")
         if is_transformers_version(">=", str(DeepseekOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
             if "deepseek_v2" in supported_architectures:
                 supported_architectures.remove("deepseek_v2")
@@ -278,7 +279,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 supported_architectures.remove("deepseek_v3")
         elif is_transformers_version("<", str(BitnetOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures.remove("bitnet")
-
         elif is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures.remove("lfm2")
 
