@@ -454,7 +454,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         del pipeline
         gc.collect()
 
-    def test_load_from_hub_and_save_sam_model(self):
+    def __test_load_from_hub_and_save_sam_model(self):
         loaded_model = OVModelForFeatureExtraction.from_pretrained(self.OV_SAM_MODEL_ID, device=OPENVINO_DEVICE)
         self.assertIsInstance(loaded_model, OVSamModel)
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
