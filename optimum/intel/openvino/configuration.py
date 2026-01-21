@@ -275,6 +275,12 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "ratio": 1.0,
         "quant_method": OVQuantizationMethod.AWQ,
     },
+    "microsoft/Phi-4-reasoning": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+    },
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": {
         "bits": 4,
         "sym": False,
