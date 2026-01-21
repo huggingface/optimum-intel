@@ -277,9 +277,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 supported_architectures.remove("deepseek_v2")
             if "deepseek_v3" in supported_architectures:
                 supported_architectures.remove("deepseek_v3")
-        elif is_transformers_version("<", str(BitnetOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+        if is_transformers_version("<", str(BitnetOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures.remove("bitnet")
-        elif is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+        if is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures.remove("lfm2")
 
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
