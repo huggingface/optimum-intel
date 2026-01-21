@@ -21,7 +21,6 @@ from utils_tests import (
     patch_awq_for_inference,
 )
 
-from optimum.exporters.onnx.model_configs import NemotronOnnxConfig
 from optimum.exporters.openvino.model_configs import BitnetOpenVINOConfig, DeepseekOpenVINOConfig, LFM2OpenVINOConfig
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
@@ -118,11 +117,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">", "4.47"):
         SUPPORTED_ARCHITECTURES += ("olmo2",)
 
-    if is_transformers_version(">", "4.48"):
-        SUPPORTED_ARCHITECTURES += ("nemotron",)
-
     if is_transformers_version(">", "4.49"):
-        SUPPORTED_ARCHITECTURES += ("gemma3_text", "helium")
+        SUPPORTED_ARCHITECTURES += ("gemma3_text",)
 
     if is_transformers_version(">=", "4.51.0"):
         SUPPORTED_ARCHITECTURES += ("llama4", "llama4_text", "qwen3", "qwen3_moe")
@@ -223,7 +219,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mixtral_awq": 2,
         "gemma3_text": 2,
         "glm4": 2,
-        "helium": 2,
         "qwen3": 2,
         "qwen3_moe": 2,
         "mamba": 0,
@@ -281,8 +276,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 supported_architectures.remove("deepseek_v2")
             if "deepseek_v3" in supported_architectures:
                 supported_architectures.remove("deepseek_v3")
-        elif is_transformers_version("<", str(NemotronOnnxConfig.MIN_TRANSFORMERS_VERSION)):
-            supported_architectures.remove("nemotron")
         elif is_transformers_version("<", str(BitnetOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures.remove("bitnet")
 

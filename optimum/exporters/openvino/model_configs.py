@@ -4654,16 +4654,6 @@ class OPTOpenVINOConfig(OPTOnnxConfig):
     pass
 
 
-@register_in_tasks_manager("helium", *COMMON_TEXT_GENERATION_TASKS)
-class HeliumOpenVINOConfig(HeliumOnnxConfig):
-    pass
-
-
-@register_in_tasks_manager("nemotron", *COMMON_TEXT_GENERATION_TASKS)
-class NemotronOpenVINOConfig(NemotronOnnxConfig):
-    pass
-
-
 @register_in_tasks_manager(
     "gpt_bigcode", *[*COMMON_TEXT_GENERATION_TASKS, "text-classification", "token-classification"]
 )
