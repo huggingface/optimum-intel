@@ -3765,7 +3765,7 @@ class GotOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
     ):
         if task == "image-to-text":
             logger.warning(
-                "Support of task 'image-to-text' will be deprecated in optimum-intel v1.29 for GOT-OCR2 models, please update it to 'image-text-to-text'."
+                "Support of task 'image-to-text' will be deprecated in optimum-intel v1.29 for GOT-OCR2 models, please use 'image-text-to-text'."
             )
 
         super().__init__(
