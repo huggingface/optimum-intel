@@ -7454,7 +7454,7 @@ def afmoe_moe_forward_patched(self, hidden_states):
     return output.view(batch_size, seq_len, hidden_dim)
 
 
-class AfmoeModelPatcher(ModelPatcher):
+class AfmoeModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         for idx, layer in enumerate(self._model.model.layers):
