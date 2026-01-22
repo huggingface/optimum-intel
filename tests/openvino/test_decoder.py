@@ -648,7 +648,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
             self.skipTest("Incompatible modeling code")
 
-        tokenizer = self.get_tokenizer(model_arch)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
+        if model_arch == "persimmon":
+            tokenizer.pad_token_id = tokenizer.bos_token_id
+            tokenizer.eos_token_id = tokenizer.bos_token_id
 
         beam_search_gen_config = GenerationConfig(
             max_new_tokens=10,
@@ -726,6 +729,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
             transformers_model.generation_config.cache_implementation = None
+        tokenizer.pad_token_id = tokenizer.eos_token_id
 
         tokenization_args = {}
         if model_arch == "gpt_neo":
