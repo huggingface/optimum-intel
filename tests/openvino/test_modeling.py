@@ -49,9 +49,9 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     PretrainedConfig,
+    SamModel,
     pipeline,
     set_seed,
-    SamModel,
 )
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
