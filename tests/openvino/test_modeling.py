@@ -51,6 +51,7 @@ from transformers import (
     PretrainedConfig,
     pipeline,
     set_seed,
+    SamModel,
 )
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
@@ -1846,7 +1847,7 @@ class OVSamIntegrationTest(unittest.TestCase):
         ).convert("RGB")
         inputs = processor(IMAGE, input_points=input_points, return_tensors="pt")
 
-        transformers_model = OVSamModel.from_pretrained(model_id, device=OPENVINO_DEVICE)
+        transformers_model = SamModel.from_pretrained(model_id)
 
         # test end-to-end inference
         ov_outputs = ov_model(**inputs)
@@ -1864,7 +1865,7 @@ class OVSamIntegrationTest(unittest.TestCase):
 
         # test separated image features extraction
         pixel_values = inputs.pop("pixel_values")
-        features = transformers_model.get_image_features(pixel_values)
+        features = transformers_model.get_image_embeddings(pixel_values)
         ov_features = ov_model.get_image_features(pixel_values)
         self.assertTrue(torch.allclose(ov_features, features, atol=1e-4))
         ov_outputs = ov_model(**inputs, image_embeddings=ov_features)
