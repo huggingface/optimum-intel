@@ -50,7 +50,7 @@ jobs:
             "*modeling*",
             "*diffusion*",
             "*quantization*",
-            # "*vision*",
+            "*vision*",
           ]
         export-mode: ["torchscript"]
 
