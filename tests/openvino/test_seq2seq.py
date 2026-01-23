@@ -42,7 +42,6 @@ from transformers import (
     set_seed,
 )
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
-from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
 from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TEST_IMAGE_URL, Timer
@@ -336,7 +335,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
         self._check_openvino_model_attributes(ov_model_stateless, use_cache=True, stateful=False)
 
-        processor = get_preprocessor(model_id)
+        processor = AutoProcessor.from_pretrained(model_id)
         data = self._generate_random_audio_data()
         pt_features = processor.feature_extractor(data, return_tensors="pt")
         decoder_start_token_id = transformers_model.config.decoder_start_token_id
@@ -395,7 +394,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         model = self.OVMODEL_CLASS.from_pretrained(model_id, device=OPENVINO_DEVICE)
-        processor = get_preprocessor(model_id)
+        processor = AutoProcessor.from_pretrained(model_id)
         pipe = pipeline(
             "automatic-speech-recognition",
             model=model,
@@ -1079,7 +1078,7 @@ class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
 
         question = "Who am I?"
         transformers_model = self.AUTOMODEL_CLASS.from_pretrained(model_id)
-        preprocessor = get_preprocessor(model_id)
+        preprocessor = AutoProcessor.from_pretrained(model_id)
 
         inputs = preprocessor(images=self.IMAGE, text=question, padding=True, return_tensors="pt")
         ov_outputs = ov_model(**inputs)
@@ -1100,7 +1099,7 @@ class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
-        preprocessor = get_preprocessor(model_id)
+        preprocessor = AutoProcessor.from_pretrained(model_id)
         question = "Who am I?"
         inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
 
@@ -1114,7 +1113,7 @@ class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
 
     def test_compare_with_and_without_past_key_values(self):
         model_id = MODEL_NAMES["pix2struct"]
-        preprocessor = get_preprocessor(model_id)
+        preprocessor = AutoProcessor.from_pretrained(model_id)
         question = "Who am I?"
         inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
         model_with_pkv = self.OVMODEL_CLASS.from_pretrained(
