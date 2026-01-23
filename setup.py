@@ -31,6 +31,7 @@ INSTALL_REQUIRE = [
     "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git@main",
     "transformers>=4.45,<5.1",
     "setuptools",
+    "huggingface-hub>=0.23.2,<2.0",
 ]
 
 TESTS_REQUIRE = [

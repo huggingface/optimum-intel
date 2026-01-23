@@ -28,12 +28,12 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 from transformers.generation import GenerationMixin
-from transformers.utils import is_offline_mode
 from transformers.utils.hub import cached_file
 
 from optimum.exporters.base import ExportConfig
 from optimum.exporters.openvino.utils import _MAX_UNCOMPRESSED_SIZE
 from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
+from optimum.utils.import_utils import is_huggingface_hub_version
 
 from ...exporters.openvino import export, main_export
 from ..utils.import_utils import is_nncf_available
@@ -56,6 +56,12 @@ from .utils import (
     classproperty,
     model_has_dynamic_inputs,
 )
+
+
+if is_huggingface_hub_version(">=", "1.2.1"):
+    from huggingface_hub import is_offline_mode
+else:
+    from transformers.utils import is_offline_mode
 
 
 core = Core()
