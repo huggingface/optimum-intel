@@ -8,6 +8,7 @@ import pytest
 import torch
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, PretrainedConfig, pipeline, set_seed
+from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
 from utils_tests import (
     F32_CONFIG,
@@ -20,7 +21,10 @@ from utils_tests import (
     patch_awq_for_inference,
 )
 
+from optimum.exporters.openvino.model_configs import BitnetOpenVINOConfig, DeepseekOpenVINOConfig, LFM2OpenVINOConfig
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
+from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
+from optimum.exporters.tasks import TasksManager
 from optimum.intel import OVModelForCausalLM, OVModelForSequenceClassification
 from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
@@ -39,6 +43,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "baichuan2",
         "baichuan2-13b",
         "gpt_bigcode",
+        "bigbird_pegasus",
         "blenderbot",
         "blenderbot-small",
         "bloom",
@@ -53,6 +58,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mistral",
         "mixtral",
         "mpt",
+        "mbart",
         "opt",
         "pegasus",
         "phi",
@@ -82,16 +88,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gemma2",
         "exaone",
         "granite",
-        "granite-moe",
+        "granitemoe",
     )
 
-    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon-mamba")
+    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon_mamba")
 
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
 
     if is_transformers_version(">=", "4.53.0"):
-        SUPPORTED_SSM_ARCHITECTURES += ("granite-moe-hybrid",)
+        SUPPORTED_SSM_ARCHITECTURES += ("granitemoehybrid",)
 
     if is_transformers_version(">=", "4.54.0"):
         SUPPORTED_SSM_ARCHITECTURES += ("lfm2",)
@@ -99,7 +105,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
     if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phi3-moe")
+        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phimoe")
 
         if is_transformers_version("<", "4.54.0"):
             SUPPORTED_ARCHITECTURES += ("deepseek",)
@@ -108,11 +114,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if platform.system() != "Windows" and is_transformers_version("<", "4.56.0"):
             SUPPORTED_ARCHITECTURES += ("opt_gptq", "mixtral_awq")
 
+    if is_transformers_version(">", "4.47"):
+        SUPPORTED_ARCHITECTURES += ("olmo2",)
+
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ("gemma3_text",)
 
     if is_transformers_version(">=", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe")
+        SUPPORTED_ARCHITECTURES += ("llama4", "qwen3", "qwen3_moe")
 
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
@@ -145,6 +154,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "bart": 2,
         "baichuan2": 2,
         "baichuan2-13b": 2,
+        "bigbird_pegasus": 2 if is_transformers_version(">=", "4.52") else 0,
         "gpt_bigcode": 5,
         "blenderbot": 2,
         "blenderbot-small": 2,
@@ -158,12 +168,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neox": 5,
         "lfm2": 1,
         "llama": 2,
+        "llama4": 5,
         "marian": 2,
+        "mbart": 2,
         "minicpm": 4,
         "mistral": 2,
         "mixtral": 2,
         "mpt": 5,
-        "opt": 5 if is_transformers_version(">=", "4.46.0") else 0,
+        "nemotron": 2,
+        "olmo2": 2,
+        "opt": 5 if is_transformers_version(">=", "4.46") else 0,
         "pegasus": 2,
         "qwen": 2,
         "phi": 2,
@@ -193,12 +207,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "exaone": 8,
         "exaone4": 1,
         "granite": 6,
-        "granite-moe": 6,
-        "granite-moe-hybrid": 1,
+        "granitemoe": 6,
+        "granitemoehybrid": 1,
         "glm": 28,
         "mistral-nemo": 8,
         "minicpm3": 6,
-        "phi3-moe": 2,
+        "phimoe": 2,
         "deepseek": 2,
         "opt_gptq": 12,
         "mixtral_awq": 2,
@@ -207,13 +221,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "qwen3": 2,
         "qwen3_moe": 2,
         "mamba": 0,
-        "falcon-mamba": 0,
+        "falcon_mamba": 0,
         "arcee": 2,
         "gpt_oss": 2,
         "gpt_oss_mxfp4": 2,
         "zamba2": 1,
         "bitnet": 6,
     }
+    TASK = "text-generation"
 
     def mock_torch_compile(self, model_arch):
         if model_arch == "bitnet":
@@ -222,6 +237,58 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             torch.compile = lambda func: func
             # ensure restoration happens even if test fails
             self.addCleanup(lambda: setattr(torch, "compile", original_torch_compile))
+
+    def get_tokenizer(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        trust_remote_code = model_arch in REMOTE_CODE_MODELS
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+        if tokenizer.pad_token is None:
+            if tokenizer.eos_token is not None:
+                tokenizer.pad_token = tokenizer.eos_token
+            elif tokenizer.bos_token is not None:
+                tokenizer.pad_token = tokenizer.bos_token
+            else:
+                raise ValueError(
+                    f"Tokenizer for model {model_id} does not have a defined `pad_token`, `eos_token`, or `bos_token`."
+                )
+        tokenizer.padding_side = "left"
+        return tokenizer
+
+    def test_find_untested_architectures(self):
+        if len(self.SUPPORTED_ARCHITECTURES) != len(set(self.SUPPORTED_ARCHITECTURES)):
+            raise ValueError(
+                f"For the task `{self.TASK}`, some architectures are duplicated in the list of tested architectures: "
+                f"{self.SUPPORTED_ARCHITECTURES}.\n"
+            )
+
+        tested_architectures = set(self.SUPPORTED_ARCHITECTURES)
+        transformers_architectures = set(CONFIG_MAPPING_NAMES.keys())
+        ov_architectures = {
+            model_type
+            for model_type in TasksManager._SUPPORTED_MODEL_TYPE
+            if self.TASK in TasksManager._SUPPORTED_MODEL_TYPE[model_type].get("openvino", {})
+        }
+        supported_architectures = ov_architectures & transformers_architectures
+
+        if "llama4_text" in supported_architectures:
+            supported_architectures.remove("llama4_text")
+        if is_transformers_version(">=", str(DeepseekOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
+            if "deepseek_v2" in supported_architectures:
+                supported_architectures.remove("deepseek_v2")
+            if "deepseek_v3" in supported_architectures:
+                supported_architectures.remove("deepseek_v3")
+        if is_transformers_version("<", str(BitnetOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"bitnet"}
+        if is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"lfm2"}
+
+        supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
+        untested_architectures = supported_architectures - tested_architectures
+
+        if len(untested_architectures) > 0:
+            raise ValueError(
+                f"For the task `{self.TASK}`, the OpenVINO exporter supports {untested_architectures} which are not tested"
+            )
 
     # TODO: remove gptq/awq from here
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -245,7 +312,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
+        tokenizer = self.get_tokenizer(model_arch)
         tokens = tokenizer("This is a sample output", return_tensors="pt")
 
         ov_outputs = ov_model(**tokens)
@@ -307,13 +374,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in ["qwen"]:
             return
 
-        if model_arch not in ["chatglm", "chatglm4", "persimmon"]:
-            tokenizer.pad_token_id = tokenizer.eos_token_id
-
-        if model_arch == "persimmon":
-            tokenizer.pad_token_id = tokenizer.bos_token_id
-        # Compare batched generation
-        tokenizer.padding_side = "left"
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
@@ -325,7 +385,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
             # CVS-177964 GraniteMoeHybrid fails due to lack support of Beam search for hybrid models in OpenVINO
             # For this support, we expect changes in IRs to have connected beam_idx with Mamba/Linear attention states
-            num_beams=1 if model_arch in ["chatglm4", "lfm2", "granite-moe-hybrid"] else 2,
+            num_beams=1 if model_arch in ["chatglm4", "lfm2", "granitemoehybrid"] else 2,
             do_sample=False,
         )
 
@@ -384,7 +444,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         if model_arch in REMOTE_CODE_MODELS:
             model_kwargs = {"trust_remote_code": True}
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
+        tokenizer = self.get_tokenizer(model_arch)
 
         if model_arch == "qwen":
             tokenizer._convert_tokens_to_ids = lambda x: 0
@@ -418,11 +478,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 # method, which made it fail during inference using pipelines
                 tokenizer
                 if is_transformers_version("<=", "4.46") and model_arch == "qwen"
-                # in older transformers versions, remote code tokenizers (and granite/granite-moe)
+                # in older transformers versions, remote code tokenizers (and granite/granitemoe)
                 # were not loaded in pipelines because they were not registered in TOKENIZER_MAPPING
                 else model_id
                 if is_transformers_version("<=", "4.46")
-                and model_arch in REMOTE_CODE_MODELS + ("granite", "granite-moe")
+                and model_arch in REMOTE_CODE_MODELS + ("granite", "granitemoe")
                 else None
             ),
         )
@@ -581,7 +641,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
         # CVS-177964 GraniteMoeHybrid fails due to lack support of Beam search for hybrid models in OpenVINO
         # For this support, we expect changes in IRs to have connected beam_idx with Mamba/Linear attention states
-        if model_arch in ["lfm2", "granite-moe-hybrid"]:
+        if model_arch in ["lfm2", "granitemoehybrid"]:
             return
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
@@ -670,6 +730,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             transformers_model._supports_cache_class = True
             transformers_model.generation_config.cache_implementation = None
         tokenizer.pad_token_id = tokenizer.eos_token_id
+
         tokenization_args = {}
         if model_arch == "gpt_neo":
             tokenization_args["padding_side"] = "left"
