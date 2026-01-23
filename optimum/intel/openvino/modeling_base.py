@@ -14,7 +14,6 @@
 import logging
 import operator
 import os
-import warnings
 from functools import reduce
 from pathlib import Path
 from tempfile import gettempdir
@@ -566,7 +565,6 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         model_id: Union[str, Path],
         export: bool = False,
         force_download: bool = False,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
         subfolder: str = "",
@@ -576,15 +574,6 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         revision: Optional[str] = None,
         **kwargs,
     ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
         if is_offline_mode() and not local_files_only:
             logger.info("Offline mode: forcing local_files_only=True")
             local_files_only = True
