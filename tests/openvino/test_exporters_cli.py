@@ -94,7 +94,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text2text-generation", "t5"),
         ("text2text-generation-with-past", "t5"),
         ("text-generation-with-past", "mamba"),
-        ("text-generation-with-past", "falcon-mamba"),
+        ("text-generation-with-past", "falcon_mamba"),
         ("text-classification", "albert"),
         ("question-answering", "distilbert"),
         ("token-classification", "roberta"),
@@ -147,7 +147,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES.extend(
             [
-                ("text-generation-with-past", "granite-moe-hybrid"),
+                ("text-generation-with-past", "granitemoehybrid"),
             ]
         )
 
@@ -176,12 +176,12 @@ class OVCLIExportTestCase(unittest.TestCase):
         "speecht5": 2,
         "clip": 2,
         "mamba": 2,
-        "falcon-mamba": 2,
+        "falcon_mamba": 2,
         "qwen3": 2,
         "zamba2": 2,
         "exaone4": 2,
         "bitnet": 2,
-        "granite-moe-hybrid": 2,
+        "granitemoehybrid": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {

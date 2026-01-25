@@ -15,7 +15,6 @@
 import gc
 import os
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from typing import Dict, Generator
@@ -50,6 +49,7 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     PretrainedConfig,
+    SamModel,
     pipeline,
     set_seed,
 )
@@ -85,10 +85,7 @@ from optimum.intel import (
 from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_timm import TimmImageProcessor
-from optimum.intel.openvino.modeling_visual_language import (
-    MODEL_PARTS_CLS_MAPPING,
-    MODEL_TYPE_TO_CLS_MAPPING,
-)
+from optimum.intel.openvino.modeling_visual_language import MODEL_PARTS_CLS_MAPPING, MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.openvino.utils import (
     OV_LANGUAGE_MODEL_NAME,
     OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
@@ -98,10 +95,7 @@ from optimum.intel.openvino.utils import (
     TemporaryDirectory,
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import (
-    _langchain_hf_available,
-    is_transformers_version,
-)
+from optimum.intel.utils.import_utils import _langchain_hf_available, is_transformers_version
 from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
@@ -115,15 +109,6 @@ from optimum.utils.testing_utils import require_diffusers
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-
-class Timer(object):
-    def __enter__(self):
-        self.elapsed = time.perf_counter()
-        return self
-
-    def __exit__(self, type, value, traceback):
-        self.elapsed = (time.perf_counter() - self.elapsed) * 1e3
 
 
 class OVModelIntegrationTest(unittest.TestCase):
@@ -1110,6 +1095,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "mobilebert",
         "mpnet",
         "perceiver_text",
+        "rembert",
         "roberta",
         "roformer",
         "squeezebert",
@@ -1861,7 +1847,7 @@ class OVSamIntegrationTest(unittest.TestCase):
         ).convert("RGB")
         inputs = processor(IMAGE, input_points=input_points, return_tensors="pt")
 
-        transformers_model = OVSamModel.from_pretrained(model_id, device=OPENVINO_DEVICE)
+        transformers_model = SamModel.from_pretrained(model_id)
 
         # test end-to-end inference
         ov_outputs = ov_model(**inputs)
@@ -1879,7 +1865,7 @@ class OVSamIntegrationTest(unittest.TestCase):
 
         # test separated image features extraction
         pixel_values = inputs.pop("pixel_values")
-        features = transformers_model.get_image_features(pixel_values)
+        features = transformers_model.get_image_embeddings(pixel_values)
         ov_features = ov_model.get_image_features(pixel_values)
         self.assertTrue(torch.allclose(ov_features, features, atol=1e-4))
         ov_outputs = ov_model(**inputs, image_embeddings=ov_features)

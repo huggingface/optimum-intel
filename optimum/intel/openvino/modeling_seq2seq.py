@@ -1048,9 +1048,16 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
         config: PretrainedConfig = None,
         **kwargs,
     ):
-        if config.decoder.model_type == "gpt2":
+        if hasattr(config, "decoder") and getattr(config.decoder, "model_type", None) == "gpt2":
             self.no_cross_attention_cache = True
         super().__init__(encoder, decoder, decoder_with_past, config, **kwargs)
+
+    @classmethod
+    def _from_pretrained(cls, model_id: Union[str, Path], config: "PretrainedConfig", **kwargs):
+        if config.model_type == "pix2struct":
+            return OVModelForPix2Struct._from_pretrained(model_id, config, **kwargs)
+        else:
+            return super()._from_pretrained(model_id, config, **kwargs)
 
     def prepare_inputs_for_generation(
         self,
@@ -1133,10 +1140,15 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
     """,
     INPUTS_DOCSTRING,
 )
-class OVModelForPix2Struct(OVModelForSeq2SeqLM):
+class OVModelForPix2Struct(OVModelForVision2Seq):
     auto_model_class = Pix2StructForConditionalGeneration
     main_input_name = "flattened_patches"
     export_feature = "image-to-text"
+
+    # this is needed to avoid circular calls when OVModelForVision2Seq is called to instantiate a OVModelForPix2Struct
+    @classmethod
+    def _from_pretrained(cls, model_id: Union[str, Path], config: "PretrainedConfig", **kwargs):
+        return super(OVModelForVision2Seq, cls)._from_pretrained(model_id, config, **kwargs)
 
     def prepare_inputs_for_generation(
         self,
@@ -1187,7 +1199,7 @@ class OVModelForPix2Struct(OVModelForSeq2SeqLM):
         **kwargs,
     ) -> Seq2SeqLMOutput:
         return super().forward(
-            input_ids=flattened_patches,
+            pixel_values=flattened_patches,
             attention_mask=attention_mask,
             decoder_input_ids=decoder_input_ids,
             decoder_attention_mask=decoder_attention_mask,

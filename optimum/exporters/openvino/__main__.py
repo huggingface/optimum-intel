@@ -289,7 +289,6 @@ def main_export(
     revision: str = "main",
     force_download: bool = False,
     local_files_only: bool = False,
-    use_auth_token: Optional[Union[bool, str]] = None,
     token: Optional[Union[bool, str]] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
     custom_export_configs: Optional[Dict[str, "OnnxConfig"]] = None,
@@ -322,7 +321,7 @@ def main_export(
         device (`str`, defaults to `"cpu"`):
             The device to use to do the export. Defaults to "cpu".
         framework (`Optional[str]`, defaults to `pt`):
-            The framework to use for the ONNX export. Defaults to 'pt' for PyTorch.
+            The framework to use to load the model before conversion. Defaults to 'pt' for PyTorch.
         cache_dir (`Optional[str]`, defaults to `HUGGINGFACE_HUB_CACHE`):
             Path indicating where to store cache. The default Hugging Face cache path will be used by default.
         trust_remote_code (`bool`, defaults to `False`):
@@ -341,8 +340,6 @@ def main_export(
             cached versions if they exist.
         local_files_only (`Optional[bool]`, defaults to `False`):
             Whether or not to only look at local files (i.e., do not try to download the model).
-        use_auth_token (Optional[Union[bool, str]], defaults to `None`):
-            Deprecated. Please use `token` instead.
         token (Optional[Union[bool, str]], defaults to `None`):
             The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
             when running `huggingface-cli login` (stored in `~/.huggingface`).
@@ -355,13 +352,13 @@ def main_export(
             Experimental usage: override the default export config used for the given model. This argument may be useful for advanced users that desire a finer-grained control on the export. An example is available [here](https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model).
         fn_get_submodels (`Optional[Callable]`, defaults to `None`):
             Experimental usage: Override the default submodels that are used at the export. This is
-            especially useful when exporting a custom architecture that needs to split the ONNX (e.g. encoder-decoder). If unspecified with custom models, optimum will try to use the default submodels used for the given task, with no guarantee of success.
+            especially useful when exporting a custom architecture that needs to be splitted in multiple components (e.g. encoder-decoder). If unspecified with custom models, optimum will try to use the default submodels used for the given task, with no guarantee of success.
         stateful (`bool`, defaults to `True`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
         eagle3 (`bool`, defaults to `False`):
             This is needed by eagle3 draft models.
         **kwargs_shapes (`Dict`):
-            Shapes to use during inference. This argument allows to override the default shapes used during the ONNX export.
+            Shapes to use during inference. This argument allows to override the default shapes used during the OpenVINO export.
 
     Example usage:
     ```python
@@ -371,15 +368,6 @@ def main_export(
     ```
     """
     from optimum.exporters.openvino.convert import export_from_model
-
-    if use_auth_token is not None:
-        warnings.warn(
-            "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-            FutureWarning,
-        )
-        if token is not None:
-            raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-        token = use_auth_token
 
     if framework is None:
         framework = TasksManager.determine_framework(
@@ -478,7 +466,7 @@ def main_export(
                 model_type, exporter="openvino", library_name=library_name
             )
             raise ValueError(
-                f"Asked to export a {model_type} model for the task {task}{autodetected_message}, but the Optimum OpenVINO exporter only supports the tasks {', '.join(model_tasks.keys())} for {model_type}. Please use a supported task. Please open an issue at https://github.com/huggingface/optimum/issues if you would like the task {task} to be supported in the ONNX export for {model_type}."
+                f"Asked to export a {model_type} model for the task {task}{autodetected_message}, but the Optimum OpenVINO exporter only supports the tasks {', '.join(model_tasks.keys())} for {model_type}. Please use a supported task. Please open an issue at https://github.com/huggingface/optimum-intel/issues if you would like the task {task} to be supported in the OpenVINO export for {model_type}."
             )
 
         # some models force flash_attn attention by default that does not support load model on cpu
