@@ -7523,33 +7523,6 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                 del afmoe_moe.down_projs, afmoe_moe.gate_projs, afmoe_moe.up_projs
 
 
-class LlamaEagle3RotaryEmbedding(torch.nn.Module):
-    def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
-        super().__init__()
-
-        self.dim = dim
-        self.max_position_embeddings = max_position_embeddings
-        self.base = base
-        self.attention_scaling = 1.0
-        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
-
-    @torch.no_grad()
-    def forward(self, x, position_ids):
-        # Different with eagle code on github to fix the issue of long prompt (> max_seq_len_cached)
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-        position_ids_expanded = position_ids[:, None, :].float()
-
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
-
-        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
-
-
 class LlamaEagle3MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -7610,15 +7583,9 @@ class LlamaEagle3Attention(nn.Module):
         self._init_rope()
 
     def _init_rope(self):
+        from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
         if self.config.rope_scaling is None:
-            if hasattr(self.config, "rope_theta"):
-                self.rotary_emb = LlamaEagle3RotaryEmbedding(
-                    self.head_dim, max_position_embeddings=self.max_position_embeddings, base=self.config.rope_theta
-                )
-            else:
-                self.rotary_emb = LlamaEagle3RotaryEmbedding(
-                    self.head_dim, max_position_embeddings=self.max_position_embeddings
-                )
+            self.rotary_emb = LlamaRotaryEmbedding(self.config)
         else:
             scaling_type = self.config.rope_scaling.get("rope_type", self.config.rope_scaling.get("type"))
             raise ValueError(f"Unknown RoPE scaling type {scaling_type}")
