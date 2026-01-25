@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 import torch
 import torch.nn.functional as F
 from torch import nn
-from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache
 from transformers.configuration_utils import PretrainedConfig
 from transformers.generation import GenerationMixin
@@ -7550,6 +7549,7 @@ class LlamaEagle3Attention(nn.Module):
 
     def _init_rope(self):
         from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
+
         if self.config.rope_scaling is None:
             self.rotary_emb = LlamaRotaryEmbedding(self.config)
         else:
@@ -7628,6 +7628,7 @@ class LlamaEagle3Attention(nn.Module):
 class LlamaEagle3DecoderLayeremb(nn.Module):
     def __init__(self, config, last=True):
         from transformers.models.llama.modeling_llama import LlamaMLP
+
         super().__init__()
         self.hidden_size = config.hidden_size
         self.self_attn = LlamaEagle3Attention(config=config)
