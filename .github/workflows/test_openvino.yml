@@ -38,7 +38,7 @@ jobs:
             "*diffusion*",
             "*quantization*",
           ]
-        transformers-version: ["4.45", "4.57.6", "latest"]
+        transformers-version: ["4.45.0", "4.57.6", "latest"]
 
     runs-on: ubuntu-22.04
 
@@ -55,6 +55,11 @@ jobs:
         run: |
           pip install --upgrade pip uv
           uv pip install .[openvino,diffusers,tests]
+
+      - if: ${{ matrix.transformers-version != 'latest' }}
+        name: Install transformers
+        run: |
+          uv pip install transformers==${{ matrix.transformers-version }}
 
       - if: ${{ matrix.transformers-version == '4.45.0' }}
         name: Install specific dependencies and versions required for older transformers
