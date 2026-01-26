@@ -7561,7 +7561,7 @@ class LlamaEagle3Attention(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        past_key_value: Cache = None,
         use_cache: bool = False,
         **kwargs: Unpack[TransformersKwargs],
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
@@ -7622,7 +7622,7 @@ class LlamaEagle3Attention(nn.Module):
         if not kwargs.get("output_attentions", False):
             attn_weights = None
 
-        return attn_output, attn_weights, past_key_value
+        return attn_output, attn_weights
 
 
 class LlamaEagle3DecoderLayeremb(nn.Module):
@@ -7644,7 +7644,7 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        past_key_value: Cache = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
@@ -7670,7 +7670,7 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
         hidden_states = torch.cat((input_emb, hidden_states), dim=-1)
 
         # Self Attention
-        hidden_states, self_attn_weights, present_key_value = self.self_attn(
+        hidden_states, self_attn_weights = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -7690,9 +7690,6 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
 
         if output_attentions:
             outputs += (self_attn_weights,)
-
-        if use_cache:
-            outputs += (present_key_value,)
 
         return outputs
 
@@ -7803,7 +7800,8 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
         )
 
         if use_cache:
-            next_decoder_cache += (layer_outputs[2 if output_attentions else 1],)
+            #next_decoder_cache += (layer_outputs[2 if output_attentions else 1],)
+            next_decoder_cache = past_key_value
         hidden_states = layer_outputs[0]
         hidden_states = self.norm(hidden_states)
 
@@ -7843,14 +7841,6 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
             combined_attention_mask = (
                 expanded_attn_mask if combined_attention_mask is None else expanded_attn_mask + combined_attention_mask
             )
-
-        # [MODIFIED] add tree mask
-        if hasattr(self, "tree_mask") and self.tree_mask is not None:
-            tree_mask = self.tree_mask
-            _, _, tree_shape0, tree_shape1 = tree_mask.shape
-            combined_attention_mask[:, :, -tree_shape0:, -tree_shape1:][tree_mask == 0] = torch.finfo(
-                torch.float32
-            ).min
 
         return combined_attention_mask
 
