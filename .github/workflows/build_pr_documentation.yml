@@ -38,7 +38,7 @@ jobs:
         run: |
           pip install --upgrade pip uv
           uv pip install git+https://github.com/huggingface/doc-builder
-          uv pip install .[quality] nncf openvino neural-compressor[pt]>3.4 diffusers accelerate datasets
+          uv pip install .[quality] nncf openvino diffusers accelerate datasets
 
       - name: Make documentation
         shell: bash
