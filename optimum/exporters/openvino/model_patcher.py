@@ -7521,99 +7521,16 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                 afmoe_moe.forward = afmoe_moe._orig_forward
                 del afmoe_moe.down_projs, afmoe_moe.gate_projs, afmoe_moe.up_projs
 
+from transformers.models.llama.modeling_llama import LlamaAttention
 
-class LlamaEagle3Attention(nn.Module):
+class LlamaEagle3Attention(LlamaAttention):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
     def __init__(self, config):
-        super().__init__()
-        self.config = config
-        self.hidden_size = config.hidden_size
-        self.num_heads = config.num_attention_heads
-        self.head_dim = self.hidden_size // self.num_heads
-        self.num_key_value_heads = config.num_key_value_heads
-        self.num_key_value_groups = self.num_heads // self.num_key_value_heads
-        self.max_position_embeddings = config.max_position_embeddings
-        self.scaling = 1 / math.sqrt(self.head_dim)
-
-        if (self.head_dim * self.num_heads) != self.hidden_size:
-            raise ValueError(
-                f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
-                f" and `num_heads`: {self.num_heads})."
-            )
-        self.q_proj = nn.Linear(self.hidden_size * 2, self.num_heads * self.head_dim, bias=False)
-        self.k_proj = nn.Linear(self.hidden_size * 2, self.num_key_value_heads * self.head_dim, bias=False)
-        self.v_proj = nn.Linear(self.hidden_size * 2, self.num_key_value_heads * self.head_dim, bias=False)
-        self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        position_embeddings: tuple[torch.Tensor, torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Cache = None,
-        use_cache: bool = False,
-        **kwargs: Unpack[TransformersKwargs],
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-        from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
-        from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, eager_attention_forward
-
-        bsz, q_len, _ = hidden_states.size()
-
-        query_states = self.q_proj(hidden_states)
-        key_states = self.k_proj(hidden_states)
-        value_states = self.v_proj(hidden_states)
-
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-
-        kv_seq_len = key_states.shape[-2]
-        if past_key_value is not None:
-            kv_seq_len += past_key_value[0].shape[-2]
-
-        cos, sin = position_embeddings
-
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
-
-        if past_key_value is not None:
-            # reuse k, v, self_attention
-            key_states = torch.cat([past_key_value[0], key_states], dim=2)
-            value_states = torch.cat([past_key_value[1], value_states], dim=2)
-
-        past_key_value = (key_states, value_states) if use_cache else None
-
-        attention_interface: Callable = eager_attention_forward
-
-        if self.config._attn_implementation != "eager":
-            if self.config._attn_implementation == "sdpa" and kwargs.get("output_attentions", False):
-                logger.warning_once(
-                    "`torch.nn.functional.scaled_dot_product_attention` does not support `output_attentions=True`. Falling back to "
-                    'eager attention. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
-                )
-            else:
-                attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
-
-        attn_output, attn_weights = attention_interface(
-            self,
-            query_states,
-            key_states,
-            value_states,
-            attention_mask,
-            dropout=0.0 if not self.training else self.attention_dropout,
-            scaling=self.scaling,
-            **kwargs,
-        )
-
-        # attn_output = attn_output.transpose(1, 2).contiguous()
-        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
-        attn_output = self.o_proj(attn_output)
-
-        if not kwargs.get("output_attentions", False):
-            attn_weights = None
-
-        return attn_output, attn_weights
+        super().__init__(config, 0)
+        self.q_proj = nn.Linear(config.hidden_size * 2, config.num_attention_heads * self.head_dim, bias=False)
+        self.k_proj = nn.Linear(config.hidden_size * 2, config.num_key_value_heads * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(config.hidden_size * 2, config.num_key_value_heads * self.head_dim, bias=False)
 
 
 class LlamaEagle3DecoderLayeremb(nn.Module):
@@ -7781,24 +7698,22 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
         all_self_attns = () if output_attentions else None
         next_decoder_cache = () if use_cache else None
 
-        past_key_value = past_key_values[0] if past_key_values is not None else None
-
         position_embeddings=self.rotary_emb(hidden_states, position_ids=position_ids)
-    
+
         layer_outputs = self.midlayer(
             input_emb=inputs_embeds,
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_embeddings=position_embeddings,
             position_ids=position_ids,
-            past_key_value=past_key_value,
+            past_key_value=past_key_values,
             output_attentions=output_attentions,
             use_cache=True,
         )
 
         if use_cache:
-            #next_decoder_cache += (layer_outputs[2 if output_attentions else 1],)
-            next_decoder_cache = past_key_value
+            next_decoder_cache = past_key_values
+
         hidden_states = layer_outputs[0]
         hidden_states = self.norm(hidden_states)
 
