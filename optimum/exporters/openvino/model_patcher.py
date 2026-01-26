@@ -19,7 +19,7 @@ import logging as log
 import math
 import types
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
@@ -27,6 +27,7 @@ from torch import nn
 from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache
 from transformers.configuration_utils import PretrainedConfig
 from transformers.generation import GenerationMixin
+from transformers.masking_utils import create_causal_mask
 from transformers.modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPast,
@@ -34,7 +35,7 @@ from transformers.modeling_outputs import (
 )
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.llama.configuration_llama import LlamaConfig
-from transformers.models.llama.modeling_llama import LlamaRMSNorm
+from transformers.models.llama.modeling_llama import LlamaPreTrainedModel, LlamaRMSNorm, LlamaRotaryEmbedding
 from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
 from transformers.processing_utils import Unpack
@@ -7521,7 +7522,9 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                 afmoe_moe.forward = afmoe_moe._orig_forward
                 del afmoe_moe.down_projs, afmoe_moe.gate_projs, afmoe_moe.up_projs
 
+
 from transformers.models.llama.modeling_llama import LlamaAttention
+
 
 class LlamaEagle3Attention(LlamaAttention):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -7589,10 +7592,6 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
 
         return outputs
 
-
-from transformers.models.llama.modeling_llama import LlamaPreTrainedModel
-from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
-from transformers.masking_utils import create_causal_mask
 
 class LlamaEagle3Model(LlamaPreTrainedModel):
     def __init__(self, config: LlamaConfig):
@@ -7688,7 +7687,7 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
         all_self_attns = () if output_attentions else None
         next_decoder_cache = () if use_cache else None
 
-        position_embeddings=self.rotary_emb(hidden_states, position_ids=position_ids)
+        position_embeddings = self.rotary_emb(hidden_states, position_ids=position_ids)
 
         layer_outputs = self.midlayer(
             input_emb=inputs_embeds,
