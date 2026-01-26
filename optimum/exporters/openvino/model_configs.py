@@ -247,10 +247,6 @@ def init_model_configs():
         "transformers",
         "Qwen2VLForConditionalGeneration",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen2_5_vl", "image-text-to-text")] = (
-        "transformers",
-        "AutoModelForImageTextToText",
-    )
     TasksManager._CUSTOM_CLASSES[("pt", "llava_next_video", "image-text-to-text")] = (
         "transformers",
         "AutoModelForVision2Seq",
@@ -258,14 +254,6 @@ def init_model_configs():
     TasksManager._CUSTOM_CLASSES[("pt", "gemma3", "image-text-to-text")] = (
         "transformers",
         "Gemma3ForConditionalGeneration",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "idefics3", "image-text-to-text")] = (
-        "transformers",
-        "AutoModelForImageTextToText",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "smolvlm", "image-text-to-text")] = (
-        "transformers",
-        "AutoModelForImageTextToText",
     )
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "image-text-to-text")] = ("transformers", "AutoModelForCausalLM")
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "automatic-speech-recognition")] = (
@@ -279,10 +267,6 @@ def init_model_configs():
     TasksManager._CUSTOM_CLASSES[("pt", "phi4_multimodal", "automatic-speech-recognition")] = (
         "transformers",
         "AutoModelForCausalLM",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "llama4", "image-text-to-text")] = (
-        "transformers",
-        "AutoModelForImageTextToText",
     )
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
