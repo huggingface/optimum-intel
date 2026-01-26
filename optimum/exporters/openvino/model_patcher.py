@@ -7698,6 +7698,8 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
 
 
 from transformers.models.llama.modeling_llama import LlamaPreTrainedModel
+
+
 class LlamaEagle3Model(LlamaPreTrainedModel):
     def __init__(self, config: LlamaConfig):
         super().__init__(config)
