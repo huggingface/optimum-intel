@@ -38,7 +38,7 @@ jobs:
             "*diffusion*",
             "*quantization*",
           ]
-        transformers-version: ["4.45.0", "latest", "5.0.0"]
+        transformers-version: ["4.45", "4.57.6", "latest"]
 
     runs-on: ubuntu-22.04
 
@@ -61,7 +61,7 @@ jobs:
         run: |
           uv pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.32.* transformers_stream_generator
 
-      - if: ${{ matrix.transformers-version == 'latest' && matrix.test-pattern == '*decoder*'}}
+      - if: ${{ matrix.transformers-version != '4.45.0' && matrix.test-pattern == '*decoder*'}}
         name: Install auto-gptq, autoawq
         run: |
           uv pip install auto-gptq "autoawq<0.2.8"
