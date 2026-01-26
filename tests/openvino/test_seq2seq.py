@@ -33,7 +33,6 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     AutoModelForSpeechSeq2Seq,
     AutoModelForTextToSpectrogram,
-    AutoModelForVision2Seq,
     AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
@@ -67,6 +66,18 @@ from optimum.intel.openvino.modeling_text2speech import (
 from optimum.intel.openvino.modeling_visual_language import MODEL_PARTS_CLS_MAPPING, MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+
+
+# AutoModelForVision2Seq is deprecated since v4.54
+# https://github.com/huggingface/transformers/blob/v4.54.0/src/transformers/models/auto/modeling_auto.py#L2151
+if is_transformers_version(">=", "4.54.0"):
+    from transformers import AutoModelForImageTextToText
+
+    transformers_auto_class = AutoModelForImageTextToText
+else:
+    from transformers import AutoModelForVision2Seq
+
+    transformers_auto_class = AutoModelForVision2Seq
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -421,7 +432,7 @@ class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
     UNSUPPORTED_ARCHITECTURES = {"got_ocr2", "pix2struct"}
     TASK = "image-to-text"
     OVMODEL_CLASS = OVModelForVision2Seq
-    AUTOMODEL_CLASS = AutoModelForVision2Seq
+    AUTOMODEL_CLASS = transformers_auto_class
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
@@ -580,9 +591,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
             return AutoModelForImageTextToText
         if model_arch == "llava_next_video":
-            from transformers import AutoModelForVision2Seq
+            from transformers import LlavaNextVideoForConditionalGeneration
 
-            return AutoModelForVision2Seq
+            return LlavaNextVideoForConditionalGeneration
         if model_arch == "llava":
             from transformers import LlavaForConditionalGeneration
 
@@ -1056,7 +1067,7 @@ class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ["pix2struct"]
     TASK = "image-to-text"  # is it fine as well with visual-question-answering?
     OVMODEL_CLASS = OVModelForVision2Seq
-    AUTOMODEL_CLASS = AutoModelForVision2Seq
+    AUTOMODEL_CLASS = transformers_auto_class
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
