@@ -235,26 +235,7 @@ if TYPE_CHECKING:
 def init_model_configs():
     if "open_clip" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
         TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["open_clip"] = {}
-    TasksManager._CUSTOM_CLASSES[("pt", "llava", "image-text-to-text")] = (
-        "transformers",
-        "LlavaForConditionalGeneration",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "llava_next", "image-text-to-text")] = (
-        "transformers",
-        "LlavaNextForConditionalGeneration",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen2_vl", "image-text-to-text")] = (
-        "transformers",
-        "Qwen2VLForConditionalGeneration",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "llava_next_video", "image-text-to-text")] = (
-        "transformers",
-        "AutoModelForVision2Seq",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "gemma3", "image-text-to-text")] = (
-        "transformers",
-        "Gemma3ForConditionalGeneration",
-    )
+
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "image-text-to-text")] = ("transformers", "AutoModelForCausalLM")
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "automatic-speech-recognition")] = (
         "transformers",
@@ -268,6 +249,38 @@ def init_model_configs():
         "transformers",
         "AutoModelForCausalLM",
     )
+
+    # since transformers v4.46, model can be loaded using default AutoModelForImageTextToText
+    # https://github.com/huggingface/transformers/blob/v4.46.0/src/transformers/models/auto/modeling_auto.py#L776
+    if is_transformers_version("<", "4.46"):
+        TasksManager._CUSTOM_CLASSES[("pt", "llava", "image-text-to-text")] = (
+            "transformers",
+            "LlavaForConditionalGeneration",
+        )
+        TasksManager._CUSTOM_CLASSES[("pt", "llava_next", "image-text-to-text")] = (
+            "transformers",
+            "LlavaNextForConditionalGeneration",
+        )
+        TasksManager._CUSTOM_CLASSES[("pt", "qwen2_vl", "image-text-to-text")] = (
+            "transformers",
+            "Qwen2VLForConditionalGeneration",
+        )
+
+    # since transformers v4.50, model can be loaded using default AutoModelForImageTextToText
+    # https://github.com/huggingface/transformers/blob/v4.50.0/src/transformers/models/auto/modeling_auto.py#L835
+    if is_transformers_version("<", "4.50"):
+        TasksManager._CUSTOM_CLASSES[("pt", "gemma3", "image-text-to-text")] = (
+            "transformers",
+            "Gemma3ForConditionalGeneration",
+        )
+
+    # since transformers v4.52, model can be loaded using default AutoModelForImageTextToText
+    # https://github.com/huggingface/transformers/blob/v4.52.0/src/transformers/models/auto/modeling_auto.py#L899
+    if is_transformers_version("<", "4.52"):
+        TasksManager._CUSTOM_CLASSES[("pt", "llava_next_video", "image-text-to-text")] = (
+            "transformers",
+            "AutoModelForVision2Seq",
+        )
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
