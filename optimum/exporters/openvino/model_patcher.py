@@ -7545,20 +7545,11 @@ class LlamaEagle3Attention(nn.Module):
         self.k_proj = nn.Linear(self.hidden_size * 2, self.num_key_value_heads * self.head_dim, bias=False)
         self.v_proj = nn.Linear(self.hidden_size * 2, self.num_key_value_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
-        self._init_rope()
-
-    def _init_rope(self):
-        from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
-
-        if self.config.rope_scaling is None:
-            self.rotary_emb = LlamaRotaryEmbedding(self.config)
-        else:
-            scaling_type = self.config.rope_scaling.get("rope_type", self.config.rope_scaling.get("type"))
-            raise ValueError(f"Unknown RoPE scaling type {scaling_type}")
 
     def forward(
         self,
         hidden_states: torch.Tensor,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Cache = None,
@@ -7582,7 +7573,7 @@ class LlamaEagle3Attention(nn.Module):
         if past_key_value is not None:
             kv_seq_len += past_key_value[0].shape[-2]
 
-        cos, sin = self.rotary_emb(query_states, position_ids)
+        cos, sin = position_embeddings
 
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
@@ -7645,6 +7636,7 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Cache = None,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
@@ -7676,6 +7668,7 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
             position_ids=position_ids,
             past_key_value=past_key_value,
             output_attentions=output_attentions,
+            position_embeddings=position_embeddings,
             use_cache=use_cache,
         )
         hidden_states = residual + hidden_states
@@ -7695,7 +7688,7 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
 
 
 from transformers.models.llama.modeling_llama import LlamaPreTrainedModel
-
+from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
 
 class LlamaEagle3Model(LlamaPreTrainedModel):
     def __init__(self, config: LlamaConfig):
@@ -7718,7 +7711,7 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
         self.register_buffer("t2d", t2d)
         self.lm_head = nn.Linear(config.hidden_size, config.draft_vocab_size, bias=False)
         self.identity = torch.nn.Identity()
-
+        self.rotary_emb = LlamaRotaryEmbedding(config=config)
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -7789,10 +7782,14 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
         next_decoder_cache = () if use_cache else None
 
         past_key_value = past_key_values[0] if past_key_values is not None else None
+
+        position_embeddings=self.rotary_emb(hidden_states, position_ids=position_ids)
+    
         layer_outputs = self.midlayer(
             input_emb=inputs_embeds,
             hidden_states=hidden_states,
             attention_mask=attention_mask,
+            position_embeddings=position_embeddings,
             position_ids=position_ids,
             past_key_value=past_key_value,
             output_attentions=output_attentions,
