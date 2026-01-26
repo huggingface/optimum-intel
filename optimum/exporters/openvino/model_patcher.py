@@ -7557,20 +7557,6 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
-        """
-        Args:
-            hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
-            attention_mask (`torch.FloatTensor`, *optional*): attention mask of size
-                `(batch, 1, tgt_len, src_len)` where padding elements are indicated by very large negative values.
-            output_attentions (`bool`, *optional*):
-                Whether or not to return the attentions tensors of all attention layers. See `attentions` under
-                returned tensors for more detail.
-            use_cache (`bool`, *optional*):
-                If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding
-                (see `past_key_values`).
-            past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
-        """
-
         residual = hidden_states
 
         hidden_states = self.hidden_norm(hidden_states)
@@ -7606,29 +7592,28 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
 
 from transformers.models.llama.modeling_llama import LlamaPreTrainedModel
 from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
+from transformers.masking_utils import create_causal_mask
 
 class LlamaEagle3Model(LlamaPreTrainedModel):
     def __init__(self, config: LlamaConfig):
         super().__init__(config)
-        self.padding_idx = config.pad_token_id
-        self.vocab_size = config.vocab_size
         self.hidden_size = config.hidden_size
 
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, config.pad_token_id)
+        self.rotary_emb = LlamaRotaryEmbedding(config=config)
+
         self.midlayer = LlamaEagle3DecoderLayeremb(config)
-        if hasattr(config, "target_hidden_size"):
-            self.fc = nn.Linear(config.target_hidden_size * 3, self.hidden_size, bias=False)
-        else:
-            self.fc = nn.Linear(config.hidden_size * 3, self.hidden_size, bias=False)
+        self.target_hidden_size = getattr(config, "target_hidden_size", config.hidden_size)
+        self.fc = nn.Linear(self.target_hidden_size * 3, self.hidden_size, bias=False)
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.gradient_checkpointing = False
+
+        self.lm_head = nn.Linear(config.hidden_size, config.draft_vocab_size, bias=False)
+
         d2t = torch.zeros((config.draft_vocab_size), dtype=torch.long)
         t2d = torch.zeros((config.vocab_size), dtype=torch.bool)
         self.register_buffer("d2t", d2t)
         self.register_buffer("t2d", t2d)
-        self.lm_head = nn.Linear(config.hidden_size, config.draft_vocab_size, bias=False)
-        self.identity = torch.nn.Identity()
-        self.rotary_emb = LlamaRotaryEmbedding(config=config)
+
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -7667,22 +7652,27 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
         else:
             position_ids = position_ids.view(-1, seq_length).long()
 
-        # position_ids=position_ids//4
-        if attention_mask is None:
-            attention_mask = torch.ones(
-                (batch_size, seq_length_with_past), dtype=torch.bool, device=hidden_states.device
-            )
-        attention_mask = self._prepare_decoder_attention_mask(
-            attention_mask, (batch_size, seq_length), hidden_states, past_key_values_length
-        )
-
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
+
+        if cache_position is None:
+            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+            cache_position: torch.Tensor = (
+                torch.arange(inputs_embeds.shape[1], device=inputs_embeds.device) + past_seen_tokens
+            )
+
+        causal_mask = create_causal_mask(
+            config=self.config,
+            input_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            cache_position=cache_position,
+            past_key_values=past_key_values,
+            position_ids=position_ids,
+        )
 
         if hidden_states is None:
             hidden_states = torch.zeros(
                 [batch_size, seq_length, self.embed_dim],
-                # *inputs_embeds.shape[:-1],
                 self.embed_dim,
                 dtype=inputs_embeds.dtype,
                 device=inputs_embeds.device,
@@ -7703,7 +7693,7 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
         layer_outputs = self.midlayer(
             input_emb=inputs_embeds,
             hidden_states=hidden_states,
-            attention_mask=attention_mask,
+            attention_mask=causal_mask,
             position_embeddings=position_embeddings,
             position_ids=position_ids,
             past_key_value=past_key_values,
@@ -7730,32 +7720,6 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
             attentions=all_self_attns,
         )
 
-    def _prepare_decoder_attention_mask(self, attention_mask, input_shape, inputs_embeds, past_key_values_length):
-        from transformers.modeling_attn_mask_utils import AttentionMaskConverter
-
-        # create causal mask
-        # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-        combined_attention_mask = None
-        if input_shape[-1] > 1:
-            combined_attention_mask = AttentionMaskConverter._make_causal_mask(
-                input_shape,
-                # inputs_embeds.dtype,
-                torch.float32,  # [MODIFIED] force to cast to float32
-                device=inputs_embeds.device,
-                past_key_values_length=past_key_values_length,
-            )
-
-        if attention_mask is not None:
-            # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            expanded_attn_mask = AttentionMaskConverter._expand_mask(
-                attention_mask, torch.float32, tgt_len=input_shape[-1]
-            ).to(inputs_embeds.device)
-            combined_attention_mask = (
-                expanded_attn_mask if combined_attention_mask is None else expanded_attn_mask + combined_attention_mask
-            )
-
-        return combined_attention_mask
-
 
 @dataclass
 class Eagle3Output(ModelOutput):
@@ -7776,10 +7740,7 @@ class LlamaEagle3ForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         super().__init__(config)
         self.model = LlamaEagle3Model(config)
         self.vocab_size = config.vocab_size
-        # self.lm_head = nn.Linear(config.hidden_size, config.draft_vocab_size, bias=False)
-        # self.logsoftmax = nn.LogSoftmax(dim=-1)
-
-        # Initialize weights and apply final processing
+        self.identity = torch.nn.Identity()
         self.post_init()
 
     def forward(
@@ -7841,7 +7802,7 @@ class LlamaEagle3ForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         if labels is not None:
             loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
 
-        d2t_out = self.model.identity(self.model.d2t)
+        d2t_out = self.identity(self.model.d2t)
         return Eagle3Output(
             loss=loss,
             logits=logits,
