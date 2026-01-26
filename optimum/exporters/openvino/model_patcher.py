@@ -7697,35 +7697,8 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
         return outputs
 
 
-class LlamaEagle3PreTrainedModel(PreTrainedModel):
-    config_class = LlamaConfig
-    base_model_prefix = "model"
-    supports_gradient_checkpointing = True
-    _no_split_modules = ["LlamaDecoderLayer"]
-    _skip_keys_device_placement = ["past_key_values"]
-    _supports_flash_attn_2 = True
-    _supports_sdpa = True
-    _supports_flex_attn = True
-    _supports_cache_class = True
-    _supports_quantized_cache = True
-    _supports_static_cache = True
-    _supports_attention_backend = True
-
-    def _init_weights(self, module):
-        std = self.config.initializer_range
-        if isinstance(module, nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=std)
-            if module.bias is not None:
-                module.bias.data.zero_()
-        elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=std)
-            if module.padding_idx is not None:
-                module.weight.data[module.padding_idx].zero_()
-        elif isinstance(module, LlamaRMSNorm):
-            module.weight.data.fill_(1.0)
-
-
-class LlamaEagle3Model(LlamaEagle3PreTrainedModel):
+from transformers.models.llama.modeling_llama import LlamaPreTrainedModel
+class LlamaEagle3Model(LlamaPreTrainedModel):
     def __init__(self, config: LlamaConfig):
         super().__init__(config)
         self.padding_idx = config.pad_token_id
@@ -7896,7 +7869,7 @@ class Eagle3Output(ModelOutput):
     d2t: Optional[torch.LongTensor] = None
 
 
-class LlamaEagle3ForCausalLM(LlamaEagle3PreTrainedModel, GenerationMixin):
+class LlamaEagle3ForCausalLM(LlamaPreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
     _tp_plan = {"lm_head": "colwise_rep"}
     _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
