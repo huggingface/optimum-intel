@@ -38,7 +38,7 @@ jobs:
             "*diffusion*",
             "*quantization*",
           ]
-        transformers-version: ["4.45.0", "4.57.6", "latest"]
+        transformers-version: ["4.45.0", "5.0.0", "latest"]
 
     runs-on: ubuntu-22.04
 
