@@ -66,6 +66,11 @@ jobs:
         run: |
           uv pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.32.* transformers_stream_generator
 
+      - if: ${{ matrix.transformers-version == '5.0.0' }}
+        name: Install diffusers
+        run: |
+          uv pip install git+https://github.com/huggingface/diffusers
+
       - if: ${{ matrix.transformers-version != '4.45.0' && matrix.test-pattern == '*decoder*'}}
         name: Install auto-gptq, autoawq
         run: |
