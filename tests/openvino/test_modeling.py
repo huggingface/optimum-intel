@@ -909,7 +909,7 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
         ov_model = OVModelForQuestionAnswering.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
         transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        data = load_dataset("squad", split="validation").select(range(50))
+        data = load_dataset("rajpurkar/squad", split="validation").select(range(50))
         task_evaluator = evaluator("question-answering")
         transformers_pipe = pipeline("question-answering", model=transformers_model, tokenizer=tokenizer)
         ov_pipe = pipeline("question-answering", model=ov_model, tokenizer=tokenizer)
