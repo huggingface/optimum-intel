@@ -109,7 +109,7 @@ _TASK_TO_DATASET = {
         "column_name": "text",
     },
     "text-classification": {
-        "dataset_name": "glue",
+        "dataset_name": "nyu-mll/glue",
         "dataset_config_name": "sst2",
         "column_name": "sentence",
     },
