@@ -12,10 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import logging
-import operator
 import os
-import warnings
-from functools import reduce
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Dict, List, Optional, Union
@@ -24,7 +21,6 @@ import openvino
 import torch
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import CompiledModel, Core, Model, convert_model
-from openvino import Type as ov_Type
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
