@@ -153,7 +153,7 @@ _HEAD_TO_AUTOMODELS = {
 PREDEFINED_CAUSAL_LANGUAGE_DATASETS = {"wikitext2", "c4", "c4-new", "auto", "gsm8k"}
 
 PREDEFINED_LANGUAGE_DATASETS = {
-    "wikitext2": {"id": "wikitext", "name": "wikitext-2-raw-v1", "split": "train", "streaming": False},
+    "wikitext2": {"id": "Salesforce/wikitext", "name": "wikitext-2-raw-v1", "split": "train", "streaming": False},
     "c4": {"id": "allenai/c4", "name": "en", "split": "train", "streaming": True},
 }
 

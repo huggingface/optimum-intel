@@ -94,17 +94,17 @@ from utils_tests import (
 
 _TASK_TO_DATASET = {
     "text-generation": {
-        "dataset_name": "wikitext",
+        "dataset_name": "Salesforce/wikitext",
         "dataset_config_name": "wikitext-2-raw-v1",
         "column_name": "text",
     },
     "feature-extraction": {
-        "dataset_name": "wikitext",
+        "dataset_name": "Salesforce/wikitext",
         "dataset_config_name": "wikitext-2-raw-v1",
         "column_name": "text",
     },
     "fill-mask": {
-        "dataset_name": "wikitext",
+        "dataset_name": "Salesforce/wikitext",
         "dataset_config_name": "wikitext-2-raw-v1",
         "column_name": "text",
     },
