@@ -94,27 +94,27 @@ from utils_tests import (
 
 _TASK_TO_DATASET = {
     "text-generation": {
-        "dataset_name": "wikitext",
+        "dataset_name": "Salesforce/wikitext",
         "dataset_config_name": "wikitext-2-raw-v1",
         "column_name": "text",
     },
     "feature-extraction": {
-        "dataset_name": "wikitext",
+        "dataset_name": "Salesforce/wikitext",
         "dataset_config_name": "wikitext-2-raw-v1",
         "column_name": "text",
     },
     "fill-mask": {
-        "dataset_name": "wikitext",
+        "dataset_name": "Salesforce/wikitext",
         "dataset_config_name": "wikitext-2-raw-v1",
         "column_name": "text",
     },
     "text-classification": {
-        "dataset_name": "glue",
+        "dataset_name": "nyu-mll/glue",
         "dataset_config_name": "sst2",
         "column_name": "sentence",
     },
     "zero-shot-image-classification": {
-        "dataset_name": "conceptual_captions",
+        "dataset_name": "google-research-datasets/conceptual_captions",
         "column_name": "caption",
         "streaming": True,
     },
