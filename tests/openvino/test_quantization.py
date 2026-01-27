@@ -1362,10 +1362,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertEqual(242, num_weight_nodes["int8"])
         self.assertEqual(0, num_weight_nodes["int4"])
         quantization_config = OVWeightQuantizationConfig(
-            bits=8,
-            dataset="conceptual_captions",
-            num_samples=2,
-            quant_method=OVQuantizationMethod.HYBRID,
+            bits=8, dataset="conceptual_captions", num_samples=2, quant_method=OVQuantizationMethod.HYBRID
         )
         check_optimization_not_applicable_to_optimized_model(int8_pipe, quantization_config)
 
