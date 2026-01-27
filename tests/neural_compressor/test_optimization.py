@@ -149,7 +149,7 @@ class QuantizationTest(INCTestMixin):
         model_name = "distilbert-base-cased-distilled-squad"
         model = AutoModelForQuestionAnswering.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
-        eval_dataset = load_dataset("squad", split="validation").select(range(64))
+        eval_dataset = load_dataset("rajpurkar/squad", split="validation").select(range(64))
         task_evaluator = evaluate.evaluator("question-answering")
         qa_pipeline = pipeline("question-answering", model=model, tokenizer=tokenizer)
         tolerance_criterion = 0.1
