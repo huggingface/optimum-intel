@@ -169,7 +169,7 @@ PREDEFINED_SD_DATASETS = {
 
 PREDEFINED_TEXT_IMAGE_ENCODER_DATASETS = {
     "conceptual_captions": {
-        "id": "conceptual_captions",
+        "id": "google-research-datasets/conceptual_captions",
         "split": "train",
         "text_column_name": "caption",
         "image_column_name": "image_url",

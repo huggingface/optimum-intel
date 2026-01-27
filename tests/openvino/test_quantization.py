@@ -114,7 +114,7 @@ _TASK_TO_DATASET = {
         "column_name": "sentence",
     },
     "zero-shot-image-classification": {
-        "dataset_name": "conceptual_captions",
+        "dataset_name": "google-research-datasets/conceptual_captions",
         "column_name": "caption",
         "streaming": True,
     },
