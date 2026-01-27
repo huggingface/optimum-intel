@@ -248,6 +248,12 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
         # would end-up removing the directory containing the underlying OpenVINO model
         cls._model_save_dir_tempdirectory_instance = save_dir
 
+        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
+        if load_in_8bit is None and not quantization_config:
+            ov_config = None
+        else:
+            ov_config = OVConfig(dtype="fp32")
+
         def fn_get_submodels(model):
             return {"model_text": model.text}
 
@@ -266,7 +272,7 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            ov_config=OVConfig(dtype="auto"),
+            ov_config=ov_config,
             library_name=cls._library_name,
             framework="pt",
             fn_get_submodels=fn_get_submodels,
@@ -370,6 +376,12 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
         # would end-up removing the directory containing the underlying OpenVINO model
         cls._model_save_dir_tempdirectory_instance = save_dir
 
+        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
+        if load_in_8bit is None and not quantization_config:
+            ov_config = None
+        else:
+            ov_config = OVConfig(dtype="fp32")
+
         def fn_get_submodels(model):
             return {"model_vision": model.visual}
 
@@ -388,7 +400,7 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            ov_config=OVConfig(dtype="auto"),
+            ov_config=ov_config,
             library_name=cls._library_name,
             framework="pt",
             fn_get_submodels=fn_get_submodels,
