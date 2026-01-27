@@ -59,7 +59,7 @@ SEED = 1009
 _TASK_TO_DATASET = {
     "text-classification": ("nyu-mll/glue", "sst2", "sentence"),
     "text-generation": ("Salesforce/wikitext", "wikitext-2-raw-v1", "text"),
-    "text2text-generation": ("cnn_dailymail", "3.0.0", ("article", "highlights")),
+    "text2text-generation": ("abisee/cnn_dailymail", "3.0.0", ("article", "highlights")),
 }
 
 
