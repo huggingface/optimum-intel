@@ -1332,7 +1332,9 @@ class OVWeightCompressionTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
     def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_fake_nodes, expected_int8_nodes):
         model_id = MODEL_NAMES[model_type]
-        quantization_config = OVWeightQuantizationConfig(bits=8, dataset="conceptual_captions", num_samples=2)
+        quantization_config = OVWeightQuantizationConfig(
+            bits=8, dataset="google-research-datasets/conceptual_captions", num_samples=2
+        )
         with TemporaryDirectory() as tmp_dir:
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
 
@@ -1362,7 +1364,10 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertEqual(242, num_weight_nodes["int8"])
         self.assertEqual(0, num_weight_nodes["int4"])
         quantization_config = OVWeightQuantizationConfig(
-            bits=8, dataset="conceptual_captions", num_samples=2, quant_method=OVQuantizationMethod.HYBRID
+            bits=8,
+            dataset="google-research-datasets/conceptual_captions",
+            num_samples=2,
+            quant_method=OVQuantizationMethod.HYBRID,
         )
         check_optimization_not_applicable_to_optimized_model(int8_pipe, quantization_config)
 

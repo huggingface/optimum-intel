@@ -158,13 +158,24 @@ PREDEFINED_LANGUAGE_DATASETS = {
 }
 
 PREDEFINED_SD_DATASETS = {
-    "conceptual_captions": {"split": "train", "prompt_column_name": "caption", "streaming": True},
-    "laion/220k-GPT4Vision-captions-from-LIVIS": {
+    "conceptual_captions": {
+        "id": "google-research-datasets/conceptual_captions",
         "split": "train",
         "prompt_column_name": "caption",
         "streaming": True,
     },
-    "laion/filtered-wit": {"split": "train", "prompt_column_name": "caption", "streaming": True},
+    "laion/220k-GPT4Vision-captions-from-LIVIS": {
+        "id": "laion/220k-GPT4Vision-captions-from-LIVIS",
+        "split": "train",
+        "prompt_column_name": "caption",
+        "streaming": True,
+    },
+    "laion/filtered-wit": {
+        "id": "laion/filtered-wit",
+        "split": "train",
+        "prompt_column_name": "caption",
+        "streaming": True,
+    },
 }
 
 PREDEFINED_TEXT_IMAGE_ENCODER_DATASETS = {

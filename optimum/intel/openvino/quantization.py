@@ -335,7 +335,7 @@ class OVCalibrationDatasetBuilder:
                 dataset_metadata = PREDEFINED_SD_DATASETS[dataset_name]
 
                 dataset = self.load_dataset(
-                    dataset_name,
+                    dataset_metadata["id"],
                     num_samples=config.num_samples,  # This is an upper bound on how many prompts are needed
                     dataset_split=dataset_metadata["split"],
                     streaming=dataset_metadata["streaming"],
