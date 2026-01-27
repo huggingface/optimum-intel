@@ -59,7 +59,11 @@ from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.openvino.utils import TemporaryDirectory
 from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version
+from optimum.utils import logging
 from optimum.utils.save_utils import maybe_load_preprocessors
+
+
+logger = logging.get_logger()
 
 
 class ExportModelTest(unittest.TestCase):
@@ -85,7 +89,7 @@ class ExportModelTest(unittest.TestCase):
         "speecht5": OVModelForTextToSpeechSeq2Seq,
         "clip": OVModelForZeroShotImageClassification,
         "mamba": OVModelForCausalLM,
-        "falcon-mamba": OVModelForCausalLM,
+        "falcon_mamba": OVModelForCausalLM,
         "stable-diffusion-3": OVStableDiffusion3Pipeline,
         "flux": OVFluxPipeline,
         "ltx-video": OVLTXPipeline,
@@ -95,12 +99,12 @@ class ExportModelTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.53.0"):
-        SUPPORTED_ARCHITECTURES.update({"granite-moe-hybrid": OVModelForCausalLM})
+        SUPPORTED_ARCHITECTURES.update({"granitemoehybrid": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.54"):
         SUPPORTED_ARCHITECTURES.update({"exaone4": OVModelForCausalLM, "lfm2": OVModelForCausalLM})
 
-    if is_transformers_version(">=", "4.55.0") and is_transformers_version("<=", "4.57.3"):
+    if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "4.58.0"):
         SUPPORTED_ARCHITECTURES.update({"afmoe": OVModelForCausalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
@@ -299,6 +303,30 @@ class ExportModelTest(unittest.TestCase):
                 self.assertEqual(
                     ov_model.model.get_rt_info()["optimum"]["transformers_version"], _transformers_version
                 )
+
+    def test_compare_openvino_onnx_supported_architectures(self):
+        onnx_architectures = set()
+        openvino_architectures = set()
+        supported_model_types = [
+            "_SUPPORTED_MODEL_TYPE",
+            "_DIFFUSERS_SUPPORTED_MODEL_TYPE",
+            "_TIMM_SUPPORTED_MODEL_TYPE",
+            "_SENTENCE_TRANSFORMERS_SUPPORTED_MODEL_TYPE",
+        ]
+        for supported_models_config in supported_model_types:
+            supported_models = getattr(TasksManager, supported_models_config)
+            for model_type, exporter_configs in supported_models.items():
+                if "onnx" in exporter_configs:
+                    onnx_architectures.add(model_type)
+                if "openvino" in exporter_configs:
+                    openvino_architectures.add(model_type)
+
+            # ensure no breaking changes (all models supported before this PR are still supported), can be removed
+            self.assertTrue(onnx_architectures.issubset(openvino_architectures))
+
+            only_onnx = onnx_architectures - openvino_architectures
+            if len(only_onnx) > 0:
+                logger.warning(f"The following architectures export {only_onnx} is supported by ONNX but not OpenVINO")
 
 
 class CustomExportModelTest(unittest.TestCase):

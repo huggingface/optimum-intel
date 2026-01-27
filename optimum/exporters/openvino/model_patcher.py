@@ -7013,7 +7013,7 @@ def lfm2_short_conv_forward_patched(
 #    for subsequent invocation of the model's `forward` method.
 # 2. Patches the Lfm2ShortConv so that the traced `slow_forward` function works correctly
 #    during both the prefill and decoding steps.
-class Lfm2ModelPatcher(ModelPatcher):
+class Lfm2ModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -7411,6 +7411,24 @@ class GraniteMoeHybridModelPatcher(ModelPatcher):
             mamba_layer.forward = mamba_layer._orig_forward
 
 
+class BigBirdPegasusModelPatcher(OVSeq2SeqModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        if self.real_config._behavior == "encoder" and self._model.config.attention_type == "block_sparse":
+            logger.warning(
+                "BigBirdPegasus model is using block sparse attention, which is not supported in ONNX export. "
+                "The model will be exported with original full attention."
+            )
+            self._model.set_attention_type("original_full")
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        if self.real_config._behavior == "encoder" and self._model.config.attention_type == "block_sparse":
+            self._model.set_attention_type("block_sparse")
+
+
 # Patch MoE implementation to enable correct Torch tracing:
 # https://huggingface.co/arcee-ai/Trinity-Nano-Preview/blob/main/modeling_afmoe.py#L265
 #
@@ -7454,7 +7472,7 @@ def afmoe_moe_forward_patched(self, hidden_states):
     return output.view(batch_size, seq_len, hidden_dim)
 
 
-class AfmoeModelPatcher(ModelPatcher):
+class AfmoeModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         for idx, layer in enumerate(self._model.model.layers):
