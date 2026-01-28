@@ -7484,6 +7484,10 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
 
                 # prepare weigths to combine them from all experts to get the common gate, up and down weights
                 # this is required for vectorized batched matmul representation of MoE
+                # Fix CVS-180119: currently OpenVINO PyTorch Frontend incorrectly patching torch.bmm operation
+                # with bf16 weights that leads to operands types mismatch in torch.bmm during TorchScript tracing
+                # Now we align with hidden_states (that will be always fp32 due to patching
+                # above for embedding layer during tracing)
                 afmoe_moe.down_projs = (
                     torch.concat(
                         tuple(afmoe_moe.experts[i].down_proj.weight.unsqueeze(0) for i in range(num_experts)),
