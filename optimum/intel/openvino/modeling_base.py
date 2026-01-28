@@ -28,17 +28,12 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 from transformers.generation import GenerationMixin
-from transformers.utils import is_offline_mode
 from transformers.utils.hub import cached_file
 
 from optimum.exporters.base import ExportConfig
+from optimum.exporters.openvino import export, main_export
 from optimum.exporters.openvino.utils import _MAX_UNCOMPRESSED_SIZE
-from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
-
-from ...exporters.openvino import export, main_export
-from ..utils.import_utils import is_nncf_available
-from ..utils.modeling_utils import _find_files_matching_pattern
-from .configuration import (
+from optimum.intel.openvino.configuration import (
     _DEFAULT_4BIT_WQ_CONFIG,
     OVConfig,
     OVQuantizationConfigBase,
@@ -47,7 +42,7 @@ from .configuration import (
     _quantization_config_from_dict,
     get_default_quantization_config,
 )
-from .utils import (
+from optimum.intel.openvino.utils import (
     ONNX_WEIGHTS_NAME,
     OV_TO_PT_TYPE,
     OV_XML_FILE_NAME,
@@ -56,6 +51,15 @@ from .utils import (
     classproperty,
     model_has_dynamic_inputs,
 )
+from optimum.intel.utils.import_utils import is_huggingface_hub_version, is_nncf_available
+from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
+from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
+
+
+if is_huggingface_hub_version(">=", "1.2.1"):
+    from huggingface_hub import is_offline_mode
+else:
+    from transformers.utils import is_offline_mode
 
 
 core = Core()
@@ -840,16 +844,14 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         **kwargs,
     ):
         """
-        Export a vanilla Transformers model into an ONNX model using `transformers.onnx.export_onnx`.
+        Load and export a model to the OpenVINO IR.
 
         Arguments:
             model_id (`str` or `Path`):
                 The directory from which to load the model.
                 Can be either:
                     - The model id of a pretrained model hosted inside a model repo on huggingface.co.
-                    - The path to a directory containing the model weights.            save_dir (`str` or `Path`):
-                The directory where the exported ONNX model should be saved, default to
-                `transformers.file_utils.default_cache_path`, which is the cache directory for transformers.
+                    - The path to a directory containing the model weights.
             token (Optional[Union[bool, str]], defaults to `None`):
                 The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
                 when running `huggingface-cli login` (stored in `~/.huggingface`).

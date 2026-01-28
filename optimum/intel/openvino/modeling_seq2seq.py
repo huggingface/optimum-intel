@@ -27,7 +27,6 @@ from transformers import (
     AutoConfig,
     AutoModelForSeq2SeqLM,
     AutoModelForSpeechSeq2Seq,
-    AutoModelForVision2Seq,
     GenerationConfig,
     Pix2StructForConditionalGeneration,
     PretrainedConfig,
@@ -54,6 +53,18 @@ from .utils import (
     TemporaryDirectory,
     classproperty,
 )
+
+
+# AutoModelForVision2Seq is deprecated since v4.54
+# https://github.com/huggingface/transformers/blob/v4.54.0/src/transformers/models/auto/modeling_auto.py#L2151
+if is_transformers_version(">=", "4.54.0"):
+    from transformers import AutoModelForImageTextToText
+
+    transformers_auto_class = AutoModelForImageTextToText
+else:
+    from transformers import AutoModelForVision2Seq
+
+    transformers_auto_class = AutoModelForVision2Seq
 
 
 core = Core()
@@ -1036,7 +1047,7 @@ class OVDecoder(OVModelPart):
     INPUTS_DOCSTRING,
 )
 class OVModelForVision2Seq(OVModelForSeq2SeqLM):
-    auto_model_class = AutoModelForVision2Seq
+    auto_model_class = transformers_auto_class
     main_input_name = "pixel_values"
     export_feature = "image-to-text"
 

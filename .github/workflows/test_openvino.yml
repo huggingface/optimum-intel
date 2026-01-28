@@ -38,7 +38,7 @@ jobs:
             "*diffusion*",
             "*quantization*",
           ]
-        transformers-version: ["4.45.0", "latest"]
+        transformers-version: ["4.45.0", "5.0.0", "latest"]
 
     runs-on: ubuntu-22.04
 
@@ -57,11 +57,21 @@ jobs:
           uv pip install .[openvino,diffusers,tests]
 
       - if: ${{ matrix.transformers-version != 'latest' }}
+        name: Install transformers
+        run: |
+          uv pip install transformers==${{ matrix.transformers-version }}
+
+      - if: ${{ matrix.transformers-version == '4.45.0' }}
         name: Install specific dependencies and versions required for older transformers
         run: |
           uv pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.32.* transformers_stream_generator
 
-      - if: ${{ matrix.transformers-version == 'latest' && matrix.test-pattern == '*decoder*'}}
+      - if: ${{ matrix.transformers-version == '5.0.0' }}
+        name: Install diffusers
+        run: |
+          uv pip install git+https://github.com/huggingface/diffusers
+
+      - if: ${{ matrix.transformers-version != '4.45.0' && matrix.test-pattern == '*decoder*'}}
         name: Install auto-gptq, autoawq
         run: |
           uv pip install auto-gptq "autoawq<0.2.8"
