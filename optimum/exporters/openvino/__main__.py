@@ -13,10 +13,16 @@
 #  limitations under the License.
 
 import gc
+import importlib.util
+import json
 import logging
+import os
+import shutil
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
+from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
@@ -134,6 +140,60 @@ def infer_task(
     return task
 
 
+def eagle3_config(model_path: str):
+    config_file = os.path.join(model_path, "config.json")
+    # rename the origin config
+    new_config_file = os.path.join(model_path, "config_temp.json")
+    shutil.copy2(config_file, new_config_file)
+
+    # read config
+    with open(new_config_file, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    # modify config
+    if "model_type" in config.keys():
+        org_type = config["model_type"]
+        if org_type != "llama":
+            raise ValueError(
+                f"Currently eagle3 does not support model_type={org_type}, it only supports the conversion of llama-based draft models."
+            )
+    # CVS-174959
+    if "tie_word_embeddings" in config.keys():
+        if config["tie_word_embeddings"]:
+            config["tie_word_embeddings"] = False
+    moduler_name = "optimum.exporters.openvino.model_patcher"
+    spec = importlib.util.find_spec(moduler_name)
+    if spec and spec.origin:
+        moduler_path = os.path.dirname(spec.origin)
+        config["auto_map"] = {
+            "AutoModel": moduler_path + "--model_patcher.LlamaEagle3Model",
+            "AutoModelForCausalLM": moduler_path + "--model_patcher.LlamaEagle3ForCausalLM",
+        }
+    config["is_eagle3"] = True
+    # write new config.json
+    with open(new_config_file, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+    return os.path.abspath(new_config_file)
+
+
+def remove_config(model_path: str, ov_path: str, download_to_local: bool):
+    if not download_to_local:
+        # remove the temp config
+        new_config_file = os.path.join(model_path, "config_temp.json")
+        if os.path.exists(new_config_file):
+            os.remove(new_config_file)
+
+
+def download_eagle3_model(model_path: str):
+    dir_name = tempfile.mkdtemp()
+    local_dir = snapshot_download(repo_id=model_path, local_dir=dir_name, local_dir_use_symlinks=False)
+    return local_dir
+
+
+def clean_download(model_path: str):
+    if os.path.exists(model_path):
+        shutil.rmtree(model_path, ignore_errors=True)
+
+
 def infer_library_name(
     model_name_or_path: str,
     subfolder: str = "",
@@ -238,6 +298,7 @@ def main_export(
     library_name: Optional[str] = None,
     model_loading_kwargs: Optional[Dict[str, Any]] = None,
     variant: Optional[str] = None,
+    eagle3: bool = False,
     **kwargs_shapes,
 ):
     """
@@ -293,6 +354,8 @@ def main_export(
             especially useful when exporting a custom architecture that needs to be splitted in multiple components (e.g. encoder-decoder). If unspecified with custom models, optimum will try to use the default submodels used for the given task, with no guarantee of success.
         stateful (`bool`, defaults to `True`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
+        eagle3 (`bool`, defaults to `False`):
+            This is needed by eagle3 draft models.
         **kwargs_shapes (`Dict`):
             Shapes to use during inference. This argument allows to override the default shapes used during the OpenVINO export.
 
@@ -355,6 +418,18 @@ def main_export(
         quantization_config = getattr(config, "quantization_config", None)
         quant_method = quantization_config.get("quant_method", None) if quantization_config else None
 
+        # check if model is used as a draft model for Eagle3
+        archs = getattr(config, "architectures", None)
+        eagle3 = False
+        if isinstance(archs, list) and len(archs) > 0 and "eagle3" in archs[0].lower():
+            eagle3 = True
+        if eagle3 and not os.path.isdir(model_name_or_path):
+            model_name_or_path = download_eagle3_model(model_name_or_path)
+            if os.path.exists(model_name_or_path):
+                download_to_local = True
+                logger.info(f"Download eagle3 draft model to local path: {model_name_or_path}")
+            loading_kwargs["_configuration_file"] = eagle3_config(model_name_or_path)
+
         # mxfp4 quantized model will be dequantized to bf16
         if quant_method == "mxfp4" and is_transformers_version(">=", "4.55"):
             dtype = torch.bfloat16
@@ -415,6 +490,11 @@ def main_export(
                 "Please provide custom export config if you want load model with remote code."
             )
             trust_remote_code = False
+
+        if not trust_remote_code and eagle3:
+            logger.warning("eagle3 draft model needs `trust_remote_code=True`")
+            trust_remote_code = True
+
         if dtype == "auto":
             dtype = getattr(config, "torch_dtype")
 
@@ -592,6 +672,8 @@ def main_export(
                 GPTQQuantizer.post_init_model = orig_post_init_model
             if do_bitnet_patching:
                 AutoBitLinear.load_hook = orig_load_hook
+        if eagle3 and library_name == "transformers":
+            remove_config(model_name_or_path, output, download_to_local)
 
 
 def _main_quantize(

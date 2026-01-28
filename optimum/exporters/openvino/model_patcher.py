@@ -18,14 +18,33 @@ import logging
 import logging as log
 import math
 import types
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-from transformers.cache_utils import DynamicCache, EncoderDecoderCache
-from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPast, BaseModelOutputWithPooling
+from torch import nn
+from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache
+from transformers.configuration_utils import PretrainedConfig
+from transformers.generation import GenerationMixin
+from transformers.masking_utils import create_causal_mask
+from transformers.modeling_outputs import (
+    BaseModelOutput,
+    BaseModelOutputWithPast,
+    BaseModelOutputWithPooling,
+)
+from transformers.modeling_utils import PreTrainedModel
+from transformers.models.llama.configuration_llama import LlamaConfig
+from transformers.models.llama.modeling_llama import (
+    LlamaAttention,
+    LlamaPreTrainedModel,
+    LlamaRMSNorm,
+    LlamaRotaryEmbedding,
+)
 from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
+from transformers.processing_utils import Unpack
+from transformers.utils import ModelOutput
 
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.model_patcher import (
@@ -44,12 +63,17 @@ if is_transformers_version(">=", "4.53"):
 if is_transformers_version(">=", "4.56"):
     import transformers.masking_utils
 
-
 if TYPE_CHECKING:
     from transformers.cache_utils import Cache
     from transformers.modeling_utils import PreTrainedModel
 
     from optimum.exporters.onnx.config import OnnxConfig
+
+if is_transformers_version(">=", "4.54"):
+    from transformers.utils import TransformersKwargs
+else:
+    TransformersKwargs = object
+
 
 logger = logging.getLogger(__name__)
 
@@ -6323,7 +6347,6 @@ class MambaPatcher(ModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers import PretrainedConfig
         from transformers.models.mamba.modeling_mamba import MambaCache
 
         super().__init__(config, model, model_kwargs)
@@ -7503,3 +7526,289 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                 afmoe_moe = layer.mlp
                 afmoe_moe.forward = afmoe_moe._orig_forward
                 del afmoe_moe.down_projs, afmoe_moe.gate_projs, afmoe_moe.up_projs
+
+
+class LlamaEagle3Attention(LlamaAttention):
+    """Multi-headed attention from 'Attention Is All You Need' paper"""
+
+    def __init__(self, config):
+        super().__init__(config, 0)
+        self.q_proj = nn.Linear(config.hidden_size * 2, config.num_attention_heads * self.head_dim, bias=False)
+        self.k_proj = nn.Linear(config.hidden_size * 2, config.num_key_value_heads * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(config.hidden_size * 2, config.num_key_value_heads * self.head_dim, bias=False)
+
+
+class LlamaEagle3DecoderLayeremb(nn.Module):
+    def __init__(self, config, last=True):
+        from transformers.models.llama.modeling_llama import LlamaMLP
+
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        self.self_attn = LlamaEagle3Attention(config=config)
+        self.mlp = LlamaMLP(config)
+        self.last = last
+        self.hidden_norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+    def forward(
+        self,
+        input_emb: torch.Tensor,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Cache = None,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor] = None,
+        output_attentions: Optional[bool] = False,
+        use_cache: Optional[bool] = False,
+    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+        residual = hidden_states
+
+        hidden_states = self.hidden_norm(hidden_states)
+        input_emb = self.input_layernorm(input_emb)
+
+        hidden_states = torch.cat((input_emb, hidden_states), dim=-1)
+
+        # Self Attention
+        hidden_states, self_attn_weights = self.self_attn(
+            hidden_states=hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_value,
+            output_attentions=output_attentions,
+            position_embeddings=position_embeddings,
+            use_cache=use_cache,
+        )
+        hidden_states = residual + hidden_states
+
+        # Fully Connected
+        residual = hidden_states
+        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = residual + hidden_states
+
+        outputs = (hidden_states,)
+
+        if output_attentions:
+            outputs += (self_attn_weights,)
+
+        return outputs
+
+
+class LlamaEagle3Model(LlamaPreTrainedModel):
+    def __init__(self, config: LlamaConfig):
+        super().__init__(config)
+        self.hidden_size = config.hidden_size
+
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, config.pad_token_id)
+        self.rotary_emb = LlamaRotaryEmbedding(config=config)
+
+        self.midlayer = LlamaEagle3DecoderLayeremb(config)
+        self.target_hidden_size = getattr(config, "target_hidden_size", config.hidden_size)
+        self.fc = nn.Linear(self.target_hidden_size * 3, self.hidden_size, bias=False)
+        self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+        self.lm_head = nn.Linear(config.hidden_size, config.draft_vocab_size, bias=False)
+
+        d2t = torch.zeros((config.draft_vocab_size), dtype=torch.long)
+        t2d = torch.zeros((config.vocab_size), dtype=torch.bool)
+        self.register_buffer("d2t", d2t)
+        self.register_buffer("t2d", t2d)
+
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        hidden_states: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Cache] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> BaseModelOutputWithPast:
+        batch_size, seq_length, _ = hidden_states.shape
+        seq_length_with_past = seq_length
+        past_key_values_length = 0
+        output_attentions = kwargs.get("output_attentions")
+        output_hidden_states = kwargs.get("output_hidden_states")
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+        use_cache = use_cache if use_cache is not None else self.config.use_cache
+
+        if past_key_values is not None:
+            past_key_values_length = past_key_values[0][0].shape[2]
+            seq_length_with_past = seq_length_with_past + past_key_values_length
+        if position_ids is None:
+            device = hidden_states.device if hidden_states is not None else inputs_embeds.device
+            position_ids = torch.arange(
+                past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
+            )
+            position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
+        else:
+            position_ids = position_ids.view(-1, seq_length).long()
+
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+
+        if cache_position is None:
+            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+            cache_position: torch.Tensor = (
+                torch.arange(inputs_embeds.shape[1], device=inputs_embeds.device) + past_seen_tokens
+            )
+
+        causal_mask = create_causal_mask(
+            config=self.config,
+            input_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            cache_position=cache_position,
+            past_key_values=past_key_values,
+            position_ids=position_ids,
+        )
+
+        if hidden_states is None:
+            hidden_states = torch.zeros(
+                [batch_size, seq_length, self.embed_dim],
+                self.embed_dim,
+                dtype=inputs_embeds.dtype,
+                device=inputs_embeds.device,
+            )
+
+        # hidden_states = inputs_embeds
+        inputs_embeds = inputs_embeds.to(hidden_states.dtype)
+        if hidden_states.shape[-1] != inputs_embeds.shape[-1]:
+            hidden_states = self.fc(hidden_states)
+
+        # decoder layers
+        all_hidden_states = () if output_hidden_states else None
+        all_self_attns = () if output_attentions else None
+        next_decoder_cache = () if use_cache else None
+
+        position_embeddings = self.rotary_emb(hidden_states, position_ids=position_ids)
+
+        layer_outputs = self.midlayer(
+            input_emb=inputs_embeds,
+            hidden_states=hidden_states,
+            attention_mask=causal_mask,
+            position_embeddings=position_embeddings,
+            position_ids=position_ids,
+            past_key_value=past_key_values,
+            output_attentions=output_attentions,
+            use_cache=True,
+        )
+
+        if use_cache:
+            next_decoder_cache = past_key_values
+
+        hidden_states = layer_outputs[0]
+        hidden_states = self.norm(hidden_states)
+
+        # add hidden states from the last decoder layer
+        if output_hidden_states:
+            all_hidden_states += (hidden_states,)
+        if output_attentions:
+            all_self_attns += (layer_outputs[1],)
+
+        return BaseModelOutputWithPast(
+            last_hidden_state=hidden_states,
+            past_key_values=next_decoder_cache if use_cache else None,
+            hidden_states=all_hidden_states,
+            attentions=all_self_attns,
+        )
+
+
+@dataclass
+class Eagle3Output(ModelOutput):
+    loss: Optional[torch.FloatTensor] = None
+    logits: Optional[torch.FloatTensor] = None
+    past_key_values: Optional[Cache] = None
+    hidden_states: Optional[tuple[torch.FloatTensor, ...]] = None
+    attentions: Optional[tuple[torch.FloatTensor, ...]] = None
+    d2t: Optional[torch.LongTensor] = None
+
+
+class LlamaEagle3ForCausalLM(LlamaPreTrainedModel, GenerationMixin):
+    _tied_weights_keys = ["lm_head.weight"]
+    _tp_plan = {"lm_head": "colwise_rep"}
+    _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.model = LlamaEagle3Model(config)
+        self.vocab_size = config.vocab_size
+        self.identity = torch.nn.Identity()
+        self.post_init()
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        hidden_states: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Cache] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        logits_to_keep: Union[int, torch.Tensor] = 0,
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> Eagle3Output:
+        r"""
+        labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
+            Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
+            config.vocab_size]` or -100 (see `input_ids` docstring). Tokens with indices set to `-100` are ignored
+            (masked), the loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`.
+
+        Example:
+
+        ```python
+        >>> from transformers import AutoTokenizer, LlamaForCausalLM
+
+        >>> model = LlamaForCausalLM.from_pretrained("meta-llama/Llama-2-7b-hf")
+        >>> tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
+
+        >>> prompt = "Hey, are you conscious? Can you talk to me?"
+        >>> inputs = tokenizer(prompt, return_tensors="pt")
+
+        >>> # Generate
+        >>> generate_ids = model.generate(inputs.input_ids, max_length=30)
+        >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+        "Hey, are you conscious? Can you talk to me?\nI'm not conscious, but I can talk to you."
+        ```"""
+        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+        outputs: BaseModelOutputWithPast = self.model(
+            input_ids=input_ids,
+            hidden_states=hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            cache_position=cache_position,
+            **kwargs,
+        )
+
+        hidden_states = outputs.last_hidden_state
+        # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+        slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+        # logits = self.lm_head(hidden_states[:, slice_indices, :])
+        logits = self.model.lm_head(hidden_states[:, slice_indices, :])
+
+        loss = None
+        if labels is not None:
+            loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
+
+        d2t_out = self.identity(self.model.d2t)
+        return Eagle3Output(
+            loss=loss,
+            logits=logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+            d2t=d2t_out,
+        )
