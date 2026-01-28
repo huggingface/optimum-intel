@@ -149,7 +149,7 @@ class QuantizationTest(INCTestMixin):
         model_name = "distilbert-base-cased-distilled-squad"
         model = AutoModelForQuestionAnswering.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
-        eval_dataset = load_dataset("squad", split="validation").select(range(64))
+        eval_dataset = load_dataset("rajpurkar/squad", split="validation").select(range(64))
         task_evaluator = evaluate.evaluator("question-answering")
         qa_pipeline = pipeline("question-answering", model=model, tokenizer=tokenizer)
         tolerance_criterion = 0.1
@@ -369,8 +369,8 @@ class TrainingOptimizationTest(INCTestMixin):
     def test_seq2seq_aware_training_quantization(self):
         quantization_config = QuantizationAwareTrainingConfig()
         batch_size = 2
-        train_dataset = load_dataset("cnn_dailymail", "3.0.0", split="train[:1%]")
-        val_dataset = load_dataset("cnn_dailymail", "3.0.0", split="validation[:1%]")
+        train_dataset = load_dataset("abisee/cnn_dailymail", "3.0.0", split="train[:1%]")
+        val_dataset = load_dataset("abisee/cnn_dailymail", "3.0.0", split="validation[:1%]")
         train_dataset = train_dataset.select(range(4))
         val_dataset = val_dataset.select(range(4))
 

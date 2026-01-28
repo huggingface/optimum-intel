@@ -15,6 +15,7 @@
 import inspect
 import logging
 import re
+import shutil
 from collections import namedtuple
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -307,6 +308,66 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
 
 SSM_MODELS = ["mamba", "falcon_mamba", "zamba2", "lfm2", "granitemoehybrid"]
 
+# All transformers, diffusers, timm and sentence transformers models that are supported via optimum-onnx OnnxConfigs but that have currently no test
+# TODO: add tests for all models that are compatible and remove support for all others
+ONNX_SUPPORTED_ARCHITECTURES = {
+    "big_bird",
+    "chinese_clip",
+    "colpali",
+    "convnextv2",
+    "cvt",
+    "d_fine",
+    "decision_transformer",
+    "default-timm-config",
+    "detr",
+    "dinov2",
+    "donut-swin",
+    "dpt",
+    "efficientnet",
+    "encoder-decoder",
+    "glpn",
+    "groupvit",
+    "helium",
+    "hiera",
+    "imagegpt",
+    "layoutlm",
+    "layoutlmv3",
+    "lilt",
+    "longformer",
+    "markuplm",
+    "maskformer",
+    "mctct",
+    "megatron-bert",
+    "metaclip_2",
+    "mgp-str",
+    "modernbert",
+    "moonshine",
+    "musicgen",
+    "nemotron",
+    "owlv2",
+    "owlvit",
+    "patchtsmixer",
+    "patchtst",
+    "pvt",
+    "regnet",
+    "rt_detr",
+    "rt_detr_v2",
+    "siglip_vision_model",
+    "smollm3",
+    "speech_to_text",
+    "splinter",
+    "swin2sr",
+    "swinv2",
+    "table-transformer",
+    "trocr",
+    "visual_bert",
+    "vit_mae",
+    "vit_msn",
+    "vitpose",
+    "vits",
+    "yolos",
+}
+
 
 def save_config(config, save_dir):
     try:
@@ -495,3 +556,55 @@ def patch_qwenvl_configs():
             return original_getattribute_25(self, name)
 
     Qwen2_5_VLConfig.__getattribute__ = model_type_preserving_getattribute_25
+
+
+def _merge_move(src: Path, dest: Path):
+    """
+    Move src to dest.
+
+    - If src is a directory:
+        - If dest does not exist: rename src -> dest.
+        - If dest is a directory: merge src into dest recursively.
+        - If dest is a file: replace file with src directory (delete file, then rename).
+
+    - If src is a file:
+        - If dest does not exist: rename src -> dest.
+        - If dest is a file: overwrite file (delete dest, then rename).
+        - If dest is a directory: replace directory with src file (delete directory recursively, then rename).
+    """
+
+    def _safe_rename(src: Path, dest: Path):
+        # Try to rename first, fall back to shutil.move if it fails (e.g., cross-device move)
+        try:
+            src.rename(dest)
+        except OSError:
+            shutil.move(str(src), str(dest))
+
+    dest_exists = dest.exists()
+    dest_is_dir = dest_exists and dest.is_dir()
+    if src.is_dir():
+        if not dest_exists:
+            # No conflict: just rename
+            _safe_rename(src, dest)
+        elif dest_is_dir:
+            # Merge src into dest recursively
+            for child in src.iterdir():
+                _merge_move(child, dest / child.name)
+            # Remove src once empty
+            src.rmdir()
+        else:
+            # dest exists and is a file: replace file with directory
+            dest.unlink()
+            _safe_rename(src, dest)
+    else:
+        if not dest_exists:
+            # No conflict: just rename
+            _safe_rename(src, dest)
+        elif dest_is_dir:
+            # Replace directory (recursively) with file
+            shutil.rmtree(dest)
+            _safe_rename(src, dest)
+        else:
+            # dest is a file: overwrite
+            dest.unlink()
+            _safe_rename(src, dest)
