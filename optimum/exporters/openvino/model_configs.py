@@ -317,6 +317,13 @@ init_model_configs()
 register_in_tasks_manager = TasksManager.create_register("openvino", overwrite_existing=True)
 
 
+def _get_language_model(model):
+    if is_transformers_version("<", "5"):
+        return model.language_model
+
+    return model.model.language_model
+
+
 @register_in_tasks_manager("baichuan", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class BaichaunOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 13
@@ -1702,14 +1709,14 @@ class BaseVLMOpenVINOConfig(OnnxConfig):
             behavior = VLMConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.LANGUAGE:
-            return model.language_model if not hasattr(model, "lm_head") else model
+            return _get_language_model(model) if not hasattr(model, "lm_head") else model
 
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
 
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = model.get_input_embeddings()
-            text_embedding.config = model.language_model.config
+            text_embedding.config = _get_language_model(model).config
             return text_embedding
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
@@ -1892,8 +1899,8 @@ class MairaOpenVINOConfig(LlavaOpenVINOConfig):
             behavior = VLMConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
-            text_embedding = model.language_model.get_input_embeddings()
-            text_embedding.config = model.language_model.config
+            text_embedding = _get_language_model(model).get_input_embeddings()
+            text_embedding.config = _get_language_model(model).config
             return text_embedding
 
         return super().get_model_for_behavior(model, behavior)
@@ -1969,14 +1976,14 @@ class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
             behavior = VLMConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.LANGUAGE:
-            return model.language_model
+            return _get_language_model(model)
 
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
 
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
-            text_embedding = model.language_model.get_input_embeddings()
-            text_embedding.config = model.language_model.config
+            text_embedding = _get_language_model(model).get_input_embeddings()
+            text_embedding.config = _get_language_model(model).config
             return text_embedding
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
@@ -3477,7 +3484,9 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
 
         if behavior == Qwen2VLConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = (
-                model.model.embed_tokens if hasattr(model.model, "embed_tokens") else model.language_model.embed_tokens
+                model.model.embed_tokens
+                if hasattr(model.model, "embed_tokens")
+                else _get_language_model(model).embed_tokens
             )
             text_embedding.config = model.config
             return text_embedding
