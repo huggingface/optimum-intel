@@ -81,14 +81,14 @@ jobs:
         run: |
           python tests/scripts/login_with_ci_token.py
 
-      - name: Test with Pytest
-        run: |
-          pytest tests/openvino/${{ matrix.test-pattern }} --durations=0
-
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Install Nightly OpenVINO
         run: |
           uv pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+
+      - name: Test with Pytest
+        run: |
+          pytest tests/openvino/${{ matrix.test-pattern }} --durations=0
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Test with Pytest - Nightly OpenVINO
