@@ -335,7 +335,7 @@ class OVCalibrationDatasetBuilder:
                 dataset_metadata = PREDEFINED_SD_DATASETS[dataset_name]
 
                 dataset = self.load_dataset(
-                    dataset_name,
+                    dataset_metadata["id"],
                     num_samples=config.num_samples,  # This is an upper bound on how many prompts are needed
                     dataset_split=dataset_metadata["split"],
                     streaming=dataset_metadata["streaming"],
@@ -697,9 +697,9 @@ class OVCalibrationDatasetBuilder:
                     from datasets import load_dataset
 
                     if split == "train":
-                        data = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
+                        data = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1", split="train")
                     elif split == "validation":
-                        data = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+                        data = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1", split="test")
                     # length of 288059 should be enough
                     limit = nsamples * seqlen // 4  # ~1k for 128 samples with seqlen=32 to be aligned with optimum
                     text = "".join([" \n" if s == "" else s for s in data["text"][:limit]])
