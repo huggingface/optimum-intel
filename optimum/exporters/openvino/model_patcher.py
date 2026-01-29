@@ -3389,7 +3389,11 @@ class LlavaNextVideoImageEmbeddingModelPatcher(OVModelPatcher):
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
-        model.forward = types.MethodType(llava_next_video_vision_embed_forward, model)
+
+        if is_transformers_version("<", "5"):
+            model.forward = types.MethodType(llava_next_video_vision_embed_forward, model)
+        else:
+            model.forward = model.get_image_features
 
         super().__init__(config, model, model_kwargs)
 
