@@ -708,6 +708,8 @@ class PipelineTest(unittest.TestCase):
 
         # verify could load both pytorch and openvino model (export argument should automatically infered)
         ov_exported_pipe = optimum_pipeline("text-generation", model_id, revision="pt", accelerator="openvino")
+        ov_exported_pipe.modelcard = None
+
         ov_pipe = optimum_pipeline("text-generation", model_id, revision="ov", accelerator="openvino")
         self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
         self.assertIsInstance(ov_pipe.model, OVBaseModel)
