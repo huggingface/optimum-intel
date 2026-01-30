@@ -18,6 +18,7 @@ import logging
 import logging as log
 import math
 import types
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -52,6 +53,118 @@ if TYPE_CHECKING:
     from optimum.exporters.onnx.config import OnnxConfig
 
 logger = logging.getLogger(__name__)
+
+
+class OVDynamicCache(DynamicCache):
+    # copied from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/cache_utils.py#L1005
+    def to_legacy_cache(self) -> tuple[tuple[torch.Tensor, torch.Tensor]]:
+        """
+        Converts the `Cache` instance into the its equivalent in the legacy cache format. Used for
+        backward compatibility.
+        """
+        legacy_cache = ()
+        for layer in self.layers:
+            legacy_cache += ((layer.keys, layer.values),)
+        return legacy_cache
+
+    # copied from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/cache_utils.py#L1015
+    @classmethod
+    def from_legacy_cache(cls, past_key_values: tuple[tuple[torch.Tensor, torch.Tensor]]) -> "OVDynamicCache":
+        """
+        Converts a cache in the legacy cache format into an equivalent `Cache`. Used for
+        backward compatibility.
+        """
+        cache = cls()
+        if past_key_values is None:
+            logger.warning_once("past_key_values should not be None in from_legacy_cache()")
+        if past_key_values is not None:
+            for layer_idx in range(len(past_key_values)):
+                key_states, value_states = past_key_values[layer_idx]
+                cache.update(key_states, value_states, layer_idx)
+        return cache
+
+
+class OVEncoderDecoderCache(EncoderDecoderCache):
+    # copied from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/cache_utils.py#L1266
+    def to_legacy_cache(self) -> tuple[tuple[torch.Tensor]]:
+        """Converts the `OVEncoderDecoderCache` instance into its equivalent in the legacy cache format."""
+        legacy_cache = ()
+        if len(self.cross_attention_cache) > 0:
+            for self_attn, cross_attn in zip(
+                self.self_attention_cache.to_legacy_cache(), self.cross_attention_cache.to_legacy_cache()
+            ):
+                legacy_cache += (self_attn + cross_attn,)
+        else:
+            legacy_cache = self.self_attention_cache.to_legacy_cache()
+        return legacy_cache
+
+    # copied from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/cache_utils.py#L1279
+    @classmethod
+    def from_legacy_cache(
+        cls, past_key_values: Optional[Iterable[tuple[torch.FloatTensor, ...]]]
+    ) -> "OVEncoderDecoderCache":
+        """Converts a cache in the legacy cache format into an equivalent `OVEncoderDecoderCache`."""
+        cache = cls(OVDynamicCache(), OVDynamicCache())
+        if past_key_values is None:
+            logger.warning_once("past_key_values should not be None in from_legacy_cache()")
+        else:
+            for layer_idx, key_value_states in enumerate(past_key_values):
+                key_states, value_states = key_value_states[:2]
+                cache.self_attention_cache.update(key_states, value_states, layer_idx)
+                if len(key_value_states) > 2:
+                    key_states, value_states = key_value_states[2:]
+                    cache.cross_attention_cache.update(key_states, value_states, layer_idx)
+                    cache.is_updated[layer_idx] = True
+        return cache
+
+
+def preprocess_past_key_values(past_key_values):
+    if (
+        is_transformers_version(">=", "4.48")
+        and isinstance(past_key_values, (list, tuple))
+        and isinstance(past_key_values[0], (list, tuple))
+    ):
+        if len(past_key_values[0]) == 2:
+            past_key_values = OVDynamicCache.from_legacy_cache(past_key_values)
+        elif len(past_key_values[0]) == 4:
+            past_key_values = OVEncoderDecoderCache.from_legacy_cache(past_key_values)
+        else:
+            raise ValueError(
+                f"past_key_values should have either 2 or 4 elements, but it has {len(past_key_values[0])} elements."
+            )
+
+    return past_key_values
+
+
+class OVModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        self.model_patched_forward = self.patched_forward
+
+        @functools.wraps(self.model_patched_forward)
+        def patched_forward(*args, **kwargs):
+            signature = inspect.signature(self.model_patched_forward)
+            args, kwargs = override_arguments(args, kwargs, signature, model_kwargs=self.model_kwargs)
+
+            if "past_key_values" in signature.parameters:
+                # Most models require past_key_values to be a cache instance instead of a tuple now
+                pkv_index = list(signature.parameters.keys()).index("past_key_values")
+                if pkv_index < len(args) and args[pkv_index] is not None:
+                    args[pkv_index] = preprocess_past_key_values(args[pkv_index])
+                elif kwargs.get("past_key_values") is not None:
+                    kwargs["past_key_values"] = preprocess_past_key_values(kwargs["past_key_values"])
+
+            outputs = self.model_patched_forward(*args, **kwargs)
+
+            return outputs
+
+        self.patched_forward = patched_forward
 
 
 for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
@@ -210,7 +323,7 @@ def eager_mask_without_vmap(*args, **kwargs) -> Optional[torch.Tensor]:
     return mask
 
 
-class OVDecoderModelPatcher(ModelPatcher):
+class OVDecoderModelPatcher(OVModelPatcher):
     def __enter__(self):
         super().__enter__()
 
@@ -1338,7 +1451,7 @@ def phi3_442_forward(
     if use_cache:
         use_legacy_cache = not isinstance(past_key_values, Cache)
         if use_legacy_cache:
-            past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            past_key_values = OVDynamicCache.from_legacy_cache(past_key_values)
         past_key_values_length = past_key_values.get_usable_length(seq_length)
 
     if position_ids is None:
@@ -2910,7 +3023,7 @@ class Gemma2ModelPatcher(OVDecoderModelPatcher):
                 legacy_pkv = args[pkv_argument_index]
                 pkv_in_args = True
             if legacy_pkv is not None:
-                pkv = DynamicCache.from_legacy_cache(legacy_pkv)
+                pkv = OVDynamicCache.from_legacy_cache(legacy_pkv)
                 return_legacy_cache = True
                 if not pkv_in_args:
                     kwargs["past_key_values"] = pkv
@@ -3069,7 +3182,7 @@ class DeciLMModelPatcher(OVDecoderModelPatcher):
             layer.self_attn.forward = layer.self_attn._orig_forward
 
 
-class IBertModelPatcher(ModelPatcher):
+class IBertModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3087,7 +3200,7 @@ class IBertModelPatcher(ModelPatcher):
             self._model(torch.ones([1, 1], dtype=torch.long))
 
 
-class InternVLChatImageEmbeddingModelPatcher(ModelPatcher):
+class InternVLChatImageEmbeddingModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3230,7 +3343,7 @@ def maira_vision_embed_forward(self, pixel_values):
     return self.get_image_features(pixel_values, vision_feature_layer, vision_feature_select_strategy)
 
 
-class LlavaImageEmbeddingModelPatcher(ModelPatcher):
+class LlavaImageEmbeddingModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3238,7 +3351,11 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
-        model.forward = types.MethodType(llava_vision_embed_forward, model)
+
+        if is_transformers_version("<", "5"):
+            model.forward = types.MethodType(llava_vision_embed_forward, model)
+        else:
+            model.forward = model.get_image_features
 
         super().__init__(config, model, model_kwargs)
 
@@ -3247,7 +3364,7 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
-class MairaImageEmbeddingModelPatcher(ModelPatcher):
+class MairaImageEmbeddingModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3264,7 +3381,7 @@ class MairaImageEmbeddingModelPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
-class LlavaNextVideoImageEmbeddingModelPatcher(ModelPatcher):
+class LlavaNextVideoImageEmbeddingModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3272,7 +3389,11 @@ class LlavaNextVideoImageEmbeddingModelPatcher(ModelPatcher):
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
-        model.forward = types.MethodType(llava_next_video_vision_embed_forward, model)
+
+        if is_transformers_version("<", "5"):
+            model.forward = types.MethodType(llava_next_video_vision_embed_forward, model)
+        else:
+            model.forward = model.get_image_features
 
         super().__init__(config, model, model_kwargs)
 
@@ -3305,7 +3426,7 @@ def _embednb_forward(self, ids: torch.Tensor) -> torch.Tensor:
     return emb.unsqueeze(1)
 
 
-class FluxTransfromerModelPatcher(ModelPatcher):
+class FluxTransfromerModelPatcher(OVModelPatcher):
     def __enter__(self):
         super().__enter__()
         if is_diffusers_version("<", "0.31.0"):
@@ -3480,7 +3601,7 @@ def _minicpmv_siglip_transformer_forward(
     )
 
 
-class MiniCPMVResamplerModelPatcher(ModelPatcher):
+class MiniCPMVResamplerModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3497,7 +3618,7 @@ class MiniCPMVResamplerModelPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
-class MiniCPMVImageEmbeddingsModelPatcher(ModelPatcher):
+class MiniCPMVImageEmbeddingsModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3528,7 +3649,7 @@ class MiniCPMVImageEmbeddingsModelPatcher(ModelPatcher):
                 layer.self_attn.forward = layer.self_attn._orig_forward
 
 
-class LlavaQwen2ImageEmbeddingsModelPatcher(ModelPatcher):
+class LlavaQwen2ImageEmbeddingsModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3546,7 +3667,7 @@ class LlavaQwen2ImageEmbeddingsModelPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
-class InputEmbeddingPatcher(ModelPatcher):
+class InputEmbeddingPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3571,7 +3692,7 @@ def phi3_vision_embeddings_forward(self, pixel_values: torch.FloatTensor):
     return self.get_img_features(pixel_values)
 
 
-class Phi3VisionImageEmbeddingsPatcher(ModelPatcher):
+class Phi3VisionImageEmbeddingsPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -4041,7 +4162,7 @@ class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
             input_ids=None,
             use_cache=True,
         ):
-            new_past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            new_past_key_values = OVDynamicCache.from_legacy_cache(past_key_values)
             result = self.__orig_forward(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -4180,7 +4301,7 @@ def patch_qwen2vl_vision_blocks(model, force_new_behaviour=False):
         block.attn.forward = types.MethodType(sdpa_attn_forward, block.attn)
 
 
-class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
+class Qwen2VLVisionEmbMergerPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -4214,7 +4335,7 @@ class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
             block.attn.forward = block.attn._orig_forward
 
 
-class Qwen2_5_VLVisionEmbMergerPatcher(ModelPatcher):
+class Qwen2_5_VLVisionEmbMergerPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -4345,7 +4466,7 @@ class GraniteMoEModelPatcher(OVDecoderModelPatcher):
             block_sparse_moe.output_linear.forward = block_sparse_moe.output_linear._orig_forward
 
 
-class OVSeq2SeqModelPatcher(ModelPatcher):
+class OVSeq2SeqModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -4377,11 +4498,11 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
                     pkv = args[pkv_arg_index]
 
                 if pkv is not None:
-                    if isinstance(pkv, EncoderDecoderCache):
+                    if isinstance(pkv, OVEncoderDecoderCache):
                         pkv = pkv.self_attention_cache.to_legacy_cache()
                     else:
                         pkv = [pkv_item[:2] for pkv_item in pkv]
-                    pkv = EncoderDecoderCache.from_legacy_cache(pkv)
+                    pkv = OVEncoderDecoderCache.from_legacy_cache(pkv)
 
                     if "past_key_values" in kwargs:
                         kwargs["past_key_values"] = pkv
@@ -4391,7 +4512,7 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
             outputs = self.super_patched_forward(*args, **kwargs)
 
             # the optimum-onnx seq2seq model patcher only converts to tuple starting from 4.48
-            if isinstance(outputs.get("past_key_values"), (DynamicCache, EncoderDecoderCache)):
+            if isinstance(outputs.get("past_key_values"), (OVDynamicCache, OVEncoderDecoderCache)):
                 outputs["past_key_values"] = outputs["past_key_values"].to_legacy_cache()
 
             # we still need to filter out cross attention in the case of non-stateful decoder
@@ -4430,7 +4551,7 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
 
 
-class SanaTextEncoderModelPatcher(ModelPatcher):
+class SanaTextEncoderModelPatcher(OVModelPatcher):
     def __enter__(self):
         super().__enter__()
 
@@ -4481,7 +4602,7 @@ class MiniCPMModelPatcher(OVDecoderModelPatcher):
         super().__init__(config, model, model_kwargs)
 
 
-class CommonImageEmbeddingsModelPatcher(ModelPatcher):
+class CommonImageEmbeddingsModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -4566,7 +4687,7 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
         def forward(
             self, attention_mask, position_ids, past_key_values, token_type_ids, inputs_embeds, use_cache=True
         ):
-            pkv = DynamicCache.from_legacy_cache(past_key_values)
+            pkv = OVDynamicCache.from_legacy_cache(past_key_values)
 
             past_seen_tokens = past_key_values[0][0].shape[-2]
             cache_position = torch.arange(
@@ -4631,7 +4752,7 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
             del self._model.model._orig_update_causual_mask
 
 
-class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
+class Idefics3ImageEmbeddingsModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -4931,8 +5052,6 @@ def _blenderbot_attn_forward_new(
     output_attentions: bool = False,
     cache_position: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-    from transformers.cache_utils import EncoderDecoderCache
-
     """Input shape: Batch x Time x Channel"""
 
     # if key_value_states are provided this layer is used as a cross-attention layer
@@ -4955,7 +5074,7 @@ def _blenderbot_attn_forward_new(
     query_states = query_states
 
     if past_key_value is not None:
-        if isinstance(past_key_value, EncoderDecoderCache):
+        if isinstance(past_key_value, OVEncoderDecoderCache):
             is_updated = past_key_value.is_updated.get(self.layer_idx)
             if is_cross_attention:
                 # after the first generated id, we can subsequently re-use all key/value_states from cache
@@ -5410,7 +5529,7 @@ def speecht5_decoder_layer_forward(
     return outputs
 
 
-class OVSpeechT5ModelPatcher(ModelPatcher):
+class OVSpeechT5ModelPatcher(OVModelPatcher):
     def __enter__(self):
         if self.real_config._behavior != "vocoder":
             super().__enter__()
@@ -5480,7 +5599,7 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             if past_key_values is not None:
                 past_key_values = [cache_item[:2] for cache_item in past_key_values]
                 if is_transformers_version(">=", "4.56"):
-                    past_key_values = EncoderDecoderCache.from_legacy_cache(past_key_values)
+                    past_key_values = OVEncoderDecoderCache.from_legacy_cache(past_key_values)
 
             output_sequence = inputs_embeds
             output_cross_attentions = False
@@ -5512,7 +5631,7 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
 
             past_key_values = decoder_out.past_key_values
             if past_key_values is not None:
-                if isinstance(past_key_values, EncoderDecoderCache):
+                if isinstance(past_key_values, OVEncoderDecoderCache):
                     past_key_values = past_key_values.self_attention_cache.to_legacy_cache()
                 else:
                     past_key_values = [cache_item[:2] for cache_item in past_key_values]
@@ -5564,7 +5683,7 @@ class Phi4MMLanguageModelPatcher(OVDecoderModelPatcher):
         # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L2156-L2178
         # moved audio and vision features processing outside model
         def lm_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values, use_cache=True):
-            pkv = DynamicCache.from_legacy_cache(past_key_values)
+            pkv = OVDynamicCache.from_legacy_cache(past_key_values)
             outputs = self.model(
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
@@ -5586,7 +5705,7 @@ class Phi4MMLanguageModelPatcher(OVDecoderModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
-class Phi4MMAudioForwardEmbeddingsPatcher(ModelPatcher):
+class Phi4MMAudioForwardEmbeddingsPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -5610,7 +5729,7 @@ class Phi4MMAudioForwardEmbeddingsPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
-class Phi4MMAudioEncoderPatcher(ModelPatcher):
+class Phi4MMAudioEncoderPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -5651,7 +5770,7 @@ class Phi4MMAudioEncoderPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
-class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
+class Phi4MMVisionEmbeddingsPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -5960,7 +6079,7 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
         self._model.img_processor.embeddings.forward = self._model.img_processor.embeddings._orig_forward
 
 
-class Llama4ImageEmbeddingsModelPatcher(ModelPatcher):
+class Llama4ImageEmbeddingsModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -6146,7 +6265,7 @@ def llama4_moe_forward(self, hidden_states):
     return out, router_scores
 
 
-class Llama4TextModelPatcher(ModelPatcher):
+class Llama4TextModelPatcher(OVModelPatcher):
     def __enter__(self):
         super().__enter__()
 
@@ -6316,7 +6435,7 @@ def mamba_mixer_forward(
 # 1. Inject a MambaCache structure into the original model to simplify input and output handling related to SSM states
 # 2. Patch ConvSequenceTransform module to avoid if-else branching
 # 3. Vectorize the selective scan operation to ensure correct behavior during JIT tracing
-class MambaPatcher(ModelPatcher):
+class MambaPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -6810,7 +6929,7 @@ def zamba2_mamba_mixer(
 #    for subsequent invocation of the model's `forward` method.
 # 2. Patches the Zamba2MambaMixer so that the traced `forward` function works correctly
 #    during both the prefill and decoding steps.
-class Zamba2ModelPatcher(ModelPatcher):
+class Zamba2ModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -7236,7 +7355,7 @@ def granite_moe_hybrid_update_causal_mask(
     return causal_mask
 
 
-class GraniteMoeHybridModelPatcher(ModelPatcher):
+class GraniteMoeHybridModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",

@@ -48,7 +48,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "blenderbot-small",
         "bloom",
         "codegen",
-        "codegen2",
         "gpt2",
         "gptj",
         "gpt_neo",
@@ -146,6 +145,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version("<", "4.56.0"):
         SUPPORTED_ARCHITECTURES += ("qwen", "chatglm", "chatglm4")
+
+    if is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES += ("codegen2",)
 
     GENERATION_LENGTH = 100
 
