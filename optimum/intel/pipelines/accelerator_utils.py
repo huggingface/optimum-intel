@@ -13,7 +13,7 @@
 #  limitations under the License.
 
 import contextlib
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
 import transformers.pipelines
 from transformers import AutoConfig
@@ -143,12 +143,15 @@ def get_openvino_model_class(
 
 # a modified transformers.pipelines.base.infer_framework_load_model that loads OpenVINO models
 def openvino_infer_framework_load_model(
-    model, config: Optional["PretrainedConfig"] = None, task: Optional[str] = None, **model_kwargs
+    model,
+    config: Optional["PretrainedConfig"] = None,
+    model_classes: Optional[Dict[str, Tuple[type]]] = None,
+    task: Optional[str] = None,
+    framework: Optional[str] = None,
+    **model_kwargs,
 ):
     if isinstance(model, str):
-        model_kwargs.pop("framework", None)
         model_kwargs.pop("_commit_hash", None)  # not supported for OVModel
-        model_kwargs.pop("model_classes", None)
         ov_model_class = get_openvino_model_class(task, config, model, **model_kwargs)
         ov_model = ov_model_class.from_pretrained(model, **model_kwargs)
     elif isinstance(model, OVBaseModel):
@@ -181,12 +184,15 @@ def get_ipex_model_class(task: str, **model_kwargs):
 
 # a modified transformers.pipelines.base.infer_framework_load_model that loads IPEX models
 def ipex_infer_framework_load_model(
-    model, config: Optional["PretrainedConfig"] = None, task: Optional[str] = None, **model_kwargs
+    model,
+    config: Optional["PretrainedConfig"] = None,
+    model_classes: Optional[Dict[str, Tuple[type]]] = None,
+    task: Optional[str] = None,
+    framework: Optional[str] = None,
+    **model_kwargs,
 ):
     if isinstance(model, str):
-        model_kwargs.pop("framework", None)
         model_kwargs.pop("_commit_hash", None)  # not supported for IPEXModel
-        model_kwargs.pop("model_classes", None)
         ipex_model_class = get_ipex_model_class(task, **model_kwargs)
         ipex_model = ipex_model_class.from_pretrained(model, **model_kwargs)
     elif isinstance(model, IPEXModel):
