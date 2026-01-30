@@ -4646,7 +4646,7 @@ class ASTOpenVINOConfig(ASTOnnxConfig):
 )
 class AfmoeOpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.55.0"
-    MAX_TRANSFORMERS_VERSION = "4.57.99"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     _MODEL_PATCHER = AfmoeModelPatcher
 
 

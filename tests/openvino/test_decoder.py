@@ -21,7 +21,12 @@ from utils_tests import (
     patch_awq_for_inference,
 )
 
-from optimum.exporters.openvino.model_configs import BitnetOpenVINOConfig, DeepseekOpenVINOConfig, LFM2OpenVINOConfig
+from optimum.exporters.openvino.model_configs import (
+    AfmoeOpenVINOConfig,
+    BitnetOpenVINOConfig,
+    DeepseekOpenVINOConfig,
+    LFM2OpenVINOConfig,
+)
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
 from optimum.exporters.tasks import TasksManager
@@ -274,11 +279,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         if "llama4_text" in supported_architectures:
             supported_architectures.remove("llama4_text")
-        if is_transformers_version(">=", str(DeepseekOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
+        if is_transformers_version(">", str(DeepseekOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
             if "deepseek_v2" in supported_architectures:
                 supported_architectures.remove("deepseek_v2")
             if "deepseek_v3" in supported_architectures:
                 supported_architectures.remove("deepseek_v3")
+        if is_transformers_version(">", str(AfmoeOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"afmoe"}
         if is_transformers_version("<", str(BitnetOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"bitnet"}
         if is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
