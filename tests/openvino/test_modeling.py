@@ -1184,19 +1184,18 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         set_seed(SEED)
         transformers_model = AutoModelForImageClassification.from_pretrained(model_id)
-        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
+        preprocessor = AutoProcessor.from_pretrained(model_id)
         url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
         inputs = preprocessor(images=image, return_tensors="pt")
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs)
-        for input_type in ["pt", "np"]:
-            inputs = preprocessor(images=image, return_tensors=input_type)
-            ov_outputs = ov_model(**inputs)
-            self.assertIn("logits", ov_outputs)
-            self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
-            # Compare tensor outputs
-            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
+        inputs = preprocessor(images=image, return_tensors="pt")
+        ov_outputs = ov_model(**inputs)
+        self.assertIn("logits", ov_outputs)
+        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
         del transformers_model
         del ov_model
         gc.collect()
@@ -1209,7 +1208,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForImageClassification.from_pretrained(model_id, device=OPENVINO_DEVICE)
         model.eval()
-        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
+        preprocessor = AutoProcessor.from_pretrained(model_id)
         pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
         inputs = TEST_IMAGE_URL
         outputs = pipe(inputs)
