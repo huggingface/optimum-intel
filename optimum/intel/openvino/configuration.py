@@ -388,7 +388,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "sym": False,
             "weight_only": True,
         },
-    },    
+    },
 }
 
 _DEFAULT_8BIT_WQ_CONFIGS = {
