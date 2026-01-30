@@ -69,7 +69,7 @@ class OVDynamicCache(DynamicCache):
 
     # copied from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/cache_utils.py#L1015
     @classmethod
-    def from_legacy_cache(cls, past_key_values: tuple[tuple[torch.Tensor, torch.Tensor]]) -> "DynamicCache":
+    def from_legacy_cache(cls, past_key_values: tuple[tuple[torch.Tensor, torch.Tensor]]) -> "OVDynamicCache":
         """
         Converts a cache in the legacy cache format into an equivalent `Cache`. Used for
         backward compatibility.
@@ -87,7 +87,7 @@ class OVDynamicCache(DynamicCache):
 class OVEncoderDecoderCache(EncoderDecoderCache):
     # copied from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/cache_utils.py#L1266
     def to_legacy_cache(self) -> tuple[tuple[torch.Tensor]]:
-        """Converts the `EncoderDecoderCache` instance into its equivalent in the legacy cache format."""
+        """Converts the `OVEncoderDecoderCache` instance into its equivalent in the legacy cache format."""
         legacy_cache = ()
         if len(self.cross_attention_cache) > 0:
             for self_attn, cross_attn in zip(
@@ -102,9 +102,9 @@ class OVEncoderDecoderCache(EncoderDecoderCache):
     @classmethod
     def from_legacy_cache(
         cls, past_key_values: Optional[Iterable[tuple[torch.FloatTensor, ...]]]
-    ) -> "EncoderDecoderCache":
-        """Converts a cache in the legacy cache format into an equivalent `EncoderDecoderCache`."""
-        cache = cls(DynamicCache(), DynamicCache())
+    ) -> "OVEncoderDecoderCache":
+        """Converts a cache in the legacy cache format into an equivalent `OVEncoderDecoderCache`."""
+        cache = cls(OVDynamicCache(), OVDynamicCache())
         if past_key_values is None:
             logger.warning_once("past_key_values should not be None in from_legacy_cache()")
         else:
@@ -1451,7 +1451,7 @@ def phi3_442_forward(
     if use_cache:
         use_legacy_cache = not isinstance(past_key_values, Cache)
         if use_legacy_cache:
-            past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            past_key_values = OVDynamicCache.from_legacy_cache(past_key_values)
         past_key_values_length = past_key_values.get_usable_length(seq_length)
 
     if position_ids is None:
@@ -3023,7 +3023,7 @@ class Gemma2ModelPatcher(OVDecoderModelPatcher):
                 legacy_pkv = args[pkv_argument_index]
                 pkv_in_args = True
             if legacy_pkv is not None:
-                pkv = DynamicCache.from_legacy_cache(legacy_pkv)
+                pkv = OVDynamicCache.from_legacy_cache(legacy_pkv)
                 return_legacy_cache = True
                 if not pkv_in_args:
                     kwargs["past_key_values"] = pkv
@@ -4162,7 +4162,7 @@ class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
             input_ids=None,
             use_cache=True,
         ):
-            new_past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            new_past_key_values = OVDynamicCache.from_legacy_cache(past_key_values)
             result = self.__orig_forward(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -4498,11 +4498,11 @@ class OVSeq2SeqModelPatcher(OVModelPatcher):
                     pkv = args[pkv_arg_index]
 
                 if pkv is not None:
-                    if isinstance(pkv, EncoderDecoderCache):
+                    if isinstance(pkv, OVEncoderDecoderCache):
                         pkv = pkv.self_attention_cache.to_legacy_cache()
                     else:
                         pkv = [pkv_item[:2] for pkv_item in pkv]
-                    pkv = EncoderDecoderCache.from_legacy_cache(pkv)
+                    pkv = OVEncoderDecoderCache.from_legacy_cache(pkv)
 
                     if "past_key_values" in kwargs:
                         kwargs["past_key_values"] = pkv
@@ -4512,7 +4512,7 @@ class OVSeq2SeqModelPatcher(OVModelPatcher):
             outputs = self.super_patched_forward(*args, **kwargs)
 
             # the optimum-onnx seq2seq model patcher only converts to tuple starting from 4.48
-            if isinstance(outputs.get("past_key_values"), (DynamicCache, EncoderDecoderCache)):
+            if isinstance(outputs.get("past_key_values"), (OVDynamicCache, OVEncoderDecoderCache)):
                 outputs["past_key_values"] = outputs["past_key_values"].to_legacy_cache()
 
             # we still need to filter out cross attention in the case of non-stateful decoder
@@ -4687,7 +4687,7 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
         def forward(
             self, attention_mask, position_ids, past_key_values, token_type_ids, inputs_embeds, use_cache=True
         ):
-            pkv = DynamicCache.from_legacy_cache(past_key_values)
+            pkv = OVDynamicCache.from_legacy_cache(past_key_values)
 
             past_seen_tokens = past_key_values[0][0].shape[-2]
             cache_position = torch.arange(
@@ -5052,7 +5052,6 @@ def _blenderbot_attn_forward_new(
     output_attentions: bool = False,
     cache_position: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-    from transformers.cache_utils import EncoderDecoderCache
 
     """Input shape: Batch x Time x Channel"""
 
@@ -5076,7 +5075,7 @@ def _blenderbot_attn_forward_new(
     query_states = query_states
 
     if past_key_value is not None:
-        if isinstance(past_key_value, EncoderDecoderCache):
+        if isinstance(past_key_value, OVEncoderDecoderCache):
             is_updated = past_key_value.is_updated.get(self.layer_idx)
             if is_cross_attention:
                 # after the first generated id, we can subsequently re-use all key/value_states from cache
@@ -5601,7 +5600,7 @@ class OVSpeechT5ModelPatcher(OVModelPatcher):
             if past_key_values is not None:
                 past_key_values = [cache_item[:2] for cache_item in past_key_values]
                 if is_transformers_version(">=", "4.56"):
-                    past_key_values = EncoderDecoderCache.from_legacy_cache(past_key_values)
+                    past_key_values = OVEncoderDecoderCache.from_legacy_cache(past_key_values)
 
             output_sequence = inputs_embeds
             output_cross_attentions = False
@@ -5633,7 +5632,7 @@ class OVSpeechT5ModelPatcher(OVModelPatcher):
 
             past_key_values = decoder_out.past_key_values
             if past_key_values is not None:
-                if isinstance(past_key_values, EncoderDecoderCache):
+                if isinstance(past_key_values, OVEncoderDecoderCache):
                     past_key_values = past_key_values.self_attention_cache.to_legacy_cache()
                 else:
                     past_key_values = [cache_item[:2] for cache_item in past_key_values]
@@ -5685,7 +5684,7 @@ class Phi4MMLanguageModelPatcher(OVDecoderModelPatcher):
         # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L2156-L2178
         # moved audio and vision features processing outside model
         def lm_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values, use_cache=True):
-            pkv = DynamicCache.from_legacy_cache(past_key_values)
+            pkv = OVDynamicCache.from_legacy_cache(past_key_values)
             outputs = self.model(
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
