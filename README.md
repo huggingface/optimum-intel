@@ -40,7 +40,7 @@ optimum-cli export openvino --model TinyLlama/TinyLlama_v1.1 ov_TinyLlama_v1_1
 To load an exported model and run inference using Optimum Intel, use the corresponding `OVModelForXxx` class instead of `AutoModelForXxx`:
 
 ```python
-from optimum.intel import OVModelForSeq2SeqLM, OVModelForCausalLM
+from optimum.intel import OVModelForCausalLM
 from transformers import AutoTokenizer, pipeline
 
 model_id = "ov_TinyLlama_v1_1"
