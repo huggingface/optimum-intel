@@ -29,11 +29,13 @@ python -m pip install "optimum-intel"@git+https://github.com/huggingface/optimum
 ## Export:
 
 To export your model to [OpenVINO IR](https://docs.openvino.ai/2025/documentation/openvino-ir-format.html) format, use the optimum-cli tool.
-Below is an example of exporting `TinyLlama/TinyLlama_v1.1` model:
+Below is an example of exporting [TinyLlama/TinyLlama_v1.1](https://huggingface.co/TinyLlama/TinyLlama_v1.1) model:
 
 ```sh
 optimum-cli export openvino --model TinyLlama/TinyLlama_v1.1 ov_TinyLlama_v1_1
 ```
+
+Additional information on exporting models is available in the [documentation](https://huggingface.co/docs/optimum-intel/en/openvino/export).
 
 ## Inference:
 
@@ -49,6 +51,8 @@ tokenizer = AutoTokenizer.from_pretrained(model_id)
 pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
 results = pipe("Hey, how are you doing today?", max_new_tokens=100)
 ```
+
+For more details on Optimum Intel inference, refer to the [documentation](https://huggingface.co/docs/optimum-intel/en/openvino/inference).
 
 **Note:** Alternatively, an exported model can also be inferred using [OpenVINO GenAI](https://github.com/openvinotoolkit/openvino.genai) framework,
 that provides optimized execution methods for highly performant Generative AI.
