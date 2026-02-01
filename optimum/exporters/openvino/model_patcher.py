@@ -7586,7 +7586,7 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
         hidden_states = torch.cat((input_emb, hidden_states), dim=-1)
 
         # Self Attention
-        hidden_states, self_attn_weights = self.self_attn(
+        hidden_states, _ = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -7603,12 +7603,7 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual + hidden_states
 
-        outputs = (hidden_states,)
-
-        if output_attentions:
-            outputs += (self_attn_weights,)
-
-        return outputs
+        return hidden_states
 
 
 class LlamaEagle3Model(LlamaPreTrainedModel):
@@ -7647,36 +7642,25 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
         **kwargs: Unpack[TransformersKwargs],
     ) -> BaseModelOutputWithPast:
         batch_size, seq_length, _ = hidden_states.shape
-        seq_length_with_past = seq_length
-        past_key_values_length = 0
-        output_attentions = kwargs.get("output_attentions")
-        output_hidden_states = kwargs.get("output_hidden_states")
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
         use_cache = use_cache if use_cache is not None else self.config.use_cache
 
-        if past_key_values is not None:
-            past_key_values_length = past_key_values[0][0].shape[2]
-            seq_length_with_past = seq_length_with_past + past_key_values_length
-        if position_ids is None:
-            device = hidden_states.device if hidden_states is not None else inputs_embeds.device
-            position_ids = torch.arange(
-                past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
-            )
-            position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
-        else:
-            position_ids = position_ids.view(-1, seq_length).long()
+        if (input_ids is None) ^ (inputs_embeds is not None):
+            raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
 
         if inputs_embeds is None:
-            inputs_embeds = self.embed_tokens(input_ids)
+            inputs_embeds: torch.Tensor = self.embed_tokens(input_ids)
+
+        if use_cache and past_key_values is None:
+            past_key_values = DynamicCache(config=self.config)
 
         if cache_position is None:
             past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-            cache_position: torch.Tensor = (
-                torch.arange(inputs_embeds.shape[1], device=inputs_embeds.device) + past_seen_tokens
+            cache_position: torch.Tensor = torch.arange(
+                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
             )
+
+        if position_ids is None:
+            position_ids = cache_position.unsqueeze(0)
 
         causal_mask = create_causal_mask(
             config=self.config,
@@ -7700,41 +7684,22 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
         if hidden_states.shape[-1] != inputs_embeds.shape[-1]:
             hidden_states = self.fc(hidden_states)
 
-        # decoder layers
-        all_hidden_states = () if output_hidden_states else None
-        all_self_attns = () if output_attentions else None
-        next_decoder_cache = () if use_cache else None
-
         position_embeddings = self.rotary_emb(hidden_states, position_ids=position_ids)
 
-        layer_outputs = self.midlayer(
+        hidden_states = self.midlayer(
             input_emb=inputs_embeds,
             hidden_states=hidden_states,
             attention_mask=causal_mask,
             position_embeddings=position_embeddings,
             position_ids=position_ids,
             past_key_value=past_key_values,
-            output_attentions=output_attentions,
             use_cache=True,
         )
 
-        if use_cache:
-            next_decoder_cache = past_key_values
-
-        hidden_states = layer_outputs[0]
         hidden_states = self.norm(hidden_states)
-
-        # add hidden states from the last decoder layer
-        if output_hidden_states:
-            all_hidden_states += (hidden_states,)
-        if output_attentions:
-            all_self_attns += (layer_outputs[1],)
-
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
-            past_key_values=next_decoder_cache if use_cache else None,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attns,
+            past_key_values=past_key_values,
         )
 
 
@@ -7783,7 +7748,6 @@ class LlamaEagle3ForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         hidden_states = outputs.last_hidden_state
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
         slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
-        # logits = self.lm_head(hidden_states[:, slice_indices, :])
         logits = self.model.lm_head(hidden_states[:, slice_indices, :])
 
         d2t_out = self.identity(self.model.d2t)
