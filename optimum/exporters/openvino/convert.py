@@ -53,6 +53,7 @@ from optimum.intel.utils.import_utils import (
 )
 from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
 
+from ...intel.utils.import_utils import is_nncf_available
 from ...intel.utils.modeling_utils import _infer_library_from_model_or_model_class
 from .stateful import (
     ensure_export_task_support_stateful,
@@ -99,6 +100,8 @@ def _set_runtime_options(
         Tuple[Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"],
     ],
     task: str,
+    library_name: str,
+    quantized_model: bool,
 ):
     for model_name in models_and_export_configs.keys():
         _, sub_export_config = models_and_export_configs[model_name]
@@ -110,6 +113,11 @@ def _set_runtime_options(
             or getattr(sub_export_config, "stateful", False)
         ):
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
+        if not quantized_model and (
+            "text-generation" in task
+            or ("image-text-to-text" in task and model_name == "language_model")
+            or getattr(sub_export_config, "stateful", False)
+        ):
             sub_export_config.runtime_options["KV_CACHE_PRECISION"] = "f16"
 
 
@@ -562,6 +570,11 @@ def export_from_model(
 ):
     model_kwargs = model_kwargs or {}
 
+    if ov_config is not None and ov_config.quantization_config and not is_nncf_available():
+        raise ImportError(
+            f"Compression of the weights to {ov_config.quantization_config} requires nncf, please install it with `pip install nncf`"
+        )
+
     library_name = _infer_library_from_model_or_model_class(model)
     if library_name != "open_clip":
         TasksManager.standardize_model_attributes(model)
@@ -749,7 +762,12 @@ def export_from_model(
 
         model.save_config(output)
 
-    _set_runtime_options(models_and_export_configs, task)
+    _set_runtime_options(
+        models_and_export_configs,
+        task,
+        library_name,
+        hasattr(ov_config, "quantization_config") and ov_config.quantization_config,
+    )
 
     export_models(
         models_and_export_configs=models_and_export_configs,

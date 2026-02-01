@@ -27,7 +27,10 @@ from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.configuration_utils import BaseConfig
 
-from ..utils.import_utils import is_nncf_available
+from ..utils.import_utils import (
+    is_nncf_available,
+    is_nncf_version,
+)
 from .utils import (
     PREDEFINED_CAUSAL_LANGUAGE_DATASETS,
     PREDEFINED_LANGUAGE_DATASETS,
@@ -697,13 +700,11 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
                         self._dataset_kwargs[key] = int(value)
                     except ValueError:
                         raise ValueError(
-                            f"Invalid value '{value}' for seq_len in dataset spec '{dataset}'. "
-                            f"Expected an integer."
+                            f"Invalid value '{value}' for seq_len in dataset spec '{dataset}'. Expected an integer."
                         )
                 else:
                     raise ValueError(
-                        f"Unsupported dataset option '{key}' in dataset spec '{dataset}'. "
-                        f"Only 'seq_len' is supported."
+                        f"Unsupported dataset option '{key}' in dataset spec '{dataset}'. Only 'seq_len' is supported."
                     )
         else:
             # No options or list-of-str dataset
@@ -1060,7 +1061,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         mode = self.dtype if self.dtype else signed_bitness[self.bits]
         if mode in signed_bitness.values():
             mode += "_sym" if self.sym else "_asym"
-        if mode == "cb4":
+
+        if mode == "cb4" and is_nncf_version("<=", "2.19"):
             mode = "cb4_f8e4m3"
         mode = nncf.CompressWeightsMode(mode)
 

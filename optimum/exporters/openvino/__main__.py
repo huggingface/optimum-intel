@@ -16,11 +16,13 @@ import gc
 import importlib.util
 import json
 import logging
+import operator
 import os
 import shutil
 import tempfile
+from functools import reduce
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
@@ -28,12 +30,11 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 from transformers.utils import is_torch_available
 
-from openvino import Core, save_model
+from openvino import Core, Type, save_model
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     DIFFUSERS_IMPORT_ERROR,
-    NNCF_IMPORT_ERROR,
     is_diffusers_available,
     is_nncf_available,
     is_openvino_tokenizers_available,
@@ -45,6 +46,7 @@ from optimum.intel.utils.modeling_utils import (
 )
 
 from .utils import (
+    _MAX_UNCOMPRESSED_SIZE,
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     clear_class_registry,
     deduce_diffusers_dtype,
@@ -217,64 +219,6 @@ def infer_library_name(
     return library_name
 
 
-def _infer_ov_model_class(
-    model_name_or_path: str,
-    task: str,
-    library_name: Optional[str] = None,
-    cache_dir: Optional[str] = HUGGINGFACE_HUB_CACHE,
-    trust_remote_code: bool = False,
-    subfolder: str = "",
-    revision: str = "main",
-    token: Optional[Union[bool, str]] = None,
-):
-    from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
-
-    if library_name is None:
-        library_name = infer_library_name(
-            model_name_or_path,
-            subfolder=subfolder,
-            revision=revision,
-            cache_dir=cache_dir,
-            token=token,
-        )
-    original_task = task
-    task = infer_task(
-        task,
-        model_name_or_path,
-        subfolder=subfolder,
-        revision=revision,
-        cache_dir=cache_dir,
-        token=token,
-        library_name=library_name,
-        trust_remote_code=trust_remote_code,
-    )
-
-    if library_name == "diffusers":
-        if not is_diffusers_available():
-            raise ImportError(DIFFUSERS_IMPORT_ERROR.format("Export of diffusers models"))
-
-        from diffusers import DiffusionPipeline
-
-        diffusers_config = DiffusionPipeline.load_config(
-            model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
-        )
-        class_name = diffusers_config.get("_class_name", None)
-        ov_class_name = f"OV{class_name}"
-        try:
-            model_cls = getattr(__import__("optimum.intel", fromlist=[ov_class_name]), ov_class_name)
-        except (AttributeError, ImportError) as e:
-            raise RuntimeError(f"Wasn't able to locate OpenVINO class for {class_name} diffusion model.") from e
-    else:
-        try:
-            model_cls_name = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
-            if library_name == "sentence_transformers":
-                model_cls_name = "OVSentenceTransformer"
-            model_cls = getattr(__import__("optimum.intel", fromlist=[model_cls_name]), model_cls_name)
-        except (AttributeError, ImportError, KeyError) as e:
-            raise RuntimeError(f"Wasn't able to locate OpenVINO class for task {original_task} ({task}).") from e
-    return model_cls
-
-
 def main_export(
     model_name_or_path: str,
     output: Union[str, Path],
@@ -321,7 +265,7 @@ def main_export(
             The device to use to do the export. Defaults to "cpu".
         framework (`Optional[str]`, defaults to `pt`):
             The framework to use to load the model before conversion. Defaults to 'pt' for PyTorch.
-        cache_dir (`Optional[str]`, defaults to `HUGGINGFACE_HUB_CACHE`):
+        cache_dir (`Optional[str]`, defaults to `None`):
             Path indicating where to store cache. The default Hugging Face cache path will be used by default.
         trust_remote_code (`bool`, defaults to `False`):
             Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories
@@ -367,6 +311,7 @@ def main_export(
     ```
     """
     from optimum.exporters.openvino.convert import export_from_model
+    from optimum.intel.openvino.configuration import _GPTOSSQuantizationConfig
 
     if framework is None:
         framework = TasksManager.determine_framework(
@@ -642,7 +587,7 @@ def main_export(
             model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code, model_type=model_type
         )
 
-        export_from_model(
+        submodel_paths = export_from_model(
             model=model,
             output=output,
             task=task,
@@ -664,6 +609,11 @@ def main_export(
         clear_class_registry()
         del model
         gc.collect()
+
+        # TODO: Remove GPT-OSS workaround when possible
+        quantization_config = None if ov_config is None else ov_config.quantization_config
+        if not quantization_config or isinstance(quantization_config, _GPTOSSQuantizationConfig):
+            _apply_model_size_based_quantization(submodel_paths, ov_config, output)
     finally:
         # Unpatch modules after quantized model export
         if do_quant_patching:
@@ -678,31 +628,33 @@ def main_export(
 
 def _main_quantize(
     model_name_or_path: str,
-    output: Union[str, Path],
-    quantization_config: Union[Dict, "OVQuantizationConfigBase"],  # noqa: F821
     task: str,
-    cache_dir: Optional[str] = HUGGINGFACE_HUB_CACHE,
+    library_name: str,
+    quantization_config: Union[Dict, "OVQuantizationConfigBase"],  # noqa: F821
+    output: Path,
+    cache_dir: str,
     trust_remote_code: bool = False,
     subfolder: str = "",
     revision: str = "main",
     token: Optional[Union[bool, str]] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    library_name: Optional[str] = None,
 ):
     """
     Apply quantization to the OpenVINO model exported to `output` directory.
 
     Args:
         model_name_or_path (`str`):
-            Model ID on huggingface.co or path on disk to the original model repository.
-        output (`Union[str, Path]`):
-            Path indicating the directory where the exported OpenVINO model is stored and where to save the
-            quantized model.
-        quantization_config (`Union[Dict, OVQuantizationConfigBase]`):
-            The quantization configuration to use.
+            Model ID on huggingface.co or path on disk to the model repository.
         task (`str`):
             The task to export the model for.
-        cache_dir (`Optional[str]`, defaults to `HUGGINGFACE_HUB_CACHE`):
+        library_name (`str`):
+            The library name.
+        quantization_config (`Union[Dict, OVQuantizationConfigBase]`):
+            The quantization configuration to use.
+        output (`Path`):
+            Path indicating the directory where the exported OpenVINO model is stored and where to save the
+            quantized model.
+        cache_dir (`Optional[str]`, defaults to `None`):
             Path indicating where to store cache. The default Hugging Face cache path will be used by default.
         trust_remote_code (`bool`, defaults to `False`):
             Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories
@@ -721,66 +673,12 @@ def _main_quantize(
             the export. This argument should be used along the `custom_export_configs` argument
             in case, for example, the model inputs/outputs are changed (for example, if
             `model_kwargs={"output_attentions": True}` is passed).
-        library_name (`Optional[str]`, defaults to `None`):
-            The library name.
+
     """
-    from optimum.intel.openvino.configuration import _GPTOSSQuantizationConfig
+    from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 
-    if not is_nncf_available():
-        raise ImportError(NNCF_IMPORT_ERROR.format("Applying quantization"))
-
-    # Step 1. Obtain the correct OpenVINO model class
-    model_cls = _infer_ov_model_class(
-        model_name_or_path=model_name_or_path,
-        task=task,
-        library_name=library_name,
-        cache_dir=cache_dir,
-        trust_remote_code=trust_remote_code,
-        subfolder=subfolder,
-        revision=revision,
-        token=token,
-    )
-    output = Path(output)
-
-    # Step 2. A special case for quantization of GPT-OSS models
-    # TODO: remove this workaround when possible
-    if isinstance(quantization_config, _GPTOSSQuantizationConfig):
-        # A workaround for GPT-OSS model is required to run quantization twice, this way it is possible to
-        # selectively quantize some weights to 4 bits and some to 8 bits.
-        from optimum.intel.openvino import OVModelForCausalLM
-        from optimum.intel.openvino.quantization import _weight_only_quantization
-
-        if model_cls != OVModelForCausalLM:
-            raise ValueError(
-                "GPT-OSS quantization is only supported for causal language models. "
-                f"Expected model class OVModelForCausalLM but got {model_cls}."
-            )
-
-        ov_model_path = output / model_cls._all_ov_model_paths["model"]
-        ov_model = core.read_model(ov_model_path)
-        _weight_only_quantization(ov_model, quantization_config.quantization_config1)
-        _weight_only_quantization(ov_model, quantization_config.quantization_config2, verify_not_optimized=False)
-
-        # Save to a temporary path and replace the original model files to avoid reading and writing to the same file
-        compressed_ov_model_path = ov_model_path.parent / f"{ov_model_path.stem}_compressed.xml"
-        save_model(ov_model, compressed_ov_model_path, compress_to_fp16=False)
-        del ov_model
-        gc.collect()
-        ov_model_path.unlink()
-        ov_model_path.with_suffix(".bin").unlink()
-        compressed_ov_model_path.rename(ov_model_path)
-        compressed_ov_model_path.with_suffix(".bin").rename(ov_model_path.with_suffix(".bin"))
-        return
-
-    # Step 3. Load the exported model
-    if library_name is None:
-        library_name = infer_library_name(
-            model_name_or_path,
-            subfolder=subfolder,
-            revision=revision,
-            cache_dir=cache_dir,
-            token=token,
-        )
+    # Step 0. Infer task and library name if needed
+    original_task = task
     task = infer_task(
         task,
         model_name_or_path,
@@ -791,6 +689,39 @@ def _main_quantize(
         library_name=library_name,
         trust_remote_code=trust_remote_code,
     )
+    if library_name is None:
+        library_name = infer_library_name(
+            model_name_or_path,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+        )
+
+    # Step 1. Obtain the correct OpenVINO model class
+    if library_name == "diffusers":
+        if not is_diffusers_available():
+            raise ValueError(DIFFUSERS_IMPORT_ERROR.format("Export of diffusers models"))
+
+        from diffusers import DiffusionPipeline
+
+        diffusers_config = DiffusionPipeline.load_config(model_name_or_path)
+        class_name = diffusers_config.get("_class_name", None)
+        ov_class_name = f"OV{class_name}"
+        try:
+            model_cls = getattr(__import__("optimum.intel", fromlist=[ov_class_name]), ov_class_name)
+        except (AttributeError, ImportError) as e:
+            raise RuntimeError(f"Wasn't able to locate OpenVINO class for {class_name} diffusion model.") from e
+    else:
+        try:
+            model_cls_name = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+            if library_name == "sentence_transformers":
+                model_cls_name = "OVSentenceTransformer"
+            model_cls = getattr(__import__("optimum.intel", fromlist=[model_cls_name]), model_cls_name)
+        except (AttributeError, ImportError, KeyError) as e:
+            raise RuntimeError(f"Wasn't able to locate OpenVINO class for task {original_task} ({task}).") from e
+
+    # Step 2. Load the exported model
     model = model_cls.from_pretrained(
         output,
         compile=False,
@@ -800,7 +731,7 @@ def _main_quantize(
         **(model_kwargs or {}),
     )
 
-    # Step 4. Apply quantization and save the quantized model
+    # Step 3. Apply quantization and save the quantized model
     model._apply_quantization(
         quantization_config,
         compile_only=False,
@@ -809,354 +740,6 @@ def _main_quantize(
         trust_remote_code=trust_remote_code,
         save_directory=output,
         immediate_save=True,
-    )
-
-
-def _prepare_quantization_config(
-    model_name_or_path: str,
-    output: Union[str, Path],
-    task: str,
-    cache_dir: Optional[str] = HUGGINGFACE_HUB_CACHE,
-    library_name: Optional[str] = None,
-    trust_remote_code: bool = False,
-    subfolder: str = "",
-    revision: str = "main",
-    token: Optional[Union[bool, str]] = None,
-    # Quantization parameters
-    weight_format: Optional[str] = None,
-    quant_mode: Optional[str] = None,
-    ratio: Optional[float] = None,
-    sym: Optional[bool] = None,
-    group_size: Optional[int] = None,
-    all_layers: Optional[bool] = None,
-    dataset: Optional[str] = None,
-    num_samples: Optional[int] = None,
-    awq: Optional[bool] = None,
-    sensitivity_metric: Optional[str] = None,
-    scale_estimation: Optional[bool] = None,
-    gptq: Optional[bool] = None,
-    lora_correction: Optional[bool] = None,
-    quantization_statistics_path: Optional[str] = None,
-    backup_precision: Optional[str] = None,
-    group_size_fallback: Optional[str] = None,
-    smooth_quant_alpha: Optional[float] = None,
-) -> Optional["OVQuantizationConfigBase"]:  # noqa: F821
-    """
-    Prepare the quantization configuration based on the provided parameters.
-    Full description of quantization-related parameters can be found at OVExportCommand class.
-
-    Args:
-        model_name_or_path (`str`):
-            Model ID on huggingface.co or path on disk to the original model repository.
-        output (`Union[str, Path]`):
-            Path indicating the directory where the exported OpenVINO model is stored.
-        task (`str`):
-            The task to export the model for.
-        library_name (`str`, defaults to `None`):
-            The library name.
-        cache_dir (`str`, defaults to `HUGGINGFACE_HUB_CACHE`):
-            Path indicating where to store cache. The default Hugging Face cache path will be used by default.
-        trust_remote_code (`bool`, defaults to `False`):
-            Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories
-            you trust and in which you have read the code, as it will execute on your local machine arbitrary code present in the
-            model repository.
-        subfolder (`str`, defaults to `""`):
-            In case the relevant files are located inside a subfolder of the model repo either locally or on huggingface.co, you can
-            specify the folder name here.
-        revision (`str`, defaults to `"main"`):
-            Revision is the specific model version to use. It can be a branch name, a tag name, or a commit id.
-        token (Optional[Union[bool, str]], defaults to `None`):
-            The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
-            when running `huggingface-cli login` (stored in `~/.huggingface`).
-        weight_format (`Optional[str]`, defaults to `None`):
-            The weight format of the exported model.
-        quant_mode (`Optional[str]`, defaults to `None`):
-            Quantization precision mode.
-        ratio (`Optional[float]`, defaults to `None`):
-            A parameter used when applying 4-bit quantization to control the ratio between 4-bit and 8-bit quantization.
-        sym (`Optional[bool]`, defaults to `None`):
-            Whether to apply symmetric quantization.
-        group_size (`Optional[int]`, defaults to `None`):
-            The group size to use for quantization.
-        all_layers (`Optional[bool]`, defaults to `None`):
-            Whether embeddings and last MatMul layers should be compressed to INT4.
-        dataset (`Optional[str]`, defaults to `None`):
-            The dataset used for data-aware compression or quantization with NNCF.
-        num_samples (`Optional[int]`, defaults to `None`):
-            The maximum number of samples to take from the dataset for quantization.
-        awq (`Optional[bool]`, defaults to `None`):
-            Whether to apply AWQ algorithm.
-        sensitivity_metric (`Optional[str]`, defaults to `None`):
-            The sensitivity metric for assigning quantization precision to layers.
-        scale_estimation (`Optional[bool]`, defaults to `None`):
-            Indicates whether to apply a scale estimation algorithm.
-        gptq (`Optional[bool]`, defaults to `None`):
-            Indicates whether to apply GPTQ algorithm.
-        lora_correction (`Optional[bool]`, defaults to `None`):
-            Indicates whether to apply LoRA Correction algorithm.
-        quantization_statistics_path (`Optional[str]`, defaults to `None`):
-            Directory path to dump/load data-aware weight-only quantization statistics.
-        backup_precision (`Optional[str]`, defaults to `None`):
-            Defines a backup precision for mixed-precision weight compression.
-        group_size_fallback (`Optional[str]`, defaults to `None`):
-            Specifies how to handle operations that do not support the given group size.
-        smooth_quant_alpha (`Optional[float]`, defaults to `None`):
-            SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and
-            reduces quantization error.
-    Returns:
-        `Optional[OVQuantizationConfigBase]`: The prepared quantization configuration or `None` if no quantization is to be applied.
-    """
-    from optimum.intel.openvino.configuration import (
-        _DEFAULT_4BIT_WQ_CONFIG,
-        _quantization_config_from_dict,
-        get_default_quantization_config,
-    )
-
-    no_compression_parameter_provided = _no_compression_parameter_provided(
-        ratio,
-        group_size,
-        sym,
-        all_layers,
-        dataset,
-        num_samples,
-        awq,
-        scale_estimation,
-        gptq,
-        lora_correction,
-        sensitivity_metric,
-        backup_precision,
-    )
-    no_quantization_parameter_provided = _no_quantization_parameter_provided(
-        sym, dataset, num_samples, smooth_quant_alpha
-    )
-    output = Path(output)
-
-    wc_config = None
-    if weight_format is None and quant_mode is None:
-        if not no_compression_parameter_provided or quantization_statistics_path is not None:
-            raise ValueError(
-                "Some compression parameters are provided, but the weight format is not specified. "
-                "Please provide it with weight_format argument."
-            )
-        if not no_quantization_parameter_provided:
-            raise ValueError(
-                "Some quantization parameters are provided, but the quantization mode is not specified. "
-                "Please provide it with quant_mode argument."
-            )
-    else:
-        # wc_config may be needed in case of weight-only quantization or mixed precision quantization
-        wc_config = _prepare_wc_config(
-            weight_format,
-            ratio,
-            sym,
-            group_size,
-            all_layers,
-            dataset,
-            num_samples,
-            awq,
-            sensitivity_metric,
-            scale_estimation,
-            gptq,
-            lora_correction,
-            quantization_statistics_path,
-            backup_precision,
-            group_size_fallback,
-            _DEFAULT_4BIT_WQ_CONFIG,
-        )
-    if weight_format is not None and quant_mode is not None:
-        raise ValueError("Both weight_format and quant_mode arguments are provided. Please provide only one of them.")
-    default_quantization_config = None
-    if weight_format is not None or quant_mode is not None:
-        default_quantization_config = get_default_quantization_config(model_name_or_path, weight_format, quant_mode)
-
-    # Step 1. If weight_format argument is provided, construct a weight-only quantization config
-    if weight_format not in [None, "fp16", "fp32"]:
-        quantization_config = wc_config
-        # For int4/int8 quantization if no parameter is provided, then use the default config if exists
-        if no_compression_parameter_provided and weight_format in ["int4", "int8"]:
-            if default_quantization_config is not None:
-                quantization_config = default_quantization_config
-                logger.info(
-                    f"Applying the default quantization config for {model_name_or_path}: {quantization_config}."
-                )
-            elif weight_format == "int4":
-                quantization_config = _DEFAULT_4BIT_WQ_CONFIG
-                logger.info(f"Applying a default quantization config: {quantization_config}.")
-            if quantization_statistics_path is not None:
-                quantization_config["statistics_path"] = quantization_statistics_path
-        elif default_quantization_config is not None:
-            logger.info(
-                f"For the given model, we recommend the following `quantization_config` : {default_quantization_config}."
-            )
-        quantization_config = _quantization_config_from_dict(quantization_config)
-        return quantization_config
-
-    # Step 2. If quant_mode argument is provided, construct a full quantization config
-    if quant_mode is not None:
-        if no_quantization_parameter_provided and default_quantization_config is not None:
-            quantization_config = default_quantization_config
-            logger.info(f"Applying the default quantization config for {model_name_or_path}: {quantization_config}.")
-        else:
-            if dataset is None:
-                raise ValueError(
-                    "Dataset is required for full quantization. Please provide it with --dataset argument."
-                )
-            if quant_mode in [
-                "cb4_f8e4m3",
-                "int4_f8e4m3",
-                "int4_f8e5m2",
-            ]:
-                if library_name == "diffusers":
-                    raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
-
-                wc_dtype, q_dtype = quant_mode.split("_")
-                wc_config["dtype"] = wc_dtype
-
-                q_config = _prepare_q_config(quant_mode, sym, dataset, num_samples, smooth_quant_alpha)
-                q_config["dtype"] = q_dtype
-
-                quantization_config = {
-                    "weight_quantization_config": wc_config,
-                    "full_quantization_config": q_config,
-                    "num_samples": num_samples,
-                    "dataset": dataset,
-                }
-            else:
-                if quantization_statistics_path is not None:
-                    logger.warning(
-                        "The --quantization-statistics-path argument is only applicable for weight-only "
-                        "quantization. It will be ignored."
-                    )
-                quantization_config = _prepare_q_config(quant_mode, sym, dataset, num_samples, smooth_quant_alpha)
-        quantization_config = _quantization_config_from_dict(quantization_config)
-        return quantization_config
-
-    # Step 3. No quantization parameters provided, apply int8 weight quantization only to models larger than 1B params
-    if weight_format not in ["fp16", "fp32"]:
-        model_cls = _infer_ov_model_class(
-            model_name_or_path=model_name_or_path,
-            task=task,
-            library_name=library_name,
-            cache_dir=cache_dir,
-            trust_remote_code=trust_remote_code,
-            subfolder=subfolder,
-            revision=revision,
-            token=token,
-        )
-        quantization_config = model_cls._prepare_model_size_based_quantization_config(output)
-        return quantization_config
-
-    return None
-
-
-def _prepare_wc_config(
-    weight_format: Optional[str],
-    ratio: Optional[float],
-    sym: Optional[bool],
-    group_size: Optional[int],
-    all_layers: Optional[bool],
-    dataset: Optional[str],
-    num_samples: Optional[int],
-    awq: Optional[bool],
-    sensitivity_metric: Optional[str],
-    scale_estimation: Optional[bool],
-    gptq: Optional[bool],
-    lora_correction: Optional[bool],
-    quantization_statistics_path: Optional[str],
-    backup_precision: Optional[str],
-    group_size_fallback: Optional[str],
-    default_configs: Dict[str, Any],
-):
-    is_int8 = weight_format == "int8"
-    return {
-        "bits": 8 if is_int8 else 4,
-        "ratio": 1.0 if is_int8 else (ratio or default_configs["ratio"]),
-        "sym": sym or False,
-        "group_size": -1 if is_int8 else group_size,
-        "all_layers": None if is_int8 else all_layers,
-        "dataset": dataset,
-        "num_samples": num_samples,
-        "quant_method": "awq" if awq else "default",
-        "sensitivity_metric": sensitivity_metric,
-        "scale_estimation": scale_estimation,
-        "gptq": gptq,
-        "lora_correction": lora_correction,
-        "dtype": weight_format,
-        "backup_precision": backup_precision,
-        "statistics_path": quantization_statistics_path,
-        "group_size_fallback": group_size_fallback,
-    }
-
-
-def _prepare_q_config(
-    quant_mode: str,
-    sym: Optional[bool],
-    dataset: Optional[str],
-    num_samples: Optional[int],
-    smooth_quant_alpha: Optional[float],
-):
-    return {
-        "dtype": quant_mode,
-        "bits": 8,
-        "sym": sym or False,
-        "dataset": dataset,
-        "num_samples": num_samples,
-        "smooth_quant_alpha": smooth_quant_alpha,
-    }
-
-
-def _no_compression_parameter_provided(
-    ratio: Optional[float],
-    group_size: Optional[int],
-    sym: Optional[bool],
-    all_layers: Optional[bool],
-    dataset: Optional[str],
-    num_samples: Optional[int],
-    awq: Optional[bool],
-    scale_estimation: Optional[bool],
-    gptq: Optional[bool],
-    lora_correction: Optional[bool],
-    sensitivity_metric: Optional[str],
-    backup_precision: Optional[str],
-):
-    # Except statistics path
-    return all(
-        (
-            it is None
-            for it in (
-                ratio,
-                group_size,
-                sym,
-                all_layers,
-                dataset,
-                num_samples,
-                awq,
-                scale_estimation,
-                gptq,
-                lora_correction,
-                sensitivity_metric,
-                backup_precision,
-            )
-        )
-    )
-
-
-def _no_quantization_parameter_provided(
-    sym: Optional[bool],
-    dataset: Optional[str],
-    num_samples: Optional[int],
-    smooth_quant_alpha: Optional[float],
-):
-    return all(
-        (
-            it is None
-            for it in (
-                sym,
-                dataset,
-                num_samples,
-                smooth_quant_alpha,
-            )
-        )
     )
 
 
@@ -1201,3 +784,122 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
                     export_tokenizer(tokenizer, output / tokenizer_name, task=task)
     else:
         logger.warning("Tokenizer won't be converted.")
+
+
+def _apply_model_size_based_quantization(submodel_paths: List[str], ov_config: "OVConfig", output: Union[str, Path]):
+    """
+    Apply weight-only quantization to int8_asym to submodels larger than 1B parameters.
+    """
+    # TODO: Refactor the code below in the following way:
+    #   1. Create a OVPipelineQuantizationConfig based on each submodel size
+    #   2. Run _main_quantize() with the created quantization config
+    # TODO: Apply default int8 and ignored scope configs from configuration.py if matches
+    for submodel_path in submodel_paths:
+        submodel_path = Path(output) / submodel_path
+
+        if (not submodel_path.is_file()) or (submodel_path.stat().st_size == 0):
+            raise RuntimeError(
+                f"An issue happened during export : {submodel_path.name} was not converted and saved as expected."
+            )
+
+        submodel = core.read_model(submodel_path)
+
+        quantization_config = None
+        if ov_config is None:
+            num_parameters = 0
+            for op in submodel.get_ops():
+                if op.get_type_name() == "Constant" and op.get_element_type() in [Type.f16, Type.f32, Type.bf16]:
+                    num_parameters += reduce(operator.mul, op.shape, 1)
+                del op
+            if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
+                if is_nncf_available():
+                    quantization_config = {"bits": 8, "sym": False}
+                    logger.info("The model weights will be quantized to int8_asym.")
+                else:
+                    logger.warning(
+                        "The model will be converted with no weights quantization. Quantization of the weights to int8 "
+                        "requires nncf. Please install it with `pip install nncf`"
+                    )
+                    break
+        else:
+            # TODO: Remove this case when the workaround for GPT-OSS is removed
+            quantization_config = ov_config.quantization_config
+        if quantization_config is None:
+            del submodel
+            gc.collect()
+            continue
+
+        if not is_nncf_available():
+            raise ImportError("Quantization of the weights requires nncf, please install it with `pip install nncf`")
+
+        from optimum.intel.openvino.configuration import _GPTOSSQuantizationConfig
+        from optimum.intel.openvino.quantization import _weight_only_quantization
+
+        if isinstance(quantization_config, _GPTOSSQuantizationConfig):
+            # A workaround for GPT-OSS model is required to run quantization twice, this way it is possible to
+            # selectively quantize some weights to 4 bits and some to 8 bits.
+            _weight_only_quantization(submodel, quantization_config.quantization_config1)
+            _weight_only_quantization(submodel, quantization_config.quantization_config2, verify_not_optimized=False)
+        else:
+            _weight_only_quantization(submodel, quantization_config)
+        compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
+        save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
+        del submodel
+        gc.collect()
+
+        submodel_path.unlink()
+        submodel_path.with_suffix(".bin").unlink()
+        compressed_submodel_path.rename(submodel_path)
+        compressed_submodel_path.with_suffix(".bin").rename(submodel_path.with_suffix(".bin"))
+
+
+def _merge_move(src: Path, dest: Path):
+    """
+    Move src to dest.
+
+    - If src is a directory:
+        - If dest does not exist: rename src -> dest.
+        - If dest is a directory: merge src into dest recursively.
+        - If dest is a file: replace file with src directory (delete file, then rename).
+
+    - If src is a file:
+        - If dest does not exist: rename src -> dest.
+        - If dest is a file: overwrite file (delete dest, then rename).
+        - If dest is a directory: replace directory with src file (delete directory recursively, then rename).
+    """
+
+    def _safe_rename(src: Path, dest: Path):
+        # Try to rename first, fall back to shutil.move if it fails (e.g., cross-device move)
+        try:
+            src.rename(dest)
+        except OSError:
+            shutil.move(str(src), str(dest))
+
+    dest_exists = dest.exists()
+    dest_is_dir = dest_exists and dest.is_dir()
+    if src.is_dir():
+        if not dest_exists:
+            # No conflict: just rename
+            _safe_rename(src, dest)
+        elif dest_is_dir:
+            # Merge src into dest recursively
+            for child in src.iterdir():
+                _merge_move(child, dest / child.name)
+            # Remove src once empty
+            src.rmdir()
+        else:
+            # dest exists and is a file: replace file with directory
+            dest.unlink()
+            _safe_rename(src, dest)
+    else:
+        if not dest_exists:
+            # No conflict: just rename
+            _safe_rename(src, dest)
+        elif dest_is_dir:
+            # Replace directory (recursively) with file
+            shutil.rmtree(dest)
+            _safe_rename(src, dest)
+        else:
+            # dest is a file: overwrite
+            dest.unlink()
+            _safe_rename(src, dest)
