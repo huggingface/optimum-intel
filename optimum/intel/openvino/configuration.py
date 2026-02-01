@@ -700,11 +700,13 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
                         self._dataset_kwargs[key] = int(value)
                     except ValueError:
                         raise ValueError(
-                            f"Invalid value '{value}' for seq_len in dataset spec '{dataset}'. Expected an integer."
+                            f"Invalid value '{value}' for seq_len in dataset spec '{dataset}'. "
+                            f"Expected an integer."
                         )
                 else:
                     raise ValueError(
-                        f"Unsupported dataset option '{key}' in dataset spec '{dataset}'. Only 'seq_len' is supported."
+                        f"Unsupported dataset option '{key}' in dataset spec '{dataset}'. "
+                        f"Only 'seq_len' is supported."
                     )
         else:
             # No options or list-of-str dataset
