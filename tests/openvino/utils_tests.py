@@ -357,6 +357,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "zamba2": {"model": 44},
     "exaone4": {"model": 16},
     "lfm2": {"model": 52},
+    "qwen3_eagle3": {"model": 52},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
