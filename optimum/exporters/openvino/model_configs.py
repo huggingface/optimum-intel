@@ -639,7 +639,7 @@ class GemmaOpenVINOConfig(GemmaOnnxConfig):
         return inputs
 
 
-class EAGLE3DummyGenerator(DummyInputGenerator):
+class Eagle3DummyGenerator(DummyInputGenerator):
     """
     Generates dummy hidden_states inputs.
     """
@@ -703,7 +703,8 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
         archs = getattr(config, "architectures", None)
         self.eagle3 = False
         if isinstance(archs, list) and len(archs) > 0 and "eagle3" in archs[0].lower():
-            self.DUMMY_INPUT_GENERATOR_CLASSES += (EAGLE3DummyGenerator,)
+            self.DUMMY_INPUT_GENERATOR_CLASSES += (Eagle3DummyGenerator,)
+            self.MIN_TRANSFORMERS_VERSION = "4.54.0"
             self.eagle3 = True
 
     @property
