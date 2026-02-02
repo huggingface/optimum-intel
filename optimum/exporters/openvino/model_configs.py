@@ -679,20 +679,46 @@ class EAGLE3DummyGenerator(DummyInputGenerator):
     library_name="transformers",
 )
 class LlamaOpenVINOConfig(LlamaOnnxConfig):
-    DUMMY_INPUT_GENERATOR_CLASSES = LlamaOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES + (EAGLE3DummyGenerator,)
     _MODEL_PATCHER = OVDecoderModelPatcher
+
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        use_past: bool = False,
+        use_past_in_inputs: bool = False,
+        preprocessors: list[Any] | None = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            use_past=use_past,
+            use_past_in_inputs=use_past_in_inputs,
+            preprocessors=preprocessors,
+        )
+        archs = getattr(config, "architectures", None)
+        self.eagle3 = False
+        if isinstance(archs, list) and len(archs) > 0 and "eagle3" in archs[0].lower():
+            self.DUMMY_INPUT_GENERATOR_CLASSES += (EAGLE3DummyGenerator,)
+            self.eagle3 = True
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         common_inputs = super().inputs
-        common_inputs["hidden_states"] = {0: "batch_size", 1: "sequence_length", 2: "hidden_size"}
+        if self.eagle3:
+            common_inputs["hidden_states"] = {0: "batch_size", 1: "sequence_length", 2: "hidden_size"}
         return common_inputs
 
     @property
     def outputs(self) -> dict[str, dict[int, str]]:
         common_outputs = super().outputs
-        # Add d2t buffer as eagle3 draft output
-        common_outputs["d2t"] = {0: "vocab_size"}
+        if self.eagle3:
+            # Add d2t buffer as eagle3 draft output
+            common_outputs["d2t"] = {0: "vocab_size"}
         return common_outputs
 
 
