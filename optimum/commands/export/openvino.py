@@ -290,6 +290,16 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--submodel",
+        type=str,
+        choices=["vision", "text", "full"],
+        default="full",
+        help=(
+            "For CLIP/OpenCLIP feature-extraction, export only the specified submodule. "
+            "Use 'vision' to export the vision encoder, 'text' for the text encoder, or 'full' for the combined/default behavior."
+        ),
+    )
+    optional_group.add_argument(
         "--model-kwargs",
         type=json.loads,
         help=("Any kwargs passed to the model forward, or used to customize the export for a given model."),
@@ -479,6 +489,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 library_name=library_name,
                 variant=self.args.variant,
                 model_kwargs=self.args.model_kwargs,
+                submodel=self.args.submodel,
                 # **input_shapes,
             )
             if apply_main_quantize:
