@@ -103,6 +103,8 @@ def _set_runtime_options(
     for model_name in models_and_export_configs.keys():
         _, sub_export_config = models_and_export_configs[model_name]
         if not hasattr(sub_export_config, "runtime_options"):
+            if sub_export_config is None:
+                print("k")
             sub_export_config.runtime_options = {}
         if (
             "text-generation" in task
@@ -664,6 +666,10 @@ def export_from_model(
             stateful=stateful,
         )
         logging.disable(logging.NOTSET)
+
+    # Remove empty model and export_configs pairs, they can be empty when a config class is shared between model versions.
+    # Example: Qwen2VL and Qwen3VL share config class, but "vision_embeddings_pos" is used in Qwen3VL only.
+    models_and_export_configs = {k: v for k, v in models_and_export_configs.items() if v != (None, None)}
 
     if library_name == "open_clip":
         if hasattr(model.config, "save_pretrained"):
