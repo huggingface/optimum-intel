@@ -402,6 +402,8 @@ class MixtralModelPatcher(OVDecoderModelPatcher):
                 layer.block_sparse_moe.forward = types.MethodType(
                     _mixtral_sparse_moe_block_forward, layer.block_sparse_moe
                 )
+        else:
+            self._model.config._experts_implementation = "batched_mm"
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -1709,16 +1711,22 @@ def _phi_moe_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torc
 class PhiMoEModelPatcher(Phi3ModelPatcher):
     def __enter__(self):
         super().__enter__()
-        for layer in self._model.model.layers:
-            layer.block_sparse_moe._orig_forward = layer.block_sparse_moe.forward
-            layer.block_sparse_moe.forward = types.MethodType(
-                _phi_moe_sparse_moe_block_forward, layer.block_sparse_moe
-            )
+
+        if is_transformers_version("<", "5"):
+            for layer in self._model.model.layers:
+                layer.block_sparse_moe._orig_forward = layer.block_sparse_moe.forward
+                layer.block_sparse_moe.forward = types.MethodType(
+                    _phi_moe_sparse_moe_block_forward, layer.block_sparse_moe
+                )
+        else:
+            self._model.config._experts_implementation = "batched_mm"
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        for layer in self._model.model.layers:
-            layer.block_sparse_moe.forward = layer.block_sparse_moe._orig_forward
+
+        if is_transformers_version("<", "5"):
+            for layer in self._model.model.layers:
+                layer.block_sparse_moe.forward = layer.block_sparse_moe._orig_forward
 
 
 def _aquila_self_attn_sdpa_forward(
@@ -4443,28 +4451,35 @@ def _granite_moe_parallel_experts_forward(self, inputs, expert_size):
 class GraniteMoEModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        for layer in self._model.model.layers:
-            block_sparse_moe = layer.block_sparse_moe
-            block_sparse_moe.router._orig_forward = block_sparse_moe.router.forward
-            block_sparse_moe.router.forward = types.MethodType(
-                _granite_moe_topk_gating_forward, block_sparse_moe.router
-            )
-            block_sparse_moe.input_linear._orig_forward = block_sparse_moe.input_linear.forward
-            block_sparse_moe.input_linear.forward = types.MethodType(
-                _granite_moe_parallel_experts_forward, block_sparse_moe.input_linear
-            )
-            block_sparse_moe.output_linear._orig_forward = block_sparse_moe.output_linear.forward
-            block_sparse_moe.output_linear.forward = types.MethodType(
-                _granite_moe_parallel_experts_forward, block_sparse_moe.output_linear
-            )
+
+        if is_transformers_version("<", "5"):
+            for layer in self._model.model.layers:
+                block_sparse_moe = layer.block_sparse_moe
+                block_sparse_moe.router._orig_forward = block_sparse_moe.router.forward
+                block_sparse_moe.router.forward = types.MethodType(
+                    _granite_moe_topk_gating_forward, block_sparse_moe.router
+                )
+                block_sparse_moe.input_linear._orig_forward = block_sparse_moe.input_linear.forward
+                block_sparse_moe.input_linear.forward = types.MethodType(
+                    _granite_moe_parallel_experts_forward, block_sparse_moe.input_linear
+                )
+                block_sparse_moe.output_linear._orig_forward = block_sparse_moe.output_linear.forward
+                block_sparse_moe.output_linear.forward = types.MethodType(
+                    _granite_moe_parallel_experts_forward, block_sparse_moe.output_linear
+                )
+
+        else:
+            self._model.config._experts_implementation = "batched_mm"
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        for layer in self._model.model.layers:
-            block_sparse_moe = layer.block_sparse_moe
-            block_sparse_moe.router.forward = block_sparse_moe.router._orig_forward
-            block_sparse_moe.input_linear.forward = block_sparse_moe.input_linear._orig_forward
-            block_sparse_moe.output_linear.forward = block_sparse_moe.output_linear._orig_forward
+
+        if is_transformers_version("<", "5"):
+            for layer in self._model.model.layers:
+                block_sparse_moe = layer.block_sparse_moe
+                block_sparse_moe.router.forward = block_sparse_moe.router._orig_forward
+                block_sparse_moe.input_linear.forward = block_sparse_moe.input_linear._orig_forward
+                block_sparse_moe.output_linear.forward = block_sparse_moe.output_linear._orig_forward
 
 
 class OVSeq2SeqModelPatcher(OVModelPatcher):
@@ -5270,14 +5285,18 @@ def _qwen2moe_sparse_block_forward(self, hidden_states: torch.Tensor) -> torch.T
 class Qwen2MoEPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "4.52.0"):
+
+        if is_transformers_version(">=", "4.52.0") and is_transformers_version("<", "5"):
             from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeSparseMoeBlock
 
             modulewise_patch(self._model, Qwen2MoeSparseMoeBlock, _qwen2moe_sparse_block_forward)
 
+        if is_transformers_version(">=", "5"):
+            self._model.config._experts_implementation = "batched_mm"
+
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if is_transformers_version(">=", "4.52.0"):
+        if is_transformers_version(">=", "4.52.0") and is_transformers_version("<", "5"):
             from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeSparseMoeBlock
 
             modulewise_unpatch(self._model, Qwen2MoeSparseMoeBlock)
@@ -6626,14 +6645,16 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        if is_transformers_version(">=", "4.53"):
+        if is_transformers_version(">=", "4.53") and is_transformers_version("<", "5"):
             self.original_moe_forward = Qwen3MoeSparseMoeBlock.forward
             Qwen3MoeSparseMoeBlock.forward = qwen3_moe_forward_patched
+        if is_transformers_version(">=", "5"):
+            self._model.config._experts_implementation = "batched_mm"
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if is_transformers_version(">=", "4.53"):
+        if is_transformers_version(">=", "4.53") and is_transformers_version("<", "5"):
             Qwen3MoeSparseMoeBlock.forward = self.original_moe_forward
 
 
