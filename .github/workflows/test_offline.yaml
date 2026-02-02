@@ -34,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip uv
-          uv pip install .[openvino,diffusers,tests]
+          uv pip install .[diffusers,tests]
 
       - name: Test
         run: |
