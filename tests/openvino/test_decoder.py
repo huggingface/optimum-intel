@@ -828,12 +828,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 f"values are not close for {dtype if dtype is not None else 'None'}, max diff = {torch.abs(ov_logits - ref_logits).max()}",
             )
 
-    @pytest.mark.skipif(
-        not is_transformers_version(">=", "4.54"),
-        reason="Eagle3 requires transformers >= 4.54",
-    )
     @parameterized.expand(EAGLE3_MODELS.items())
     def test_load_and_infer_with_eagle3_model(self, model_arch, model_pair):
+        if is_transformers_version("<", "4.54"):
+            self.skipTest("Eagle3 requires transformers >= 4.54")
+
         draft_model_id, target_model_id = model_pair
 
         ov_model = OVModelForCausalLM.from_pretrained(draft_model_id, export=True, trust_remote_code=True)
