@@ -727,20 +727,21 @@ class PipelineTest(unittest.TestCase):
         gc.collect()
 
     def test_seq2seq_load_from_hub(self):
-        model_id = "echarlaix/tiny-random-t5"
+        model_id = MODEL_NAMES["whisper"]
+        task = "automatic-speech-recognition"
         # verify could load both pytorch and openvino model (export argument should automatically infered)
-        ov_exported_pipe = optimum_pipeline("text2text-generation", model_id, accelerator="openvino")
-        ov_pipe = optimum_pipeline("text2text-generation", model_id, revision="ov", accelerator="openvino")
+        ov_exported_pipe = optimum_pipeline(task, model_id, accelerator="openvino")
+        ov_exported_pipe.modelcard = None
+        ov_pipe = optimum_pipeline(task, model_id, revision="ov", accelerator="openvino")
         self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
         self.assertIsInstance(ov_pipe.model, OVBaseModel)
 
         with TemporaryDirectory() as tmpdirname:
             ov_exported_pipe.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
-            if not ov_exported_pipe.model.decoder.stateful:
-                self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
-                self.assertTrue(OV_DECODER_WITH_PAST_NAME.replace(".xml", ".bin") in folder_contents)
-            ov_exported_pipe = optimum_pipeline("text2text-generation", tmpdirname, accelerator="openvino")
+            self.assertTrue(ov_exported_pipe.model._ov_model_paths["encoder"] in folder_contents)
+            self.assertTrue(ov_exported_pipe.model._ov_model_paths["decoder"] in folder_contents)
+            ov_exported_pipe = optimum_pipeline(task, tmpdirname, accelerator="openvino")
             self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
 
         del ov_exported_pipe
