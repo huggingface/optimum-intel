@@ -103,8 +103,6 @@ def _set_runtime_options(
     for model_name in models_and_export_configs.keys():
         _, sub_export_config = models_and_export_configs[model_name]
         if not hasattr(sub_export_config, "runtime_options"):
-            if sub_export_config is None:
-                print("k")
             sub_export_config.runtime_options = {}
         if (
             "text-generation" in task
