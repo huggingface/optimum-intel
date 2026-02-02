@@ -346,6 +346,7 @@ def main_export(
     if isinstance(dtype, str):
         dtype = getattr(torch, dtype) if dtype != "auto" else dtype
 
+    eagle3 = False
     if library_name == "transformers":
         config = AutoConfig.from_pretrained(
             model_name_or_path,
@@ -362,7 +363,6 @@ def main_export(
 
         # check if model is used as a draft model for Eagle3
         archs = getattr(config, "architectures", None)
-        eagle3 = False
         if isinstance(archs, list) and len(archs) > 0 and "eagle3" in archs[0].lower():
             eagle3 = True
         if eagle3 and not os.path.isdir(model_name_or_path):
