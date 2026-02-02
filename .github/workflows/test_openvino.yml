@@ -54,7 +54,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip uv
-          uv pip install .[openvino,diffusers,tests]
+          uv pip install .[diffusers,tests]
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Install OpenVINO

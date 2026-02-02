@@ -32,6 +32,9 @@ INSTALL_REQUIRE = [
     "transformers>=4.45,<5.1",
     "setuptools",
     "huggingface-hub>=0.23.2,<2.0",
+    "nncf>=2.19.0",
+    "openvino>=2025.4.0",
+    "openvino-tokenizers>=2025.4.0",
 ]
 
 TESTS_REQUIRE = [

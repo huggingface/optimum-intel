@@ -39,7 +39,7 @@ jobs:
           pip install --upgrade pip uv
           uv pip install git+https://github.com/huggingface/doc-builder
           uv pip install transformers==4.57.6
-          uv pip install .[quality] nncf openvino diffusers accelerate datasets
+          uv pip install .[quality] diffusers accelerate datasets
 
       - name: Make documentation
         shell: bash
