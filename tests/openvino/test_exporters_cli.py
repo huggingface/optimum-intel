@@ -841,7 +841,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
             if model_type in REMOTE_CODE_MODELS:
-                model_kwargs['trust_remote_code'] = True
+                model_kwargs["trust_remote_code"] = True
 
             eval(
                 _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
