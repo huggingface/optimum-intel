@@ -2793,15 +2793,19 @@ def gptj_attn_forward(
     if output_attentions:
         self._attn = self._orig_attn
 
+    kwargs = {}
+    if is_transformers_version("<", "5"):
+        kwrags["head_mask"] = head_mask
+
     return self._orig_forward(
         hidden_states,
         layer_past,
         attention_mask,
         position_ids,
-        head_mask,
         use_cache=use_cache,
         output_attentions=output_attentions,
         cache_position=cache_position,
+        **kwargs
     )
 
 
