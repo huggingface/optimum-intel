@@ -2795,7 +2795,7 @@ def gptj_attn_forward(
 
     kwargs = {}
     if is_transformers_version("<", "5"):
-        kwrags["head_mask"] = head_mask
+        kwargs["head_mask"] = head_mask
 
     return self._orig_forward(
         hidden_states,
