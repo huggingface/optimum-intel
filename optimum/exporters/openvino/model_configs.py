@@ -701,7 +701,7 @@ class BitnetOpenVINOConfig(LlamaOnnxConfig):
     library_name="transformers",
 )
 class ExaoneOpenVINOConfig(LlamaOpenVINOConfig):
-    pass
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
 
 @register_in_tasks_manager(
