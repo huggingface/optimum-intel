@@ -7,21 +7,11 @@ import openvino as ov
 import requests
 import torch
 from openvino_genai import (
-    draft_model,
     LLMPipeline,
     Text2SpeechPipeline,
     VLMPipeline,
     WhisperPipeline,
-)
-from openvino_genai import (
-    SchedulerConfig,
     draft_model,
-    ContinuousBatchingPipeline,
-    LLMPipeline,
-    GenerationConfig,
-    GenerationResult,
-    StreamerBase,
-    DecodedResults,
 )
 from parameterized import parameterized
 from PIL import Image
@@ -34,7 +24,7 @@ from transformers import (
     AutoTokenizer,
     set_seed,
 )
-from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, TEST_IMAGE_URL, REMOTE_CODE_MODELS, EAGLE3_MODELS
+from utils_tests import EAGLE3_MODELS, F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS, TEST_IMAGE_URL
 
 from optimum.exporters.openvino import main_export
 from optimum.intel.openvino import (
@@ -470,11 +460,12 @@ class LLMPipelineWithEagle3TestCase(unittest.TestCase):
         trust_remote_code = model_arch in REMOTE_CODE_MODELS
 
         set_seed(42)
-        transformers_model = AutoModelForCausalLM.from_pretrained(target_model_id, trust_remote_code=trust_remote_code).eval()
+        transformers_model = AutoModelForCausalLM.from_pretrained(
+            target_model_id, trust_remote_code=trust_remote_code
+        ).eval()
 
         # generate without Eagle3 speculative decoding
-        with tempfile.TemporaryDirectory() as draft_model_path, \
-                tempfile.TemporaryDirectory() as main_model_path:
+        with tempfile.TemporaryDirectory() as draft_model_path, tempfile.TemporaryDirectory() as main_model_path:
             main_export(
                 model_name_or_path=draft_model_id,
                 task="text-generation-with-past",
@@ -489,7 +480,7 @@ class LLMPipelineWithEagle3TestCase(unittest.TestCase):
                 output=main_model_path,
             )
 
-            ov_draft_model = draft_model(draft_model_path, 'CPU')
+            ov_draft_model = draft_model(draft_model_path, "CPU")
             ov_eagle3_pipe = LLMPipeline(main_model_path, OPENVINO_DEVICE, draft_model=ov_draft_model, **F32_CONFIG)
 
         prompt = "Paris is the capital of"
@@ -514,4 +505,4 @@ class LLMPipelineWithEagle3TestCase(unittest.TestCase):
         self.assertTrue(genai_output)
 
         # compare outputs
-        #self.assertEqual(transformers_output, genai_output)
+        # self.assertEqual(transformers_output, genai_output)
