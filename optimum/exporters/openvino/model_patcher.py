@@ -2805,7 +2805,7 @@ def gptj_attn_forward(
         use_cache=use_cache,
         output_attentions=output_attentions,
         cache_position=cache_position,
-        **kwargs
+        **kwargs,
     )
 
 
@@ -7522,10 +7522,12 @@ class GraniteMoeHybridModelPatcher(OVModelPatcher):
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
-        self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
-        self._model.model._update_causal_mask = types.MethodType(
-            granite_moe_hybrid_update_causal_mask, self._model.model
-        )
+        if is_transformers_version("<", "5"):
+            self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
+            self._model.model._update_causal_mask = types.MethodType(
+                granite_moe_hybrid_update_causal_mask, self._model.model
+            )
+
         for idx, layer in enumerate(self._model.model.layers):
             if hasattr(layer, "block_sparse_moe"):
                 patch_sparse_moe(layer.block_sparse_moe)
@@ -7545,7 +7547,9 @@ class GraniteMoeHybridModelPatcher(OVModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
 
-        self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+        if is_transformers_version("<", "5"):
+            self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+
         for idx, layer in enumerate(self._model.model.layers):
             if hasattr(layer, "block_sparse_moe"):
                 unpatch_sparse_moe(layer.block_sparse_moe)
