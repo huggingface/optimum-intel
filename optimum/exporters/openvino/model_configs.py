@@ -1184,6 +1184,7 @@ class DBRXOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 )
 class JaisOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = DummyPastKeyValuesGenerator
