@@ -1257,11 +1257,13 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_filtered_architectures(cls):
         expected = set()
         if is_transformers_version("<", "4.49"):
-            expected.update({"qwen3_vl", "qwen2_5_vl"})
+            expected.add("qwen2_5_vl")
         if is_transformers_version("<", "4.51"):
-            expected.update({"qwen3_vl", "llama4"})
+            expected.add("llama4")
         if is_transformers_version("<", "4.54"):
-            expected.update({"qwen3_vl", "exaone4"})
+            expected.add("exaone4")
+        if is_transformers_version("<", "4.57"):
+            expected.add("qwen3_vl")
         if is_transformers_version(">=", "4.54"):
             expected.update({"llava-qwen2", "phi3_v", "minicpmo"})
 
