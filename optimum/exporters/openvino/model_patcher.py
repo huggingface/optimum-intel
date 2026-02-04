@@ -56,6 +56,28 @@ logger = logging.getLogger(__name__)
 
 
 class OVDynamicCache(DynamicCache):
+    # copied from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/cache_utils.py#L881
+    def __getitem__(self, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Support for backwards-compatible `past_key_values` indexing, e.g. `past_key_values[0][0].shape[2]` to get the
+        sequence length.
+        """
+        if layer_idx < len(self.layers):
+            return self.layers[layer_idx].keys, self.layers[layer_idx].values
+        else:
+            raise KeyError(
+                f"Cache only has {len(self.layers)} layers, attempted to access layer with index {layer_idx}"
+            )
+
+    # copied from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/cache_utils.py#L893
+    def __iter__(self):
+        """
+        Support for backwards-compatible `past_key_values` iteration, e.g. `for x in past_key_values:` to iterate over
+        keys and values
+        """
+        for layer_idx in range(len(self)):
+            yield (self.layers[layer_idx].keys, self.layers[layer_idx].values)
+
     # copied from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/cache_utils.py#L1005
     def to_legacy_cache(self) -> tuple[tuple[torch.Tensor, torch.Tensor]]:
         """
@@ -85,6 +107,36 @@ class OVDynamicCache(DynamicCache):
 
 
 class OVEncoderDecoderCache(EncoderDecoderCache):
+    # copied from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/cache_utils.py#L1244
+    def __getitem__(self, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Support for backwards-compatible `past_key_values` indexing, e.g. `past_key_values[0][0].shape[2]` to get the
+        sequence length.
+        """
+        if layer_idx < len(self):
+            return (
+                self.self_attention_cache.layers[layer_idx].keys,
+                self.self_attention_cache.layers[layer_idx].values,
+                self.cross_attention_cache.layers[layer_idx].keys,
+                self.cross_attention_cache.layers[layer_idx].values,
+            )
+        else:
+            raise KeyError(f"Cache only has {len(self)} layers, attempted to access layer with index {layer_idx}")
+
+    # copied from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/cache_utils.py#L1231
+    def __iter__(self):
+        """
+        Support for backwards-compatible `past_key_values` iteration, e.g. `for x in past_key_values:` to iterate over
+        keys and values
+        """
+        for layer_idx in range(len(self)):
+            yield (
+                self.self_attention_cache.layers[layer_idx].keys,
+                self.self_attention_cache.layers[layer_idx].values,
+                self.cross_attention_cache.layers[layer_idx].keys,
+                self.cross_attention_cache.layers[layer_idx].values,
+            )
+
     # copied from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/cache_utils.py#L1266
     def to_legacy_cache(self) -> tuple[tuple[torch.Tensor]]:
         """Converts the `OVEncoderDecoderCache` instance into its equivalent in the legacy cache format."""
