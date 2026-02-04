@@ -19,7 +19,7 @@ import logging as log
 import math
 import types
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
@@ -6289,6 +6289,15 @@ def llama4_moe_forward(self, hidden_states):
     return out, router_scores
 
 
+# Copied from https://github.com/huggingface/transformers/blob/v4.56.0/src/transformers/masking_utils.py#L105
+# transformers.masking_utils._legacy_chunked_overlay deprecated since transformers v5
+def _legacy_chunked_overlay(chunk_size: int) -> Callable:
+    def inner_mask(batch_idx: int, head_idx: int, q_idx: int, kv_idx: int) -> bool:
+        return kv_idx // chunk_size == q_idx // chunk_size
+
+    return inner_mask
+
+
 class Llama4TextModelPatcher(OVModelPatcher):
     def __enter__(self):
         super().__enter__()
@@ -6305,8 +6314,8 @@ class Llama4TextModelPatcher(OVModelPatcher):
         if is_transformers_version(">=", "4.56"):
             # openvino is not able to trace through the new chunked_overlay with left_padding
             self.original_chunked_overlay = transformers.masking_utils.chunked_overlay
-            transformers.masking_utils.chunked_overlay = (
-                lambda chunk_size, left_padding: transformers.masking_utils._legacy_chunked_overlay(chunk_size)
+            transformers.masking_utils.chunked_overlay = lambda chunk_size, left_padding: _legacy_chunked_overlay(
+                chunk_size
             )
 
     def __exit__(self, exc_type, exc_value, traceback):
