@@ -1351,6 +1351,7 @@ class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
 @register_in_tasks_manager("deci", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class DeciOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DeciDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = DeciDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig

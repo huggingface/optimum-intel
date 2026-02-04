@@ -79,7 +79,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "xverse",
         "internlm",
         "jais",
-        "decilm",
         "gemma",
         "olmo",
         "stablelm",
@@ -151,7 +150,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("qwen", "chatglm", "chatglm4")
 
     if is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES += ("codegen2", "exaone")
+        SUPPORTED_ARCHITECTURES += ("codegen2", "exaone", "decilm")
 
     GENERATION_LENGTH = 100
 
