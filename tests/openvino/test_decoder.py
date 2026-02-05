@@ -45,7 +45,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bart",
-        "baichuan2",
         "baichuan2-13b",
         "gpt_bigcode",
         "bigbird_pegasus",
@@ -146,7 +145,17 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version("<", "5"):
         # TODO: add dbrx back once fixed in transformers
-        SUPPORTED_ARCHITECTURES += ("codegen2", "exaone", "decilm", "internlm2", "orion", "aquila2", "jais", "dbrx")
+        SUPPORTED_ARCHITECTURES += (
+            "codegen2",
+            "exaone",
+            "decilm",
+            "internlm2",
+            "orion",
+            "aquila2",
+            "jais",
+            "dbrx",
+            "baichuan2",
+        )
 
     GENERATION_LENGTH = 100
 
