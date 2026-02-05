@@ -4062,6 +4062,52 @@ class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
+class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L2156-L2178
+        # moved audio and vision features processing outside model
+        # This method in original model: https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1344-L1362
+        def lm_forward(
+            self,
+            attention_mask,
+            position_ids,
+            past_key_values,
+            inputs_embeds,
+            visual_pos_masks,
+            deepstack_visual_embeds,
+            use_cache=True,
+        ):
+            from transformers.cache_utils import DynamicCache
+
+            pkv = DynamicCache.from_legacy_cache(past_key_values)
+            outputs = self.model.language_model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                use_cache=use_cache,
+                past_key_values=pkv,
+                visual_pos_masks=visual_pos_masks,
+                deepstack_visual_embeds=deepstack_visual_embeds,
+            )
+            hidden_states = outputs[0]
+            # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+            logits = self.lm_head(hidden_states)
+            return (logits, outputs.past_key_values.to_legacy_cache())
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(lm_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
 def patch_qwen2vl_vision_blocks(model, force_new_behaviour=False):
     if not force_new_behaviour and is_transformers_version("<=", "4.48.99"):
         # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L390
@@ -4266,6 +4312,48 @@ class Qwen2_5_VLVisionEmbMergerPatcher(ModelPatcher):
 
     def __enter__(self):
         patch_qwen2vl_vision_blocks(self._model, force_new_behaviour=True)
+        super().__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        for block in self._model.blocks:
+            block.forward = block._orig_forward
+            block.attn.forward = block.attn._orig_forward
+
+
+class Qwen3VLVisionEmbMergerPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1118
+        # added attention_mask input instead cu_lens for its internal calculation model (unsupported by tracing due to cycle with dynamic len)
+        # separated patch_embed and rot_pos_emb calls for performing as part of another model
+        # This code part in original model: https://github.com/huggingface/transformers/blob/main/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L794-L808
+        def image_embed_forward(
+            self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, rotary_pos_emb: torch.Tensor
+        ) -> torch.Tensor:
+            deepstack_feature_lists = []
+            for layer_num, blk in enumerate(self.blocks):
+                hidden_states = blk(hidden_states, attention_mask=attention_mask, rotary_pos_emb=rotary_pos_emb)
+                if layer_num in self.deepstack_visual_indexes:
+                    deepstack_feature = self.deepstack_merger_list[self.deepstack_visual_indexes.index(layer_num)](
+                        hidden_states
+                    )
+                    deepstack_feature_lists.append(deepstack_feature)
+            last_hidden_state = self.merger(hidden_states)
+            return last_hidden_state, torch.stack(deepstack_feature_lists, dim=0)
+
+        model.forward = types.MethodType(image_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        patch_qwen2vl_vision_blocks(self._model)
         super().__enter__()
 
     def __exit__(self, exc_type, exc_value, traceback):

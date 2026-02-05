@@ -410,6 +410,35 @@ class OVQuantizerTest(unittest.TestCase):
         ),
     ]
 
+    if is_transformers_version(">=", "4.57.0"):
+        SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET.extend(
+            [
+                (
+                    OVModelForVisualCausalLM,
+                    "qwen3_vl",
+                    OVQuantizationConfig(
+                        bits=8,
+                        dataset="contextual",
+                        num_samples=1,
+                    ),
+                    {
+                        "lm_model": 14,
+                        "text_embeddings_model": 0,
+                        "vision_embeddings_model": 1,
+                        "vision_embeddings_merger_model": 44,
+                        "vision_embeddings_pos_model": 0,
+                    },
+                    {
+                        "lm_model": {"int8": 15},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 1},
+                        "vision_embeddings_merger_model": {"int8": 32},
+                        "vision_embeddings_pos_model": {"int8": 1},
+                    },
+                ),
+            ]
+        )
+
     @staticmethod
     def get_calibration_dataset(
         quantizer,
@@ -881,6 +910,26 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForVisualCausalLM,
+            "qwen3_vl",
+            False,
+            dict(
+                bits=4,
+                group_size=8,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+            ),
+            {
+                "lm_model": {"int8": 12, "int4": 18},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 32},
+                "vision_embeddings_pos_model": {"int8": 1},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
             "phi3_v",
             True,
             dict(
@@ -1028,6 +1077,9 @@ class OVWeightCompressionTest(unittest.TestCase):
     if is_transformers_version(">=", "4.54.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "exaone4", True))
 
+    if is_transformers_version(">=", "4.57.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen3_vl", False))
+
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl", 84, 331),
@@ -1166,6 +1218,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             expected.add("llama4")
         if is_transformers_version("<", "4.54"):
             expected.add("exaone4")
+        if is_transformers_version("<", "4.57"):
+            expected.add("qwen3_vl")
         if is_transformers_version(">=", "4.54"):
             expected.update({"llava-qwen2", "phi3_v", "minicpmo"})
 
