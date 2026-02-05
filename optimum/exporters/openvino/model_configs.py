@@ -686,6 +686,7 @@ class GptOssOpenVINOConfig(LlamaOpenVINOConfig):
 )
 class BitnetOpenVINOConfig(LlamaOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.52.1"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     _MODEL_PATCHER = OVDecoderModelPatcher
 
 
