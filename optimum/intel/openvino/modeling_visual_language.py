@@ -3800,40 +3800,11 @@ if is_transformers_version(">=", "4.57.0"):
             )
             return final_result
 
-        def generate(
-            self,
-            inputs: Optional[torch.Tensor] = None,
-            generation_config: Optional[GenerationConfig] = None,
-            logits_processor=None,
-            stopping_criteria=None,
-            prefix_allowed_tokens_fn=None,
-            synced_gpus: Optional[bool] = None,
-            assistant_model=None,
-            streamer: Optional = None,
-            negative_prompt_ids: Optional[torch.Tensor] = None,
-            negative_prompt_attention_mask: Optional[torch.Tensor] = None,
-            use_model_defaults: Optional[bool] = None,
-            custom_generate=None,
-            **kwargs,
-        ):
+        def generate(self, *args, **kwargs):
             # Clear cached rope delta from previous generations
             self.rope_deltas = None
 
-            return super().generate(
-                inputs,
-                generation_config,
-                logits_processor,
-                stopping_criteria,
-                prefix_allowed_tokens_fn,
-                synced_gpus,
-                assistant_model,
-                streamer,
-                negative_prompt_ids,
-                negative_prompt_attention_mask,
-                use_model_defaults,
-                custom_generate,
-                **kwargs,
-            )
+            return super().generate((*args, **kwargs)
 
 
 class _OVMaira2ForCausalLM(_OVLlavaForCausalLM):
