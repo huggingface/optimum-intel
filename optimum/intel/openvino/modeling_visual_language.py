@@ -3429,6 +3429,7 @@ if is_transformers_version(">=", "4.57.0"):
         Qwen3VLVisionRotaryEmbedding,
     )
 else:
+
     class Qwen3VLModel:
         pass
 
