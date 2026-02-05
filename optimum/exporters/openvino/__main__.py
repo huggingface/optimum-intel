@@ -170,7 +170,7 @@ def eagle3_config(model_path: str):
             "AutoModel": moduler_path + "--model_patcher.LlamaEagle3Model",
             "AutoModelForCausalLM": moduler_path + "--model_patcher.LlamaEagle3ForCausalLM",
         }
-    config["is_eagle3"] = True
+
     # write new config.json
     with open(new_config_file, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
