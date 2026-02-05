@@ -3429,8 +3429,11 @@ if is_transformers_version(">=", "4.57.0"):
         Qwen3VLVisionRotaryEmbedding,
     )
 else:
-    Qwen3VLModel = object
-    Qwen3VLVisionModel = object
+    class Qwen3VLModel:
+        pass
+
+    class Qwen3VLVisionModel:
+        pass
 
 
 class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM, Qwen3VLModel, Qwen3VLVisionModel):
