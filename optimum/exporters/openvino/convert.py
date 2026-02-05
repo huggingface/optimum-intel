@@ -134,7 +134,7 @@ def _save_model(
     runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}
     model = _add_runtime_options_to_rt_info(model, runtime_options)
 
-    if config.eagle3:
+    if getattr(config, "eagle3", False):
         model = _add_eagle3_mode_to_rt_info(model)
 
     save_model(model, path, compress_to_fp16)
@@ -369,9 +369,6 @@ def export_pytorch(
         if input_shapes is None:
             input_shapes = {}  # will use the defaults from DEFAULT_DUMMY_SHAPES
 
-        model_config = getattr(model, "config", {})
-        model_type = getattr(model_config, "model_type", "")
-
         # Check that inputs match, and order them properly
         dummy_inputs = config.generate_dummy_inputs(framework="pt", **input_shapes)
 
@@ -413,6 +410,8 @@ def export_pytorch(
         patcher.patched_forward = ts_patched_forward
 
         ts_decoder_kwargs = {}
+        model_config = getattr(model, "config", {})
+        model_type = getattr(model_config, "model_type", "")
         if allow_skip_tracing_check(library_name, model_type):
             ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
 
