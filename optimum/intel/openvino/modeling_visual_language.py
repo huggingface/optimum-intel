@@ -3470,6 +3470,7 @@ if is_transformers_version(">=", "4.57.0"):
         def __setattr__(self, name, value):
             OVModelForVisualCausalLM.__setattr__(self, name, value)
 
+        # Adapted from https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1471-1537
         def prepare_inputs_for_generation(
             self,
             input_ids,
@@ -3583,6 +3584,7 @@ if is_transformers_version(">=", "4.57.0"):
             patch_pos_embeds = torch.cat(patch_pos_embeds_permute)
             return patch_pos_embeds
 
+        # Adapted from https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L758-814
         def get_vision_embeddings(self, pixel_values, grid_thw, **kwargs):
             hidden_states = torch.from_numpy(self.vision_embeddings(pixel_values)[0])
 
@@ -3609,6 +3611,7 @@ if is_transformers_version(">=", "4.57.0"):
             )
             return res[0], res[1]
 
+        # Adapted from https://github.com/huggingface/transformers/blob/08810b1e278938278c50153ee1edfd7a20a759da/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1110-1131
         def get_image_features(
             self, pixel_values: torch.FloatTensor, image_grid_thw: Optional[torch.LongTensor] = None
         ):
@@ -3631,6 +3634,7 @@ if is_transformers_version(">=", "4.57.0"):
             image_embeds = torch.split(image_embeds, split_sizes)
             return image_embeds, deepstack_image_embeds
 
+        # Adapted from https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1176-1290
         def get_multimodal_embeddings(
             self,
             input_ids,

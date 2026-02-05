@@ -3727,17 +3727,9 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
             int_dtype=int_dtype,
             float_dtype=float_dtype,
             preprocessors=preprocessors,
+            behavior=behavior,
         )
-        self._behavior = behavior
-        self._orig_config = config
-        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
-            self._config = config.vision_config
-            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
-            self._normalized_config.use_embed_dim = False
-        if self._behavior in (
-            QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER,
-            QwenVLConfigBehavior.VISION_EMBEDDINGS_POS,
-        ) and hasattr(config, "vision_config"):
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self._normalized_config.use_embed_dim = True

@@ -4071,6 +4071,7 @@ class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
     ):
         # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L2156-L2178
         # moved audio and vision features processing outside model
+        # This method in original model: https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1344-L1362
         def lm_forward(
             self,
             attention_mask,
@@ -4333,6 +4334,7 @@ class Qwen3VLVisionEmbMergerPatcher(ModelPatcher):
         # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1118
         # added attention_mask input instead cu_lens for its internal calculation model (unsupported by tracing due to cycle with dynamic len)
         # separated patch_embed and rot_pos_emb calls for performing as part of another model
+        # This code part in original model: https://github.com/huggingface/transformers/blob/main/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L794-L808
         def image_embed_forward(
             self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, rotary_pos_emb: torch.Tensor
         ) -> torch.Tensor:
