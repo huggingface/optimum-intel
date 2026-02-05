@@ -33,6 +33,7 @@ from optimum.intel.openvino import (
     OVModelForTextToSpeechSeq2Seq,
     OVModelForVisualCausalLM,
 )
+from optimum.intel.utils.import_utils import is_openvino_version
 from optimum.utils import is_transformers_version
 
 
@@ -447,24 +448,22 @@ class Text2SpeechPipelineTestCase(unittest.TestCase):
 class LLMPipelineWithEagle3TestCase(unittest.TestCase):
     GEN_KWARGS = {
         "max_new_tokens": 10,
+        "min_new_tokens": 10,
+        "do_sample": False,
+        "num_beams": 1,
     }
 
     @parameterized.expand(EAGLE3_MODELS.items())
     def test_compare_outputs(self, model_arch, model_pair):
         if is_transformers_version("<", "4.54"):
             self.skipTest("Eagle3 requires transformers >= 4.54")
+        if is_openvino_version("<", "2026.0"):
+            self.skipTest("Eagle3 requires openvino-genai >= 2026.0")
 
         draft_model_id, target_model_id = model_pair
-
-        use_cache = True
         trust_remote_code = model_arch in REMOTE_CODE_MODELS
 
-        set_seed(42)
-        transformers_model = AutoModelForCausalLM.from_pretrained(
-            target_model_id, trust_remote_code=trust_remote_code
-        ).eval()
-
-        # generate without Eagle3 speculative decoding
+        # export main and draft eagle3 models and initialize OV LLM pipelines w/o Eagle3
         with tempfile.TemporaryDirectory() as draft_model_path, tempfile.TemporaryDirectory() as main_model_path:
             main_export(
                 model_name_or_path=draft_model_id,
@@ -482,27 +481,19 @@ class LLMPipelineWithEagle3TestCase(unittest.TestCase):
 
             ov_draft_model = draft_model(draft_model_path, "CPU")
             ov_eagle3_pipe = LLMPipeline(main_model_path, OPENVINO_DEVICE, draft_model=ov_draft_model, **F32_CONFIG)
+            ov_pipe = LLMPipeline(main_model_path, OPENVINO_DEVICE, **F32_CONFIG)
 
         prompt = "Paris is the capital of"
-        tokenizer = AutoTokenizer.from_pretrained(target_model_id)
-        inputs = tokenizer(prompt, return_tensors="pt")
-
-        with torch.no_grad():
-            transformers_ids = transformers_model.generate(**inputs, use_cache=use_cache, **self.GEN_KWARGS)
-        transformers_output = tokenizer.decode(transformers_ids[0], skip_special_tokens=True)
-
-        echo = True
-        genai_output = ov_eagle3_pipe.generate(
-            prompt, echo=echo, apply_chat_template=False, ignore_eos=True, **self.GEN_KWARGS
+        genai_eagle3_output = ov_eagle3_pipe.generate(
+            prompt, echo=True, apply_chat_template=False, ignore_eos=True, **self.GEN_KWARGS
         )
-        if not echo:
-            # if echo is not supported, trim the prompt from the outputs and trim spaces
-            # NOTE: this is an approximation, as detokenize(prompt_ids + generated_ids) - prompt != detokenize(generated_ids)
-            transformers_output = transformers_output[len(prompt) :].strip()
+        genai_output = ov_pipe.generate(
+            prompt, echo=True, apply_chat_template=False, ignore_eos=True, **self.GEN_KWARGS
+        )
 
         # assert they are not empty
-        self.assertTrue(transformers_output)
+        self.assertTrue(genai_eagle3_output)
         self.assertTrue(genai_output)
 
         # compare outputs
-        # self.assertEqual(transformers_output, genai_output)
+        self.assertEqual(genai_eagle3_output, genai_output)
