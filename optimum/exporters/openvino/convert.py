@@ -134,9 +134,9 @@ def _save_model(
     runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}
     model = _add_runtime_options_to_rt_info(model, runtime_options)
 
-    archs = getattr(config._config, "architectures", None)
-    if isinstance(archs, list) and len(archs) > 0 and "eagle3" in archs[0].lower():
+    if config.eagle3:
         model = _add_eagle3_mode_to_rt_info(model)
+
     save_model(model, path, compress_to_fp16)
     del model
     gc.collect()
