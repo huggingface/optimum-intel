@@ -7385,16 +7385,19 @@ class GptOssModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        if is_transformers_version(">=", "4.55.0"):
+        if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "5"):
             from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
 
             self.original_gpt_oss_forward = GptOssExperts.forward
             GptOssExperts.forward = gpt_oss_forward
 
+        if is_transformers_version(">=", "5"):
+            self._model.config._experts_implementation = "batched_mm"
+
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if is_transformers_version(">=", "4.55.0"):
+        if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "5"):
             from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
 
             GptOssExperts.forward = self.original_gpt_oss_forward
