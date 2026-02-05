@@ -360,7 +360,17 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
             transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
-        if model_arch in ["qwen", "arctic", "chatglm4", "gpt_oss_mxfp4"]:
+        if model_arch in [
+            "qwen",
+            "arctic",
+            "chatglm4",
+            "gpt_oss_mxfp4",
+            "llama",
+            "lfm2",
+            "gemma3_text",
+            "llama4",
+            "exaone4",
+        ]:
             transformers_model.to(torch.float32)
 
         with torch.no_grad():
@@ -808,7 +818,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     def test_load_with_different_dtype(self):
         set_seed(SEED)
-        model_id = MODEL_NAMES["llama"]
+        model_id = MODEL_NAMES["mistral"]
         pt_model = AutoModelForCausalLM.from_pretrained(
             model_id,
         )
