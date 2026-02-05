@@ -1165,6 +1165,7 @@ class CodeGenOpenVINOConfig(CodeGenOnnxConfig):
 )
 class DBRXOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
         num_attention_heads="n_heads",
         hidden_size="d_model",

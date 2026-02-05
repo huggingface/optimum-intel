@@ -79,7 +79,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "olmo",
         "stablelm",
         "starcoder2",
-        "dbrx",
         "cohere",
         "qwen2",
         "qwen2_moe",
@@ -146,7 +145,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("qwen", "chatglm", "chatglm4")
 
     if is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES += ("codegen2", "exaone", "decilm", "internlm2", "orion", "aquila2", "jais")
+        # TODO: add dbrx back once fixed in transformers
+        SUPPORTED_ARCHITECTURES += ("codegen2", "exaone", "decilm", "internlm2", "orion", "aquila2", "jais", "dbrx")
 
     GENERATION_LENGTH = 100
 
