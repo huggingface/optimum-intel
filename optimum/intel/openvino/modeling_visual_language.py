@@ -202,11 +202,11 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
                 inputs["visual_pos_masks"] = torch.zeros(1, 1, dtype=torch.bool)
 
         if "deepstack_visual_embeds" in self.input_names:
-            num_layers = len(self.config.vision_config.deepstack_visual_indexes)
-            emd_dim = self.config.text_config.hidden_size
             if deepstack_visual_embeds is not None:
                 inputs["deepstack_visual_embeds"] = torch.Tensor(deepstack_visual_embeds)
             else:
+                num_layers = len(self.config.vision_config.deepstack_visual_indexes)
+                emd_dim = self.config.text_config.hidden_size
                 inputs["deepstack_visual_embeds"] = torch.zeros((num_layers, 1, emd_dim), dtype=torch.float32)
 
         if "token_type_ids" in self.input_names:
