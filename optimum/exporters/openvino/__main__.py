@@ -432,11 +432,6 @@ def main_export(
                 "Please provide custom export config if you want load model with remote code."
             )
             trust_remote_code = False
-
-        if not trust_remote_code and eagle3:
-            logger.warning("eagle3 draft model needs `trust_remote_code=True`")
-            trust_remote_code = True
-
         if dtype == "auto":
             dtype = getattr(config, "torch_dtype")
 
