@@ -317,11 +317,11 @@ init_model_configs()
 register_in_tasks_manager = TasksManager.create_register("openvino", overwrite_existing=True)
 
 
-def _get_language_model(model):
+def _get_subcomponent_model(model, name):
     if is_transformers_version("<", "5"):
-        return model.language_model
+        return getattr(model, name)
 
-    return model.model.language_model
+    return getattr(model.model, name)
 
 
 @register_in_tasks_manager("baichuan", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -1714,14 +1714,14 @@ class BaseVLMOpenVINOConfig(OnnxConfig):
             behavior = VLMConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.LANGUAGE:
-            return _get_language_model(model) if not hasattr(model, "lm_head") else model
+            return _get_subcomponent_model(model, "language_model") if not hasattr(model, "lm_head") else model
 
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
 
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = model.get_input_embeddings()
-            text_embedding.config = _get_language_model(model).config
+            text_embedding.config = _get_subcomponent_model(model, "language_model").config
             return text_embedding
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
@@ -1904,8 +1904,8 @@ class MairaOpenVINOConfig(LlavaOpenVINOConfig):
             behavior = VLMConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
-            text_embedding = _get_language_model(model).get_input_embeddings()
-            text_embedding.config = _get_language_model(model).config
+            text_embedding = _get_subcomponent_model(model, "language_model").get_input_embeddings()
+            text_embedding.config = _get_subcomponent_model(model, "language_model").config
             return text_embedding
 
         return super().get_model_for_behavior(model, behavior)
@@ -1981,14 +1981,14 @@ class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
             behavior = VLMConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.LANGUAGE:
-            return _get_language_model(model)
+            return _get_subcomponent_model(model, "language_model")
 
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
 
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
-            text_embedding = _get_language_model(model).get_input_embeddings()
-            text_embedding.config = _get_language_model(model).config
+            text_embedding = _get_subcomponent_model(model, "language_model").get_input_embeddings()
+            text_embedding.config = _get_subcomponent_model(model, "language_model").config
             return text_embedding
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
@@ -3478,12 +3478,12 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return model
 
         if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
-            vision_embeddings = model.visual.patch_embed
+            vision_embeddings = _get_subcomponent_model(model, "visual").patch_embed
             vision_embeddings.config = model.config.vision_config
             return vision_embeddings
 
         if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
-            vision_emb_merger = model.visual
+            vision_emb_merger = _get_subcomponent_model(model, "visual")
             vision_emb_merger.config = model.config.vision_config
             return vision_emb_merger
 
@@ -3491,7 +3491,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             text_embedding = (
                 model.model.embed_tokens
                 if hasattr(model.model, "embed_tokens")
-                else _get_language_model(model).embed_tokens
+                else _get_subcomponent_model(model, "language_model").embed_tokens
             )
             text_embedding.config = model.config
             return text_embedding
