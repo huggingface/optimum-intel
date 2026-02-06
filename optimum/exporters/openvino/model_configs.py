@@ -1904,9 +1904,12 @@ class MairaOpenVINOConfig(LlavaOpenVINOConfig):
             behavior = VLMConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
-            text_embedding = _get_subcomponent_model(model, "language_model").get_input_embeddings()
-            text_embedding.config = _get_subcomponent_model(model, "language_model").config
+            text_embedding = model.language_model.get_input_embeddings()
+            text_embedding.config = model.language_model.config
             return text_embedding
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return model.language_model
 
         return super().get_model_for_behavior(model, behavior)
 
