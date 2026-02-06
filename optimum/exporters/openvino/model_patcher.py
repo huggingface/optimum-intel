@@ -7609,6 +7609,7 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
 
 class LlamaEagle3Model(LlamaPreTrainedModel):
     def __init__(self, config: LlamaConfig):
+        config.tie_word_embeddings = False
         super().__init__(config)
         self.hidden_size = config.hidden_size
 
