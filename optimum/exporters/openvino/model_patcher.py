@@ -4684,7 +4684,11 @@ class CommonImageEmbeddingsModelPatcher(OVModelPatcher):
         model.__orig_forward = model.forward
         # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/got_ocr2/modeling_got_ocr2.py#L835
         # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-Gemma-3/src/transformers/models/gemma3/modeling_gemma3.py#L1321
-        if hasattr(model, "model") and hasattr(model.model, "get_image_features"):
+        if (
+            hasattr(model, "model")
+            and hasattr(model.model, "get_image_features")
+            and is_transformers_version("<", "5")
+        ):
             model.forward = model.model.get_image_features
         else:
             model.forward = model.get_image_features
