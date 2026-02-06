@@ -247,9 +247,9 @@ class VLMPipelineTestCase(unittest.TestCase):
 
             return AutoModelForImageTextToText
         elif model_arch == "llava_next_video":
-            from transformers import AutoModelForVision2Seq
+            from transformers import LlavaNextVideoForConditionalGeneration
 
-            return AutoModelForVision2Seq
+            return LlavaNextVideoForConditionalGeneration
         elif model_arch == "llava":
             from transformers import LlavaForConditionalGeneration
 
