@@ -166,6 +166,7 @@ from .model_patcher import (
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
     LlavaImageEmbeddingModelPatcher,
+    LlavaNextImageEmbeddingModelPatcher,
     LlavaNextVideoImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
     MairaImageEmbeddingModelPatcher,
@@ -199,6 +200,7 @@ from .model_patcher import (
     SanaTextEncoderModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
+    _get_subcomponent_model,
 )
 
 
@@ -315,13 +317,6 @@ init_model_configs()
 
 
 register_in_tasks_manager = TasksManager.create_register("openvino", overwrite_existing=True)
-
-
-def _get_subcomponent_model(model, name):
-    if is_transformers_version("<", "5"):
-        return getattr(model, name)
-
-    return getattr(model.model, name)
 
 
 @register_in_tasks_manager("baichuan", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -1772,6 +1767,12 @@ class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
 @register_in_tasks_manager("llava_next", *["image-text-to-text"], library_name="transformers")
 class LlavaNextOpenVINOConfig(LlavaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.40.0"
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return LlavaNextImageEmbeddingModelPatcher(self, model, model_kwargs)
 
 
 class DummyLLavaMultiModalProjectorInputGenerator(DummyInputGenerator):

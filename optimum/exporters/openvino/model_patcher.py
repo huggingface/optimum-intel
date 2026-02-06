@@ -55,6 +55,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _get_subcomponent_model(model, name):
+    if is_transformers_version("<", "5"):
+        return getattr(model, name)
+
+    return getattr(model.model, name)
+
+
 class OVDynamicCache(DynamicCache):
     # copied from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/cache_utils.py#L881
     def __getitem__(self, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -3365,7 +3372,7 @@ def llava_vision_embed_forward(self, pixel_values):
     # copied from https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/models/llava/modeling_llava.py#L428-L441
     # these changes does not bring any difference from original, it only packs model subcomponent inference together
     # that allow us avoid memory overheads and their inference results handling on code-level
-    image_outputs = self.vision_tower(pixel_values, output_hidden_states=True)
+    image_outputs = _get_subcomponent_model(self, "vision_tower")(pixel_values, output_hidden_states=True)
     # this is not memory efficient at all (output_hidden_states=True) will save all the hidden stated.
     selected_image_feature = image_outputs.hidden_states[self.config.vision_feature_layer]
 
@@ -3376,7 +3383,7 @@ def llava_vision_embed_forward(self, pixel_values):
     else:
         raise ValueError(f"Unexpected select feature strategy: {self.config.vision_feature_select_strategy}")
 
-    image_features = self.multi_modal_projector(selected_image_feature)
+    image_features = _get_subcomponent_model(self, "multi_modal_projector")(selected_image_feature)
     return image_features
 
 
@@ -3422,6 +3429,24 @@ class LlavaImageEmbeddingModelPatcher(OVModelPatcher):
         else:
             model.forward = model.get_image_features
 
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class LlavaNextImageEmbeddingModelPatcher(OVModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        # TODO: use get_image_features instead and add image_sizes as input when exorting
+        # https://github.com/huggingface/transformers/blob/v4.48.0/src/transformers/models/llava_next/modeling_llava_next.py#L716
+        model.forward = types.MethodType(llava_vision_embed_forward, model)
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
