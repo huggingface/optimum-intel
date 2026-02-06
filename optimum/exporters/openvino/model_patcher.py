@@ -3391,7 +3391,7 @@ def llava_next_video_vision_embed_forward(self, pixel_values):
     # copied from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/llava_next_video/modeling_llava_next_video.py#L519
     # these changes does not bring any difference from original, it only packs model subcomponent inference together
     # that allow us avoid memory overheads and their inference results handling on code-level
-    image_features = self.vision_tower(pixel_values, output_hidden_states=True)
+    image_features = _get_subcomponent_model(self, "vision_tower")(pixel_values, output_hidden_states=True)
     vision_feature_layer = self.config.vision_feature_layer
     if isinstance(vision_feature_layer, int):
         selected_image_feature = image_features.hidden_states[vision_feature_layer]
@@ -3444,7 +3444,7 @@ class LlavaNextImageEmbeddingModelPatcher(OVModelPatcher):
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
-        # TODO: use get_image_features instead and add image_sizes as input when exorting
+        # TODO: use get_image_features instead and add image_sizes as input when exporting
         # https://github.com/huggingface/transformers/blob/v4.48.0/src/transformers/models/llava_next/modeling_llava_next.py#L716
         model.forward = types.MethodType(llava_vision_embed_forward, model)
         super().__init__(config, model, model_kwargs)
@@ -3479,12 +3479,9 @@ class LlavaNextVideoImageEmbeddingModelPatcher(OVModelPatcher):
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
-
-        if is_transformers_version("<", "5"):
-            model.forward = types.MethodType(llava_next_video_vision_embed_forward, model)
-        else:
-            model.forward = model.get_image_features
-
+        # TODO: use get_image_features instead and add image_sizes as input when exporting
+        # https://github.com/huggingface/transformers/blob/v4.48.0/src/transformers/models/llava_next_video/modeling_llava_next_video.py#L746
+        model.forward = types.MethodType(llava_next_video_vision_embed_forward, model)
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
