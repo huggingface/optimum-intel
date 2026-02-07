@@ -11,6 +11,7 @@ from openvino_genai import (
     Text2SpeechPipeline,
     VLMPipeline,
     WhisperPipeline,
+    draft_model,
 )
 from parameterized import parameterized
 from PIL import Image
@@ -23,7 +24,7 @@ from transformers import (
     AutoTokenizer,
     set_seed,
 )
-from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, TEST_IMAGE_URL
+from utils_tests import EAGLE3_MODELS, F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS, TEST_IMAGE_URL
 
 from optimum.exporters.openvino import main_export
 from optimum.intel.openvino import (
@@ -32,6 +33,7 @@ from optimum.intel.openvino import (
     OVModelForTextToSpeechSeq2Seq,
     OVModelForVisualCausalLM,
 )
+from optimum.intel.utils.import_utils import is_openvino_version
 from optimum.utils import is_transformers_version
 
 
@@ -441,3 +443,57 @@ class Text2SpeechPipelineTestCase(unittest.TestCase):
 
         torch.testing.assert_close(transformers_output, optimum_output, rtol=1e-2, atol=1e-4)
         torch.testing.assert_close(transformers_output, genai_output, rtol=1e-2, atol=1e-4)
+
+
+class LLMPipelineWithEagle3TestCase(unittest.TestCase):
+    GEN_KWARGS = {
+        "max_new_tokens": 10,
+        "min_new_tokens": 10,
+        "do_sample": False,
+        "num_beams": 1,
+    }
+
+    @parameterized.expand(EAGLE3_MODELS.items())
+    def test_compare_outputs(self, model_arch, model_pair):
+        if is_transformers_version("<", "4.54"):
+            self.skipTest("Eagle3 requires transformers >= 4.54")
+        if is_openvino_version("<", "2026.0"):
+            self.skipTest("Eagle3 requires openvino-genai >= 2026.0")
+
+        draft_model_id, target_model_id = model_pair
+        trust_remote_code = model_arch in REMOTE_CODE_MODELS
+
+        # export main and draft eagle3 models and initialize OV LLM pipelines w/o Eagle3
+        with tempfile.TemporaryDirectory() as draft_model_path, tempfile.TemporaryDirectory() as main_model_path:
+            main_export(
+                model_name_or_path=draft_model_id,
+                task="text-generation-with-past",
+                trust_remote_code=trust_remote_code,
+                convert_tokenizer=False,
+                output=draft_model_path,
+            )
+            main_export(
+                model_name_or_path=target_model_id,
+                task="text-generation-with-past",
+                convert_tokenizer=True,
+                output=main_model_path,
+            )
+
+            ov_draft_model = draft_model(draft_model_path, "CPU")
+            ov_eagle3_pipe = LLMPipeline(main_model_path, OPENVINO_DEVICE, draft_model=ov_draft_model, **F32_CONFIG)
+            ov_pipe = LLMPipeline(main_model_path, OPENVINO_DEVICE, **F32_CONFIG)
+
+        prompt = "Paris is the capital of"
+        genai_eagle3_output = ov_eagle3_pipe.generate(
+            prompt, echo=True, apply_chat_template=False, ignore_eos=True, **self.GEN_KWARGS
+        )
+        genai_output = ov_pipe.generate(
+            prompt, echo=True, apply_chat_template=False, ignore_eos=True, **self.GEN_KWARGS
+        )
+
+        # assert they are not empty
+        self.assertTrue(genai_eagle3_output)
+        self.assertTrue(genai_output)
+
+        # compare outputs
+        self.assertEqual(genai_eagle3_output, genai_output)

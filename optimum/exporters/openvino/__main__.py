@@ -13,13 +13,18 @@
 #  limitations under the License.
 
 import gc
+import importlib.util
+import json
 import logging
 import operator
+import os
 import shutil
+import tempfile
 from functools import reduce
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
+from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
@@ -135,6 +140,19 @@ def infer_task(
                     f" if needed, please pass `--task {task}-with-past` to export using the past key values."
                 )
     return task
+
+
+def update_config_for_eagle3(config):
+    moduler_name = "optimum.exporters.openvino.model_patcher"
+    spec = importlib.util.find_spec(moduler_name)
+    if spec and spec.origin:
+        moduler_path = os.path.dirname(spec.origin)
+        config.auto_map = {
+            "AutoModel": moduler_path + "--model_patcher.LlamaEagle3Model",
+            "AutoModelForCausalLM": moduler_path + "--model_patcher.LlamaEagle3ForCausalLM",
+        }
+    config.tie_word_embeddings = False
+    return config
 
 
 def infer_library_name(
@@ -300,6 +318,11 @@ def main_export(
         )
         quantization_config = getattr(config, "quantization_config", None)
         quant_method = quantization_config.get("quant_method", None) if quantization_config else None
+
+        # update config to load eagle3 models
+        archs = getattr(config, "architectures", None)
+        if isinstance(archs, list) and len(archs) > 0 and "eagle3" in archs[0].lower():
+            loading_kwargs["config"] = update_config_for_eagle3(config)
 
         # mxfp4 quantized model will be dequantized to bf16
         if quant_method == "mxfp4" and is_transformers_version(">=", "4.55"):
