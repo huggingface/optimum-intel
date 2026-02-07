@@ -142,54 +142,17 @@ def infer_task(
     return task
 
 
-def eagle3_config(model_path: str):
-    config_file = os.path.join(model_path, "config.json")
-    # rename the origin config
-    new_config_file = os.path.join(model_path, "config_temp.json")
-    shutil.copy2(config_file, new_config_file)
-
-    # read config
-    with open(new_config_file, "r", encoding="utf-8") as f:
-        config = json.load(f)
-    # modify config
-    if "model_type" in config.keys():
-        org_type = config["model_type"]
-        if org_type != "llama":
-            raise ValueError(
-                f"Currently eagle3 does not support model_type={org_type}, it only supports the conversion of llama-based draft models."
-            )
+def update_config_for_eagle3(config):
     moduler_name = "optimum.exporters.openvino.model_patcher"
     spec = importlib.util.find_spec(moduler_name)
     if spec and spec.origin:
         moduler_path = os.path.dirname(spec.origin)
-        config["auto_map"] = {
+        config.auto_map = {
             "AutoModel": moduler_path + "--model_patcher.LlamaEagle3Model",
             "AutoModelForCausalLM": moduler_path + "--model_patcher.LlamaEagle3ForCausalLM",
         }
-
-    # write new config.json
-    with open(new_config_file, "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
-    return os.path.abspath(new_config_file)
-
-
-def remove_config(model_path: str, ov_path: str, download_to_local: bool):
-    if not download_to_local:
-        # remove the temp config
-        new_config_file = os.path.join(model_path, "config_temp.json")
-        if os.path.exists(new_config_file):
-            os.remove(new_config_file)
-
-
-def download_eagle3_model(model_path: str):
-    dir_name = tempfile.mkdtemp()
-    local_dir = snapshot_download(repo_id=model_path, local_dir=dir_name, local_dir_use_symlinks=False)
-    return local_dir
-
-
-def clean_download(model_path: str):
-    if os.path.exists(model_path):
-        shutil.rmtree(model_path, ignore_errors=True)
+    config.tie_word_embeddings = False
+    return config
 
 
 def infer_library_name(
@@ -342,7 +305,6 @@ def main_export(
     if isinstance(dtype, str):
         dtype = getattr(torch, dtype) if dtype != "auto" else dtype
 
-    eagle3 = False
     if library_name == "transformers":
         config = AutoConfig.from_pretrained(
             model_name_or_path,
@@ -357,16 +319,10 @@ def main_export(
         quantization_config = getattr(config, "quantization_config", None)
         quant_method = quantization_config.get("quant_method", None) if quantization_config else None
 
-        # check if model is used as a draft model for Eagle3
+        # update config to load eagle3 models
         archs = getattr(config, "architectures", None)
         if isinstance(archs, list) and len(archs) > 0 and "eagle3" in archs[0].lower():
-            eagle3 = True
-        if eagle3 and not os.path.isdir(model_name_or_path):
-            model_name_or_path = download_eagle3_model(model_name_or_path)
-            if os.path.exists(model_name_or_path):
-                download_to_local = True
-                logger.info(f"Download eagle3 draft model to local path: {model_name_or_path}")
-            loading_kwargs["_configuration_file"] = eagle3_config(model_name_or_path)
+            loading_kwargs["config"] = update_config_for_eagle3(config)
 
         # mxfp4 quantized model will be dequantized to bf16
         if quant_method == "mxfp4" and is_transformers_version(">=", "4.55"):
@@ -610,8 +566,6 @@ def main_export(
                 GPTQQuantizer.post_init_model = orig_post_init_model
             if do_bitnet_patching:
                 AutoBitLinear.load_hook = orig_load_hook
-        if eagle3 and library_name == "transformers":
-            remove_config(model_name_or_path, output, download_to_local)
 
 
 def _main_quantize(
