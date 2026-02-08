@@ -7546,7 +7546,14 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
 
 
 class LlamaEagle3Attention(LlamaAttention):
-    """Multi-headed attention from 'Attention Is All You Need' paper"""
+    """
+    LLaMA-style multi-headed self-attention adapted for Eagle-3 speculative decoding.
+
+    This attention module extends the standard LLaMA attention mechanism to
+    support Eagle-3 draft models, where the attention input is formed by
+    concatenating the main model hidden states with the corresponding input
+    embeddings.
+    """
 
     def __init__(self, config):
         super().__init__(config, 0)
@@ -7556,6 +7563,19 @@ class LlamaEagle3Attention(LlamaAttention):
 
 
 class LlamaEagle3DecoderLayeremb(nn.Module):
+    """
+    Eagle-3 decoder layer that consumes main-model hidden states and input embeddings.
+
+    This decoder layer is designed for the Eagle-3 draft model used in
+    speculative decoding. Unlike a standard LLaMA decoder layer, it accepts
+    two separate inputs:
+        - `hidden_states`: hidden states produced by the main (target) model
+        - `input_emb`: input token embeddings corresponding to the same positions
+
+    This layer is used exclusively within the Eagle-3 draft model and is not
+    compatible with token-only decoding pipelines.
+    """
+
     def __init__(self, config, last=True):
         from transformers.models.llama.modeling_llama import LlamaMLP
 
@@ -7608,6 +7628,19 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
 
 
 class LlamaEagle3Model(LlamaPreTrainedModel):
+    """
+    Eagle-3 draft model built on a LLaMA backbone for speculative decoding.
+
+    This model extends the standard LLaMA architecture to support Eagle-3’s
+    draft model workflow, where the model operates on hidden states produced
+    by a main (target) model rather than directly on token IDs.
+
+    **Triple Hidden-State Concatenation**: The model accepts three
+    hidden-state tensors from the main model. These are concatenated along
+    the hidden dimension and then projected via a linear layer (`fc`) to
+    match `hidden_size`. This forms the effective input to the decoder.
+    """
+
     def __init__(self, config: LlamaConfig):
         config.tie_word_embeddings = False
         super().__init__(config)
@@ -7707,6 +7740,16 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
 
 @dataclass
 class Eagle3Output(ModelOutput):
+    """
+    Output container for the Eagle-3 draft model.
+
+    This class extends `ModelOutput` to hold the outputs of the Eagle-3
+    speculative decoding model. It contains `d2t`,
+    a mapping from generated draft tokens to the corresponding main
+    model tokens. This is used to reconcile the draft model outputs
+    with the main model vocabulary during speculative decoding.
+    """
+
     logits: Optional[torch.FloatTensor] = None
     past_key_values: Optional[Cache] = None
     hidden_states: Optional[tuple[torch.FloatTensor, ...]] = None

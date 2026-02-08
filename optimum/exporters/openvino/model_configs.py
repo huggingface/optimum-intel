@@ -641,7 +641,11 @@ class GemmaOpenVINOConfig(GemmaOnnxConfig):
 
 class Eagle3DummyGenerator(DummyInputGenerator):
     """
-    Generates dummy hidden_states inputs.
+    Dummy input generator for Eagle-3 speculative decoding.
+
+    This generator produces synthetic `hidden_states` tensors that mimic the
+    intermediate hidden-state outputs of a *main (target) model*, which are
+    required by the Eagle-3 draft model during speculative decoding.
     """
 
     SUPPORTED_INPUT_NAMES = ("hidden_states",)
@@ -710,6 +714,7 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         common_inputs = super().inputs
+        # Eagle3 model has additional conditional input
         if self.eagle3:
             common_inputs["hidden_states"] = {0: "batch_size", 1: "sequence_length", 2: "hidden_size"}
         return common_inputs
@@ -717,8 +722,8 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
     @property
     def outputs(self) -> dict[str, dict[int, str]]:
         common_outputs = super().outputs
+        # d2t map for Eagle3 is required to map draft tokens to target model token
         if self.eagle3:
-            # Add d2t buffer as eagle3 draft output
             common_outputs["d2t"] = {0: "vocab_size"}
         return common_outputs
 
