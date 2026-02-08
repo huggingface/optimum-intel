@@ -793,11 +793,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     ):
         with TemporaryDirectory() as tmpdir:
             main_export(
-                model_name_or_path=model_name,
-                output=tmpdir,
-                task=task,
-                model_kwargs=model_kwargs,
-                **loading_kwargs
+                model_name_or_path=model_name, output=tmpdir, task=task, model_kwargs=model_kwargs, **loading_kwargs
             )
 
     def test_filtered_architectures(cls):
