@@ -789,6 +789,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         model_name: str,
         task: str,
         model_kwargs: Dict = None,
+        loading_kwargs: Dict = None,
     ):
         with TemporaryDirectory() as tmpdir:
             main_export(
@@ -796,6 +797,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 output=tmpdir,
                 task=task,
                 model_kwargs=model_kwargs,
+                **loading_kwargs
             )
 
     def test_filtered_architectures(cls):
@@ -819,10 +821,11 @@ class OVCLIExportTestCase(unittest.TestCase):
         if task == "text-to-audio" and model_type == "speecht5":
             model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
 
+        loading_kwargs = {}
         if model_type in REMOTE_CODE_MODELS:
-            model_kwargs = {"trust_remote_code": True}
+            loading_kwargs["trust_remote_code"] = True
 
-        self._openvino_export(MODEL_NAMES[model_type], task, model_kwargs=model_kwargs)
+        self._openvino_export(MODEL_NAMES[model_type], task, model_kwargs=model_kwargs, loading_kwargs=loading_kwargs)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli(self, task: str, model_type: str):
