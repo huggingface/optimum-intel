@@ -4386,6 +4386,255 @@ class _OVLlama4ForCausalLM(OVModelForVisualCausalLM):
         return inputs
 
 
+class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = ["vision_projection"]
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        image_features = self.vision_embeddings(pixel_values).last_hidden_state
+        image_features = self.multi_modal_projector(image_features)
+        return image_features
+
+    def pack_image_features(self, image_features, image_sizes, image_newline=None):
+        """
+        Reshape, unpad and then pack each image_feature into a single image_features tensor containing all visual vectors.
+
+        Args:
+            image_features (`List[torch.Tensor]` of length num_images, each of shape `(num_patches, image_length, embed_dim)`)
+                List of image feature tensor, each contains all the visual feature of all patches.
+            image_sizes (`torch.Tensor` of shape `(num_images, 2)`)
+                Actual image size of each images (H, W).
+            vision_feature_select_strategy (`str`)
+                The feature selection strategy used to select the vision feature from the vision backbone.
+            image_newline (`torch.Tensor` of shape `(embed_dim)`)
+                New line embedding vector.
+        Returns:
+            image_features (`torch.Tensor` of shape `(all_feat_len, embed_dim)`)
+            feature_lens (`List[int]`)
+                token length of each image in image_features
+        """
+        from transformers.models.llava_next_video.modeling_llava_next_video import (
+            get_anyres_image_grid_shape,
+            unpad_image,
+        )
+
+        new_image_features = []
+        feature_lens = []
+        vision_feature_select_strategy = self.config.vision_feature_select_strategy
+        for image_idx, image_feature in enumerate(image_features):
+            if image_feature.shape[0] > 1:
+                base_image_feature = image_feature[0]
+                image_feature = image_feature[1:]
+                height = width = self.config.vision_config.image_size // self.config.vision_config.patch_size
+
+                num_patch_height, num_patch_width = get_anyres_image_grid_shape(
+                    image_sizes[image_idx],
+                    self.config.image_grid_pinpoints,
+                    self.config.vision_config.image_size,
+                )
+
+                if (
+                    np.prod(image_feature.shape) % (num_patch_height * num_patch_width * height * width) != 0
+                    and vision_feature_select_strategy == "default"
+                ):
+                    logger.warning_once(
+                        "Image feature shape does not line up with the provided patch size. "
+                        "You may be using the `default` vision_feature_select_strategy with a"
+                        " visual encoder that does not have CLS."
+                    )
+
+                image_feature = image_feature.view(num_patch_height, num_patch_width, height, width, -1)
+                image_feature = image_feature.permute(4, 0, 2, 1, 3).contiguous()
+                image_feature = image_feature.flatten(1, 2).flatten(2, 3)
+                image_feature = unpad_image(image_feature, image_sizes[image_idx])
+                if image_newline is not None:
+                    image_feature = torch.cat(
+                        (
+                            image_feature,
+                            image_newline[:, None, None]
+                            .expand(*image_feature.shape[:-1], 1)
+                            .to(image_feature.device, image_feature.dtype),
+                        ),
+                        dim=-1,
+                    )
+                image_feature = image_feature.flatten(1, 2).transpose(0, 1)
+                image_feature = torch.cat((base_image_feature, image_feature), dim=0)
+            else:
+                image_feature = image_feature[0]
+                if image_newline is not None:
+                    image_feature = torch.cat((image_feature, image_newline[None].to(image_feature)), dim=0)
+            new_image_features.append(image_feature)
+            feature_lens.append(image_feature.size(0))
+        image_features = torch.cat(new_image_features, dim=0)
+        feature_lens = torch.tensor(feature_lens, dtype=torch.long, device=image_features.device)
+        return image_features, feature_lens
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        if getattr(processor, "chat_template", None) is not None:
+            chat_prompt = [{"role": "user", "content": [{"type": "text", "text": text}]}]
+            if image is not None:
+                chat_prompt[0]["content"].append({"type": "image"})
+            if video is not None:
+                chat_prompt[0]["content"].append({"type": "video"})
+            prompt = processor.apply_chat_template(chat_prompt, add_generation_prompt=True, tokenize=False)
+        else:
+            prompt = text
+            if image is not None and "<image>" not in prompt:
+                prompt = "<image>\n" + prompt
+            if video is not None and "<video>" not in prompt:
+                prompt = "<video>\n" + prompt
+
+        if is_transformers_version(">", "4.47.99") and getattr(processor, "patch_size", None) is None:
+            if (
+                getattr(config, "vision_config", None) is not None
+                and getattr(config.vision_config, "patch_size", None) is not None
+            ):
+                processor.patch_size = config.vision_config.patch_size
+            else:
+                raise ValueError(
+                    "Processor does not have `patch_size` attribute. Please fix the processor or provide `patch_size` in the config."
+                )
+
+        inputs = processor(images=image, text=prompt, videos=video, return_tensors="pt")
+        return inputs
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        past_key_values=None,
+        image_sizes=None,
+        pixel_values_videos=None,
+        **kwargs,
+    ):
+        inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
+
+        if (
+            pixel_values is not None
+            and pixel_values.size(0) > 0
+            and self._support_new_processing
+            and past_key_values is None
+        ):
+            legacy_processing = (
+                (input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length
+            ).item()
+        elif (
+            pixel_values_videos is not None
+            and pixel_values_videos.size(0) > 0
+            and self._support_new_processing
+            and past_key_values is None
+        ):
+            legacy_processing = (
+                (input_ids == self.config.video_token_index).sum(1).max() < self.config.video_seq_length
+            ).item()
+        else:
+            legacy_processing = True
+
+        legacy_processing = (
+            legacy_processing.item() if isinstance(legacy_processing, torch.Tensor) else legacy_processing
+        )
+
+        if pixel_values is not None and pixel_values.size(0) > 0:
+            inputs_embeds, attention_mask, position_ids = self.add_image_features(
+                input_ids,
+                inputs_embeds,
+                pixel_values,
+                attention_mask,
+                position_ids,
+                image_sizes,
+                legacy_processing,
+                **kwargs,
+            )
+
+        if pixel_values_videos is not None and pixel_values_videos.size(0) > 0:
+            inputs_embeds, attention_mask, position_ids = self.add_video_features(
+                input_ids,
+                inputs_embeds,
+                pixel_values_videos,
+                attention_mask,
+                position_ids,
+                legacy_processing=legacy_processing,
+                **kwargs,
+            )
+
+        if legacy_processing and pixel_values is not None and past_key_values is not None and input_ids.shape[1] == 1:
+            attention_mask, position_ids = self._filter_unattended_tokens(input_ids, attention_mask, past_key_values)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    def add_video_features(
+        self,
+        input_ids,
+        inputs_embeds,
+        pixel_values_videos,
+        attention_mask,
+        position_ids,
+        legacy_processing,
+        **kwargs,
+    ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/llava_next_video/modeling_llava_next_video.py#L732-L751
+        video_features = self.get_video_features(pixel_values_videos, input_ids)
+        if video_features is not None and len(video_features) != 0:
+            video_features = [feature.flatten(0, 1) for feature in video_features]
+            video_feature_lens = [feature.size(0) for feature in video_features]
+            video_features = torch.cat(video_features, dim=0)
+            video_feature_lens = torch.tensor(video_feature_lens, dtype=torch.long, device=video_features.device)
+
+            if legacy_processing:
+                inputs_embeds, attention_mask, position_ids = self.merge_vision_text_embeddings(
+                    video_features,
+                    inputs_embeds,
+                    video_feature_lens,
+                    input_ids,
+                    attention_mask,
+                    position_ids,
+                    legacy_processing,
+                    self.config.video_token_index,
+                )
+            else:
+                inputs_embeds = (
+                    torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+                )
+                special_image_mask = (input_ids == self.config.video_token_index).unsqueeze(-1)
+                special_image_mask = special_image_mask.expand_as(inputs_embeds)
+                if inputs_embeds[special_image_mask].numel() != video_features.numel():
+                    n_video_tokens = (input_ids == self.config.video_token_index).sum().item()
+                    n_video_features = video_features.shape[0]
+                    raise ValueError(
+                        f"Video features and video tokens do not match: tokens: {n_video_tokens}, features {n_video_features}"
+                    )
+                inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, video_features)
+        return inputs_embeds, attention_mask, position_ids
+
+    def get_video_features(self, pixel_values, input_ids=None, **kwargs):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/llava_next_video/modeling_llava_next_video.py#L835
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        batch_size, frames, channels, height, width = pixel_values.shape
+        pixel_values = pixel_values.reshape(batch_size * frames, channels, height, width)
+        selected_video_features = self.vision_embeddings(pixel_values).last_hidden_state
+        video_features = self.vision_resampler(selected_video_features)
+        video_features = self.multi_modal_projector(video_features)
+        video_features = torch.split(torch.from_numpy(video_features), frames, dim=0)
+        return video_features
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
@@ -4407,4 +4656,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "phi4_multimodal": _OVPhi4MMForCausalLM,
     "llama4": _OVLlama4ForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
+    "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
 }
