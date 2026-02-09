@@ -663,6 +663,7 @@ class Eagle3DummyGenerator(DummyInputGenerator):
         self.hidden_size = normalized_config.hidden_size
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        # hidden_states is provided as a concatenation of three hidden-layer outputs from the main model
         shape = (
             self.batch_size,
             self.sequence_length,
