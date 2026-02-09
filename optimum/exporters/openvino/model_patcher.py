@@ -36,6 +36,7 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import (
     LlamaAttention,
+    LlamaMLP,
     LlamaPreTrainedModel,
     LlamaRMSNorm,
     LlamaRotaryEmbedding,
@@ -7577,8 +7578,6 @@ class LlamaEagle3DecoderLayer(nn.Module):
     """
 
     def __init__(self, config, last=True):
-        from transformers.models.llama.modeling_llama import LlamaMLP
-
         super().__init__()
         self.hidden_size = config.hidden_size
         self.self_attn = LlamaEagle3Attention(config=config)
