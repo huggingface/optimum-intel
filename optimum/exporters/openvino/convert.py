@@ -682,6 +682,10 @@ def export_from_model(
         )
         logging.disable(logging.NOTSET)
 
+    # Remove empty model and export_configs pairs, they can be empty when a config class is shared between model versions.
+    # Example: Qwen2VL and Qwen3VL share config class, but "vision_embeddings_pos" is used in Qwen3VL only.
+    models_and_export_configs = {k: v for k, v in models_and_export_configs.items() if v != (None, None)}
+
     if library_name == "open_clip":
         if hasattr(model.config, "save_pretrained"):
             model.config.save_pretrained(output)

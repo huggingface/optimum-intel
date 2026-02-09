@@ -700,6 +700,19 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),
         (
             "image-text-to-text",
+            "qwen3_vl",
+            'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1",
+            {
+                "lm_model": {"int8": 12, "int4": 18},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 32},
+                "vision_embeddings_pos_model": {"int8": 1},
+            },
+        ),
+        (
+            "image-text-to-text",
             "phi3_v",
             "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
             {
@@ -798,11 +811,11 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     def test_filtered_architectures(cls):
         if is_transformers_version("<", "4.49"):
-            expected = {"llama4", "qwen2_5_vl", "phi4mm"}
+            expected = {"qwen3_vl", "llama4", "qwen2_5_vl", "phi4mm"}
         elif is_transformers_version("<", "4.51"):
-            expected = {"llama4", "phi4mm"}
+            expected = {"qwen3_vl", "llama4", "phi4mm"}
         elif is_transformers_version("<", "4.52"):
-            expected = set()
+            expected = {"qwen3_vl"}
         else:
             expected = {"llava-qwen2", "phi3_v", "phi4mm", "minicpmo"}
 
