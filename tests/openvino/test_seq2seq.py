@@ -565,6 +565,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     if is_transformers_version("<", "4.52"):
         SUPPORTED_ARCHITECTURES += ["minicpmo"]
+    if is_transformers_version(">=", "4.57.0"):
+        SUPPORTED_ARCHITECTURES += ["qwen3_vl"]
+        SUPPORT_VIDEO += ["qwen3_vl"]
 
     if is_transformers_version(">=", "4.54.0"):
         # remote code models differs after transformers v4.54
@@ -590,6 +593,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "idefics3",
             "smolvlm",
             "llama4",
+            "qwen3_vl",
         ]:
             from transformers import AutoModelForImageTextToText
 
