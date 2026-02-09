@@ -7546,6 +7546,7 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                 del afmoe_moe.down_projs, afmoe_moe.gate_projs, afmoe_moe.up_projs
 
 
+# adopted from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/llama/modeling_llama.py#L197
 class LlamaEagle3Attention(LlamaAttention):
     """
     LLaMA-style multi-headed self-attention adapted for Eagle-3 speculative decoding.
@@ -7563,6 +7564,7 @@ class LlamaEagle3Attention(LlamaAttention):
         self.v_proj = nn.Linear(config.hidden_size * 2, config.num_key_value_heads * self.head_dim, bias=False)
 
 
+# adopted from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/llama/modeling_llama.py#L268
 class LlamaEagle3DecoderLayer(nn.Module):
     """
     Eagle-3 decoder layer that consumes main-model hidden states and input embeddings.
@@ -7626,6 +7628,7 @@ class LlamaEagle3DecoderLayer(nn.Module):
         return hidden_states
 
 
+# adopted from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/llama/modeling_llama.py#L334
 class LlamaEagle3Model(LlamaPreTrainedModel):
     """
     Eagle-3 draft model built on a LLaMA backbone for speculative decoding.
@@ -7755,6 +7758,7 @@ class Eagle3Output(ModelOutput):
     d2t: Optional[torch.LongTensor] = None
 
 
+# adopted from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/llama/modeling_llama.py#L413
 class LlamaEagle3ForCausalLM(LlamaPreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
 
