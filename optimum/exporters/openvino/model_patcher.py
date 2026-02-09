@@ -7562,7 +7562,7 @@ class LlamaEagle3Attention(LlamaAttention):
         self.v_proj = nn.Linear(config.hidden_size * 2, config.num_key_value_heads * self.head_dim, bias=False)
 
 
-class LlamaEagle3DecoderLayeremb(nn.Module):
+class LlamaEagle3DecoderLayer(nn.Module):
     """
     Eagle-3 decoder layer that consumes main-model hidden states and input embeddings.
 
@@ -7594,7 +7594,7 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Cache = None,
+        past_key_values: Optional[Cache] = None,
         position_embeddings: tuple[torch.Tensor, torch.Tensor] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
@@ -7611,7 +7611,7 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
-            past_key_value=past_key_value,
+            past_key_value=past_key_values,
             output_attentions=output_attentions,
             position_embeddings=position_embeddings,
             use_cache=use_cache,
@@ -7649,7 +7649,7 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, config.pad_token_id)
         self.rotary_emb = LlamaRotaryEmbedding(config=config)
 
-        self.midlayer = LlamaEagle3DecoderLayeremb(config)
+        self.midlayer = LlamaEagle3DecoderLayer(config)
         self.target_hidden_size = getattr(config, "target_hidden_size", config.hidden_size)
         self.fc = nn.Linear(self.target_hidden_size * 3, self.hidden_size, bias=False)
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -7727,7 +7727,7 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
             attention_mask=causal_mask,
             position_embeddings=position_embeddings,
             position_ids=position_ids,
-            past_key_value=past_key_values,
+            past_key_values=past_key_values,
             use_cache=True,
         )
 

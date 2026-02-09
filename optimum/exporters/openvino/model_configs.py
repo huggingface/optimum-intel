@@ -720,7 +720,7 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
         return common_inputs
 
     @property
-    def outputs(self) -> dict[str, dict[int, str]]:
+    def outputs(self) -> Dict[str, Dict[int, str]]:
         common_outputs = super().outputs
         # d2t map for Eagle3 is required to map draft tokens to target model token
         if self.eagle3:
