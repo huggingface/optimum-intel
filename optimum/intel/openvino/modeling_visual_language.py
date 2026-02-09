@@ -3437,6 +3437,13 @@ else:
         pass
 
 
+# The inheritance from Qwen3VLModel is needed to get access to methods:
+# get_placeholder_mask(): https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1066
+# get_rope_index(): https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L916
+# get_video_features(): https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1035
+#
+# and inheritance from Qwen3VLVisionModel is needed for accessing the following method:
+# rot_pos_emb(): https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L603
 class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM, Qwen3VLModel, Qwen3VLVisionModel):
     additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
 
