@@ -318,7 +318,7 @@ def main_export(
 
         # update config to load eagle3 models
         archs = getattr(config, "architectures", None)
-        if isinstance(archs, list) and len(archs) > 0 and "eagle3" in archs[0].lower():
+        if isinstance(archs, list) and len(archs) > 0 and archs[0] == "LlamaForCausalLMEagle3":
             loading_kwargs["config"] = update_config_for_eagle3(config)
 
         # mxfp4 quantized model will be dequantized to bf16
