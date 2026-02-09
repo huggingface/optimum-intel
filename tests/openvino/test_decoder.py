@@ -840,7 +840,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(EAGLE3_MODELS.items())
     @pytest.mark.skipif(is_transformers_version("<", "4.54"), reason="Eagle3 requires transformers >= 4.54")
     def test_load_and_infer_with_eagle3_model(self, model_arch, model_pair):
-
         draft_model_id, target_model_id = model_pair
 
         ov_model = OVModelForCausalLM.from_pretrained(draft_model_id, export=True, trust_remote_code=True)
