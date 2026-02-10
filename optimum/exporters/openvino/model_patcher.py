@@ -18,12 +18,11 @@ import logging
 import logging as log
 import math
 import types
-from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-from transformers.cache_utils import DynamicCache, EncoderDecoderCache
+from transformers.cache_utils import DynamicCache
 from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPast, BaseModelOutputWithPooling
 from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
@@ -37,8 +36,6 @@ from optimum.exporters.onnx.model_patcher import (
     sdpa_mask_without_vmap,
 )
 from optimum.exporters.onnx.utils import ONNXDynamicCache, ONNXEncoderDecoderCache
-
-
 from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_version, is_transformers_version
 
 
@@ -4129,7 +4126,6 @@ class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
             deepstack_visual_embeds,
             use_cache=True,
         ):
-            from transformers.cache_utils import DynamicCache
 
             pkv = DynamicCache.from_legacy_cache(past_key_values)
             outputs = self.model.language_model(
