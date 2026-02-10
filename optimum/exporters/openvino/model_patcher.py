@@ -7167,12 +7167,102 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
 
+
+def lfm2_moe_sparse_block_forward_patched(self, hidden_states: torch.Tensor):
+    batch_size, sequence_length, hidden_dim = hidden_states.shape
+    num_tokens = batch_size * sequence_length
+    num_experts = self.num_experts
+
+    hidden_states = hidden_states.view(num_tokens, hidden_dim)
+
+    router_logits = self.gate(hidden_states)
+
+    if self.router_temperature != 1.0:
+        router_logits = router_logits / self.router_temperature
+
+    if self.score_function == "sigmoid":
+        routing_scores = router_logits.sigmoid()
+
+        if self.expert_bias is not None:
+            scores_for_routing = routing_scores + self.expert_bias
+            _, selected_experts = torch.topk(scores_for_routing, k=self.top_k, dim=-1)
+            routing_weights = torch.gather(routing_scores, dim=1, index=selected_experts)
+        else:
+            routing_weights, selected_experts = torch.topk(routing_scores, k=self.top_k, dim=-1)
+
+        if self.norm_topk_prob:
+            routing_weights = routing_weights / (routing_weights.sum(dim=-1, keepdim=True) + 1e-6)
+
+    elif self.score_function == "softmax":
+        scores_for_routing, selected_experts = torch.topk(router_logits, k=self.top_k, dim=-1)
+        routing_weights = torch.softmax(scores_for_routing, dim=-1, dtype=torch.float32)
+
+    else:
+        raise ValueError(f"Unsupported router score function: {self.score_function}")
+
+    if self.routed_scaling_factor:
+        routing_weights = routing_weights * self.routed_scaling_factor
+
+    routing_weights = routing_weights.to(hidden_states.dtype)
+
+    dense_routing_weights = torch.zeros(
+        num_tokens,
+        num_experts,
+        device=hidden_states.device,
+        dtype=hidden_states.dtype,
+    )
+    dense_routing_weights.scatter_(dim=1, index=selected_experts, src=routing_weights)
+    hidden_states_expanded = hidden_states.repeat(num_experts, 1) # (num_experts * num_tokens, hidden_dim)
+    hidden_states_expanded = hidden_states_expanded.view(num_experts, -1, hidden_dim) # (num_experts, num_tokens, hidden_dim)
+
+    # Stack expert parameters
+    w1_stacked = torch.stack([e.w1.weight.T for e in self.experts])
+    w2_stacked = torch.stack([e.w2.weight.T for e in self.experts])
+    w3_stacked = torch.stack([e.w3.weight.T for e in self.experts])
+
+    # self.w2(F.silu(self.w1(x)) * self.w3(x))
+    silu_out = F.silu(torch.bmm(hidden_states_expanded, w1_stacked))
+    x_w3 = torch.bmm(hidden_states_expanded, w3_stacked)
+    silu_x_w3 = silu_out * x_w3
+    next_states = torch.bmm(silu_x_w3, w2_stacked)
+
+    next_states = next_states.view(num_experts, batch_size, -1, hidden_dim)
+    next_states = next_states * dense_routing_weights.transpose(0, 1).view(num_experts, batch_size, -1)[..., None]
+    next_states = next_states.sum(dim=0)
+
+    return next_states, router_logits
+
+
+class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
+
+    def __enter__(self):
+
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
         for layer in self._model.model.layers:
-            if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2ShortConv):
+            if hasattr(layer, "conv"):
                 conv_layer = layer.conv
-            else:
-                continue
-            conv_layer.slow_forward = conv_layer._orig_forward
+                conv_layer._orig_forward = conv_layer.slow_forward
+                conv_layer.slow_forward = types.MethodType(lfm2_short_conv_forward_patched, conv_layer)
+            elif hasattr(layer, "feed_forward") and hasattr(layer.feed_forward, "num_experts"):
+                sparse_moe_block = layer.feed_forward
+                sparse_moe_block._orig_forward = sparse_moe_block.forward
+                sparse_moe_block.forward = types.MethodType(lfm2_moe_sparse_block_forward_patched, sparse_moe_block)
+        print('ok')
+
+    def __exit__(self, exc_type, exc_value, traceback):
+
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+
+        for layer in self._model.model.layers:
+            if hasattr(layer, "conv"):
+                conv_layer = layer.conv
+                conv_layer.slow_forward = conv_layer._orig_forward
+            elif hasattr(layer, "feed_forward") and hasattr(layer.feed_forward, "num_experts"):
+                sparse_moe_block = layer.feed_forward
+                sparse_moe_block.forward = sparse_moe_block._orig_forward
 
 
 class GptOssModelPatcher(OVDecoderModelPatcher):
