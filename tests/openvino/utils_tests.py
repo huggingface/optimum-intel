@@ -224,8 +224,10 @@ MODEL_NAMES = {
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
+    "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
 }
 
+EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7B")}
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "afmoe": {"model": 16},
@@ -363,6 +365,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "zamba2": {"model": 44},
     "exaone4": {"model": 16},
     "lfm2": {"model": 52},
+    "qwen3_eagle3": {"model": 20},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -389,6 +392,7 @@ REMOTE_CODE_MODELS = (
     "decilm",
     "minicpm3",
     "deepseek",
+    "qwen3_eagle3",
 )
 
 
