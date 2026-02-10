@@ -133,6 +133,10 @@ def _save_model(
 
     runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}
     model = _add_runtime_options_to_rt_info(model, runtime_options)
+
+    if getattr(config, "eagle3", False):
+        model = _add_eagle3_mode_to_rt_info(model)
+
     save_model(model, path, compress_to_fp16)
     del model
     gc.collect()
@@ -845,6 +849,18 @@ def _add_runtime_options_to_rt_info(model: Model, options: Dict):
     try:
         for name, value in options.items():
             model.set_rt_info(value, ["runtime_options", name])
+    except Exception:
+        pass
+
+    return model
+
+
+def _add_eagle3_mode_to_rt_info(model: Model):
+    """
+    Add eagle3 mode
+    """
+    try:
+        model.set_rt_info("True", ["eagle3_mode"])
     except Exception:
         pass
 

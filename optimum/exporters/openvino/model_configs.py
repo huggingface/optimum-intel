@@ -725,6 +725,39 @@ class GemmaOpenVINOConfig(GemmaOnnxConfig):
         return inputs
 
 
+class Eagle3DummyGenerator(DummyInputGenerator):
+    """
+    Dummy input generator for Eagle-3 speculative decoding.
+
+    This generator produces synthetic `hidden_states` tensors that mimic the
+    intermediate hidden-state outputs of a *main (target) model*, which are
+    required by the Eagle-3 draft model during speculative decoding.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("hidden_states",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.hidden_size = normalized_config.hidden_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        # hidden_states is provided as a concatenation of three hidden-layer outputs from the main model
+        shape = (
+            self.batch_size,
+            self.sequence_length,
+            self.hidden_size * 3,
+        )
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
 @register_in_tasks_manager(
     "llama",
     *[
@@ -738,6 +771,48 @@ class GemmaOpenVINOConfig(GemmaOnnxConfig):
 )
 class LlamaOpenVINOConfig(LlamaOnnxConfig):
     _MODEL_PATCHER = OVDecoderModelPatcher
+
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        use_past: bool = False,
+        use_past_in_inputs: bool = False,
+        preprocessors: list[Any] | None = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            use_past=use_past,
+            use_past_in_inputs=use_past_in_inputs,
+            preprocessors=preprocessors,
+        )
+        archs = getattr(config, "architectures", None)
+        self.eagle3 = False
+        if isinstance(archs, list) and len(archs) > 0 and "eagle3" in archs[0].lower():
+            self.DUMMY_INPUT_GENERATOR_CLASSES += (Eagle3DummyGenerator,)
+            self.MIN_TRANSFORMERS_VERSION = "4.54.0"
+            self.eagle3 = True
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = super().inputs
+        # Eagle3 model has additional conditional input
+        if self.eagle3:
+            common_inputs["hidden_states"] = {0: "batch_size", 1: "sequence_length", 2: "hidden_size"}
+        return common_inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        common_outputs = super().outputs
+        # d2t map for Eagle3 is required to map draft tokens to target model token
+        if self.eagle3:
+            common_outputs["d2t"] = {0: "vocab_size"}
+        return common_outputs
 
 
 @register_in_tasks_manager(
