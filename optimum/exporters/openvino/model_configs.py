@@ -4597,37 +4597,6 @@ class LFM2OpenVINOConfig(LFM2OpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Lfm2DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Lfm2DummyPastKeyValuesGenerator
 
-    # def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
-    #     if direction not in ["inputs", "outputs"]:
-    #         raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
-    #
-    #     if direction == "inputs":
-    #         decoder_sequence_name = "past_sequence_length"
-    #         cache_name_prefix = "cache_params.past"
-    #     else:
-    #         decoder_sequence_name = "past_sequence_length + sequence_length"
-    #         cache_name_prefix = "cache_params.present"
-    #
-    #     self.num_conv_layers = self._normalized_config.layer_types.count("conv")
-    #     self.num_atten_layers = self._normalized_config.layer_types.count("full_attention")
-    #
-    #     for i in range(self.num_conv_layers):
-    #         inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
-    #
-    #     for i in range(self.num_atten_layers):
-    #         inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
-    #         inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
-    #
-    # @property
-    # def inputs(self) -> Dict[str, Dict[int, str]]:
-    #     common_inputs = {
-    #         "input_ids": {0: "batch_size", 1: "sequence_length"},
-    #         "attention_mask": {0: "batch_size", 1: "sequence_length"},
-    #     }
-    #     if self.use_past_in_inputs:
-    #         self.add_past_key_values(common_inputs, direction="inputs")
-    #     return common_inputs
-
 
 @register_in_tasks_manager(
     "granitemoehybrid", *["text-generation", "text-generation-with-past"], library_name="transformers"

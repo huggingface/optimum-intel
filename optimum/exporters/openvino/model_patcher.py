@@ -7249,7 +7249,6 @@ class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
                 sparse_moe_block = layer.feed_forward
                 sparse_moe_block._orig_forward = sparse_moe_block.forward
                 sparse_moe_block.forward = types.MethodType(lfm2_moe_sparse_block_forward_patched, sparse_moe_block)
-        print('ok')
 
     def __exit__(self, exc_type, exc_value, traceback):
 
