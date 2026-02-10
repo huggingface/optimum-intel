@@ -4591,7 +4591,7 @@ class LFM2OpenVINOConfig(MambaOpenVINOConfig):
     library_name="transformers",
 )
 class LFM2MoeOpenVINOConfig(LFM2OpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = "4.54.0"
+    MAX_TRANSFORMERS_VERSION = "4.57.99"
     _MODEL_PATCHER = Lfm2MoeModelPatcher
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Lfm2DummyPastKeyValuesGenerator)
