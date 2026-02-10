@@ -54,7 +54,6 @@ from optimum.exporters.onnx.model_patcher import (
     override_arguments,
     sdpa_mask_without_vmap,
 )
-from optimum.exporters.onnx.utils import ONNXDynamicCache, ONNXEncoderDecoderCache
 from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_version, is_transformers_version
 
 
@@ -76,6 +75,14 @@ if is_transformers_version(">=", "4.54"):
     from transformers.utils import TransformersKwargs
 else:
     TransformersKwargs = object
+
+
+if is_transformers_version("<", "5"):
+    from transformers import DynamicCache as ONNXDynamicCache
+    from transformers import EncoderDecoderCache as ONNXEncoderDecoderCache
+else:
+    from optimum.exporters.onnx.utils import LegacyDynamicCache as ONNXDynamicCache
+    from optimum.exporters.onnx.utils import LegacyEncoderDecoderCache as ONNXEncoderDecoderCache
 
 
 logger = logging.getLogger(__name__)
