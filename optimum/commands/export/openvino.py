@@ -22,6 +22,7 @@ from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
 from optimum.commands.base import BaseOptimumCLICommand, CommandInfo
 from optimum.utils.constant import ALL_TASKS
+from optimum.utils import DEFAULT_DUMMY_SHAPES
 
 
 logger = logging.getLogger(__name__)
@@ -294,6 +295,82 @@ def parse_args_openvino(parser: "ArgumentParser"):
         type=json.loads,
         help=("Any kwargs passed to the model forward, or used to customize the export for a given model."),
     )
+    doc_input = "to use in the example input given to the OpenVINO export."
+    optional_group.add_argument(
+        "--batch_size",
+        type=int,
+        default=None,
+        help=f"Batch size {doc_input}",
+    )
+    optional_group.add_argument(
+        "--sequence_length",
+        type=int,
+        default=None,
+        help=f"Text tasks only. Sequence length {doc_input}",
+    )
+    optional_group.add_argument(
+        "--num_choices",
+        type=int,
+        default=None,
+        help=f"Text tasks only. Num choices {doc_input}",
+    )
+    optional_group.add_argument(
+        "--width",
+        type=int,
+        default=None,
+        help=f"Image tasks only. Width {doc_input}",
+    )
+    optional_group.add_argument(
+        "--height",
+        type=int,
+        default=None,
+        help=f"Image tasks only. Height {doc_input}",
+    )
+    optional_group.add_argument(
+        "--num_channels",
+        type=int,
+        default=None,
+        help=f"Image tasks only. Number of channels {doc_input}",
+    )
+    optional_group.add_argument(
+        "--feature_size",
+        type=int,
+        default=None,
+        help=f"Audio tasks only. Feature size {doc_input}",
+    )
+    optional_group.add_argument(
+        "--nb_max_frames",
+        type=int,
+        default=None,
+        help=f"Audio tasks only. Maximum number of frames {doc_input}",
+    )
+    optional_group.add_argument(
+        "--audio_sequence_length",
+        type=int,
+        default=None,
+        help=f"Audio tasks only. Audio sequence length {doc_input}",
+    )
+    optional_group.add_argument(
+        "--point_batch_size",
+        type=int,
+        default=None,
+        help=(
+            "For Segment Anything. It corresponds to how many segmentation masks we want the model to predict per "
+            "input point."
+        ),
+    )
+    optional_group.add_argument(
+        "--nb_points_per_image",
+        type=int,
+        default=None,
+        help="For Segment Anything. It corresponds to the number of points per segmentation masks.",
+    )
+    optional_group.add_argument(
+        "--visual_seq_length",
+        type=int,
+        default=None,
+        help="Visual sequence length",
+    )
 
 
 def no_compression_parameter_provided(args):
@@ -464,7 +541,11 @@ class OVExportCommand(BaseOptimumCLICommand):
             output = Path(self.args.output)
 
         try:
-            # TODO : add input shapes
+            # Get the shapes to be used to generate dummy inputs
+            input_shapes = {}
+            for input_name in DEFAULT_DUMMY_SHAPES:
+                if hasattr(self.args, input_name) and getattr(self.args, input_name) is not None:
+                    input_shapes[input_name] = getattr(self.args, input_name)
             main_export(
                 model_name_or_path=self.args.model,
                 output=output,
@@ -479,7 +560,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 library_name=library_name,
                 variant=self.args.variant,
                 model_kwargs=self.args.model_kwargs,
-                # **input_shapes,
+                **input_shapes,
             )
             if apply_main_quantize:
                 _main_quantize(
