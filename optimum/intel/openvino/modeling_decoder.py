@@ -1440,7 +1440,7 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                 # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)
 
-                if self.config.model_type not in ["lfm2", "granitemoehybrid"]:
+                if self.config.model_type not in ["lfm2", "lfm2_moe", "granitemoehybrid"]:
                     # LFM2 and GraniteMoeHybrid (Granite-4.0) require the attention mask
                     # to be the length of the full context, so default mask from OVModelForCausalLM needs to be used.
                     # Other models like Mamba typically do not require an attention_mask
