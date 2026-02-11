@@ -5005,7 +5005,7 @@ class GPTBigCodeOpenVINOConfig(GPTBigCodeOnnxConfig):
     ],
 )
 class Pix2StructOpenVINOConfig(Pix2StructOnnxConfig):
-    pass
+    _MODEL_PATCHER = OVSeq2SeqModelPatcher
 
 
 @register_in_tasks_manager("bert", *COMMON_TEXT_TASKS)
