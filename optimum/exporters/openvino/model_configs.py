@@ -2078,6 +2078,7 @@ class MairaOpenVINOConfig(LlavaOpenVINOConfig):
 
 @register_in_tasks_manager("internvl_chat", *["image-text-to-text"], library_name="transformers")
 class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     def __init__(
         self,
         config: "PretrainedConfig",
@@ -2862,6 +2863,7 @@ class MiniCPMVConfigBehavior(str, enum.Enum):
 
 @register_in_tasks_manager("minicpmv", *["image-text-to-text"], library_name="transformers")
 class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in MiniCPMVConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = ()
