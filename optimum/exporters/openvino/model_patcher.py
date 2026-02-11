@@ -7162,8 +7162,6 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
             conv_layer.slow_forward = types.MethodType(lfm2_short_conv_forward_patched, conv_layer)
 
     def __exit__(self, exc_type, exc_value, traceback):
-        from transformers.models.lfm2.modeling_lfm2 import Lfm2ShortConv
-
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
 
@@ -7228,16 +7226,12 @@ def lfm2_moe_sparse_block_forward_patched(self, hidden_states: torch.Tensor):
         # However `index_add_` only support torch tensors for indexing so we'll use
         # the `top_x` tensor here.
         final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
-    final_hidden_states = final_hidden_states.to(hidden_states.dtype).reshape(
-        batch_size, sequence_length, hidden_dim
-    )
+    final_hidden_states = final_hidden_states.to(hidden_states.dtype).reshape(batch_size, sequence_length, hidden_dim)
     return final_hidden_states, router_logits
 
 
 class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
-
     def __enter__(self):
-
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
@@ -7252,7 +7246,6 @@ class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
                 sparse_moe_block.forward = types.MethodType(lfm2_moe_sparse_block_forward_patched, sparse_moe_block)
 
     def __exit__(self, exc_type, exc_value, traceback):
-
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
 
