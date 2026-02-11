@@ -89,10 +89,10 @@ logger = logging.getLogger(__name__)
 
 
 def _get_subcomponent_model(model, name):
-    if is_transformers_version("<", "5"):
-        return getattr(model, name)
+    if is_transformers_version(">=", "5") and hasattr(model, "model"):
+        return getattr(model.model, name)
 
-    return getattr(model.model, name)
+    return getattr(model, name)
 
 
 for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
