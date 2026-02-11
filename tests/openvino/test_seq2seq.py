@@ -535,14 +535,10 @@ class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
 class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = [
-        "internvl_chat",
         "llava",
         "llava_next",
         "llava_next_mistral",
         "llava_next_video",
-        "llava-qwen2",
-        "minicpmv",
-        "phi3_v",
         "qwen2_vl",
     ]
     SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl"]
@@ -554,9 +550,14 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         SUPPORTED_ARCHITECTURES += ["maira2", "idefics3"]
 
     if is_transformers_version(">=", "4.49.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl", "got_ocr2", "phi4mm"]
+        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl", "got_ocr2"]
         SUPPORT_VIDEO.append("qwen2_5_vl")
-        SUPPORT_AUDIO.append("phi4mm")
+
+        if is_transformers_version("<", "4.54.0"):
+            # remote code models differs after transformers v4.54
+            SUPPORTED_ARCHITECTURES += ["phi4mm"]
+            SUPPORT_AUDIO.append("phi4mm")
+
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
     if is_transformers_version(">=", "4.51"):
@@ -569,9 +570,13 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         SUPPORTED_ARCHITECTURES += ["qwen3_vl"]
         SUPPORT_VIDEO += ["qwen3_vl"]
 
-    if is_transformers_version(">=", "4.54.0"):
+    if is_transformers_version("<", "4.54.0"):
         # remote code models differs after transformers v4.54
-        SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"llava-qwen2", "phi3_v", "phi4mm"}
+        SUPPORTED_ARCHITECTURES += ["llava-qwen2", "phi3_v"]
+
+    if is_transformers_version("<", "5"):
+        # remote code models incompatible after transformers v5
+        SUPPORTED_ARCHITECTURES += ["internvl_chat", "minicpmv"]
 
     REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "minicpmo", "llava-qwen2", "phi3_v", "maira2", "phi4mm"]
     IMAGE = Image.open(
