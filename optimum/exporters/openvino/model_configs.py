@@ -2079,6 +2079,7 @@ class MairaOpenVINOConfig(LlavaOpenVINOConfig):
 @register_in_tasks_manager("internvl_chat", *["image-text-to-text"], library_name="transformers")
 class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
+
     def __init__(
         self,
         config: "PretrainedConfig",
