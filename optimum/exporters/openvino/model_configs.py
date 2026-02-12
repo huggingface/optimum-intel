@@ -261,6 +261,10 @@ def init_model_configs():
         "transformers",
         "Gemma3ForConditionalGeneration",
     )
+    TasksManager._CUSTOM_CLASSES[("pt", "gemma3n", "image-text-to-text")] = (
+        "transformers",
+        "Gemma3nForConditionalGeneration",
+    )
     TasksManager._CUSTOM_CLASSES[("pt", "idefics3", "image-text-to-text")] = (
         "transformers",
         "AutoModelForImageTextToText",
@@ -1462,6 +1466,21 @@ class Gemma2OpenVINOConfig(GemmaOpenVINOConfig):
     library_name="transformers",
 )
 class Gemma3TextOpenVINOConfig(Gemma2OpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.50.0"
+
+
+@register_in_tasks_manager(
+    "gemma3n_text",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class Gemma3nTextOpenVINOConfig(Gemma3TextOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
 
 
@@ -4153,6 +4172,11 @@ class Gemma3OpenVINOConfig(BaseVLMOpenVINOConfig):
                 inputs_update={"token_type_ids": {0: "batch_size", 1: "sequence_length"}},
             )
         return super().with_behavior(behavior)
+
+
+@register_in_tasks_manager("gemma3n", *["image-text-to-text"], library_name="transformers")
+class Gemma3OpenVINOConfig(Gemma3OpenVINOConfig):
+    pass
 
 
 class DummyVisionPositionIdsInputGenerator(DummyVisionInputGenerator):
