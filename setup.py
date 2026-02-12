@@ -31,7 +31,7 @@ INSTALL_REQUIRE = [
     "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git@main",
     "transformers>=4.45,<4.58",
     "setuptools",
-    "nncf>=2.19.0",
+    "nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v300",
     "openvino>=2025.4.0",
     "openvino-tokenizers>=2025.4.0",
 ]
@@ -68,8 +68,12 @@ TESTS_REQUIRE = [
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 
 EXTRAS_REQUIRE = {
-    "nncf": ["nncf>=2.19.0"],
-    "openvino": ["nncf>=2.19.0", "openvino>=2025.4.0", "openvino-tokenizers>=2025.4.0"],
+    "nncf": ["nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v300"],
+    "openvino": [
+        "nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v300",
+        "openvino>=2025.4.0",
+        "openvino-tokenizers>=2025.4.0",
+    ],
     "neural-compressor": ["neural-compressor[pt]>=3.4.1", "accelerate", "transformers<4.46", "datasets"],
     "ipex": ["intel-extension-for-pytorch>=2.8", "transformers>4.54,<4.56", "accelerate"],
     "diffusers": ["diffusers"],
