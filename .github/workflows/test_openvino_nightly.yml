@@ -102,7 +102,7 @@ jobs:
       - if: ${{ matrix.openvino-version == 'openvino-nightly' }}
         name: Install OpenVINO Nightly
         run: |
-          uv pip install --upgrade --pre openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+          uv pip install --upgrade --pre openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/pre-release
 
       - if: ${{ matrix.nncf-version == 'nncf-develop' }}
         name: Install NNCF from main
