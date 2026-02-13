@@ -7168,23 +7168,25 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
 
 def lfm2_moe_sparse_block_forward_patched(self, hidden_states: torch.Tensor):
     batch_size, sequence_length, hidden_dim = hidden_states.shape
-    hidden_states = hidden_states.view(-1, hidden_dim)
+    num_tokens = batch_size * sequence_length
+    num_experts = self.num_experts
 
-    # router_logits: (batch * sequence_length, n_experts)
+    hidden_states = hidden_states.view(num_tokens, hidden_dim)
+
     router_logits = self.gate(hidden_states)
 
     if self.router_temperature != 1.0:
         router_logits = router_logits / self.router_temperature
 
     if self.score_function == "sigmoid":
-        routing_weights = router_logits.sigmoid()
+        routing_scores = router_logits.sigmoid()
 
         if self.expert_bias is not None:
-            scores_for_routing = routing_weights + self.expert_bias
+            scores_for_routing = routing_scores + self.expert_bias
             _, selected_experts = torch.topk(scores_for_routing, k=self.top_k, dim=-1)
-            routing_weights = torch.gather(routing_weights, dim=1, index=selected_experts).type_as(router_logits)
+            routing_weights = torch.gather(routing_scores, dim=1, index=selected_experts)
         else:
-            routing_weights, selected_experts = torch.topk(routing_weights, k=self.top_k, dim=-1)
+            routing_weights, selected_experts = torch.topk(routing_scores, k=self.top_k, dim=-1)
 
         if self.norm_topk_prob:
             routing_weights = routing_weights / (routing_weights.sum(dim=-1, keepdim=True) + 1e-6)
@@ -7199,35 +7201,30 @@ def lfm2_moe_sparse_block_forward_patched(self, hidden_states: torch.Tensor):
     if self.routed_scaling_factor:
         routing_weights = routing_weights * self.routed_scaling_factor
 
-    # we cast back to the input dtype
     routing_weights = routing_weights.to(hidden_states.dtype)
 
-    final_hidden_states = torch.zeros(
-        (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
+    dense_routing_weights = torch.zeros(
+        num_tokens,
+        num_experts,
+        device=hidden_states.device,
+        dtype=hidden_states.dtype,
     )
+    dense_routing_weights.scatter_(dim=1, index=selected_experts, src=routing_weights)
+    hidden_states_expanded = hidden_states.repeat(num_experts, 1)  # (num_experts * num_tokens, hidden_dim)
+    hidden_states_expanded = hidden_states_expanded.view(num_experts, -1,
+                                                         hidden_dim)  # (num_experts, num_tokens, hidden_dim)
 
-    # One hot encode the selected experts to create an expert mask
-    # this will be used to easily index which expert is going to be sollicitated
-    expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
+    # self.w2(F.silu(self.w1(x)) * self.w3(x))
+    silu_out = F.silu(torch.bmm(hidden_states_expanded, self.w1_stacked))
+    x_w3 = torch.bmm(hidden_states_expanded, self.w3_stacked)
+    silu_x_w3 = silu_out * x_w3
+    next_states = torch.bmm(silu_x_w3, self.w2_stacked)
 
-    # Loop over all available experts in the model and perform the computation on each expert
-    # expert_hitted = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-    # TODO: we loop over all possible experts instead of hitted ones to avoid issues in graph execution.
-    for expert_idx in range(self.num_experts):
-        expert_layer = self.experts[expert_idx]
-        idx, top_x = torch.where(expert_mask[expert_idx].squeeze(0))
+    next_states = next_states.view(num_experts, batch_size, -1, hidden_dim)
+    next_states = next_states * dense_routing_weights.transpose(0, 1).view(num_experts, batch_size, -1)[..., None]
+    next_states = next_states.sum(dim=0)
 
-        # Index the correct hidden states and compute the expert hidden state for
-        # the current expert. We need to make sure to multiply the output hidden
-        # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-        current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
-        current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
-
-        # However `index_add_` only support torch tensors for indexing so we'll use
-        # the `top_x` tensor here.
-        final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
-    final_hidden_states = final_hidden_states.to(hidden_states.dtype).reshape(batch_size, sequence_length, hidden_dim)
-    return final_hidden_states, router_logits
+    return next_states, router_logits
 
 
 class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
@@ -7242,6 +7239,30 @@ class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
                 conv_layer.slow_forward = types.MethodType(lfm2_short_conv_forward_patched, conv_layer)
             if hasattr(layer, "feed_forward") and hasattr(layer.feed_forward, "num_experts"):
                 sparse_moe_block = layer.feed_forward
+                num_experts = sparse_moe_block.num_experts
+                sparse_moe_block.w1_stacked = (
+                    torch.concat(
+                        tuple(sparse_moe_block.experts[i].w1.weight.unsqueeze(0) for i in range(num_experts)),
+                        dim=0,
+                    )
+                    .transpose(1, 2)
+                    .float()
+                )
+                sparse_moe_block.w2_stacked = (
+                    torch.concat(
+                        tuple(sparse_moe_block.experts[i].w2.weight.unsqueeze(0) for i in range(num_experts)),
+                        dim=0,
+                    )
+                    .transpose(1, 2)
+                    .float()
+                )
+                sparse_moe_block.w3_stacked = (
+                    torch.concat(
+                        tuple(sparse_moe_block.experts[i].w3.weight.unsqueeze(0) for i in range(num_experts)), dim=0
+                    )
+                    .transpose(1, 2)
+                    .float()
+                )
                 sparse_moe_block._orig_forward = sparse_moe_block.forward
                 sparse_moe_block.forward = types.MethodType(lfm2_moe_sparse_block_forward_patched, sparse_moe_block)
 
