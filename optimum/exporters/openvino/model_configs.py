@@ -1469,6 +1469,59 @@ class Gemma3TextOpenVINOConfig(Gemma2OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
 
 
+class Gemma3nDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+        )
+        self.num_key_value_heads = normalized_config.num_key_value_heads
+        self.head_dim = normalized_config.head_dim
+        self.layer_types = normalized_config.config.layer_types
+        self.num_kv_shared_layers = normalized_config.config.num_kv_shared_layers
+        self.sliding_window = normalized_config.config.sliding_window
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        # some layers do not produce their own KV-cache, they use the shared KV-cache
+        layer_types = self.layer_types[: -self.num_kv_shared_layers]
+        past_kv_values = []
+        for layer_type in layer_types:
+            if layer_type == "sliding_attention":
+                shape = (
+                    self.batch_size,
+                    self.num_key_value_heads,
+                    self.sliding_window,
+                    self.head_dim,
+                )
+            else:
+                shape = (
+                    self.batch_size,
+                    self.num_key_value_heads,
+                    self.sequence_length,
+                    self.head_dim,
+                )
+            past_kv_value = (
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+            )
+            past_kv_values.append(past_kv_value)
+
+        return past_kv_values
+
+
 @register_in_tasks_manager(
     "gemma3n_text",
     *[
@@ -1481,7 +1534,30 @@ class Gemma3TextOpenVINOConfig(Gemma2OpenVINOConfig):
     library_name="transformers",
 )
 class Gemma3nTextOpenVINOConfig(Gemma3TextOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Gemma3nDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Gemma3nDummyPastKeyValuesGenerator
     MIN_TRANSFORMERS_VERSION = "4.50.0"
+
+    def add_past_key_values(self, inputs_or_outputs: dict[str, dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            name = "past_key_values"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            name = "present"
+
+        num_kv_shared_layers = self._normalized_config.config.num_kv_shared_layers
+        layer_types = self._normalized_config.config.layer_types[:-num_kv_shared_layers]
+
+        for i, layer_type in enumerate(layer_types):
+            if layer_type == "sliding_attention":
+                inputs_or_outputs[f"{name}.{i}.key"] = {0: "batch_size"}
+            else:
+                inputs_or_outputs[f"{name}.{i}.key"] = {0: "batch_size", 2: decoder_sequence_name}
 
 
 class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
@@ -4175,7 +4251,7 @@ class Gemma3OpenVINOConfig(BaseVLMOpenVINOConfig):
 
 
 @register_in_tasks_manager("gemma3n", *["image-text-to-text"], library_name="transformers")
-class Gemma3OpenVINOConfig(Gemma3OpenVINOConfig):
+class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
     pass
 
 
