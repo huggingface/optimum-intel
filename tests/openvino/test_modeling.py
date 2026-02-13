@@ -34,6 +34,7 @@ from PIL import Image
 from sentence_transformers import SentenceTransformer
 from transformers import (
     AutoFeatureExtractor,
+    AutoImageProcessor,
     AutoModel,
     AutoModelForAudioClassification,
     AutoModelForAudioFrameClassification,
@@ -1187,7 +1188,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         set_seed(SEED)
         transformers_model = AutoModelForImageClassification.from_pretrained(model_id)
-        preprocessor = AutoProcessor.from_pretrained(model_id)
+        preprocessor = AutoImageProcessor.from_pretrained(model_id)
         url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
         inputs = preprocessor(images=image, return_tensors="pt")
@@ -1211,7 +1212,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForImageClassification.from_pretrained(model_id, device=OPENVINO_DEVICE)
         model.eval()
-        preprocessor = AutoProcessor.from_pretrained(model_id)
+        preprocessor = AutoImageProcessor.from_pretrained(model_id)
         pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
         inputs = TEST_IMAGE_URL
         outputs = pipe(inputs)
