@@ -72,9 +72,13 @@ class OVModelBasicIntegrationTest(unittest.TestCase):
         elif model_class_str == "OVModelForMaskedLM":
             input_text[0] = f"{input_text[0]} {tokenizer.mask_token}"
 
-        if model_class_str in TASKS:
-            task = TASKS[model_class_str]
-            pipe = pipeline(task, model=model, tokenizer=tokenizer)
+        task = TASKS[model_class_str]
+        pipe = pipeline(task, model=model, tokenizer=tokenizer)
+
+        if task == "question-answering":
+            # positional arguments deprecated for question-answering pipeline since v5
+            pipe(question=input_text[0], context=input_text[1])
+        else:
             pipe(*input_text)
         gc.collect()
 
