@@ -23,6 +23,7 @@ from utils_tests import (
 )
 
 from optimum.exporters.openvino.model_configs import (
+    AfmoeOpenVINOConfig,
     BitnetOpenVINOConfig,
     DeepseekOpenVINOConfig,
     LFM2OpenVINOConfig,
@@ -46,7 +47,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bart",
-        "baichuan2",
         "baichuan2-13b",
         "gpt_bigcode",
         "bigbird_pegasus",
@@ -54,7 +54,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "blenderbot-small",
         "bloom",
         "codegen",
-        "codegen2",
         "gpt2",
         "gptj",
         "gpt_neo",
@@ -68,8 +67,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "opt",
         "pegasus",
         "phi",
-        "internlm2",
-        "orion",
         "falcon",
         "falcon-40b",
         "persimmon",
@@ -77,22 +74,17 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neox_japanese",
         "xglm",
         "aquila",
-        "aquila2",
         "xverse",
         "internlm",
-        "jais",
-        "decilm",
         "gemma",
         "olmo",
         "stablelm",
         "starcoder2",
-        "dbrx",
         "cohere",
         "qwen2",
         "qwen2_moe",
         "phi3",
         "gemma2",
-        "exaone",
         "granite",
         "granitemoe",
     )
@@ -135,7 +127,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES += ("arcee",)
 
-    if is_transformers_version(">=", "4.52.1"):
+    if is_transformers_version(">=", "4.52.1") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("bitnet",)
 
     if is_transformers_version(">=", "4.54.0"):
@@ -152,6 +144,20 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version("<", "4.56.0"):
         SUPPORTED_ARCHITECTURES += ("qwen", "chatglm", "chatglm4")
+
+    if is_transformers_version("<", "5"):
+        # TODO: add dbrx back once fixed in transformers
+        SUPPORTED_ARCHITECTURES += (
+            "codegen2",
+            "exaone",
+            "decilm",
+            "internlm2",
+            "orion",
+            "aquila2",
+            "jais",
+            "dbrx",
+            "baichuan2",
+        )
 
     GENERATION_LENGTH = 100
 
@@ -278,11 +284,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         if "llama4_text" in supported_architectures:
             supported_architectures.remove("llama4_text")
-        if is_transformers_version(">=", str(DeepseekOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
+        if is_transformers_version(">", str(DeepseekOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
             if "deepseek_v2" in supported_architectures:
                 supported_architectures.remove("deepseek_v2")
             if "deepseek_v3" in supported_architectures:
                 supported_architectures.remove("deepseek_v3")
+        if is_transformers_version(">", str(AfmoeOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"afmoe"}
         if is_transformers_version("<", str(BitnetOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"bitnet"}
         if is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
@@ -367,7 +375,17 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
             transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
-        if model_arch in ["qwen", "arctic", "chatglm4", "gpt_oss_mxfp4"]:
+        if model_arch in [
+            "qwen",
+            "arctic",
+            "chatglm4",
+            "gpt_oss_mxfp4",
+            "llama",
+            "lfm2",
+            "gemma3_text",
+            "llama4",
+            "exaone4",
+        ]:
             transformers_model.to(torch.float32)
 
         with torch.no_grad():
@@ -815,7 +833,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     def test_load_with_different_dtype(self):
         set_seed(SEED)
-        model_id = MODEL_NAMES["llama"]
+        model_id = MODEL_NAMES["mistral"]
         pt_model = AutoModelForCausalLM.from_pretrained(
             model_id,
         )

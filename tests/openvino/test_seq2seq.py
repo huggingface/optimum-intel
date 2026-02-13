@@ -33,7 +33,6 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     AutoModelForSpeechSeq2Seq,
     AutoModelForTextToSpectrogram,
-    AutoModelForVision2Seq,
     AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
@@ -42,7 +41,6 @@ from transformers import (
     set_seed,
 )
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
-from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
 from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TEST_IMAGE_URL, Timer
@@ -68,6 +66,18 @@ from optimum.intel.openvino.modeling_text2speech import (
 from optimum.intel.openvino.modeling_visual_language import MODEL_PARTS_CLS_MAPPING, MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+
+
+# AutoModelForVision2Seq is deprecated since v4.54
+# https://github.com/huggingface/transformers/blob/v4.54.0/src/transformers/models/auto/modeling_auto.py#L2151
+if is_transformers_version(">=", "4.54.0"):
+    from transformers import AutoModelForImageTextToText
+
+    transformers_auto_class = AutoModelForImageTextToText
+else:
+    from transformers import AutoModelForVision2Seq
+
+    transformers_auto_class = AutoModelForVision2Seq
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -214,6 +224,10 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow
     @slow
+    @pytest.mark.skipif(
+        is_transformers_version(">=", "5"),
+        reason="requires transformers < v5 since summarization/translation/text2text-generation pipelines are deprecated",
+    )
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
@@ -336,7 +350,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
         self._check_openvino_model_attributes(ov_model_stateless, use_cache=True, stateful=False)
 
-        processor = get_preprocessor(model_id)
+        processor = AutoProcessor.from_pretrained(model_id)
         data = self._generate_random_audio_data()
         pt_features = processor.feature_extractor(data, return_tensors="pt")
         decoder_start_token_id = transformers_model.config.decoder_start_token_id
@@ -395,7 +409,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         model = self.OVMODEL_CLASS.from_pretrained(model_id, device=OPENVINO_DEVICE)
-        processor = get_preprocessor(model_id)
+        processor = AutoProcessor.from_pretrained(model_id)
         pipe = pipeline(
             "automatic-speech-recognition",
             model=model,
@@ -422,7 +436,7 @@ class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
     UNSUPPORTED_ARCHITECTURES = {"got_ocr2", "pix2struct"}
     TASK = "image-to-text"
     OVMODEL_CLASS = OVModelForVision2Seq
-    AUTOMODEL_CLASS = AutoModelForVision2Seq
+    AUTOMODEL_CLASS = transformers_auto_class
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
@@ -521,14 +535,10 @@ class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
 class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = [
-        "internvl_chat",
         "llava",
         "llava_next",
         "llava_next_mistral",
         "llava_next_video",
-        "llava-qwen2",
-        "minicpmv",
-        "phi3_v",
         "qwen2_vl",
     ]
     SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl"]
@@ -540,9 +550,14 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         SUPPORTED_ARCHITECTURES += ["maira2", "idefics3"]
 
     if is_transformers_version(">=", "4.49.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl", "got_ocr2", "phi4mm"]
+        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl", "got_ocr2"]
         SUPPORT_VIDEO.append("qwen2_5_vl")
-        SUPPORT_AUDIO.append("phi4mm")
+
+        if is_transformers_version("<", "4.54.0"):
+            # remote code models differs after transformers v4.54
+            SUPPORTED_ARCHITECTURES += ["phi4mm"]
+            SUPPORT_AUDIO.append("phi4mm")
+
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
     if is_transformers_version(">=", "4.51"):
@@ -555,9 +570,13 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         SUPPORTED_ARCHITECTURES += ["qwen3_vl"]
         SUPPORT_VIDEO += ["qwen3_vl"]
 
-    if is_transformers_version(">=", "4.54.0"):
+    if is_transformers_version("<", "4.54.0"):
         # remote code models differs after transformers v4.54
-        SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"llava-qwen2", "phi3_v", "phi4mm"}
+        SUPPORTED_ARCHITECTURES += ["llava-qwen2", "phi3_v"]
+
+    if is_transformers_version("<", "5"):
+        # remote code models incompatible after transformers v5
+        SUPPORTED_ARCHITECTURES += ["internvl_chat", "minicpmv"]
 
     REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "minicpmo", "llava-qwen2", "phi3_v", "maira2", "phi4mm"]
     IMAGE = Image.open(
@@ -585,9 +604,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
             return AutoModelForImageTextToText
         if model_arch == "llava_next_video":
-            from transformers import AutoModelForVision2Seq
+            from transformers import LlavaNextVideoForConditionalGeneration
 
-            return AutoModelForVision2Seq
+            return LlavaNextVideoForConditionalGeneration
         if model_arch == "llava":
             from transformers import LlavaForConditionalGeneration
 
@@ -1061,7 +1080,7 @@ class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ["pix2struct"]
     TASK = "image-to-text"  # is it fine as well with visual-question-answering?
     OVMODEL_CLASS = OVModelForVision2Seq
-    AUTOMODEL_CLASS = AutoModelForVision2Seq
+    AUTOMODEL_CLASS = transformers_auto_class
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
@@ -1083,7 +1102,7 @@ class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
 
         question = "Who am I?"
         transformers_model = self.AUTOMODEL_CLASS.from_pretrained(model_id)
-        preprocessor = get_preprocessor(model_id)
+        preprocessor = AutoProcessor.from_pretrained(model_id)
 
         inputs = preprocessor(images=self.IMAGE, text=question, padding=True, return_tensors="pt")
         ov_outputs = ov_model(**inputs)
@@ -1104,7 +1123,7 @@ class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
-        preprocessor = get_preprocessor(model_id)
+        preprocessor = AutoProcessor.from_pretrained(model_id)
         question = "Who am I?"
         inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
 
@@ -1118,7 +1137,7 @@ class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
 
     def test_compare_with_and_without_past_key_values(self):
         model_id = MODEL_NAMES["pix2struct"]
-        preprocessor = get_preprocessor(model_id)
+        preprocessor = AutoProcessor.from_pretrained(model_id)
         question = "Who am I?"
         inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
         model_with_pkv = self.OVMODEL_CLASS.from_pretrained(

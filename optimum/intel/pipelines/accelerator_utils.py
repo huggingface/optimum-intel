@@ -13,14 +13,19 @@
 #  limitations under the License.
 
 import contextlib
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
 import transformers.pipelines
 from transformers import AutoConfig
 
+from optimum.intel.utils import (
+    IPEX_IMPORT_ERROR,
+    OPENVINO_IMPORT_ERROR,
+    is_ipex_available,
+    is_openvino_available,
+    is_transformers_version,
+)
 from optimum.utils.logging import get_logger
-
-from ..utils import IPEX_IMPORT_ERROR, OPENVINO_IMPORT_ERROR, is_ipex_available, is_openvino_available
 
 
 if TYPE_CHECKING:
@@ -138,12 +143,15 @@ def get_openvino_model_class(
 
 # a modified transformers.pipelines.base.infer_framework_load_model that loads OpenVINO models
 def openvino_infer_framework_load_model(
-    model, config: Optional["PretrainedConfig"] = None, task: Optional[str] = None, **model_kwargs
+    model,
+    config: Optional["PretrainedConfig"] = None,
+    model_classes: Optional[Dict[str, Tuple[type]]] = None,
+    task: Optional[str] = None,
+    framework: Optional[str] = None,
+    **model_kwargs,
 ):
     if isinstance(model, str):
-        model_kwargs.pop("framework", None)
         model_kwargs.pop("_commit_hash", None)  # not supported for OVModel
-        model_kwargs.pop("model_classes", None)
         ov_model_class = get_openvino_model_class(task, config, model, **model_kwargs)
         ov_model = ov_model_class.from_pretrained(model, **model_kwargs)
     elif isinstance(model, OVBaseModel):
@@ -154,7 +162,10 @@ def openvino_infer_framework_load_model(
             You can also provide None as the model to use a default one."""
         )
 
-    return "pt", ov_model
+    if is_transformers_version("<", "5"):
+        return "pt", ov_model
+
+    return ov_model
 
 
 def get_ipex_model_class(task: str, **model_kwargs):
@@ -173,12 +184,15 @@ def get_ipex_model_class(task: str, **model_kwargs):
 
 # a modified transformers.pipelines.base.infer_framework_load_model that loads IPEX models
 def ipex_infer_framework_load_model(
-    model, config: Optional["PretrainedConfig"] = None, task: Optional[str] = None, **model_kwargs
+    model,
+    config: Optional["PretrainedConfig"] = None,
+    model_classes: Optional[Dict[str, Tuple[type]]] = None,
+    task: Optional[str] = None,
+    framework: Optional[str] = None,
+    **model_kwargs,
 ):
     if isinstance(model, str):
-        model_kwargs.pop("framework", None)
         model_kwargs.pop("_commit_hash", None)  # not supported for IPEXModel
-        model_kwargs.pop("model_classes", None)
         ipex_model_class = get_ipex_model_class(task, **model_kwargs)
         ipex_model = ipex_model_class.from_pretrained(model, **model_kwargs)
     elif isinstance(model, IPEXModel):
@@ -189,27 +203,33 @@ def ipex_infer_framework_load_model(
             You can also provide None as the model to use a default one."""
         )
 
-    return "pt", ipex_model
+    if is_transformers_version("<", "5"):
+        return "pt", ipex_model
+
+    return ipex_model
 
 
 @contextlib.contextmanager
 def patch_pipelines_to_load_accelerator_model(accelerator: str):
-    original_infer_framework_load_model = transformers.pipelines.infer_framework_load_model
+    target_fn = "infer_framework_load_model" if is_transformers_version("<", "5") else "load_model"
+
+    original_infer_framework_load_model = getattr(transformers.pipelines, target_fn)
 
     if accelerator == "openvino":
         if not is_openvino_available():
             raise ImportError(OPENVINO_IMPORT_ERROR.format("`accelerator=openvino`"))
 
-        transformers.pipelines.infer_framework_load_model = openvino_infer_framework_load_model
+        setattr(transformers.pipelines, target_fn, openvino_infer_framework_load_model)
+
     elif accelerator == "ipex":
         if not is_ipex_available():
             raise ImportError(IPEX_IMPORT_ERROR.format("`accelerator=ipex`"))
 
-        transformers.pipelines.infer_framework_load_model = ipex_infer_framework_load_model
+        setattr(transformers.pipelines, target_fn, ipex_infer_framework_load_model)
     else:
         raise ValueError(f"Accelerator '{accelerator}' is not supported. Only 'openvino' and 'ipex' are supported.")
 
     try:
         yield
     finally:
-        transformers.pipelines.infer_framework_load_model = original_infer_framework_load_model
+        setattr(transformers.pipelines, target_fn, original_infer_framework_load_model)

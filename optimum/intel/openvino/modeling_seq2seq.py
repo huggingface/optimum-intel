@@ -27,7 +27,6 @@ from transformers import (
     AutoConfig,
     AutoModelForSeq2SeqLM,
     AutoModelForSpeechSeq2Seq,
-    AutoModelForVision2Seq,
     GenerationConfig,
     Pix2StructForConditionalGeneration,
     PretrainedConfig,
@@ -54,6 +53,18 @@ from .utils import (
     TemporaryDirectory,
     classproperty,
 )
+
+
+# AutoModelForVision2Seq is deprecated since v4.54
+# https://github.com/huggingface/transformers/blob/v4.54.0/src/transformers/models/auto/modeling_auto.py#L2151
+if is_transformers_version(">=", "4.54.0"):
+    from transformers import AutoModelForImageTextToText
+
+    transformers_auto_class = AutoModelForImageTextToText
+else:
+    from transformers import AutoModelForVision2Seq
+
+    transformers_auto_class = AutoModelForVision2Seq
 
 
 core = Core()
@@ -359,20 +370,21 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         generation_config = kwargs.get("generation_config", None)
         self.generation_config = generation_config or GenerationConfig.from_model_config(config)
 
-        # some model configs may have issues with loading without parameters initialization
-        try:
-            misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
-        except (KeyError, TypeError):
-            misplaced_generation_parameters = {}
-        if len(misplaced_generation_parameters) > 0:
-            logger.warning(
-                "Moving the following attributes in the config to the generation config: "
-                f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
-                "generation parameters in the model config, as opposed to in the generation config.",
-            )
-            for param_name, param_value in misplaced_generation_parameters.items():
-                setattr(self.generation_config, param_name, param_value)
-                setattr(self.config, param_name, None)
+        if is_transformers_version("<", "5"):
+            # some model configs may have issues with loading without parameters initialization
+            try:
+                misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+            except (KeyError, TypeError):
+                misplaced_generation_parameters = {}
+            if len(misplaced_generation_parameters) > 0:
+                logger.warning(
+                    "Moving the following attributes in the config to the generation config: "
+                    f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                    "generation parameters in the model config, as opposed to in the generation config.",
+                )
+                for param_name, param_value in misplaced_generation_parameters.items():
+                    setattr(self.generation_config, param_name, param_value)
+                    setattr(self.config, param_name, None)
 
         self._openvino_config = None
         if quantization_config:
@@ -1037,7 +1049,7 @@ class OVDecoder(OVModelPart):
     INPUTS_DOCSTRING,
 )
 class OVModelForVision2Seq(OVModelForSeq2SeqLM):
-    auto_model_class = AutoModelForVision2Seq
+    auto_model_class = transformers_auto_class
     main_input_name = "pixel_values"
     export_feature = "image-to-text"
 
