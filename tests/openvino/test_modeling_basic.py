@@ -17,16 +17,11 @@ from parameterized import parameterized
 from transformers import AutoTokenizer, pipeline
 from utils_tests import OPENVINO_DEVICE
 from optimum.intel import (
-    OVModelForAudioClassification,
     OVModelForCausalLM,
-    OVModelForFeatureExtraction,
-    OVModelForImageClassification,
     OVModelForMaskedLM,
     OVModelForQuestionAnswering,
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
-    OVModelForTokenClassification,
-    OVStableDiffusionPipeline,
 )
 from optimum.intel.utils.import_utils import is_transformers_version
 
