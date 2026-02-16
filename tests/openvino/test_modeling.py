@@ -1605,7 +1605,7 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
 
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID_IR)
         all_text = ["a dog", "a cat", "a frog"]
-        tokens = tokenizer.batch_encode_plus(
+        tokens = tokenizer(
             all_text,
             return_tensors="pt",
             max_length=loaded_model.config.text_config.context_length,
@@ -1683,7 +1683,7 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
 
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID_IR)
         all_text = ["a dog", "a cat", "a frog"]
-        tokens = tokenizer.batch_encode_plus(
+        tokens = tokenizer(
             all_text,
             return_tensors="pt",
             max_length=model.config.text_config.context_length,
