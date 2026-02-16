@@ -3832,7 +3832,7 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
     @staticmethod
     def get_model_for_behavior(model, behavior: Union[str, QwenVLConfigBehavior]):
         if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
-            vision_emb_pos = model.visual.pos_embed
+            vision_emb_pos = _get_subcomponent_model(model, "visual").pos_embed
             vision_emb_pos.config = model.config.vision_config
             return vision_emb_pos
 

@@ -4159,7 +4159,7 @@ class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
             deepstack_visual_embeds,
             use_cache=True,
         ):
-            pkv = DynamicCache.from_legacy_cache(past_key_values)
+            pkv = OVDynamicCache.from_legacy_cache(past_key_values)
             outputs = self.model.language_model(
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
@@ -7858,7 +7858,7 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
             inputs_embeds: torch.Tensor = self.embed_tokens(input_ids)
 
         if use_cache and past_key_values is None:
-            past_key_values = DynamicCache(config=self.config)
+            past_key_values = OVDynamicCache(config=self.config)
 
         if cache_position is None:
             past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
