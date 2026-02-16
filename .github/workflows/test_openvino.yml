@@ -64,17 +64,12 @@ jobs:
       - if: ${{ matrix.transformers-version != 'latest' }}
         name: Install transformers
         run: |
-          uv pip install transformers==${{ matrix.transformers-version }}
+          uv pip install transformers==${{ matrix.transformers-version }} diffusers
 
       - if: ${{ matrix.transformers-version == '4.45.0' }}
         name: Install specific dependencies and versions required for older transformers
         run: |
-          uv pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.32.* transformers_stream_generator
-
-      - if: ${{ matrix.transformers-version != 'latest' }}
-        name: Install diffusers
-        run: |
-          uv pip install diffusers
+          uv pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.32.* transformers_stream_generator librosa
 
       - if: ${{ matrix.transformers-version != '4.45.0' && matrix.test-pattern == '*decoder*'}}
         name: Install auto-gptq, autoawq
