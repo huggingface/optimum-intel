@@ -1723,7 +1723,7 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
         self.assertTrue(torch.allclose(model_outputs.logits_per_image, res.logits_per_image, atol=1e-2))
 
         model.reshape(1, -1)
-        reshaped_tokens = tokenizer.batch_encode_plus(
+        reshaped_tokens = tokenizer(
             ["a dog"],
             return_tensors="pt",
             max_length=model.config.text_config.context_length,

@@ -78,11 +78,11 @@ else:
 
 
 if is_transformers_version("<", "5"):
-    from transformers import DynamicCache as ONNXDynamicCache
-    from transformers import EncoderDecoderCache as ONNXEncoderDecoderCache
+    from transformers import DynamicCache as OVDynamicCache
+    from transformers import EncoderDecoderCache as OVEncoderDecoderCache
 else:
-    from optimum.exporters.onnx.utils import LegacyDynamicCache as ONNXDynamicCache
-    from optimum.exporters.onnx.utils import LegacyEncoderDecoderCache as ONNXEncoderDecoderCache
+    from optimum.exporters.onnx.utils import LegacyDynamicCache as OVDynamicCache
+    from optimum.exporters.onnx.utils import LegacyEncoderDecoderCache as OVEncoderDecoderCache
 
 
 logger = logging.getLogger(__name__)
@@ -331,7 +331,7 @@ class MixtralModelPatcher(OVDecoderModelPatcher):
                     _mixtral_sparse_moe_block_forward, layer.block_sparse_moe
                 )
         else:
-            self._model.config._experts_implementation = "batched_mm"
+            self._model.set_experts_implementation("batched_mm")
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -1382,7 +1382,7 @@ def phi3_442_forward(
     if use_cache:
         use_legacy_cache = not isinstance(past_key_values, Cache)
         if use_legacy_cache:
-            past_key_values = ONNXDynamicCache.from_legacy_cache(past_key_values)
+            past_key_values = OVDynamicCache.from_legacy_cache(past_key_values)
         past_key_values_length = past_key_values.get_usable_length(seq_length)
 
     if position_ids is None:
@@ -1647,7 +1647,7 @@ class PhiMoEModelPatcher(Phi3ModelPatcher):
                     _phi_moe_sparse_moe_block_forward, layer.block_sparse_moe
                 )
         else:
-            self._model.config._experts_implementation = "batched_mm"
+            self._model.set_experts_implementation("batched_mm")
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -2964,7 +2964,7 @@ class Gemma2ModelPatcher(OVDecoderModelPatcher):
                 legacy_pkv = args[pkv_argument_index]
                 pkv_in_args = True
             if legacy_pkv is not None:
-                pkv = ONNXDynamicCache.from_legacy_cache(legacy_pkv)
+                pkv = OVDynamicCache.from_legacy_cache(legacy_pkv)
                 return_legacy_cache = True
                 if not pkv_in_args:
                     kwargs["past_key_values"] = pkv
@@ -4118,7 +4118,7 @@ class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
             input_ids=None,
             use_cache=True,
         ):
-            new_past_key_values = ONNXDynamicCache.from_legacy_cache(past_key_values)
+            new_past_key_values = OVDynamicCache.from_legacy_cache(past_key_values)
             result = self.__orig_forward(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -4502,7 +4502,7 @@ class GraniteMoEModelPatcher(OVDecoderModelPatcher):
                 )
 
         else:
-            self._model.config._experts_implementation = "batched_mm"
+            self._model.set_experts_implementation("batched_mm")
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -4547,11 +4547,11 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
                     pkv = args[pkv_arg_index]
 
                 if pkv is not None:
-                    if isinstance(pkv, ONNXEncoderDecoderCache):
+                    if isinstance(pkv, OVEncoderDecoderCache):
                         pkv = pkv.self_attention_cache.to_legacy_cache()
                     else:
                         pkv = [pkv_item[:2] for pkv_item in pkv]
-                    pkv = ONNXEncoderDecoderCache.from_legacy_cache(pkv)
+                    pkv = OVEncoderDecoderCache.from_legacy_cache(pkv)
 
                     if "past_key_values" in kwargs:
                         kwargs["past_key_values"] = pkv
@@ -4561,7 +4561,7 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
             outputs = self.super_patched_forward(*args, **kwargs)
 
             # the optimum-onnx seq2seq model patcher only converts to tuple starting from 4.48
-            if isinstance(outputs.get("past_key_values"), (ONNXDynamicCache, ONNXEncoderDecoderCache)):
+            if isinstance(outputs.get("past_key_values"), (OVDynamicCache, OVEncoderDecoderCache)):
                 outputs["past_key_values"] = outputs["past_key_values"].to_legacy_cache()
             elif isinstance(outputs.get("past_key_values"), (DynamicCache, EncoderDecoderCache)):
                 outputs.pop("past_key_values")
@@ -4742,7 +4742,7 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
         def forward(
             self, attention_mask, position_ids, past_key_values, token_type_ids, inputs_embeds, use_cache=True
         ):
-            pkv = ONNXDynamicCache.from_legacy_cache(past_key_values)
+            pkv = OVDynamicCache.from_legacy_cache(past_key_values)
 
             past_seen_tokens = past_key_values[0][0].shape[-2]
             cache_position = torch.arange(
@@ -5129,7 +5129,7 @@ def _blenderbot_attn_forward_new(
     query_states = query_states
 
     if past_key_value is not None:
-        if isinstance(past_key_value, ONNXEncoderDecoderCache):
+        if isinstance(past_key_value, OVEncoderDecoderCache):
             is_updated = past_key_value.is_updated.get(self.layer_idx)
             if is_cross_attention:
                 # after the first generated id, we can subsequently re-use all key/value_states from cache
@@ -5331,7 +5331,7 @@ class Qwen2MoEPatcher(OVDecoderModelPatcher):
             modulewise_patch(self._model, Qwen2MoeSparseMoeBlock, _qwen2moe_sparse_block_forward)
 
         if is_transformers_version(">=", "5"):
-            self._model.config._experts_implementation = "batched_mm"
+            self._model.set_experts_implementation("batched_mm")
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -5658,7 +5658,7 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             if past_key_values is not None:
                 past_key_values = [cache_item[:2] for cache_item in past_key_values]
                 if is_transformers_version(">=", "4.56"):
-                    past_key_values = ONNXEncoderDecoderCache.from_legacy_cache(past_key_values)
+                    past_key_values = OVEncoderDecoderCache.from_legacy_cache(past_key_values)
 
             output_sequence = inputs_embeds
             output_cross_attentions = False
@@ -5690,7 +5690,7 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
 
             past_key_values = decoder_out.past_key_values
             if past_key_values is not None:
-                if isinstance(past_key_values, ONNXEncoderDecoderCache):
+                if isinstance(past_key_values, OVEncoderDecoderCache):
                     past_key_values = past_key_values.self_attention_cache.to_legacy_cache()
                 else:
                     past_key_values = [cache_item[:2] for cache_item in past_key_values]
@@ -5742,7 +5742,7 @@ class Phi4MMLanguageModelPatcher(OVDecoderModelPatcher):
         # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L2156-L2178
         # moved audio and vision features processing outside model
         def lm_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values, use_cache=True):
-            pkv = ONNXDynamicCache.from_legacy_cache(past_key_values)
+            pkv = OVDynamicCache.from_legacy_cache(past_key_values)
             outputs = self.model(
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
@@ -6696,7 +6696,7 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
             self.original_moe_forward = Qwen3MoeSparseMoeBlock.forward
             Qwen3MoeSparseMoeBlock.forward = qwen3_moe_forward_patched
         if is_transformers_version(">=", "5"):
-            self._model.config._experts_implementation = "batched_mm"
+            self._model.set_experts_implementation("batched_mm")
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -7374,7 +7374,7 @@ class GptOssModelPatcher(OVDecoderModelPatcher):
             GptOssExperts.forward = gpt_oss_forward
 
         if is_transformers_version(">=", "5"):
-            self._model.config._experts_implementation = "batched_mm"
+            self._model.set_experts_implementation("batched_mm")
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
