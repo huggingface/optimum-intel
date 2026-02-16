@@ -3716,12 +3716,17 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             behavior = QwenVLConfigBehavior(behavior)
 
         if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
-            return get_vlm_text_embeddings_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
+            return get_vlm_text_embeddings_config(
+                "qwen2",
+                self._orig_config if is_transformers_version("<", "5") else self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+            )
 
         if behavior == QwenVLConfigBehavior.LANGUAGE:
             return get_vlm_text_generation_config(
                 "qwen2",
-                self._orig_config,
+                self._orig_config if is_transformers_version("<", "5") else self._orig_config.text_config,
                 self.int_dtype,
                 self.float_dtype,
                 model_patcher=Qwen2VLLanguageModelPatcher,
