@@ -56,7 +56,7 @@ TESTS_REQUIRE = [
     "sentence-transformers",
     "open_clip_torch>=2.26.1",
     "peft",
-    "datasets[audio]>=1.4.0,<4.0.0",
+    "datasets>=1.4.0,<4.0.0",
     "tbb",
     "langchain-huggingface",
     "hf_xet",
