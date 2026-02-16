@@ -7266,6 +7266,9 @@ class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
             elif hasattr(layer, "feed_forward") and hasattr(layer.feed_forward, "num_experts"):
                 sparse_moe_block = layer.feed_forward
                 sparse_moe_block.forward = sparse_moe_block._orig_forward
+                delattr(sparse_moe_block, "w1_stacked")
+                delattr(sparse_moe_block, "w2_stacked")
+                delattr(sparse_moe_block, "w3_stacked")
 
 
 class GptOssModelPatcher(OVDecoderModelPatcher):
