@@ -4594,9 +4594,6 @@ class LFM2MoeOpenVINOConfig(LFM2OpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.99"
     _MODEL_PATCHER = Lfm2MoeModelPatcher
 
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Lfm2DummyPastKeyValuesGenerator)
-    DUMMY_PKV_GENERATOR_CLASS = Lfm2DummyPastKeyValuesGenerator
-
 
 @register_in_tasks_manager(
     "granitemoehybrid", *["text-generation", "text-generation-with-past"], library_name="transformers"
