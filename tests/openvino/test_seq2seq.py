@@ -145,7 +145,6 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
         "longt5",
         "m2m_100",
         "mbart",
-        "mt5",
         "pegasus",
         "t5",
     )
@@ -158,6 +157,10 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
     if not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2025.5.0")):
         # There are known issues with marian model on OpenVINO 2025.3.x and 2025.4.x
         SUPPORTED_ARCHITECTURES += ("marian",)
+
+    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+    if is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES += ("mt5",)
 
     SUPPORT_STATEFUL = ("t5", "mt5", "longt5")
     if is_transformers_version(">=", "4.52.0"):
@@ -535,10 +538,8 @@ class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
 class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = [
-        "llava",
         "llava_next",
         "llava_next_mistral",
-        "llava_next_video",
         "qwen2_vl",
     ]
     SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl"]
@@ -547,20 +548,31 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     TASK = "image-text-to-text"
 
     if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ["maira2", "idefics3"]
+        SUPPORTED_ARCHITECTURES += ["maira2"]
+
+        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+        if is_transformers_version("<", "5"):
+            SUPPORTED_ARCHITECTURES += ["idefics3"]
 
     if is_transformers_version(">=", "4.49.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl", "got_ocr2"]
+        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl"]
         SUPPORT_VIDEO.append("qwen2_5_vl")
+
+        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+        if is_transformers_version("<", "5"):
+            SUPPORTED_ARCHITECTURES += ["got_ocr2"]
 
         if is_transformers_version("<", "4.54.0"):
             # remote code models differs after transformers v4.54
             SUPPORTED_ARCHITECTURES += ["phi4mm"]
             SUPPORT_AUDIO.append("phi4mm")
 
-    if is_transformers_version(">", "4.49"):
-        SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
-    if is_transformers_version(">=", "4.51"):
+    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+    if is_transformers_version(">", "4.49") and is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES += ["gemma3", "smolvl"]
+
+    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+    if is_transformers_version(">=", "4.51") and is_transformers_version("<", "5"):
         # SUPPORTED_ARCHITECTURES += ["llama4", "phi4_multimodal"]
         SUPPORTED_ARCHITECTURES += ["llama4"]
 
@@ -577,6 +589,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     if is_transformers_version("<", "5"):
         # remote code models incompatible after transformers v5
         SUPPORTED_ARCHITECTURES += ["internvl_chat", "minicpmv"]
+
+    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+    if is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES += ("llava", "llava_next_video")
 
     REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "minicpmo", "llava-qwen2", "phi3_v", "maira2", "phi4mm"]
     IMAGE = Image.open(

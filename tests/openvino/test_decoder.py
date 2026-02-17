@@ -58,7 +58,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "llama",
-        "marian",
         "mistral",
         "mixtral",
         "mpt",
@@ -72,9 +71,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "biogpt",
         "gpt_neox_japanese",
         "xglm",
-        "aquila",
-        "xverse",
-        "internlm",
         "gemma",
         "olmo",
         "stablelm",
@@ -85,12 +81,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "phi3",
         "gemma2",
         "granite",
-        "granitemoe",
     )
 
     SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon_mamba")
 
-    if is_transformers_version(">=", "4.49"):
+    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
 
     if is_transformers_version(">=", "4.53.0"):
@@ -102,10 +98,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
     if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phimoe")
+        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo")
 
         if is_transformers_version("<", "4.54.0"):
             SUPPORTED_ARCHITECTURES += ("deepseek",)
+
+        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+        if is_transformers_version("<", "5"):
+            SUPPORTED_ARCHITECTURES += ("phimoe",)
 
         # gptq and awq install disabled for windows test environment
         if platform.system() != "Windows" and is_transformers_version("<", "4.56.0"):
@@ -145,8 +145,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("qwen", "chatglm", "chatglm4")
 
     if is_transformers_version("<", "5"):
-        # TODO: add dbrx back once fixed in transformers
         SUPPORTED_ARCHITECTURES += (
+            # remote modeling incompatible with v5
             "codegen2",
             "exaone",
             "decilm",
@@ -154,11 +154,19 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "orion",
             "aquila2",
             "jais",
-            "dbrx",
             "baichuan2",
             "baichuan2-13b",
+            # remote modeling code failing with v5
+            "aquila",
+            "xverse",
+            "internlm",
+            # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+            "dbrx",
+            # "phimoe",
+            "marian",
+            "granitemoe",
+            # "zamba2",
         )
-
     GENERATION_LENGTH = 100
 
     EXPECTED_NUM_SDPA = {

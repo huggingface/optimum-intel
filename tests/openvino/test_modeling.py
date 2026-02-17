@@ -757,13 +757,15 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         "convbert",
         "distilbert",
         "electra",
-        "flaubert",
         "ibert",
         "roberta",
         "roformer",
         "squeezebert",
-        "xlm",
     )
+
+    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+    if is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES += ("flaubert", "xlm")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1087,13 +1089,11 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "bert",
         "camembert",
         "convbert",
-        "data2vec-text",
         "deberta",
         "deberta-v2",
         "distilbert",
         "electra",
         "esm",
-        "flaubert",
         "ibert",
         "mobilebert",
         "mpnet",
@@ -1102,13 +1102,16 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "roberta",
         "roformer",
         "squeezebert",
-        "xlm",
         "xlm-roberta",
     )
 
     # accuracy issue, need additional investigation
     if is_transformers_version("<", "4.51.0"):
         SUPPORTED_ARCHITECTURES += ("nystromformer",)
+
+    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+    if is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES += ("data2vec-text", "flaubert", "xlm")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
