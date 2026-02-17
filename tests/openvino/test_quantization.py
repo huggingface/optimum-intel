@@ -269,7 +269,7 @@ class OVQuantizerTest(unittest.TestCase):
                 "model": 33,
             },
             {
-                "model": {"int8": 35},
+                "model": {"int8": 35 if is_transformers_version("<", "5") else 36},
             },
         ),
         (
@@ -299,7 +299,7 @@ class OVQuantizerTest(unittest.TestCase):
                 "model": 32,
             },
             {
-                "model": {"int8": 34},
+                "model": {"int8": 34 if is_transformers_version("<", "5") else 35},
             },
         ),
         (
