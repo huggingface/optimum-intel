@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 import torch
 import torch.nn.functional as F
 from torch import nn
-from transformers import DynamicCache, EncoderDecoderCache
 from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache
 from transformers.configuration_utils import PretrainedConfig
 from transformers.generation import GenerationMixin
