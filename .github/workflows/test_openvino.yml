@@ -54,7 +54,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip uv
-          uv pip install .[tests]
+          uv pip install .[tests] librosa
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Install OpenVINO
@@ -69,7 +69,7 @@ jobs:
       - if: ${{ matrix.transformers-version == '4.45.0' }}
         name: Install specific dependencies and versions required for older transformers
         run: |
-          uv pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.32.* transformers_stream_generator librosa
+          uv pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.32.* transformers_stream_generator
 
       - if: ${{ matrix.transformers-version != '4.45.0' && matrix.test-pattern == '*decoder*'}}
         name: Install auto-gptq, autoawq
