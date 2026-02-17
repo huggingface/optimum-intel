@@ -1146,7 +1146,8 @@ class OVCLIExportTestCase(unittest.TestCase):
                 in result.stdout
             )
 
-    @unittest.skipIf(is_transformers_version(">", "4.53.3") or is_transformers_version("<", "4.51.0"))
+    @unittest.skipIf(is_transformers_version(">", "4.53.3") or is_transformers_version("<", "4.51.0"),
+                     reason="Test is only compatible with transformers versions between 4.51.0 and 4.53.3")
     def test_exporters_cli_4bit_with_group_size(self):
         with TemporaryDirectory() as tmpdir:
             _ = subprocess.run(
