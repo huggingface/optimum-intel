@@ -47,7 +47,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bart",
-        "baichuan2-13b",
         "gpt_bigcode",
         "bigbird_pegasus",
         "blenderbot",
@@ -157,6 +156,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "jais",
             "dbrx",
             "baichuan2",
+            "baichuan2-13b",
         )
 
     GENERATION_LENGTH = 100

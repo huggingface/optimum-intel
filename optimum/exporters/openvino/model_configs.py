@@ -330,6 +330,7 @@ class BaichaunOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         num_layers="num_hidden_layers", num_attention_heads="num_attention_heads", hidden_size="hidden_size"
     )
     _MODEL_PATCHER = BaichuanModelPatcher
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
 
 @register_in_tasks_manager(
