@@ -161,6 +161,8 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("mt5",)
+    else:
+        UNSUPPORTED_ARCHITECTURES = {"marian", "mt5"}
 
     SUPPORT_STATEFUL = ("t5", "mt5", "longt5")
     if is_transformers_version(">=", "4.52.0"):
@@ -593,7 +595,17 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("llava", "llava_next_video")
-
+    else:
+        UNSUPPORTED_ARCHITECTURES = {
+            "got_ocr2",
+            "idefics3",
+            "llama4",
+            "llava_next_video",
+            "phi4_multimodal",
+            "gemma3",
+            "smolvlm",
+            "llava",
+        }
     REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "minicpmo", "llava-qwen2", "phi3_v", "maira2", "phi4mm"]
     IMAGE = Image.open(
         requests.get(
