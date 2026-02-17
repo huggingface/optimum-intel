@@ -4580,10 +4580,7 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
                     if is_transformers_version("<", "5"):
                         pkv = EncoderDecoderCache.from_legacy_cache(pkv)
                     else:
-                        pkv = EncoderDecoderCache(
-                            DynamicCache([layer[:2] for layer in pkv]),
-                            DynamicCache([layer[2:] for layer in pkv]),
-                        )
+                        pkv = EncoderDecoderCache(DynamicCache(pkv), DynamicCache())
 
                     if "past_key_values" in kwargs:
                         kwargs["past_key_values"] = pkv
@@ -5696,10 +5693,7 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
                     if is_transformers_version("<", "5"):
                         past_key_values = EncoderDecoderCache.from_legacy_cache(past_key_values)
                     else:
-                        past_key_values = EncoderDecoderCache(
-                            DynamicCache([layer[:2] for layer in past_key_values]),
-                            DynamicCache([layer[2:] for layer in past_key_values]),
-                        )
+                        past_key_values = EncoderDecoderCache(DynamicCache(past_key_values), DynamicCache())
 
             output_sequence = inputs_embeds
             output_cross_attentions = False
