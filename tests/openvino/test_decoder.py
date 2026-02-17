@@ -478,7 +478,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             tokenizer._convert_tokens_to_ids = lambda x: 0
 
         additional_args = {}
-        if is_transformers_version(">=", "4.51"):
+        if is_transformers_version(">=", "4.51") and is_transformers_version("<", "5"):
             additional_args["use_model_defaults"] = False
 
         set_seed(SEED)
@@ -784,7 +784,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model_stateless.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
 
-        if is_transformers_version(">=", "4.51"):
+        if is_transformers_version(">=", "4.51") and is_transformers_version("<", "5"):
             additional_inputs["use_model_defaults"] = False
 
         for gen_config in gen_configs:
