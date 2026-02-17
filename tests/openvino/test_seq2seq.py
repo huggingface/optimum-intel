@@ -380,7 +380,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
             )
 
         generate_kwrgs = {}
-        if is_transformers_version(">=", "4.50"):
+        if is_transformers_version(">=", "4.50") and is_transformers_version("<", "5"):
             generate_kwrgs = {"use_model_defaults": False}
 
         gen_config = GenerationConfig(
@@ -571,7 +571,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version(">", "4.49") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES += ["gemma3", "smolvl"]
+        SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
 
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version(">=", "4.51") and is_transformers_version("<", "5"):
