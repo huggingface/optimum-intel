@@ -4590,8 +4590,6 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
             # the optimum-onnx seq2seq model patcher only converts to tuple starting from 4.48
             if isinstance(outputs.get("past_key_values"), (DynamicCache, EncoderDecoderCache)):
                 outputs["past_key_values"] = postprocess_past_key_values(outputs["past_key_values"])
-            elif isinstance(outputs.get("past_key_values"), (DynamicCache, EncoderDecoderCache)):
-                outputs.pop("past_key_values")
 
             # we still need to filter out cross attention in the case of non-stateful decoder
             filtered_outputs = {}
