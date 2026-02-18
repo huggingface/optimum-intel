@@ -121,7 +121,7 @@ class ExportModelTest(unittest.TestCase):
 
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.update({"llava": OVModelForVisualCausalLM})
-        GENERATIVE_MODELS.append("llava")
+        GENERATIVE_MODELS += ("llava",)
 
     def _openvino_export(
         self,
