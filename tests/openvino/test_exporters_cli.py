@@ -803,7 +803,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "audio_vision_projection_model": {"int8": 2},
                 "audio_speech_projection_model": {"int8": 2},
             },
-        )
+        ),
     ]
 
     # filter models type depending on min max transformers version
