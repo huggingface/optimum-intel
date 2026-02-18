@@ -5044,9 +5044,7 @@ class GPTBigCodeOpenVINOConfig(GPTBigCodeOnnxConfig):
     ],
 )
 class Pix2StructOpenVINOConfig(Pix2StructOnnxConfig):
-    # _MODEL_PATCHER = OVSeq2SeqModelPatcher
-    # TODO (@echarlaix): add v5 support
-    MAX_TRANSFORMERS_VERSION = "4.57.6"
+    _MODEL_PATCHER = OVSeq2SeqModelPatcher
 
 
 @register_in_tasks_manager("bert", *COMMON_TEXT_TASKS)
