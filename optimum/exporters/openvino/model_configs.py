@@ -148,6 +148,7 @@ from .model_patcher import (
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
     Gemma3LMModelPatcher,
+    Glm4MoePatcher,
     GptJModelPatcher,
     GptNeoModelPatcher,
     GptNeoxModelPatcher,
@@ -3929,6 +3930,21 @@ class GLMOpenVINOConfig(LlamaOpenVINOConfig):
 )
 class GLM4OpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.3"
+
+
+@register_in_tasks_manager(
+    "glm4_moe",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class Glm4MoeOpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    _MODEL_PATCHER = Glm4MoePatcher
 
 
 @register_in_tasks_manager(

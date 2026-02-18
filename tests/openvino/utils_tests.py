@@ -215,6 +215,7 @@ MODEL_NAMES = {
     "xglm": "optimum-intel-internal-testing/tiny-random-XGLMForCausalLM",
     "xverse": "optimum-intel-internal-testing/tiny-random-xverse",
     "glm4": "optimum-intel-internal-testing/tiny-random-glm4",
+    "glm4_moe": "optimum-intel-internal-testing/tiny-random-glm4-moe",
     "glm": "optimum-intel-internal-testing/tiny-random-glm-edge",
     "open-clip": "optimum-intel-internal-testing/tiny-open-clip-model",
     "open-clip-ov": "optimum-intel-internal-testing/tiny-open-clip-model",
