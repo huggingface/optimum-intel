@@ -354,8 +354,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vocoder": 80,
     },
     "clip": {"model": 130},
-    "mamba": {"model": 322},
-    "falcon_mamba": {"model": 162},
+    "mamba": {"model": 322 if is_transformers_version("<", "5") else 324},
+    "falcon_mamba": {"model": 162 if is_transformers_version("<", "5") else 164},
     "minicpmo": {
         "lm_model": 16,
         "text_embeddings_model": 1,
@@ -364,7 +364,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     },
     "zamba2": {"model": 44},
     "exaone4": {"model": 16},
-    "lfm2": {"model": 52},
+    "lfm2": {"model": 52 if is_transformers_version("<", "5") else 54},
     "qwen3_eagle3": {"model": 20},
 }
 

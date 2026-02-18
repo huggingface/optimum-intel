@@ -84,7 +84,6 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl": OVStableDiffusionXLPipeline,
         "stable-diffusion-xl-refiner": OVStableDiffusionXLImg2ImgPipeline,
         "latent-consistency": OVLatentConsistencyModelPipeline,
-        "llava": OVModelForVisualCausalLM,
         "sam": OVSamModel,
         "speecht5": OVModelForTextToSpeechSeq2Seq,
         "clip": OVModelForZeroShotImageClassification,
@@ -95,7 +94,7 @@ class ExportModelTest(unittest.TestCase):
         "ltx-video": OVLTXPipeline,
     }
 
-    if is_transformers_version(">=", "4.49"):
+    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.53.0"):
@@ -118,7 +117,11 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.51"):
         SUPPORTED_ARCHITECTURES.update({"qwen3": OVModelForFeatureExtraction})
 
-    GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
+    GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "speecht5")
+
+    if is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES.update({"llava": OVModelForVisualCausalLM})
+        GENERATIVE_MODELS.append("llava")
 
     def _openvino_export(
         self,

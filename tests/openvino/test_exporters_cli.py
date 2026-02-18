@@ -121,11 +121,17 @@ class OVCLIExportTestCase(unittest.TestCase):
             [
                 ("text-generation", "lfm2"),
                 ("text-generation-with-past", "lfm2"),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
                 ("text-generation-with-past", "qwen3_eagle3"),
             ]
         )
 
-    if is_transformers_version(">=", "4.49"):
+    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "zamba2"),
@@ -138,7 +144,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 ("text-generation-with-past", "exaone4"),
             ]
         )
-    if is_transformers_version(">=", "4.52.1"):
+    if is_transformers_version(">=", "4.52.1") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "bitnet"),
@@ -202,14 +208,6 @@ class OVCLIExportTestCase(unittest.TestCase):
             "expected_chat_template": False,
             "simplified_chat_template": False,
         },
-        "llava": {  # transformers, chat template in processor, simplified chat template
-            "num_tokenizers": 2,
-            "task": "image-text-to-text",
-            "processor_chat_template": True,
-            "remote_code": False,
-            "expected_chat_template": True,
-            "simplified_chat_template": True,
-        },
         "llava_next": {  # transformers, chat template in processor overrides tokinizer chat template, simplified chat template
             "num_tokenizers": 2,
             "task": "image-text-to-text",
@@ -252,6 +250,20 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "simplified_chat_template": False,
                     "processor_chat_template": False,
                     "remote_code": True,
+                },
+            }
+        )
+
+    if is_transformers_version("<", "5"):
+        TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
+            {
+                "llava": {  # transformers, chat template in processor, simplified chat template
+                    "num_tokenizers": 2,
+                    "task": "image-text-to-text",
+                    "processor_chat_template": True,
+                    "remote_code": False,
+                    "expected_chat_template": True,
+                    "simplified_chat_template": True,
                 },
             }
         )
@@ -407,7 +419,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "model": 33,
             },
             {
-                "model": {"int8": 35},
+                "model": {"int8": 35 if is_transformers_version("<", "5") else 36},
             },
         ),
         (
@@ -431,7 +443,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "model": 32,
             },
             {
-                "model": {"int8": 34},
+                "model": {"int8": 34 if is_transformers_version("<", "5") else 35},
             },
         ),
         (
@@ -472,7 +484,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
                 if is_transformers_version("<=", "4.45")
-                else {"encoder": {"int8": 32}, "decoder": {"int8": 52}}
+                else {"encoder": {"int8": 32}, "decoder": {"int8": 52 if is_transformers_version("<", "5") else 53}}
             ),
         ),
         (
@@ -489,48 +501,52 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "prompt_encoder_mask_decoder": {"int8": 49},
             },
         ),
-        (
-            "image-text-to-text",
-            "internvl_chat",
-            "f8e4m3",
-            "--dataset contextual --num-samples 1 --trust-remote-code",
-            {
-                "lm_model": 15,
-                "text_embeddings_model": 0,
-                "vision_embeddings_model": 17,
-            },
-            {
-                "lm_model": {"f8e4m3": 15},
-                "text_embeddings_model": {"int8": 1},
-                "vision_embeddings_model": {"f8e4m3": 11},
-            },
-        ),
     ]
+
+    if is_transformers_version("<", "5"):
+        SUPPORTED_QUANTIZATION_ARCHITECTURES.append(
+            (
+                "image-text-to-text",
+                "internvl_chat",
+                "f8e4m3",
+                "--dataset contextual --num-samples 1 --trust-remote-code",
+                {
+                    "lm_model": 15,
+                    "text_embeddings_model": 0,
+                    "vision_embeddings_model": 17,
+                },
+                {
+                    "lm_model": {"f8e4m3": 15},
+                    "text_embeddings_model": {"int8": 1},
+                    "vision_embeddings_model": {"f8e4m3": 11},
+                },
+            ),
+        )
 
     TRANSFORMERS_4BIT_CONFIGURATIONS = [
         (
             "text-generation-with-past",
             "opt125m",
             "int4 --sym --group-size 128",
-            {"model": {"int8": 4, "int4": 72}},
+            {"model": {"int8": 4 if is_transformers_version("<", "5") else 6, "int4": 72}},
         ),
         (
             "text-generation-with-past",
             "opt125m",
             "int4 --group-size 64",
-            {"model": {"int8": 4, "int4": 144}},
+            {"model": {"int8": 4 if is_transformers_version("<", "5") else 6, "int4": 144}},
         ),
         (
             "text-generation-with-past",
             "opt125m",
             "mxfp4",
-            {"model": {"int8": 4, "f4e2m1": 72, "f8e8m0": 72}},
+            {"model": {"int8": 4 if is_transformers_version("<", "5") else 6, "f4e2m1": 72, "f8e8m0": 72}},
         ),
         (
             "text-generation-with-past",
             "opt125m",
             "nf4",
-            {"model": {"int8": 4, "nf4": 72}},
+            {"model": {"int8": 4 if is_transformers_version("<", "5") else 6, "nf4": 72}},
         ),
         (
             "text-generation-with-past",
