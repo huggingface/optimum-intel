@@ -2497,7 +2497,7 @@ def check_model_inference(ov_model, model_id, trust_remote_code):
         if isinstance(ov_model, OVModelForSpeechSeq2Seq):
             input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
             generate_kwrgs = {}
-            if is_transformers_version(">=", "4.50"):
+            if is_transformers_version(">=", "4.50") and is_transformers_version("<", "5"):
                 generate_kwrgs = {"use_model_defaults": False}
             ov_model.generate(input_features, generation_config=gen_config, **generate_kwrgs)
         else:
