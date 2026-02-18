@@ -202,7 +202,7 @@ from .model_patcher import (
     SanaTextEncoderModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
-    _get_subcomponent_model,
+    _get_model_attribute,
 )
 
 
@@ -1878,14 +1878,14 @@ class BaseVLMOpenVINOConfig(OnnxConfig):
             behavior = VLMConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.LANGUAGE:
-            return _get_subcomponent_model(model, "language_model") if not hasattr(model, "lm_head") else model
+            return _get_model_attribute(model, "language_model") if not hasattr(model, "lm_head") else model
 
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
 
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = model.get_input_embeddings()
-            text_embedding.config = _get_subcomponent_model(model, "language_model").config
+            text_embedding.config = _get_model_attribute(model, "language_model").config
             return text_embedding
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
@@ -2162,14 +2162,14 @@ class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
             behavior = VLMConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.LANGUAGE:
-            return _get_subcomponent_model(model, "language_model")
+            return _get_model_attribute(model, "language_model")
 
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
 
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
-            text_embedding = _get_subcomponent_model(model, "language_model").get_input_embeddings()
-            text_embedding.config = _get_subcomponent_model(model, "language_model").config
+            text_embedding = _get_model_attribute(model, "language_model").get_input_embeddings()
+            text_embedding.config = _get_model_attribute(model, "language_model").config
             return text_embedding
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
@@ -3696,12 +3696,12 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return model
 
         if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
-            vision_embeddings = _get_subcomponent_model(model, "visual").patch_embed
+            vision_embeddings = _get_model_attribute(model, "visual").patch_embed
             vision_embeddings.config = model.config.vision_config
             return vision_embeddings
 
         if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
-            vision_emb_merger = _get_subcomponent_model(model, "visual")
+            vision_emb_merger = _get_model_attribute(model, "visual")
             vision_emb_merger.config = model.config.vision_config
             return vision_emb_merger
 
@@ -3709,7 +3709,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             text_embedding = (
                 model.model.embed_tokens
                 if hasattr(model.model, "embed_tokens")
-                else _get_subcomponent_model(model, "language_model").embed_tokens
+                else _get_model_attribute(model, "language_model").embed_tokens
             )
             text_embedding.config = model.config
             return text_embedding
@@ -3849,7 +3849,7 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
     @staticmethod
     def get_model_for_behavior(model, behavior: Union[str, QwenVLConfigBehavior]):
         if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
-            vision_emb_pos = _get_subcomponent_model(model, "visual").pos_embed
+            vision_emb_pos = _get_model_attribute(model, "visual").pos_embed
             vision_emb_pos.config = model.config.vision_config
             return vision_emb_pos
 

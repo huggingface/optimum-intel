@@ -80,13 +80,6 @@ else:
 logger = logging.getLogger(__name__)
 
 
-def _get_subcomponent_model(model, name):
-    if is_transformers_version(">=", "5") and hasattr(model, "model"):
-        return getattr(model.model, name)
-
-    return getattr(model, name)
-
-
 def postprocess_past_key_values(past_key_values):
     if isinstance(past_key_values, (EncoderDecoderCache, DynamicCache)):
         if hasattr(past_key_values, "to_legacy_cache"):
@@ -102,6 +95,11 @@ def postprocess_past_key_values(past_key_values):
                 )
             ]
     return past_key_values
+
+
+def _get_model_attribute(model, name):
+    target = getattr(model, "model", model)
+    return getattr(target, name)
 
 
 for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
