@@ -135,8 +135,8 @@ class OVQuantizerTest(unittest.TestCase):
         (OVModelForSequenceClassification, "bert", 32, 35),
         (OVModelForCausalLM, "gpt2", 31, 22),
         (OVSentenceTransformer, "sentence-transformers-bert", 12, 15),
-        (OVModelForFeatureExtraction, "blenderbot", 33, 35),
-        (OVModelForMaskedLM, "roberta", 32, 34),
+        (OVModelForFeatureExtraction, "blenderbot", 33, 35 if is_transformers_version("<", "5") else 36),
+        (OVModelForMaskedLM, "roberta", 32, 34 if is_transformers_version("<", "5") else 35),
         (OVModelForZeroShotImageClassification, "clip", 65, 65),
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET = [
@@ -344,12 +344,12 @@ class OVQuantizerTest(unittest.TestCase):
             if is_transformers_version("<=", "4.45")
             else {
                 "encoder": 30,
-                "decoder": 52,
+                "decoder": 52 if is_transformers_version("<", "5") else 53,
             },
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
                 if is_transformers_version("<=", "4.45")
-                else {"encoder": {"int8": 32}, "decoder": {"int8": 52}}
+                else {"encoder": {"int8": 32}, "decoder": {"int8": 52 if is_transformers_version("<", "5") else 53}}
             ),
         ),
         (
@@ -596,7 +596,9 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForCausalLM, "gpt2", 44, 44),
     )
 
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 62, 43),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = (
+        (OVModelForCausalLM, "opt125m", 62 if is_transformers_version("<", "5") else 64, 43),
+    )
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 74),)
     SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "gpt2", 44, 44),)
 
