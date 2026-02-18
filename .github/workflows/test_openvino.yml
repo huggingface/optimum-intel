@@ -54,7 +54,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip uv
-          uv pip install .[tests] librosa
+          uv pip install .[tests] librosa diffusers
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Install OpenVINO
@@ -64,7 +64,12 @@ jobs:
       - if: ${{ matrix.transformers-version != 'latest' }}
         name: Install transformers
         run: |
-          uv pip install transformers==${{ matrix.transformers-version }} diffusers
+          uv pip install transformers==${{ matrix.transformers-version }}
+
+      - if: ${{ matrix.transformers-version == 'latest' }}
+        name: Install diffusers
+        run: |
+          uv pip install git+https://github.com/huggingface/diffusers
 
       - if: ${{ matrix.transformers-version == '4.45.0' }}
         name: Install specific dependencies and versions required for older transformers
