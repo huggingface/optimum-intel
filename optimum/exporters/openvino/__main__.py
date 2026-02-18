@@ -125,7 +125,6 @@ def infer_task(
         else:
             model_type = config.model_type
         custom_architecture = model_type not in TasksManager._SUPPORTED_MODEL_TYPE
-
         if not custom_architecture and task + "-with-past" in TasksManager.get_supported_tasks_for_model_type(
             model_type, exporter="openvino", library_name=library_name
         ):
