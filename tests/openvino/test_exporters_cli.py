@@ -788,6 +788,22 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "resampler_model": {"int8": 6},
             },
         ),
+        (
+            "auto",
+            "phi4mm",
+            "int4 --group-size -1 --trust-remote-code",
+            {
+                "lm_model": {"int8": 2, "int4": 48},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 8},
+                "vision_projection_model": {"int8": 2},
+                "audio_embeddings_model": {},
+                "audio_forward_embeddings_model": {"int8": 6},
+                "audio_encoder_model": {"int8": 25},
+                "audio_vision_projection_model": {"int8": 2},
+                "audio_speech_projection_model": {"int8": 2},
+            },
+        )
     ]
 
     # filter models type depending on min max transformers version
@@ -1145,31 +1161,6 @@ class OVCLIExportTestCase(unittest.TestCase):
                 b"Statistics were successfully loaded from a directory " + bytes(statistics_path, "utf-8")
                 in result.stdout
             )
-
-    @unittest.skipIf(is_transformers_version(">", "4.53.3") or is_transformers_version("<", "4.51.0"),
-                     reason="Test is only compatible with transformers versions between 4.51.0 and 4.53.3")
-    def test_exporters_cli_4bit_with_group_size(self):
-        with TemporaryDirectory() as tmpdir:
-            _ = subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES['phi4mm']} --weight-format int4 --trust-remote-code --group-size -1 {tmpdir}",
-                shell=True,
-                check=True,
-                capture_output=True,
-            )
-            model = OVModelForVisualCausalLM.from_pretrained(tmpdir, trust_remote_code=True)
-
-            expected_num_weight_nodes_per_model = {
-                "lm_model": {"int8": 2, "int4": 48},
-                "text_embeddings_model": {"int8": 1},
-                "vision_embeddings_model": {"int8": 8},
-                "vision_projection_model": {"int8": 2},
-                "audio_embeddings_model": {},
-                "audio_forward_embeddings_model": {"int8": 6},
-                "audio_encoder_model": {"int8": 25},
-                "audio_vision_projection_model": {"int8": 2},
-                "audio_speech_projection_model": {"int8": 2},
-            }
-            check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
 
     @parameterized.expand(SUPPORTED_QUANTIZATION_ARCHITECTURES)
     def test_exporters_cli_full_quantization(

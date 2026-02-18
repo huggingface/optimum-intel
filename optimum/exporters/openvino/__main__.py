@@ -126,9 +126,6 @@ def infer_task(
             model_type = config.model_type
         custom_architecture = model_type not in TasksManager._SUPPORTED_MODEL_TYPE
 
-        if original_task == "auto" and model_type in MULTI_MODAL_TEXT_GENERATION_MODELS:
-            task = "image-text-to-text"
-
         if not custom_architecture and task + "-with-past" in TasksManager.get_supported_tasks_for_model_type(
             model_type, exporter="openvino", library_name=library_name
         ):
@@ -640,6 +637,26 @@ def _main_quantize(
             cache_dir=cache_dir,
             token=token,
         )
+
+    # NOTE: The Phi-4-multimodal-instruct model card contains a pipeline_tag set to automatic-speech-recognition,
+    # which is returned as the inferred task. As a result, we try to load the exported model using the
+    # OVModelForSpeechSeq2Seq class instead of the OVModelForVisualCausalLM class when the task is not specified
+    # explicitly. Because of this, we get an error.
+    if original_task == "auto" and library_name == "transformers":
+        config = AutoConfig.from_pretrained(
+            output,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+            trust_remote_code=trust_remote_code,
+        )
+        if hasattr(config, "export_model_type"):
+            model_type = config.export_model_type
+        else:
+            model_type = config.model_type
+        if model_type in ["phi4mm", "phi4_multimodal"]:
+            task = "image-text-to-text"
 
     # Step 1. Obtain the correct OpenVINO model class
     if library_name == "diffusers":
