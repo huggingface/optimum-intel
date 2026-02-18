@@ -342,10 +342,7 @@ class OVQuantizerTest(unittest.TestCase):
             ),
             {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
             if is_transformers_version("<=", "4.45")
-            else {
-                "encoder": 30,
-                "decoder": 52 if is_transformers_version("<", "5") else 53,
-            },
+            else {"encoder": 30, "decoder": 52},
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
                 if is_transformers_version("<=", "4.45")
@@ -1064,9 +1061,6 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVStableDiffusionPipeline, "stable-diffusion", False),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl", False),
         (OVModelOpenCLIPForZeroShotImageClassification, "open-clip", False),
-        (OVModelForVisualCausalLM, "llava", False),
-        (OVModelForVisualCausalLM, "llava_next_video", False),
-        (OVModelForVisualCausalLM, "minicpmv", True),
         (OVModelForVisualCausalLM, "qwen2_vl", False),
     ]
 
@@ -1081,6 +1075,15 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.57.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen3_vl", False))
+
+    if is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.extend(
+            [
+                (OVModelForVisualCausalLM, "llava", False),
+                (OVModelForVisualCausalLM, "llava_next_video", False),
+                (OVModelForVisualCausalLM, "minicpmv", True),
+            ]
+        )
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
@@ -1117,17 +1120,6 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "vae_decoder": {},
                 "vae_encoder": {},
                 "text_encoder": {},
-            },
-        ),
-        (
-            OVModelForVisualCausalLM,
-            "llava",
-            4,
-            {"bits": 4, "group_size": 8, "ratio": 0.5},
-            {
-                "lm_model": {"int8": 22, "int4": 8},
-                "text_embeddings_model": {"int8": 1},
-                "vision_embeddings_model": {"int8": 9},
             },
         ),
         (
@@ -1184,15 +1176,6 @@ class OVWeightCompressionTest(unittest.TestCase):
             },
         ),
         (
-            OVModelForVisualCausalLM,
-            "llava",
-            {
-                "lm_model": {"patterns": [".*layers.0.self_attn.q_proj/aten::linear/MatMul"]},
-                "vision_embeddings_model": {"patterns": [".*layers.0.self_attn.q_proj/aten::linear/MatMul"]},
-                "text_embeddings_model": {"patterns": ["."]},
-            },
-        ),
-        (
             OVSamModel,
             "sam",
             {
@@ -1211,6 +1194,33 @@ class OVWeightCompressionTest(unittest.TestCase):
             },
         ),
     ]
+
+    if is_transformers_version("<", "5"):
+        DEFAULT_COMPRESSION_CONFIGURATIONS.append(
+            (
+                OVModelForVisualCausalLM,
+                "llava",
+                4,
+                {"bits": 4, "group_size": 8, "ratio": 0.5},
+                {
+                    "lm_model": {"int8": 22, "int4": 8},
+                    "text_embeddings_model": {"int8": 1},
+                    "vision_embeddings_model": {"int8": 9},
+                },
+            ),
+        )
+
+        DEFAULT_IGNORED_SCOPE_CONFIGURATIONS.append(
+            (
+                OVModelForVisualCausalLM,
+                "llava",
+                {
+                    "lm_model": {"patterns": [".*layers.0.self_attn.q_proj/aten::linear/MatMul"]},
+                    "vision_embeddings_model": {"patterns": [".*layers.0.self_attn.q_proj/aten::linear/MatMul"]},
+                    "text_embeddings_model": {"patterns": ["."]},
+                },
+            ),
+        )
 
     def test_filtered_architectures(cls):
         expected = set()
@@ -1800,31 +1810,35 @@ class OVPipelineQuantizationTest(unittest.TestCase):
             {"encoder": 14, "decoder": 22},
             {"encoder": {"int8": 14}, "decoder": {"int8": 22}},
         ),
-        (
-            OVModelForVisualCausalLM,
-            "internvl_chat",
-            True,
-            dict(
-                quantization_configs={
-                    "lm_model": dict(bits=8, weight_only=True),
-                    "vision_embeddings_model": dict(bits=8, weight_only=False),
-                },
-                dataset="contextual",
-                num_samples=1,
-                default_config=dict(bits=8, sym=True, weight_only=True),
-            ),
-            {
-                "lm_model": 0,
-                "text_embeddings_model": 0,
-                "vision_embeddings_model": 15,
-            },
-            {
-                "lm_model": {"int8": 30},
-                "text_embeddings_model": {"int8": 1},
-                "vision_embeddings_model": {"int8": 11},
-            },
-        ),
     ]
+
+    if is_transformers_version("<", "5"):
+        PIPELINE_QUANTIZATION_SCOPE.append(
+            (
+                OVModelForVisualCausalLM,
+                "internvl_chat",
+                True,
+                dict(
+                    quantization_configs={
+                        "lm_model": dict(bits=8, weight_only=True),
+                        "vision_embeddings_model": dict(bits=8, weight_only=False),
+                    },
+                    dataset="contextual",
+                    num_samples=1,
+                    default_config=dict(bits=8, sym=True, weight_only=True),
+                ),
+                {
+                    "lm_model": 0,
+                    "text_embeddings_model": 0,
+                    "vision_embeddings_model": 15,
+                },
+                {
+                    "lm_model": {"int8": 30},
+                    "text_embeddings_model": {"int8": 1},
+                    "vision_embeddings_model": {"int8": 11},
+                },
+            ),
+        )
 
     if is_transformers_version(">=", "4.49.0") and is_transformers_version("<", "4.54.0"):
         PIPELINE_QUANTIZATION_SCOPE.extend(
