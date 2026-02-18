@@ -7,19 +7,17 @@ allowed-tools: "Read, Grep, Glob, Bash"
 argument-hint: "model family: llama, qwen, phi, gemma, mistral, stable-diffusion, flux, ltx-video; task: text-generation, image-generation, video-generation"
 ---
 
-# Adding New Model Support to Optimum-Intel
+## When This Skill Applies
+
+Use this skill when:
+- Adding support for a **new model architecture** from transformers or diffusers
+- Debugging issues with **model export to OpenVINO IR**
 
 This skill helps generate patches to add support for new models from HuggingFace **transformers** and **diffusers** libraries to **optimum-intel**, enabling:
 - Export to OpenVINO IR format
 - Inference through optimum-intel API with OpenVINO backend
 - Quantization and optimization support
 - Stateful model support for improved generation performance
-
-## When This Skill Applies
-
-Use this skill when:
-- Adding support for a **new model architecture** from transformers or diffusers
-- Debugging issues with **model export to OpenVINO IR**
 
 ## Quick Start
 
@@ -63,6 +61,10 @@ for name, module in pipe.named_modules():
 ```
 
 Retrieve `model_type` from the model's config to determine if it matches an existing supported type or if a new config class is needed.
+
+### Update documentation
+
+After adding support for a new model, update the documentation in `docs/source/openvino/models.mdx` to include the corresponding `model_type`, ensuring it reflects the newly supported model. The `model_type` should be written with its first letter capitalized.
 
 ## Model Patching Patterns
 
