@@ -862,7 +862,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
         gc.collect()
 
-    @parameterized.expand(["llava", "llava_next", "llava_next_video", "llava_next_mistral"])
+    @parameterized.expand(
+        ["llava", "llava_next", "llava_next_video", "llava_next_mistral"]
+        if is_transformers_version("<", "5")
+        else ["llava_next", "llava_next_mistral"]
+    )
     def test_llava_with_new_preprocessing(self, model_arch):
         prompt = "<image>\n What is shown in this image?"
         model_id = MODEL_NAMES[model_arch]
