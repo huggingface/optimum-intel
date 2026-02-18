@@ -35,7 +35,7 @@ optimum-cli export openvino --model <model-id> output_dir
 1. **Model Architecture Analysis**
 2. **Update `optimum/exporters/openvino/model_configs.py`** to add new model config class
 3. **Update `optimum/exporters/openvino/model_patcher.py`** to add new model patching class if needed
-4. **Create tests** to validate export and inference
+4. **Create tests**
 5. **Update documentation** to include the new model
 
 For more details about executing each step, refer to the sections below.
@@ -62,7 +62,16 @@ for name, module in pipe.named_modules():
 
 Retrieve `model_type` from the model's config to determine if it matches an existing supported type or if a new config class is needed.
 
-### Update documentation
+### Create Tests
+
+ Update the following test files:
+
+- `tests/openvino/test_decoder.py` – Validates the export and inference workflows for decoder-only models.
+- `tests/openvino/test_export.py` – Verifies various export configurations and settings.
+- `tests/openvino/test_exporters_cli.py` – Tests the command line interface for exporting models.
+- `tests/openvino/utils_tests.py` – Defines test models and their corresponding model IDs.
+
+### Update Documentation
 
 After adding support for a new model, update the documentation in `docs/source/openvino/models.mdx` to include the corresponding `model_type`, ensuring it reflects the newly supported model. The `model_type` should be written with its first letter capitalized.
 
