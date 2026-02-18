@@ -98,7 +98,7 @@ def postprocess_past_key_values(past_key_values):
 
 
 def _get_model_attribute(model, name):
-    target = getattr(model, "model", model)
+    target = getattr(model, "model", model) if is_transformers_version(">=", "5") else model
     return getattr(target, name)
 
 
