@@ -35,14 +35,10 @@ optimum-cli export openvino --model <model-id> output_dir
 ## Typical Workflow for Adding Support for a New Model:
 
 1. **Model Architecture Analysis**
-2. Find similar existing config in `model_configs.py`
-3. **Create new config class** inheriting from appropriate base
-4. **Register in `__init__.py`** to make it discoverable
-5. **Test export**: `optimum-cli export openvino --model <model-id> output`
-6. **Add modeling patches** if custom ops are needed
-7. **Enable stateful support** (for LLMs)
-8. **Test inference** with `OVModelForXxx`
-9. **Create PR** to upstream changes
+2. **Update `optimum/exporters/openvino/model_configs.py`** to add new model config class
+3. **Update `optimum/exporters/openvino/model_patcher.py`** to add new model patching class if needed
+4. **Create tests** to validate export and inference
+5. **Update documentation** to include the new model
 
 For more details about executing each step, refer to the sections below.
 
@@ -67,16 +63,6 @@ for name, module in pipe.named_modules():
 ```
 
 Retrieve `model_type` from the model's config to determine if it matches an existing supported type or if a new config class is needed.
-
-
-### Adding Support for a New LLM (Transformers)
-
-1. **Create model config** in `optimum/exporters/openvino/model_configs.py`
-2. **Register model** in `optimum/exporters/openvino/__init__.py`
-3. **Patch modeling file** if needed for custom operations
-4. **Add stateful model support** for better generation performance
-5. **Test export and inference**
-
 
 ## Model Patching Patterns
 
