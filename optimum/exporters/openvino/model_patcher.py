@@ -7216,10 +7216,10 @@ def lfm2_moe_sparse_block_forward_patched(self, hidden_states: torch.Tensor):
     )  # (num_experts, num_tokens, hidden_dim)
 
     # self.w2(F.silu(self.w1(x)) * self.w3(x))
-    silu_out = F.silu(torch.bmm(hidden_states_expanded, self.w1_stacked))
-    x_w3 = torch.bmm(hidden_states_expanded, self.w3_stacked)
+    silu_out = F.silu(torch.bmm(hidden_states_expanded, self.w1_stacked.transpose(1, 2)))
+    x_w3 = torch.bmm(hidden_states_expanded, self.w3_stacked.transpose(1, 2))
     silu_x_w3 = silu_out * x_w3
-    next_states = torch.bmm(silu_x_w3, self.w2_stacked)
+    next_states = torch.bmm(silu_x_w3, self.w2_stacked.transpose(1, 2))
 
     next_states = next_states.view(num_experts, batch_size, -1, hidden_dim)
     next_states = next_states * dense_routing_weights.transpose(0, 1).view(num_experts, batch_size, -1)[..., None]
@@ -7244,14 +7244,14 @@ class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
                 sparse_moe_block.w1_stacked = torch.concat(
                     tuple(sparse_moe_block.experts[i].w1.weight.unsqueeze(0) for i in range(num_experts)),
                     dim=0,
-                ).transpose(1, 2)
+                )
                 sparse_moe_block.w2_stacked = torch.concat(
                     tuple(sparse_moe_block.experts[i].w2.weight.unsqueeze(0) for i in range(num_experts)),
                     dim=0,
-                ).transpose(1, 2)
+                )
                 sparse_moe_block.w3_stacked = torch.concat(
                     tuple(sparse_moe_block.experts[i].w3.weight.unsqueeze(0) for i in range(num_experts)), dim=0
-                ).transpose(1, 2)
+                )
                 sparse_moe_block._orig_forward = sparse_moe_block.forward
                 sparse_moe_block.forward = types.MethodType(lfm2_moe_sparse_block_forward_patched, sparse_moe_block)
 
