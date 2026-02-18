@@ -3256,7 +3256,7 @@ def llava_vision_embed_forward(self, pixel_values):
     # copied from https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/models/llava/modeling_llava.py#L428-L441
     # these changes does not bring any difference from original, it only packs model subcomponent inference together
     # that allow us avoid memory overheads and their inference results handling on code-level
-    image_outputs = _get_subcomponent_model(self, "vision_tower")(pixel_values, output_hidden_states=True)
+    image_outputs = _get_model_attribute(self, "vision_tower")(pixel_values, output_hidden_states=True)
     # this is not memory efficient at all (output_hidden_states=True) will save all the hidden stated.
     selected_image_feature = image_outputs.hidden_states[self.config.vision_feature_layer]
 
@@ -3267,7 +3267,7 @@ def llava_vision_embed_forward(self, pixel_values):
     else:
         raise ValueError(f"Unexpected select feature strategy: {self.config.vision_feature_select_strategy}")
 
-    image_features = _get_subcomponent_model(self, "multi_modal_projector")(selected_image_feature)
+    image_features = _get_model_attribute(self, "multi_modal_projector")(selected_image_feature)
     return image_features
 
 
@@ -3275,7 +3275,7 @@ def llava_next_video_vision_embed_forward(self, pixel_values):
     # copied from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/llava_next_video/modeling_llava_next_video.py#L519
     # these changes does not bring any difference from original, it only packs model subcomponent inference together
     # that allow us avoid memory overheads and their inference results handling on code-level
-    image_features = _get_subcomponent_model(self, "vision_tower")(pixel_values, output_hidden_states=True)
+    image_features = _get_model_attribute(self, "vision_tower")(pixel_values, output_hidden_states=True)
     vision_feature_layer = self.config.vision_feature_layer
     if isinstance(vision_feature_layer, int):
         selected_image_feature = image_features.hidden_states[vision_feature_layer]
