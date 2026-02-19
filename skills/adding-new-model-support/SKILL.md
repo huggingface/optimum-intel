@@ -180,7 +180,7 @@ When adding support for a new model to optimum-intel, study the following merged
 
 This PR demonstrates:
 - Proper integration into the export pipeline
-- Correct configuration wiring
+- Correct configuration writing
 - Model registration patterns
 - Test structure
 - Documentation updates
