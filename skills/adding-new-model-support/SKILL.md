@@ -47,7 +47,8 @@ Identify the model family (e.g., LLaMA, Qwen, Phi, Stable Diffusion, FLUX) and d
 ```python
 # 1. Check pipeline components
 from transformers import AutoModelForCausalLM
-import inspect
+import torch
+
 
 pipe = AutoModelForCausalLM.from_pretrained("LiquidAI/LFM2-350M", torch_dtype=torch.bfloat16)
 print("Components:", [k for k in dir(pipe) if not k.startswith('_') and hasattr(getattr(pipe, k), 'named_modules')])
@@ -176,15 +177,14 @@ def afmoe_moe_forward_patched(self, hidden_states):
 When adding support for a new model to optimum-intel, study the following merged pull requests as canonical implementation examples:
 
 - [Afmoe model](https://github.com/huggingface/optimum-intel/pull/1569/) - Adding support for Afmoe model with Mixture of Experts (MoE) logic
-- [TODO](todo)
 
-These PRs demonstrate:
+This PR demonstrates:
 - Proper integration into the export pipeline
 - Correct configuration wiring
 - Model registration patterns
 - Test structure
 - Documentation updates
-Edge case handling
+- Edge case handling
 
 The agent should analyze structure and patterns — not blindly copy code.
 
