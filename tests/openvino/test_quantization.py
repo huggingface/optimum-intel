@@ -1234,6 +1234,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             expected.add("qwen3_vl")
         if is_transformers_version(">=", "4.54"):
             expected.update({"llava-qwen2", "phi3_v", "minicpmo"})
+        if is_transformers_version(">=", "5"):
+            expected.update({"llama4", "llava_next_video", "minicpmv", "internvl_chat"})
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.LOAD_IN_4_BITS_SCOPE}
