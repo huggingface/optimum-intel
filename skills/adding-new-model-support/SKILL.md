@@ -217,6 +217,6 @@ git diff main...HEAD
 ## Project Structure
 
 ```
-/skills/cuda-kernels/
+/skills/
 └── SKILL.md           # This file
 ```
