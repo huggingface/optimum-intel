@@ -3988,8 +3988,6 @@ class GraniteOpenVINOConfig(LlamaOpenVINOConfig):
 )
 class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.45.0"
-    # TODO (@echarlaix): add v5 support
-    MAX_TRANSFORMERS_VERSION = "4.57.6"
     _MODEL_PATCHER = GraniteMoEModelPatcher
 
 

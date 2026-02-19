@@ -4508,34 +4508,29 @@ class GraniteMoEModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        if is_transformers_version("<", "5"):
-            for layer in self._model.model.layers:
-                block_sparse_moe = layer.block_sparse_moe
-                block_sparse_moe.router._orig_forward = block_sparse_moe.router.forward
-                block_sparse_moe.router.forward = types.MethodType(
-                    _granite_moe_topk_gating_forward, block_sparse_moe.router
-                )
-                block_sparse_moe.input_linear._orig_forward = block_sparse_moe.input_linear.forward
-                block_sparse_moe.input_linear.forward = types.MethodType(
-                    _granite_moe_parallel_experts_forward, block_sparse_moe.input_linear
-                )
-                block_sparse_moe.output_linear._orig_forward = block_sparse_moe.output_linear.forward
-                block_sparse_moe.output_linear.forward = types.MethodType(
-                    _granite_moe_parallel_experts_forward, block_sparse_moe.output_linear
-                )
-
-        else:
-            self._model.set_experts_implementation("batched_mm")
+        for layer in self._model.model.layers:
+            block_sparse_moe = layer.block_sparse_moe
+            block_sparse_moe.router._orig_forward = block_sparse_moe.router.forward
+            block_sparse_moe.router.forward = types.MethodType(
+                _granite_moe_topk_gating_forward, block_sparse_moe.router
+            )
+            block_sparse_moe.input_linear._orig_forward = block_sparse_moe.input_linear.forward
+            block_sparse_moe.input_linear.forward = types.MethodType(
+                _granite_moe_parallel_experts_forward, block_sparse_moe.input_linear
+            )
+            block_sparse_moe.output_linear._orig_forward = block_sparse_moe.output_linear.forward
+            block_sparse_moe.output_linear.forward = types.MethodType(
+                _granite_moe_parallel_experts_forward, block_sparse_moe.output_linear
+            )
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if is_transformers_version("<", "5"):
-            for layer in self._model.model.layers:
-                block_sparse_moe = layer.block_sparse_moe
-                block_sparse_moe.router.forward = block_sparse_moe.router._orig_forward
-                block_sparse_moe.input_linear.forward = block_sparse_moe.input_linear._orig_forward
-                block_sparse_moe.output_linear.forward = block_sparse_moe.output_linear._orig_forward
+        for layer in self._model.model.layers:
+            block_sparse_moe = layer.block_sparse_moe
+            block_sparse_moe.router.forward = block_sparse_moe.router._orig_forward
+            block_sparse_moe.input_linear.forward = block_sparse_moe.input_linear._orig_forward
+            block_sparse_moe.output_linear.forward = block_sparse_moe.output_linear._orig_forward
 
 
 class OVSeq2SeqModelPatcher(ModelPatcher):

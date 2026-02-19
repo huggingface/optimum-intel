@@ -81,6 +81,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "phi3",
         "gemma2",
         "granite",
+        "granitemoe",
     )
 
     SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon_mamba")
@@ -165,7 +166,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "dbrx",
             # "phimoe",
             "marian",
-            "granitemoe",
             # "zamba2",
         )
     GENERATION_LENGTH = 100
