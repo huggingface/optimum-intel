@@ -650,10 +650,7 @@ def _main_quantize(
             token=token,
             trust_remote_code=trust_remote_code,
         )
-        if hasattr(config, "export_model_type"):
-            model_type = config.export_model_type
-        else:
-            model_type = config.model_type
+        model_type = config.model_type
         if model_type in ["phi4mm", "phi4_multimodal"]:
             task = "image-text-to-text"
 
