@@ -65,6 +65,7 @@ class LLMPipelineTestCase(unittest.TestCase):
         "phi3",
         "gemma2",
         "granite",
+        "granitemoe",
     )
 
     if is_transformers_version(">=", "4.46.0"):
@@ -108,7 +109,6 @@ class LLMPipelineTestCase(unittest.TestCase):
             # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
             "dbrx",
             # "phimoe",
-            "granitemoe",
         )
 
     REMOTE_CODE_MODELS = (
