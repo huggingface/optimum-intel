@@ -34,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip uv
-          uv pip install .[diffusers,tests]
+          uv pip install .[tests] diffusers
 
       - name: Test
         run: |

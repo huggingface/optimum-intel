@@ -97,7 +97,12 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip uv
-          uv pip install .[diffusers,tests]
+          uv pip install .[tests] librosa diffusers
+
+      - if: ${{ matrix.transformers-version == 'latest' }}
+        name: Install diffusers
+        run: |
+          uv pip install git+https://github.com/huggingface/diffusers
 
       - if: ${{ matrix.openvino-version == 'openvino-nightly' }}
         name: Install OpenVINO Nightly
