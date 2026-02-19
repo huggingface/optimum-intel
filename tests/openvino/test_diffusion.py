@@ -38,7 +38,7 @@ from optimum.intel.openvino import (
     OVPipelineForText2Video,
 )
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import is_diffusers_version
+from optimum.intel.utils.import_utils import is_diffusers_version, is_transformers_version
 from optimum.utils.testing_utils import require_diffusers
 
 
