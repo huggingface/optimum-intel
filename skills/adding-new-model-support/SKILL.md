@@ -212,7 +212,7 @@ git diff main...HEAD
 ### External Resources
 - [optimum-intel](https://huggingface.co/docs/optimum/intel/overview) - HuggingFace Optimum Intel documentation
 - [OpenVINO](https://docs.openvino.ai/2025/index.html) - OpenVINO documentation
-- [torch.jit.trace](https://docs.pytorch.org/docs/stable/generated/torch.jit.trace.html) - PyTorch JIT tracing documentation
+- [torch.jit.trace](https://pytorch.org/docs/stable/generated/torch.jit.trace.html) - PyTorch JIT tracing documentation
 
 ## Project Structure
 
