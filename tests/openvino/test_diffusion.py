@@ -80,7 +80,6 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         "stable-diffusion",
         "stable-diffusion-xl",
         "latent-consistency",
-        "stable-diffusion-3",
         "flux",
         "sana",
     ]
@@ -93,6 +92,10 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
     if is_diffusers_version(">=", "0.33.0"):
         SUPPORTED_ARCHITECTURES.extend(["sana-sprint"])
+
+    if is_transformers_version("<", "5") or is_diffusers_version(">=", "0.37"):
+        SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
+
     CALLBACK_SUPPORT_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
 
     OVMODEL_CLASS = OVPipelineForText2Image
@@ -499,9 +502,11 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         "stable-diffusion",
         "stable-diffusion-xl",
         "latent-consistency",
-        "stable-diffusion-3",
         "flux",
     ]
+    if is_transformers_version("<", "5") or is_diffusers_version(">=", "0.37"):
+        SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
+
     AUTOMODEL_CLASS = AutoPipelineForImage2Image
     OVMODEL_CLASS = OVPipelineForImage2Image
     TASK = "image-to-image"
@@ -754,7 +759,11 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
 
 
 class OVPipelineForInpaintingTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "stable-diffusion-3", "flux", "flux-fill"]
+    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "flux", "flux-fill"]
+
+    if is_transformers_version("<", "5") or is_diffusers_version(">=", "0.37"):
+        SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
+
     AUTOMODEL_CLASS = AutoPipelineForInpainting
     OVMODEL_CLASS = OVPipelineForInpainting
     TASK = "inpainting"
