@@ -1601,7 +1601,7 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
         image = Image.open(requests.get(url, stream=True).raw)
         return image
 
-    def test_load_from_hub_and_save_model(self):
+    def test_load_from_hub_and_save_model_openclip(self):
         loaded_model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(
             self.OV_MODEL_ID_IR, device=OPENVINO_DEVICE
         )
