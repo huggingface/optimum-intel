@@ -7244,14 +7244,14 @@ class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
                 sparse_moe_block.w1_stacked = torch.concat(
                     tuple(sparse_moe_block.experts[i].w1.weight.unsqueeze(0) for i in range(num_experts)),
                     dim=0,
-                )
+                ).float()
                 sparse_moe_block.w2_stacked = torch.concat(
                     tuple(sparse_moe_block.experts[i].w2.weight.unsqueeze(0) for i in range(num_experts)),
                     dim=0,
-                )
+                ).float()
                 sparse_moe_block.w3_stacked = torch.concat(
                     tuple(sparse_moe_block.experts[i].w3.weight.unsqueeze(0) for i in range(num_experts)), dim=0
-                )
+                ).float()
                 sparse_moe_block._orig_forward = sparse_moe_block.forward
                 sparse_moe_block.forward = types.MethodType(lfm2_moe_sparse_block_forward_patched, sparse_moe_block)
 
