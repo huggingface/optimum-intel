@@ -896,12 +896,12 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
         pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
         question = "What's my name?"
         context = "My Name is Arthur and I live in Lyon."
-        outputs = pipe(question, context)
+        outputs = pipe(question=question, context=context)
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs["score"], 0.0)
         self.assertIsInstance(outputs["answer"], str)
         ov_pipe = optimum_pipeline("question-answering", model_id, accelerator="openvino")
-        ov_outputs = ov_pipe(question, context)
+        ov_outputs = ov_pipe(question=question, context=context)
         self.assertEqual(outputs["score"], ov_outputs["score"])
         del model
         del ov_pipe
