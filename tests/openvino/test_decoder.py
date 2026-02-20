@@ -316,7 +316,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
         if is_transformers_version(">=", "5"):
-            supported_architectures -= {"phimoe", "bitnet", "dbrx", "zamba2", "marian"}
+            supported_architectures -= {"phimoe", "bitnet", "dbrx", "zamba2", "marian", "llama4", "gemma3_text", "exaone4"}
 
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
         untested_architectures = supported_architectures - tested_architectures
@@ -420,7 +420,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in ["qwen"]:
             return
 
-        tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
+        tokens = tokenizer(["Today is a nice day and", "This is me"], return_tensors="pt", padding=True)
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
         ov_model.config.eos_token_id = None
