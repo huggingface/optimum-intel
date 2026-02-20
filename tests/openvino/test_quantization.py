@@ -2038,7 +2038,7 @@ class OVQuantizerQATest(unittest.TestCase):
 
             # Test that inference on quantized model works
             model = OVModelForQuestionAnswering.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
-            tokens = tokenizer.encode_plus(
+            tokens = tokenizer(
                 "This is a sample question", "This is a sample context", add_special_tokens=True, return_tensors="pt"
             )
             model(**tokens, return_dict=True)
