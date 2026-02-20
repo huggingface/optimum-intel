@@ -1225,13 +1225,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             {"model": 65},
         ),
         (
-            "gpt_oss_mxfp4",
+            "gpt_oss",
             "openai/gpt-oss-20b",
             AutoModelForCausalLM,
             OVModelForCausalLM,
             "--task text-generation-with-past --weight-format int4",
             _DEFAULT_4BIT_WQ_CONFIGS,
-            {"model": {"int8": 22, "int4": 4}},
+            {"model": {"int8": 40, "int4": 0}},
             {"model": 0},
         ),
         (
