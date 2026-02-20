@@ -76,7 +76,7 @@ class LLMPipelineTestCase(unittest.TestCase):
             SUPPORTED_ARCHITECTURES += ("qwen",)
         if is_transformers_version("<", "5"):
             SUPPORTED_ARCHITECTURES += ("phimoe",)
-    if is_transformers_version(">=", "4.49"):
+    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("gemma3_text",)
     if is_transformers_version(">=", "4.51.0"):
         SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe")
