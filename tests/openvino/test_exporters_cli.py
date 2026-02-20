@@ -787,7 +787,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "vision_embeddings_model": {"int8": 8},
                 "resampler_model": {"int8": 6},
             },
-        )
+        ),
     ]
 
     # filter models type depending on min max transformers version
