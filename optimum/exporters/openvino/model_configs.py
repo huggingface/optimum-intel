@@ -874,6 +874,8 @@ class ExaoneOpenVINOConfig(LlamaOpenVINOConfig):
 )
 class Exaone4OpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.54.0"
+    # TODO (@echarlaix): add v5 support
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
 
 @register_in_tasks_manager(
@@ -1474,6 +1476,8 @@ class Gemma2OpenVINOConfig(GemmaOpenVINOConfig):
 )
 class Gemma3TextOpenVINOConfig(Gemma2OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
+    # TODO (@echarlaix): add v5 support
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
 
 class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
@@ -4561,6 +4565,8 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
 )
 class Llama4TextOpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
+    # TODO (@echarlaix): add v5 support
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
     _MODEL_PATCHER = Llama4TextModelPatcher

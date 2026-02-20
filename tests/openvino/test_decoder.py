@@ -115,11 +115,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">", "4.47"):
         SUPPORTED_ARCHITECTURES += ("olmo2",)
 
-    if is_transformers_version(">", "4.49"):
+    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+    if is_transformers_version(">", "4.49") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("gemma3_text",)
 
     if is_transformers_version(">=", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("llama4", "qwen3", "qwen3_moe")
+        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe")
+
+    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+    if is_transformers_version(">=", "4.51.0") and is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES += ("llama4",)
 
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
@@ -131,7 +136,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.52.1") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("bitnet",)
 
-    if is_transformers_version(">=", "4.54.0"):
+    if is_transformers_version(">=", "4.54.0") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("exaone4",)
 
     if is_transformers_version("<", "4.54.0"):
