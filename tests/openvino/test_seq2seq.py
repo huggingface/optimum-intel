@@ -515,6 +515,10 @@ class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow
     @slow
+    @pytest.mark.skipif(
+        is_transformers_version(">=", "5"),
+        reason="requires transformers < v5 since image-to-text pipelines is deprecated",
+    )
     def test_pipeline(self, model_arch: str):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
