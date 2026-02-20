@@ -410,7 +410,9 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow
     @slow
-    @pytest.mark.skipif(is_transformers_version("==", "5.0"), reason="Issue with transformers v5.0 coming from num_frames")
+    @pytest.mark.skipif(
+        is_transformers_version("==", "5.0"), reason="Issue with transformers v5.0 coming from num_frames"
+    )
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
