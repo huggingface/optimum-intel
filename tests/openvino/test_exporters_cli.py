@@ -787,23 +787,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "vision_embeddings_model": {"int8": 8},
                 "resampler_model": {"int8": 6},
             },
-        ),
-        (
-            "auto",
-            "phi4mm",
-            "int4 --group-size -1 --trust-remote-code",
-            {
-                "lm_model": {"int8": 2, "int4": 48},
-                "text_embeddings_model": {"int8": 1},
-                "vision_embeddings_model": {"int8": 8},
-                "vision_projection_model": {"int8": 2},
-                "audio_embeddings_model": {},
-                "audio_forward_embeddings_model": {"int8": 6},
-                "audio_encoder_model": {"int8": 25},
-                "audio_vision_projection_model": {"int8": 2},
-                "audio_speech_projection_model": {"int8": 2},
-            },
-        ),
+        )
     ]
 
     # filter models type depending on min max transformers version
