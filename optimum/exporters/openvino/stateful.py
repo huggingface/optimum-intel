@@ -263,8 +263,6 @@ def insert_state_for_nodes(model: ov.Model, nodes):
 
 
 def patch_stateful_hybrid_ssm(ov_model: ov.Model):
-    from openvino._offline_transformations import apply_make_stateful_transformation
-
     def get_kv_ssm_tensor_names(ssm_prefix_names: list, kv_prefix_names: list, ov_tensors):
         # return tensor names of model inputs/outputs tensors with KV and SSM states
         kv_names = []
