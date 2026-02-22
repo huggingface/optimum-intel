@@ -53,7 +53,7 @@ def fuse_cache_reorder(
     gather_dim: int,
 ):
     """
-    Fuses reordered_cache during generate cycle into ov.Model. 
+    Fuses reordered_cache during generate cycle into ov.Model.
     Used with stateful models, because we can not modify model state directly.
 
     Adds a new beam_idx parameter and Gather op per each cache input in a given model.
