@@ -429,7 +429,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in ["qwen"]:
             return
 
-        tokens = tokenizer(["Today is a nice day and", "This is me"], return_tensors="pt", padding=True)
+        tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
         ov_model.config.eos_token_id = None
@@ -440,7 +440,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
             # CVS-177964 GraniteMoeHybrid fails due to lack support of Beam search for hybrid models in OpenVINO
             # For this support, we expect changes in IRs to have connected beam_idx with Mamba/Linear attention states
-            num_beams=1 if model_arch in ["chatglm4", "lfm2", "granitemoehybrid"] else 2,
+            num_beams=1 if model_arch in ["chatglm4", "lfm2", "granitemoehybrid"] else 5,
             do_sample=False,
         )
 
