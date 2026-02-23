@@ -7634,6 +7634,106 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                 del afmoe_moe.down_projs, afmoe_moe.gate_projs, afmoe_moe.up_projs
 
 
+def glm4_moe_forward_patched(self, hidden_states):
+    """
+    Vectorized MoE forward for Glm4MoeMoE.
+
+    Replaces the original for-loop over experts with a batched matmul approach,
+    avoiding data-dependent control flow (if token_indices.numel() > 0) that breaks
+    torch.jit.trace. Also produces a much smaller OpenVINO graph.
+    """
+    num_experts = self.config.n_routed_experts
+    batch_size, seq_len, hidden_dim = hidden_states.shape
+
+    # Router: returns topk_indices [B*S, top_k] and topk_weights [B*S, top_k]
+    topk_indices, topk_weights = self.gate(hidden_states)
+
+    # Build full routing weight matrix [B*S, num_experts]
+    new_routing_weights = torch.zeros(
+        batch_size * seq_len, num_experts, dtype=topk_weights.dtype, device=topk_weights.device
+    )
+    new_routing_weights.scatter_(dim=1, index=topk_indices, src=topk_weights)
+
+    hidden_states = hidden_states.view(-1, hidden_dim)
+
+    # Process shared experts
+    shared_output = self.shared_experts(hidden_states)
+
+    # Vectorized expert computation using batched matmul
+    hidden_states = hidden_states.repeat(num_experts, 1)
+    hidden_states = hidden_states.view(num_experts, -1, hidden_dim)
+    act_fn = self.experts[0].act_fn
+
+    gate = torch.bmm(hidden_states, self.gate_projs)
+    up = torch.bmm(hidden_states, self.up_projs)
+    gate_up = act_fn(gate) * up
+    next_states = torch.bmm(gate_up, self.down_projs)
+
+    next_states = next_states.view(num_experts, batch_size, -1, hidden_dim)
+    next_states = next_states * new_routing_weights.transpose(0, 1).view(num_experts, batch_size, -1)[..., None]
+    next_states = next_states.sum(dim=0)
+
+    shared_output = shared_output.view(batch_size, -1, hidden_dim)
+    output = shared_output + next_states
+    return output.view(batch_size, seq_len, hidden_dim)
+
+
+class Glm4MoePatcher(OVDecoderModelPatcher):
+    """Model patcher for Glm4Moe models (e.g., GLM-4.7-Flash).
+
+    Patches the MoE forward to use vectorized batched matmul instead of
+    a for-loop over experts with data-dependent conditional branching.
+    """
+
+    def __enter__(self):
+        super().__enter__()
+        for layer in self._model.model.layers:
+            if isinstance(layer.mlp, type) or not hasattr(layer.mlp, "experts"):
+                continue
+            if not hasattr(layer.mlp, "experts") or not hasattr(layer.mlp, "gate"):
+                continue
+
+            moe = layer.mlp
+            num_experts = moe.config.n_routed_experts
+            moe._orig_forward = moe.forward
+            moe.forward = types.MethodType(glm4_moe_forward_patched, moe)
+
+            # Fuse expert weights for vectorized batched matmul
+            moe.gate_projs = (
+                torch.concat(
+                    tuple(moe.experts[i].gate_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                    dim=0,
+                )
+                .transpose(1, 2)
+                .float()
+            )
+            moe.up_projs = (
+                torch.concat(
+                    tuple(moe.experts[i].up_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                    dim=0,
+                )
+                .transpose(1, 2)
+                .float()
+            )
+            moe.down_projs = (
+                torch.concat(
+                    tuple(moe.experts[i].down_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                    dim=0,
+                )
+                .transpose(1, 2)
+                .float()
+            )
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for layer in self._model.model.layers:
+            if hasattr(layer.mlp, "_orig_forward"):
+                layer.mlp.forward = layer.mlp._orig_forward
+                del layer.mlp._orig_forward
+                if hasattr(layer.mlp, "gate_projs"):
+                    del layer.mlp.gate_projs, layer.mlp.up_projs, layer.mlp.down_projs
+
+
 # adopted from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/llama/modeling_llama.py#L197
 class LlamaEagle3Attention(LlamaAttention):
     """
