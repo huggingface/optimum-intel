@@ -316,7 +316,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
         if is_transformers_version(">=", "5"):
-            supported_architectures -= {"phimoe", "bitnet", "dbrx", "zamba2", "marian", "llama4", "gemma3_text", "exaone4"}
+            supported_architectures -= {
+                "phimoe",
+                "bitnet",
+                "dbrx",
+                "zamba2",
+                "marian",
+                "llama4",
+                "gemma3_text",
+                "exaone4",
+            }
 
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
         untested_architectures = supported_architectures - tested_architectures
