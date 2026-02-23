@@ -359,6 +359,8 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "bits": 4,
         "sym": False,
         "group_size": 128,
+        "dataset": "contextual",
+        "quant_method": OVQuantizationMethod.AWQ,
     },
     "inceptionai/jais-13b": {
         "bits": 4,
