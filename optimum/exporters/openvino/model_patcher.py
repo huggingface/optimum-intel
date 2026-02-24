@@ -4745,6 +4745,86 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
             del self._model.model._orig_update_causual_mask
 
 
+def _project_per_layer_inputs(
+    self,
+    inputs_embeds: torch.Tensor,
+    per_layer_inputs: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    per_layer_projection: torch.Tensor = self.per_layer_model_projection(inputs_embeds)
+    # original
+    #per_layer_projection *= self.per_layer_projection_scale.to(
+    #    dtype=inputs_embeds.dtype, device=per_layer_projection.device
+    #)
+    # TODO: need this patch
+    per_layer_projection = self.per_layer_projection_scale.to(
+        dtype=inputs_embeds.dtype, device=per_layer_projection.device
+    ) * per_layer_projection
+
+    per_layer_projection = per_layer_projection.reshape(
+        *inputs_embeds.shape[:-1],
+        self.config.num_hidden_layers,
+        self.hidden_size_per_layer_input,
+    )
+    per_layer_projection = self.per_layer_projection_norm(per_layer_projection)
+
+    if per_layer_inputs is None:
+        return per_layer_projection
+
+    if per_layer_projection.shape != per_layer_inputs.shape:
+        # per-layer inputs are sometimes padded with zeros, slice the relevant embeddings.
+        per_layer_inputs = per_layer_inputs[..., : self.config.num_hidden_layers, :]
+
+    return (per_layer_projection + per_layer_inputs) * self.per_layer_input_scale.to(
+        dtype=inputs_embeds.dtype, device=per_layer_projection.device
+    )
+
+
+def _gaussian_topk(self, inputs: torch.Tensor) -> torch.Tensor:
+    target_sparsity_tensor = torch.tensor(self.activation_sparsity, dtype=torch.float32, device=inputs.device)
+    def normal_icdf_approx(p):
+        p = torch.clamp(p, 1e-7, 1 - 1e-7)
+        a1 = -3.969683028665376e+01
+        a2 = 2.209460984245205e+02
+        a3 = -2.759285104469687e+02
+        a4 = 1.383577518672690e+02
+        a5 = -3.066479806614716e+01
+        a6 = 2.506628277459239e+00
+        b1 = -5.447609879822406e+01
+        b2 = 1.615858368580409e+02
+        b3 = -1.556989798598866e+02
+        b4 = 6.680131188771972e+01
+        b5 = -1.328068155288572e+01
+        q = p - 0.5
+        r = q * q
+        num = (((((a1 * r + a2) * r + a3) * r + a4) * r + a5) * r + a6) * q
+        den = (((((b1 * r + b2) * r + b3) * r + b4) * r + b5) * r + 1.0)
+        return num / den
+    std_multiplier = normal_icdf_approx(target_sparsity_tensor)
+    std_multiplier = std_multiplier.type(inputs.dtype)
+    inputs_mean = torch.mean(inputs, dim=-1, keepdim=True)
+    inputs_std = torch.std(inputs, dim=-1, keepdim=True, unbiased=False)
+    cutoff_x = inputs_mean + inputs_std * std_multiplier
+    return nn.functional.relu(inputs - cutoff_x)
+
+
+class Gemma3nLMModelPatcher(Gemma3LMModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        self._model.model.language_model._orig_project_per_layer_inputs = self._model.model.language_model.project_per_layer_inputs
+        self._model.model.language_model.project_per_layer_inputs = types.MethodType(_project_per_layer_inputs, self._model.model.language_model)
+
+        for decoder_layer in self._model.model.language_model.layers:
+            decoder_layer.mlp._orig_gaussian_topk = decoder_layer.mlp._gaussian_topk
+            decoder_layer.mlp._gaussian_topk = types.MethodType(_gaussian_topk, decoder_layer.mlp)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.model.language_model.project_per_layer_inputs = self._model.model.language_model._orig_project_per_layer_inputs
+
+        for decoder_layer in self._model.model.language_model.layers:
+            decoder_layer.mlp._gaussian_topk = decoder_layer.mlp._orig_gaussian_topk
+
+
 class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
     def __init__(
         self,

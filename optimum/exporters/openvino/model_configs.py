@@ -148,6 +148,7 @@ from .model_patcher import (
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
     Gemma3LMModelPatcher,
+    Gemma3nLMModelPatcher,
     GptJModelPatcher,
     GptNeoModelPatcher,
     GptNeoxModelPatcher,
@@ -4254,7 +4255,28 @@ class Gemma3OpenVINOConfig(BaseVLMOpenVINOConfig):
 
 @register_in_tasks_manager("gemma3n", *["image-text-to-text"], library_name="transformers")
 class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
-    pass
+    def with_behavior(self, behavior: Union["ConfigBehavior", str]):
+        """
+        Creates a config for different behaviour specific to Gemma3n.
+
+        For LANGUAGE behavior, this explicitly uses the Gemma3n text model_type
+        instead of relying on the underlying text_config.model_type value.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            # Force the Gemma3n-specific text model type to ensure proper behavior
+            model_type = "gemma3n_text"
+            return get_vlm_text_generation_config(
+                model_type,
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Gemma3nLMModelPatcher,
+                inputs_update={"token_type_ids": {0: "batch_size", 1: "sequence_length"}},
+            )
+        return super().with_behavior(behavior)
 
 
 class DummyVisionPositionIdsInputGenerator(DummyVisionInputGenerator):
