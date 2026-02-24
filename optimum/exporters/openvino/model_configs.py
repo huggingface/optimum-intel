@@ -1556,8 +1556,8 @@ class Gemma3nTextOpenVINOConfig(Gemma3TextOpenVINOConfig):
 
         for i, layer_type in enumerate(layer_types):
             if layer_type == "sliding_attention":
-                inputs_or_outputs[f"{name}.{i}.key"] = {0: "batch_size"}
-                inputs_or_outputs[f"{name}.{i}.value"] = {0: "batch_size"}
+                inputs_or_outputs[f"{name}.{i}.key"] = {0: "batch_size", 2: decoder_sequence_name}
+                inputs_or_outputs[f"{name}.{i}.value"] = {0: "batch_size", 2: decoder_sequence_name}
             else:
                 inputs_or_outputs[f"{name}.{i}.key"] = {0: "batch_size", 2: decoder_sequence_name}
                 inputs_or_outputs[f"{name}.{i}.value"] = {0: "batch_size", 2: decoder_sequence_name}
