@@ -4255,7 +4255,7 @@ class Gemma3OpenVINOConfig(BaseVLMOpenVINOConfig):
 
 @register_in_tasks_manager("gemma3n", *["image-text-to-text"], library_name="transformers")
 class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
-    def with_behavior(self, behavior: Union["ConfigBehavior", str]):
+    def with_behavior(self, behavior: Union[str, VLMConfigBehavior]):
         """
         Creates a config for different behaviour specific to Gemma3n.
 
