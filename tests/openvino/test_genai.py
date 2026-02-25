@@ -466,7 +466,7 @@ class LLMPipelineWithEagle3TestCase(unittest.TestCase):
 
     @parameterized.expand(EAGLE3_MODELS.items())
     def test_compare_outputs(self, model_arch, model_pair):
-        if is_transformers_version("<", "4.54") or  is_transformers_version(">=", "5"):
+        if is_transformers_version("<", "4.54") or is_transformers_version(">=", "5"):
             self.skipTest("Eagle3 requires transformers >= 4.54 and transformers < 5")
         if is_openvino_version("<", "2026.0"):
             self.skipTest("Eagle3 requires openvino-genai >= 2026.0")
