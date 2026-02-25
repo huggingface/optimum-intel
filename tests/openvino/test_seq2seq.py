@@ -154,7 +154,7 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
-    if not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2025.5.0")):
+    if not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2026")) and is_transformers_version("<", "5"):
         # There are known issues with marian model on OpenVINO 2025.3.x and 2025.4.x
         SUPPORTED_ARCHITECTURES += ("marian",)
 
