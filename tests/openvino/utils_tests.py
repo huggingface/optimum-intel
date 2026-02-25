@@ -106,6 +106,7 @@ MODEL_NAMES = {
     "granitemoe": "optimum-intel-internal-testing/tiny-random-granite-moe",
     "granitemoehybrid": "optimum-intel-internal-testing/tiny-random-granitemoehybrid",
     "hubert": "optimum-intel-internal-testing/tiny-random-HubertModel",
+    "hunyuan_v1_dense": "optimum-intel-internal-testing/tiny-random-hunyuan-v1-dense",
     "ibert": "optimum-intel-internal-testing/tiny-random-ibert",
     "idefics3": "optimum-intel-internal-testing/tiny-random-Idefics3ForConditionalGeneration",
     "internlm": "optimum-intel-internal-testing/tiny-random-internlm",

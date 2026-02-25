@@ -4964,3 +4964,17 @@ class SiglipTextWithProjectionOpenVINOConfig(SiglipTextWithProjectionOnnxConfig)
 @register_in_tasks_manager("siglip-text", *["feature-extraction"])
 class SiglipTextOpenVINOConfig(SiglipTextOnnxConfig):
     pass
+
+
+@register_in_tasks_manager(
+    "hunyuan_v1_dense",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class HunyuanV1DenseOpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator

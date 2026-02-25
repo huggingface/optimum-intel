@@ -150,6 +150,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "4.57.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "hunyuan_v1_dense"),
+            ]
+        )
+
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
         "t5": 2,
