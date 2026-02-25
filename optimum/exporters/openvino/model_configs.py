@@ -1475,8 +1475,6 @@ class Gemma2OpenVINOConfig(GemmaOpenVINOConfig):
 )
 class Gemma3TextOpenVINOConfig(Gemma2OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
-    # TODO (@echarlaix): add v5 support
-    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
 
 class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):

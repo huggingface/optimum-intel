@@ -115,8 +115,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">", "4.47"):
         SUPPORTED_ARCHITECTURES += ("olmo2",)
 
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version(">", "4.49") and is_transformers_version("<", "5"):
+    if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ("gemma3_text",)
 
     if is_transformers_version(">=", "4.51.0"):
@@ -323,7 +322,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "zamba2",
                 "marian",
                 "llama4",
-                "gemma3_text",
                 "exaone4",
             }
 
