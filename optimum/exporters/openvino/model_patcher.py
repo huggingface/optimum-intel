@@ -3307,29 +3307,6 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
-
-        if is_transformers_version("<", "5"):
-            model.forward = types.MethodType(llava_vision_embed_forward, model)
-        else:
-            model.forward = model.get_image_features
-
-        super().__init__(config, model, model_kwargs)
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-        self._model.forward = self._model.__orig_forward
-
-
-class LlavaNextImageEmbeddingModelPatcher(ModelPatcher):
-    def __init__(
-        self,
-        config: "OnnxConfig",
-        model: "PreTrainedModel",
-        model_kwargs: Dict[str, Any],
-    ):
-        model.__orig_forward = model.forward
-        # TODO: use get_image_features instead and add image_sizes as input when exporting
-        # https://github.com/huggingface/transformers/blob/v4.48.0/src/transformers/models/llava_next/modeling_llava_next.py#L716
         model.forward = types.MethodType(llava_vision_embed_forward, model)
         super().__init__(config, model, model_kwargs)
 

@@ -166,7 +166,6 @@ from .model_patcher import (
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
     LlavaImageEmbeddingModelPatcher,
-    LlavaNextImageEmbeddingModelPatcher,
     LlavaNextVideoImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
     MairaImageEmbeddingModelPatcher,
@@ -1902,8 +1901,6 @@ class BaseVLMOpenVINOConfig(OnnxConfig):
 @register_in_tasks_manager("llava", *["image-text-to-text"], library_name="transformers")
 class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.37.2"
-    # TODO (@echarlaix): add v5 support
-    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
     def __init__(
         self,
@@ -1942,13 +1939,6 @@ class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
 @register_in_tasks_manager("llava_next", *["image-text-to-text"], library_name="transformers")
 class LlavaNextOpenVINOConfig(LlavaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.40.0"
-    MAX_TRANSFORMERS_VERSION = "5.99"
-
-    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
-        model_kwargs = model_kwargs or {}
-        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
-            return super().patch_model_for_export(model, model_kwargs)
-        return LlavaNextImageEmbeddingModelPatcher(self, model, model_kwargs)
 
 
 class DummyLLavaMultiModalProjectorInputGenerator(DummyInputGenerator):

@@ -547,6 +547,7 @@ class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
 class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = [
+        "llava",
         "llava_next",
         "llava_next_mistral",
         "qwen2_vl",
@@ -601,7 +602,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES += ("llava", "llava_next_video")
+        SUPPORTED_ARCHITECTURES += ("llava_next_video",)
     else:
         UNSUPPORTED_ARCHITECTURES = {
             "got_ocr2",
@@ -611,7 +612,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "phi4_multimodal",
             "gemma3",
             "smolvlm",
-            "llava",
         }
     REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "minicpmo", "llava-qwen2", "phi3_v", "maira2", "phi4mm"]
     IMAGE = Image.open(
@@ -872,7 +872,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     @parameterized.expand(
         ["llava", "llava_next", "llava_next_video", "llava_next_mistral"]
         if is_transformers_version("<", "5")
-        else ["llava_next", "llava_next_mistral"]
+        else ["llava", "llava_next", "llava_next_mistral"]
     )
     def test_llava_with_new_preprocessing(self, model_arch):
         prompt = "<image>\n What is shown in this image?"

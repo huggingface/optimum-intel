@@ -208,6 +208,14 @@ class OVCLIExportTestCase(unittest.TestCase):
             "expected_chat_template": False,
             "simplified_chat_template": False,
         },
+        "llava": {  # transformers, chat template in processor, simplified chat template
+            "num_tokenizers": 2,
+            "task": "image-text-to-text",
+            "processor_chat_template": True,
+            "remote_code": False,
+            "expected_chat_template": True,
+            "simplified_chat_template": True,
+        },
         "llava_next": {  # transformers, chat template in processor overrides tokinizer chat template, simplified chat template
             "num_tokenizers": 2,
             "task": "image-text-to-text",
@@ -250,20 +258,6 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "simplified_chat_template": False,
                     "processor_chat_template": False,
                     "remote_code": True,
-                },
-            }
-        )
-
-    if is_transformers_version("<", "5"):
-        TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
-            {
-                "llava": {  # transformers, chat template in processor, simplified chat template
-                    "num_tokenizers": 2,
-                    "task": "image-text-to-text",
-                    "processor_chat_template": True,
-                    "remote_code": False,
-                    "expected_chat_template": True,
-                    "simplified_chat_template": True,
                 },
             }
         )
