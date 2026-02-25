@@ -1061,6 +1061,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVStableDiffusionPipeline, "stable-diffusion", False),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl", False),
         (OVModelOpenCLIPForZeroShotImageClassification, "open-clip", False),
+        (OVModelForVisualCausalLM, "llava", False),
         (OVModelForVisualCausalLM, "qwen2_vl", False),
     ]
 
@@ -1079,7 +1080,6 @@ class OVWeightCompressionTest(unittest.TestCase):
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.extend(
             [
-                (OVModelForVisualCausalLM, "llava", False),
                 (OVModelForVisualCausalLM, "llava_next_video", False),
                 (OVModelForVisualCausalLM, "minicpmv", True),
             ]
@@ -1120,6 +1120,17 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "vae_decoder": {},
                 "vae_encoder": {},
                 "text_encoder": {},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "llava",
+            4,
+            {"bits": 4, "group_size": 8, "ratio": 0.5},
+            {
+                "lm_model": {"int8": 22, "int4": 8},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 9},
             },
         ),
         (
@@ -1176,6 +1187,15 @@ class OVWeightCompressionTest(unittest.TestCase):
             },
         ),
         (
+            OVModelForVisualCausalLM,
+            "llava",
+            {
+                "lm_model": {"patterns": [".*layers.0.self_attn.q_proj/aten::linear/MatMul"]},
+                "vision_embeddings_model": {"patterns": [".*layers.0.self_attn.q_proj/aten::linear/MatMul"]},
+                "text_embeddings_model": {"patterns": ["."]},
+            },
+        ),
+        (
             OVSamModel,
             "sam",
             {
@@ -1194,33 +1214,6 @@ class OVWeightCompressionTest(unittest.TestCase):
             },
         ),
     ]
-
-    if is_transformers_version("<", "5"):
-        DEFAULT_COMPRESSION_CONFIGURATIONS.append(
-            (
-                OVModelForVisualCausalLM,
-                "llava",
-                4,
-                {"bits": 4, "group_size": 8, "ratio": 0.5},
-                {
-                    "lm_model": {"int8": 22, "int4": 8},
-                    "text_embeddings_model": {"int8": 1},
-                    "vision_embeddings_model": {"int8": 9},
-                },
-            ),
-        )
-
-        DEFAULT_IGNORED_SCOPE_CONFIGURATIONS.append(
-            (
-                OVModelForVisualCausalLM,
-                "llava",
-                {
-                    "lm_model": {"patterns": [".*layers.0.self_attn.q_proj/aten::linear/MatMul"]},
-                    "vision_embeddings_model": {"patterns": [".*layers.0.self_attn.q_proj/aten::linear/MatMul"]},
-                    "text_embeddings_model": {"patterns": ["."]},
-                },
-            ),
-        )
 
     def test_filtered_architectures(cls):
         expected = set()

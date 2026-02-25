@@ -153,18 +153,20 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
     TASK = "text2text-generation"
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
-
-    if not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2026.1")) and is_transformers_version(
+    UNSUPPORTED_ARCHITECTURES = set()
+    if not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2026.1")) or is_transformers_version(
         "<", "5"
     ):
         # There are known issues with marian model on OpenVINO 2025.3.x and 2025.4.x
         SUPPORTED_ARCHITECTURES += ("marian",)
+    else:
+        UNSUPPORTED_ARCHITECTURES.add("marian")
 
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("mt5",)
     else:
-        UNSUPPORTED_ARCHITECTURES = {"marian", "mt5"}
+        UNSUPPORTED_ARCHITECTURES.add("mt5")
 
     SUPPORT_STATEFUL = ("t5", "mt5", "longt5")
     if is_transformers_version(">=", "4.52.0"):
