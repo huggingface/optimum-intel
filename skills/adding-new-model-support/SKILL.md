@@ -70,6 +70,7 @@ Retrieve `model_type` from the model's config to determine if it matches an exis
 - `tests/openvino/test_decoder.py` – Validates the export and inference workflows for decoder-only models.
 - `tests/openvino/test_export.py` – Verifies various export configurations and settings.
 - `tests/openvino/test_exporters_cli.py` – Tests the command line interface for exporting models.
+- `tests/openvino/test_quantization.py` – Validates weight compression and quantization workflows. Add the model to `SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION` and update `_ARCHITECTURES_TO_EXPECTED_INT8` in `utils_tests.py` with the expected number of INT8 weight nodes (obtain by exporting with `load_in_8bit=True` and counting quantized nodes via `get_num_quantized_nodes`).
 - `tests/openvino/utils_tests.py` – Defines test models and their corresponding model IDs.
 
 ### Update Documentation
