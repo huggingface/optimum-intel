@@ -2060,7 +2060,6 @@ class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
 )
 class MairaOpenVINOConfig(LlavaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.46.0"
-    MAX_TRANSFORMERS_VERSION = "5.99"
     SUPPORTS_PAST = True
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
