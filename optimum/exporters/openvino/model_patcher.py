@@ -18,14 +18,33 @@ import logging
 import logging as log
 import math
 import types
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-from transformers.cache_utils import DynamicCache, EncoderDecoderCache
-from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPast, BaseModelOutputWithPooling
+from torch import nn
+from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache
+from transformers.configuration_utils import PretrainedConfig
+from transformers.generation import GenerationMixin
+from transformers.modeling_outputs import (
+    BaseModelOutput,
+    BaseModelOutputWithPast,
+    BaseModelOutputWithPooling,
+)
+from transformers.modeling_utils import PreTrainedModel
+from transformers.models.llama.configuration_llama import LlamaConfig
+from transformers.models.llama.modeling_llama import (
+    LlamaAttention,
+    LlamaMLP,
+    LlamaPreTrainedModel,
+    LlamaRMSNorm,
+    LlamaRotaryEmbedding,
+)
 from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
+from transformers.processing_utils import Unpack
+from transformers.utils import ModelOutput
 
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.model_patcher import (
@@ -41,15 +60,22 @@ from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_vers
 if is_transformers_version(">=", "4.53"):
     from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, eager_mask, sdpa_mask
     from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
+if is_transformers_version(">=", "4.54"):
+    from transformers.masking_utils import create_causal_mask
 if is_transformers_version(">=", "4.56"):
     import transformers.masking_utils
-
 
 if TYPE_CHECKING:
     from transformers.cache_utils import Cache
     from transformers.modeling_utils import PreTrainedModel
 
     from optimum.exporters.onnx.config import OnnxConfig
+
+if is_transformers_version(">=", "4.54"):
+    from transformers.utils import TransformersKwargs
+else:
+    TransformersKwargs = object
+
 
 logger = logging.getLogger(__name__)
 
@@ -4062,6 +4088,52 @@ class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
+class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L2156-L2178
+        # moved audio and vision features processing outside model
+        # This method in original model: https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1344-L1362
+        def lm_forward(
+            self,
+            attention_mask,
+            position_ids,
+            past_key_values,
+            inputs_embeds,
+            visual_pos_masks,
+            deepstack_visual_embeds,
+            use_cache=True,
+        ):
+            from transformers.cache_utils import DynamicCache
+
+            pkv = DynamicCache.from_legacy_cache(past_key_values)
+            outputs = self.model.language_model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                use_cache=use_cache,
+                past_key_values=pkv,
+                visual_pos_masks=visual_pos_masks,
+                deepstack_visual_embeds=deepstack_visual_embeds,
+            )
+            hidden_states = outputs[0]
+            # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+            logits = self.lm_head(hidden_states)
+            return (logits, outputs.past_key_values.to_legacy_cache())
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(lm_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
 def patch_qwen2vl_vision_blocks(model, force_new_behaviour=False):
     if not force_new_behaviour and is_transformers_version("<=", "4.48.99"):
         # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L390
@@ -4266,6 +4338,48 @@ class Qwen2_5_VLVisionEmbMergerPatcher(ModelPatcher):
 
     def __enter__(self):
         patch_qwen2vl_vision_blocks(self._model, force_new_behaviour=True)
+        super().__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        for block in self._model.blocks:
+            block.forward = block._orig_forward
+            block.attn.forward = block.attn._orig_forward
+
+
+class Qwen3VLVisionEmbMergerPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1118
+        # added attention_mask input instead cu_lens for its internal calculation model (unsupported by tracing due to cycle with dynamic len)
+        # separated patch_embed and rot_pos_emb calls for performing as part of another model
+        # This code part in original model: https://github.com/huggingface/transformers/blob/main/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L794-L808
+        def image_embed_forward(
+            self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, rotary_pos_emb: torch.Tensor
+        ) -> torch.Tensor:
+            deepstack_feature_lists = []
+            for layer_num, blk in enumerate(self.blocks):
+                hidden_states = blk(hidden_states, attention_mask=attention_mask, rotary_pos_emb=rotary_pos_emb)
+                if layer_num in self.deepstack_visual_indexes:
+                    deepstack_feature = self.deepstack_merger_list[self.deepstack_visual_indexes.index(layer_num)](
+                        hidden_states
+                    )
+                    deepstack_feature_lists.append(deepstack_feature)
+            last_hidden_state = self.merger(hidden_states)
+            return last_hidden_state, torch.stack(deepstack_feature_lists, dim=0)
+
+        model.forward = types.MethodType(image_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        patch_qwen2vl_vision_blocks(self._model)
         super().__enter__()
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -4657,7 +4771,7 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        # The difference from original code is only in getting patch_position_ids as input and propogation it into embeddings instead of calculation inside based on patch_attention_mask
+        # The difference from original code is only in getting patch_position_ids as input and propagating it into embeddings instead of calculation inside based on patch_attention_mask
         # method for calculation position_ids is not pytorch tracing friendly due to cycle over batch size.
         def transformer_forward(
             self,
@@ -6323,7 +6437,6 @@ class MambaPatcher(ModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers import PretrainedConfig
         from transformers.models.mamba.modeling_mamba import MambaCache
 
         super().__init__(config, model, model_kwargs)
@@ -7482,7 +7595,7 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                 afmoe_moe._orig_forward = afmoe_moe.forward
                 afmoe_moe.forward = types.MethodType(afmoe_moe_forward_patched, afmoe_moe)
 
-                # prepare weigths to combine them from all experts to get the common gate, up and down weights
+                # prepare weights to combine them from all experts to get the common gate, up and down weights
                 # this is required for vectorized batched matmul representation of MoE
                 # Fix CVS-180119: currently OpenVINO PyTorch Frontend incorrectly patching torch.bmm operation
                 # with bf16 weights that leads to operands types mismatch in torch.bmm during TorchScript tracing
@@ -7519,3 +7632,266 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                 afmoe_moe = layer.mlp
                 afmoe_moe.forward = afmoe_moe._orig_forward
                 del afmoe_moe.down_projs, afmoe_moe.gate_projs, afmoe_moe.up_projs
+
+
+# adopted from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/llama/modeling_llama.py#L197
+class LlamaEagle3Attention(LlamaAttention):
+    """
+    LLaMA-style multi-headed self-attention adapted for Eagle-3 speculative decoding.
+
+    This attention module extends the standard LLaMA attention mechanism to
+    support Eagle-3 draft models, where the attention input is formed by
+    concatenating the main model hidden states with the corresponding input
+    embeddings.
+    """
+
+    def __init__(self, config):
+        super().__init__(config, 0)
+        self.q_proj = nn.Linear(config.hidden_size * 2, config.num_attention_heads * self.head_dim, bias=False)
+        self.k_proj = nn.Linear(config.hidden_size * 2, config.num_key_value_heads * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(config.hidden_size * 2, config.num_key_value_heads * self.head_dim, bias=False)
+
+
+# adopted from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/llama/modeling_llama.py#L268
+class LlamaEagle3DecoderLayer(nn.Module):
+    """
+    Eagle-3 decoder layer that consumes main-model hidden states and input embeddings.
+
+    This decoder layer is designed for the Eagle-3 draft model used in
+    speculative decoding. Unlike a standard LLaMA decoder layer, it accepts
+    two separate inputs:
+        - `hidden_states`: hidden states produced by the main (target) model
+        - `input_emb`: input token embeddings corresponding to the same positions
+
+    This layer is used exclusively within the Eagle-3 draft model and is not
+    compatible with token-only decoding pipelines.
+    """
+
+    def __init__(self, config, last=True):
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        self.self_attn = LlamaEagle3Attention(config=config)
+        self.mlp = LlamaMLP(config)
+        self.last = last
+        self.hidden_norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+    def forward(
+        self,
+        input_emb: torch.Tensor,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Cache] = None,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor] = None,
+        output_attentions: Optional[bool] = False,
+        use_cache: Optional[bool] = False,
+    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+        residual = hidden_states
+
+        hidden_states = self.hidden_norm(hidden_states)
+        input_emb = self.input_layernorm(input_emb)
+
+        hidden_states = torch.cat((input_emb, hidden_states), dim=-1)
+
+        # Self Attention
+        hidden_states, _ = self.self_attn(
+            hidden_states=hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_values,
+            output_attentions=output_attentions,
+            position_embeddings=position_embeddings,
+            use_cache=use_cache,
+        )
+        hidden_states = residual + hidden_states
+
+        # Fully Connected
+        residual = hidden_states
+        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = residual + hidden_states
+
+        return hidden_states
+
+
+# adopted from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/llama/modeling_llama.py#L334
+class LlamaEagle3Model(LlamaPreTrainedModel):
+    """
+    Eagle-3 draft model built on a LLaMA backbone for speculative decoding.
+
+    This model extends the standard LLaMA architecture to support Eagle-3’s
+    draft model workflow, where the model operates on hidden states produced
+    by a main (target) model rather than directly on token IDs.
+
+    **Triple Hidden-State Concatenation**: The model accepts three
+    hidden-state tensors from the main model. These are concatenated along
+    the hidden dimension and then projected via a linear layer (`fc`) to
+    match `hidden_size`. This forms the effective input to the decoder.
+    """
+
+    def __init__(self, config: LlamaConfig):
+        config.tie_word_embeddings = False
+        super().__init__(config)
+        self.hidden_size = config.hidden_size
+
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, config.pad_token_id)
+        self.rotary_emb = LlamaRotaryEmbedding(config=config)
+
+        self.midlayer = LlamaEagle3DecoderLayer(config)
+        self.target_hidden_size = getattr(config, "target_hidden_size", config.hidden_size)
+        self.fc = nn.Linear(self.target_hidden_size * 3, self.hidden_size, bias=False)
+        self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+        self.lm_head = nn.Linear(config.hidden_size, config.draft_vocab_size, bias=False)
+
+        d2t = torch.zeros((config.draft_vocab_size), dtype=torch.long)
+        t2d = torch.zeros((config.vocab_size), dtype=torch.bool)
+        self.register_buffer("d2t", d2t)
+        self.register_buffer("t2d", t2d)
+
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        hidden_states: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Cache] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> BaseModelOutputWithPast:
+        batch_size, seq_length, _ = hidden_states.shape
+        use_cache = use_cache if use_cache is not None else self.config.use_cache
+
+        if (input_ids is None) ^ (inputs_embeds is not None):
+            raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+
+        if inputs_embeds is None:
+            inputs_embeds: torch.Tensor = self.embed_tokens(input_ids)
+
+        if use_cache and past_key_values is None:
+            past_key_values = DynamicCache(config=self.config)
+
+        if cache_position is None:
+            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+            cache_position: torch.Tensor = torch.arange(
+                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
+            )
+
+        if position_ids is None:
+            position_ids = cache_position.unsqueeze(0)
+
+        causal_mask = create_causal_mask(
+            config=self.config,
+            input_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            cache_position=cache_position,
+            past_key_values=past_key_values,
+            position_ids=position_ids,
+        )
+
+        if hidden_states is None:
+            hidden_states = torch.zeros(
+                [batch_size, seq_length, self.embed_dim],
+                self.embed_dim,
+                dtype=inputs_embeds.dtype,
+                device=inputs_embeds.device,
+            )
+
+        # hidden_states = inputs_embeds
+        inputs_embeds = inputs_embeds.to(hidden_states.dtype)
+        if hidden_states.shape[-1] != inputs_embeds.shape[-1]:
+            hidden_states = self.fc(hidden_states)
+
+        position_embeddings = self.rotary_emb(hidden_states, position_ids=position_ids)
+
+        hidden_states = self.midlayer(
+            input_emb=inputs_embeds,
+            hidden_states=hidden_states,
+            attention_mask=causal_mask,
+            position_embeddings=position_embeddings,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            use_cache=True,
+        )
+
+        hidden_states = self.norm(hidden_states)
+        return BaseModelOutputWithPast(
+            last_hidden_state=hidden_states,
+            past_key_values=past_key_values,
+        )
+
+
+@dataclass
+class Eagle3Output(ModelOutput):
+    """
+    Output container for the Eagle-3 draft model.
+
+    This class extends `ModelOutput` to hold the outputs of the Eagle-3
+    speculative decoding model. It contains `d2t`,
+    a mapping from generated draft tokens to the corresponding main
+    model tokens. This is used to reconcile the draft model outputs
+    with the main model vocabulary during speculative decoding.
+    """
+
+    logits: Optional[torch.FloatTensor] = None
+    past_key_values: Optional[Cache] = None
+    hidden_states: Optional[tuple[torch.FloatTensor, ...]] = None
+    d2t: Optional[torch.LongTensor] = None
+
+
+# adopted from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/llama/modeling_llama.py#L413
+class LlamaEagle3ForCausalLM(LlamaPreTrainedModel, GenerationMixin):
+    _tied_weights_keys = ["lm_head.weight"]
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.model = LlamaEagle3Model(config)
+        self.vocab_size = config.vocab_size
+        self.identity = torch.nn.Identity()
+        self.post_init()
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        hidden_states: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Cache] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        logits_to_keep: Union[int, torch.Tensor] = 0,
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> Eagle3Output:
+        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+        outputs: BaseModelOutputWithPast = self.model(
+            input_ids=input_ids,
+            hidden_states=hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            cache_position=cache_position,
+            **kwargs,
+        )
+
+        hidden_states = outputs.last_hidden_state
+        # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+        slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+        logits = self.model.lm_head(hidden_states[:, slice_indices, :])
+
+        d2t_out = self.identity(self.model.d2t)
+        return Eagle3Output(
+            logits=logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            d2t=d2t_out,
+        )

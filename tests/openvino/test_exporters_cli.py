@@ -30,6 +30,7 @@ from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
     OPENVINO_DEVICE,
+    REMOTE_CODE_MODELS,
     TEST_NAME_TO_MODEL_TYPE,
     check_compression_state_per_model,
     get_num_quantized_nodes,
@@ -120,6 +121,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             [
                 ("text-generation", "lfm2"),
                 ("text-generation-with-past", "lfm2"),
+                ("text-generation-with-past", "qwen3_eagle3"),
             ]
         )
 
@@ -705,6 +707,19 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),
         (
             "image-text-to-text",
+            "qwen3_vl",
+            'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1",
+            {
+                "lm_model": {"int8": 12, "int4": 18},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 32},
+                "vision_embeddings_pos_model": {"int8": 1},
+            },
+        ),
+        (
+            "image-text-to-text",
             "phi3_v",
             "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
             {
@@ -789,17 +804,25 @@ class OVCLIExportTestCase(unittest.TestCase):
         if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
     ]
 
-    def _openvino_export(self, model_name: str, task: str, model_kwargs: Dict = None):
+    def _openvino_export(
+        self,
+        model_name: str,
+        task: str,
+        model_kwargs: Dict = None,
+        loading_kwargs: Dict = None,
+    ):
         with TemporaryDirectory() as tmpdir:
-            main_export(model_name_or_path=model_name, output=tmpdir, task=task, model_kwargs=model_kwargs)
+            main_export(
+                model_name_or_path=model_name, output=tmpdir, task=task, model_kwargs=model_kwargs, **loading_kwargs
+            )
 
     def test_filtered_architectures(cls):
         if is_transformers_version("<", "4.49"):
-            expected = {"llama4", "qwen2_5_vl", "phi4mm"}
+            expected = {"qwen3_vl", "llama4", "qwen2_5_vl", "phi4mm"}
         elif is_transformers_version("<", "4.51"):
-            expected = {"llama4", "phi4mm"}
+            expected = {"qwen3_vl", "llama4", "phi4mm"}
         elif is_transformers_version("<", "4.52"):
-            expected = set()
+            expected = {"qwen3_vl"}
         else:
             expected = {"llava-qwen2", "phi3_v", "phi4mm", "minicpmo"}
 
@@ -813,7 +836,12 @@ class OVCLIExportTestCase(unittest.TestCase):
         model_kwargs = None
         if task == "text-to-audio" and model_type == "speecht5":
             model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
-        self._openvino_export(MODEL_NAMES[model_type], task, model_kwargs)
+
+        loading_kwargs = {}
+        if model_type in REMOTE_CODE_MODELS:
+            loading_kwargs["trust_remote_code"] = True
+
+        self._openvino_export(MODEL_NAMES[model_type], task, model_kwargs=model_kwargs, loading_kwargs=loading_kwargs)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli(self, task: str, model_type: str):
@@ -821,12 +849,19 @@ class OVCLIExportTestCase(unittest.TestCase):
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":
                 add_ops = '--model-kwargs "{\\"vocoder\\": \\"fxmarty/speecht5-hifigan-tiny\\"}"'
+
+            if model_type in REMOTE_CODE_MODELS:
+                add_ops = "--trust-remote-code"
+
             subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} {tmpdir}",
                 shell=True,
                 check=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
+            if model_type in REMOTE_CODE_MODELS:
+                model_kwargs["trust_remote_code"] = True
+
             eval(
                 _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
                 if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
@@ -1004,12 +1039,17 @@ class OVCLIExportTestCase(unittest.TestCase):
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":
                 add_ops = '--model-kwargs "{\\"vocoder\\": \\"fxmarty/speecht5-hifigan-tiny\\"}"'
+            if model_type in REMOTE_CODE_MODELS:
+                add_ops = "--trust-remote-code"
+
             subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} --weight-format fp16 {tmpdir}",
                 shell=True,
                 check=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
+            if model_type in REMOTE_CODE_MODELS:
+                model_kwargs["trust_remote_code"] = True
             eval(
                 _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
                 if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
@@ -1024,18 +1064,22 @@ class OVCLIExportTestCase(unittest.TestCase):
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":
                 add_ops = '--model-kwargs "{\\"vocoder\\": \\"fxmarty/speecht5-hifigan-tiny\\"}"'
+            if model_type in REMOTE_CODE_MODELS:
+                add_ops = "--trust-remote-code"
+
             subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} --weight-format int8 {tmpdir}",
                 shell=True,
                 check=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
+            if model_type in REMOTE_CODE_MODELS:
+                model_kwargs["trust_remote_code"] = True
             model = eval(
                 _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
                 if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
-
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
             expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):

@@ -552,6 +552,15 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=int)
             )
 
+        # Eagle3 draft models have a conditional input that is a concatenated
+        # list of hidden states from a target model
+        if "hidden_states" in self.input_names:
+            hidden_states = kwargs.get("hidden_states", None)
+            if hidden_states is None:
+                hs_shape = (batch_size, input_ids.shape[1], self.config.hidden_size * 3)
+                hidden_states = torch.zeros(hs_shape, device=self.device, dtype=torch.float32)
+            inputs["hidden_states"] = hidden_states
+
         return inputs
 
     def forward(

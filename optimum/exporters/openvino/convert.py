@@ -133,6 +133,10 @@ def _save_model(
 
     runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}
     model = _add_runtime_options_to_rt_info(model, runtime_options)
+
+    if getattr(config, "eagle3", False):
+        model = _add_eagle3_mode_to_rt_info(model)
+
     save_model(model, path, compress_to_fp16)
     del model
     gc.collect()
@@ -678,6 +682,10 @@ def export_from_model(
         )
         logging.disable(logging.NOTSET)
 
+    # Remove empty model and export_configs pairs, they can be empty when a config class is shared between model versions.
+    # Example: Qwen2VL and Qwen3VL share config class, but "vision_embeddings_pos" is used in Qwen3VL only.
+    models_and_export_configs = {k: v for k, v in models_and_export_configs.items() if v != (None, None)}
+
     if library_name == "open_clip":
         if hasattr(model.config, "save_pretrained"):
             model.config.save_pretrained(output)
@@ -841,6 +849,18 @@ def _add_runtime_options_to_rt_info(model: Model, options: Dict):
     try:
         for name, value in options.items():
             model.set_rt_info(value, ["runtime_options", name])
+    except Exception:
+        pass
+
+    return model
+
+
+def _add_eagle3_mode_to_rt_info(model: Model):
+    """
+    Add eagle3 mode
+    """
+    try:
+        model.set_rt_info("True", ["eagle3_mode"])
     except Exception:
         pass
 
