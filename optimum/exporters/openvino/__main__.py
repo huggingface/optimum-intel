@@ -643,7 +643,7 @@ def _main_quantize(
     # explicitly. Because of this, we get an error.
     if original_task == "auto" and library_name == "transformers":
         config = AutoConfig.from_pretrained(
-            output,
+            model_name_or_path,
             subfolder=subfolder,
             revision=revision,
             cache_dir=cache_dir,
