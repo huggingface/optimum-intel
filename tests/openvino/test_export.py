@@ -387,3 +387,39 @@ class CustomExportModelTest(unittest.TestCase):
         ov_outputs = ov_model(**tokens)
         self.assertTrue(torch.allclose(ov_outputs.token_embeddings, model_outputs.token_embeddings, atol=1e-4))
         self.assertTrue(torch.allclose(ov_outputs.sentence_embedding, model_outputs.sentence_embedding, atol=1e-4))
+
+
+class CLIPSubmodelExportTest(unittest.TestCase):
+    def test_export_clip_vision_submodel_feature_extraction(self):
+        model_id = MODEL_NAMES["clip"]
+        with TemporaryDirectory() as tmpdirname:
+            main_export(
+                model_name_or_path=model_id,
+                library_name="transformers",
+                output=Path(tmpdirname),
+                task="feature-extraction",
+                submodel="vision",
+            )
+
+            ov_model = OVModelForFeatureExtraction.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
+            self.assertIsInstance(ov_model, OVBaseModel)
+            # Vision submodel should accept image tensors, not text inputs
+            self.assertIn("pixel_values", ov_model.input_names)
+            self.assertNotIn("input_ids", ov_model.input_names)
+
+    def test_export_clip_text_submodel_feature_extraction(self):
+        model_id = MODEL_NAMES["clip"]
+        with TemporaryDirectory() as tmpdirname:
+            main_export(
+                model_name_or_path=model_id,
+                library_name="transformers",
+                output=Path(tmpdirname),
+                task="feature-extraction",
+                submodel="text",
+            )
+
+            ov_model = OVModelForFeatureExtraction.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
+            self.assertIsInstance(ov_model, OVBaseModel)
+            # Text submodel should accept token ids, not image tensors
+            self.assertIn("input_ids", ov_model.input_names)
+            self.assertNotIn("pixel_values", ov_model.input_names)

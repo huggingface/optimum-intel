@@ -198,6 +198,7 @@ def main_export(
     library_name: Optional[str] = None,
     model_loading_kwargs: Optional[Dict[str, Any]] = None,
     variant: Optional[str] = None,
+    submodel: Optional[str] = None,
     **kwargs_shapes,
 ):
     """
@@ -495,6 +496,20 @@ def main_export(
                 library_name=library_name,
                 **loading_kwargs,
             )
+
+        # If user asks for a specific CLIP submodel, swap to that submodule so
+        # TasksManager sees the right model_type (e.g. clip_vision_model) and config.
+        if (
+            submodel in {"vision", "text"}
+            and library_name == "transformers"
+            and task == "feature-extraction"
+        ):
+            if submodel == "vision" and hasattr(model, "vision_model"):
+                logger.info("Exporting CLIP vision submodel via TasksManager registry.")
+                model = model.vision_model
+            elif submodel == "text" and hasattr(model, "text_model"):
+                logger.info("Exporting CLIP text submodel via TasksManager registry.")
+                model = model.text_model
 
         needs_pad_token_id = task == "text-classification" and getattr(model.config, "pad_token_id", None) is None
 
