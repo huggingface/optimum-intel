@@ -41,6 +41,7 @@ from optimum.intel.utils.modeling_utils import (
     _infer_library_from_model_name_or_path,
     _OpenClipForZeroShotImageClassification,
 )
+from optimum.utils import is_auto_gptq_available, is_gptqmodel_available
 
 from .utils import (
     _MAX_UNCOMPRESSED_SIZE,
@@ -415,7 +416,12 @@ def main_export(
                 orig_post_init_model = GPTQQuantizer.post_init_model
 
                 def post_init_model(self, model):
-                    from auto_gptq import exllama_set_max_input_length
+                    if is_gptqmodel_available():
+                        from gptqmodel import exllama_set_max_input_length
+                    elif is_auto_gptq_available():
+                        from auto_gptq import exllama_set_max_input_length
+                    else:
+                        raise ValueError("Neither ``auto_gptq nor `gptqmodel` is available, please install one of them.")
 
                     class StoreAttr(object):
                         pass
