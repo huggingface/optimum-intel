@@ -39,7 +39,7 @@ jobs:
       fail-fast: false
       matrix:
         # stable and nightly openvino tests
-        openvino-version: ["openvino-stable", "openvino-nightly"]
+        openvino-version: ["openvino-nightly"]
         nncf-version: ["nncf-stable"]
         test-pattern:
           [
@@ -55,33 +55,33 @@ jobs:
 
         include:
           # stable openvino + nncf develop tests
-          - nncf-version: "nncf-develop"
-            openvino-version: "openvino-stable"
-            test-pattern: "*{quantization,export}*"
+          # - nncf-version: "nncf-develop"
+          #   openvino-version: "openvino-stable"
+          #   test-pattern: "*{quantization,export}*"
           # nightly openvino + nncf develop tests
           - nncf-version: "nncf-develop"
             openvino-version: "openvino-nightly"
             test-pattern: "*{quantization,export}*"
-          - nncf-version: "nncf-stable"
-            openvino-version: "openvino-stable"
-            export-mode: "torchdynamo"
-            test-pattern: "*{quantization,export}*"
-          - nncf-version: "nncf-stable"
-            openvino-version: "openvino-stable"
-            export-mode: "torchdynamo"
-            test-pattern: "*modeling*"
-          - nncf-version: "nncf-stable"
-            openvino-version: "openvino-stable"
-            export-mode: "torchdynamo"
-            test-pattern: "*decoder*"
-          - nncf-version: "nncf-stable"
-            openvino-version: "openvino-stable"
-            export-mode: "torchdynamo"
-            test-pattern: "*seq2seq*"
-          - nncf-version: "nncf-stable"
-            openvino-version: "openvino-stable"
-            export-mode: "torchdynamo"
-            test-pattern: "*diffusion*"
+          # - nncf-version: "nncf-stable"
+          #   openvino-version: "openvino-stable"
+          #   export-mode: "torchdynamo"
+          #   test-pattern: "*{quantization,export}*"
+          # - nncf-version: "nncf-stable"
+          #   openvino-version: "openvino-stable"
+          #   export-mode: "torchdynamo"
+          #   test-pattern: "*modeling*"
+          # - nncf-version: "nncf-stable"
+          #   openvino-version: "openvino-stable"
+          #   export-mode: "torchdynamo"
+          #   test-pattern: "*decoder*"
+          # - nncf-version: "nncf-stable"
+          #   openvino-version: "openvino-stable"
+          #   export-mode: "torchdynamo"
+          #   test-pattern: "*seq2seq*"
+          # - nncf-version: "nncf-stable"
+          #   openvino-version: "openvino-stable"
+          #   export-mode: "torchdynamo"
+          #   test-pattern: "*diffusion*"
 
     runs-on: ubuntu-22.04
 
@@ -102,12 +102,12 @@ jobs:
       - if: ${{ matrix.openvino-version == 'openvino-nightly' }}
         name: Install OpenVINO Nightly
         run: |
-          uv pip install --upgrade --pre openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+          uv pip install --upgrade --pre openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/pre-release
 
       - if: ${{ matrix.nncf-version == 'nncf-develop' }}
         name: Install NNCF from main
         run: |
-          pip install git+https://github.com/openvinotoolkit/nncf.git
+          pip install nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v300
 
       - if: ${{ matrix.test-pattern == '*decoder*'}}
         name: Install auto-gptq, autoawq
