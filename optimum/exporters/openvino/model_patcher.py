@@ -7067,6 +7067,24 @@ class Zamba2ModelPatcher(ModelPatcher):
             mamba_layer.forward = mamba_layer._orig_forward
 
 
+# unified torch representation for CausalConv1d operation
+# that will be used in all models with CausalConv1d
+# the resulted OV graph for this function can be fused into internal operation CausalConv1d
+def ov_causal_conv1d(conv_state, input_embeds, weight, bias):
+    _, hidden_size, seq_len = input_embeds.shape
+    _, w_in_channels, _ = weight.shape
+    state_len = conv_state.shape[-1]
+    groups = hidden_size // w_in_channels
+
+    input_embeds_new = torch.cat([conv_state, input_embeds], dim=-1).to(weight.dtype)
+    conv_out = F.conv1d(input_embeds_new, weight, bias, padding=0, groups=groups)
+    conv_out = conv_out[:, :, -seq_len:]
+
+    new_conv_state = input_embeds_new[:, :, -state_len:]
+
+    return conv_out, new_conv_state
+
+
 # The original implementation of this method can be found at:
 # https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/lfm2/modeling_lfm2.py#L476
 # This patch modifies `slow_forward()` so that when traced by torch.jit, it works correctly
@@ -7085,35 +7103,16 @@ def lfm2_short_conv_forward_patched(
 ):
     from transformers.models.lfm2.modeling_lfm2 import apply_mask_to_padding_states
 
-    seqlen = x.shape[1]
-
     x = apply_mask_to_padding_states(x, attention_mask)
     BCx = self.in_proj(x).transpose(-1, -2)
     B, C, x = BCx.chunk(3, dim=-2)
 
     Bx = B * x
 
-    if past_key_values is not None:
-        layer_idx = past_key_values.conv_layer_idx_mapping[self.layer_idx]
-        conv_state_dec = past_key_values.conv_cache[layer_idx]
-        cache_position = cache_position.clamp(0, self.L_cache - 1)
-        conv_state_dec = conv_state_dec.roll(shifts=-1, dims=-1)
-        conv_state_dec[:, :, cache_position] = Bx.to(device=conv_state_dec.device, dtype=conv_state_dec.dtype)
-
-        conv_out_dec = torch.sum(conv_state_dec.to(Bx.device) * self.conv.weight[:, 0, :], dim=-1)
-        if self.bias:
-            conv_out_dec += self.conv.bias
-        conv_out_dec = conv_out_dec.unsqueeze(-1)
-
-        conv_state_prefill = torch.nn.functional.pad(Bx, (self.L_cache - Bx.shape[-1], 0))
-        conv_out_prefill = self.conv(Bx)[..., :seqlen]
-
-        is_decoding = torch.tensor(seqlen == 1).to(x.dtype)
-        conv_out = conv_out_dec * is_decoding + conv_out_prefill * (1.0 - is_decoding)
-        new_conv_state = conv_state_dec * is_decoding + conv_state_prefill * (1.0 - is_decoding)
-        past_key_values.conv_cache[layer_idx].copy_(new_conv_state)
-    else:
-        conv_out = self.conv(Bx)[..., :seqlen]
+    layer_idx = past_key_values.conv_layer_idx_mapping[self.layer_idx]
+    conv_state = past_key_values.conv_cache[layer_idx]
+    conv_out, new_conv_state = ov_causal_conv1d(conv_state, Bx, self.conv.weight, self.conv.bias)
+    past_key_values.conv_cache[layer_idx].copy_(new_conv_state)
 
     y = C * conv_out
     y = y.transpose(-1, -2).contiguous()
