@@ -76,7 +76,7 @@ class LLMPipelineTestCase(unittest.TestCase):
             SUPPORTED_ARCHITECTURES += ("qwen",)
         if is_transformers_version("<", "5"):
             SUPPORTED_ARCHITECTURES += ("phimoe",)
-    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
+    if is_transformers_version(">=", "4.50"):
         SUPPORTED_ARCHITECTURES += ("gemma3_text",)
     if is_transformers_version(">=", "4.51.0"):
         SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe")
@@ -224,8 +224,7 @@ class VLMPipelineTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("qwen2_5_vl",)
         if is_transformers_version("<", "4.54.0"):
             SUPPORTED_ARCHITECTURES += ("phi4mm",)
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
+    if is_transformers_version(">=", "4.50"):
         SUPPORTED_ARCHITECTURES += ("gemma3",)
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("llava", "llava_next_video")
