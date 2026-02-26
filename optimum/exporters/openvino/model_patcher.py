@@ -4833,7 +4833,7 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        # The difference from original code is only in getting patch_position_ids as input and propogation it into embeddings instead of calculation inside based on patch_attention_mask
+        # The difference from original code is only in getting patch_position_ids as input and propagating it into embeddings instead of calculation inside based on patch_attention_mask
         # method for calculation position_ids is not pytorch tracing friendly due to cycle over batch size.
         def transformer_forward(
             self,
@@ -7684,7 +7684,7 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                 afmoe_moe._orig_forward = afmoe_moe.forward
                 afmoe_moe.forward = types.MethodType(afmoe_moe_forward_patched, afmoe_moe)
 
-                # prepare weigths to combine them from all experts to get the common gate, up and down weights
+                # prepare weights to combine them from all experts to get the common gate, up and down weights
                 # this is required for vectorized batched matmul representation of MoE
                 # Fix CVS-180119: currently OpenVINO PyTorch Frontend incorrectly patching torch.bmm operation
                 # with bf16 weights that leads to operands types mismatch in torch.bmm during TorchScript tracing

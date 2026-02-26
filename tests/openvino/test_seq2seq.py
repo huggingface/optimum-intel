@@ -955,7 +955,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             question = "Hi, how are you?"
             inputs = model.preprocess_inputs(**preprocessors, text=question, image=None)
             outputs = model.generate(**inputs, max_new_tokens=10)
-            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+            # filter out original prompt because it may contain out of tokenizer tokens e.g. in nanollava text separator = -200
             outputs = outputs[:, inputs["input_ids"].shape[1] :]
             outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
             self.assertIsInstance(outputs[0], str)
@@ -977,7 +977,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 question = "Why is this video funny?"
                 inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
                 outputs = model.generate(**inputs, max_new_tokens=10)
-                # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+                # filter out original prompt because it may contain out of tokenizer tokens e.g. in nanollava text separator = -200
                 outputs = outputs[:, inputs["input_ids"].shape[1] :]
                 outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
                 self.assertIsInstance(outputs[0], str)
@@ -987,7 +987,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             question = "Translate this audio to French"
             inputs = model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
             outputs = model.generate(**inputs, max_new_tokens=10)
-            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+            # filter out original prompt because it may contain out of tokenizer tokens e.g. in nanollava text separator = -200
             outputs = outputs[:, inputs["input_ids"].shape[1] :]
             outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
             self.assertIsInstance(outputs[0], str)
