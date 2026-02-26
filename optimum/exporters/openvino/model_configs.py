@@ -4136,8 +4136,6 @@ class GotOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
 @register_in_tasks_manager("gemma3", *["image-text-to-text"], library_name="transformers")
 class Gemma3OpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
-    # TODO (@echarlaix): add v5 support
-    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
     def __init__(
         self,

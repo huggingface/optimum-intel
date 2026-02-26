@@ -4657,22 +4657,29 @@ class CommonImageEmbeddingsModelPatcher(ModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
-        model.__orig_forward = model.forward
-        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/got_ocr2/modeling_got_ocr2.py#L835
-        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-Gemma-3/src/transformers/models/gemma3/modeling_gemma3.py#L1321
-        if (
-            hasattr(model, "model")
-            and hasattr(model.model, "get_image_features")
-            and is_transformers_version("<", "5")
-        ):
-            model.forward = model.model.get_image_features
-        else:
-            model.forward = model.get_image_features
         super().__init__(config, model, model_kwargs)
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-        self._model.forward = self._model.__orig_forward
+        @functools.wraps(self.orig_forward)
+        def patched_forward(*args, **kwargs):
+            # Adapted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/got_ocr2/modeling_got_ocr2.py#L835
+            # Adapted from https://github.com/huggingface/transformers/blob/v4.49.0-Gemma-3/src/transformers/models/gemma3/modeling_gemma3.py#L1321
+            if (
+                hasattr(self._model, "model")
+                and hasattr(self._model.model, "get_image_features")
+                and is_transformers_version("<", "5")
+            ):
+                get_image_features = self._model.model.get_image_features
+            else:
+                get_image_features = self._model.get_image_features
+
+            outputs = get_image_features(*args, **kwargs)
+
+            if is_transformers_version(">=", "5"):
+                outputs = BaseModelOutputWithPooling(pooler_output=outputs.pooler_output)
+
+            return outputs
+
+        self.patched_forward = patched_forward
 
 
 # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-Gemma-3/src/transformers/models/gemma3/modeling_gemma3.py#L1147

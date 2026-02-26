@@ -581,9 +581,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             SUPPORTED_ARCHITECTURES += ["phi4mm"]
             SUPPORT_AUDIO.append("phi4mm")
 
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version(">", "4.49") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
+    if is_transformers_version(">=", "4.50"):
+        SUPPORTED_ARCHITECTURES += ["gemma3"]
+        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+        if is_transformers_version("<", "5"):
+            SUPPORTED_ARCHITECTURES += ["smolvlm"]
 
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version(">=", "4.51") and is_transformers_version("<", "5"):
@@ -614,7 +616,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "llama4",
             "llava_next_video",
             "phi4_multimodal",
-            "gemma3",
             "smolvlm",
         }
     REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "minicpmo", "llava-qwen2", "phi3_v", "maira2", "phi4mm"]
@@ -783,9 +784,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         set_seed(SEED)
 
         additional_inputs = {}
-        # gemma3 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
+        # gemma3 does not support dynamic cache until v4.53, we cannot compare dynamic cache result vs hybrid cache,
         # align cache representation in torch model
-        if model_arch == "gemma3":
+        if model_arch == "gemma3" and is_transformers_version("<", "4.53.0"):
             patch_update_causal_mask(
                 transformers_model if is_transformers_version("<", "4.52.0") else transformers_model.language_model,
                 "4.43.0",
