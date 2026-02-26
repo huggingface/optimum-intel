@@ -55,6 +55,86 @@ class OVQuantizationMethod(str, Enum):
 
 # Default configs for 4-bit weight quantization
 _DEFAULT_4BIT_WQ_CONFIGS = {
+    #############################################################
+    "meta-llama/Meta-Llama-3.1-8B-Instruct": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 0.8,
+        "quant_method": OVQuantizationMethod.AWQ,
+        "backup_precision": "int8_sym",
+    },
+    "microsoft/Phi-3.5-mini-instruct": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1.0,
+        "quant_method": OVQuantizationMethod.AWQ,
+        "backup_precision": "int8_sym",
+    },
+    "microsoft/Phi-4-reasoning": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1.0,
+        "quant_method": OVQuantizationMethod.AWQ,
+        "backup_precision": "int8_sym",
+    },
+    "Qwen/Qwen3-8B": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "scale_estimation": True,
+        "backup_precision": "int8_sym",
+    },
+    "Qwen/Qwen2.5-1.5B-Instruct": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+        "backup_precision": "int8_sym",
+    },
+    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1,
+        "backup_precision": "int8_sym",
+    },
+    "google/gemma-3-4b-it": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1.0,
+        "backup_precision": "int8_sym",
+    },
+    "openbmb/MiniCPM4-0.5B": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1.0,
+        "backup_precision": "int8_sym",
+    },
+    "openbmb/MiniCPM4-8B": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1.0,
+        "backup_precision": "int8_sym",
+    },
+    "mistralai/Mistral-7B-Instruct-v0.2": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1.0,
+        "backup_precision": "int8_sym",
+    },
+    #############################################################
     "databricks/dolly-v2-3b": {
         "bits": 4,
         "sym": False,
@@ -101,15 +181,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     "pansophic/rocket-3B": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
     "THUDM/chatglm2-6b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.72},
     "Qwen/Qwen-7B-Chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
-    "Qwen/Qwen2.5-1.5B-Instruct": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 128,
-        "ratio": 0.9,
-        "dataset": "wikitext2",
-        "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
-    },
     "Qwen/Qwen2.5-7B-Instruct": {
         "bits": 4,
         "sym": False,
@@ -141,14 +212,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "group_size": 128,
         "ratio": 1.0,
         "quant_method": OVQuantizationMethod.AWQ,
-    },
-    "Qwen/Qwen3-8B": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 128,
-        "ratio": 1.0,
-        "dataset": "wikitext2",
-        "scale_estimation": True,
     },
     "openlm-research/open_llama_3b": {"bits": 4, "sym": False, "group_size": 64, "all_layers": True},
     "openlm-research/open_llama_3b_v2": {
@@ -235,13 +298,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "dataset": "wikitext2",
         "scale_estimation": True,
     },
-    "meta-llama/Meta-Llama-3.1-8B-Instruct": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 64,
-        "ratio": 0.8,
-        "quant_method": OVQuantizationMethod.AWQ,
-    },
     "meta-llama/Llama-3.2-1B-Instruct": {
         "bits": 4,
         "sym": False,
@@ -263,13 +319,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "ratio": 1.0,
         "dataset": "wikitext2",
         "scale_estimation": True,
-    },
-    "microsoft/Phi-3.5-mini-instruct": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 64,
-        "ratio": 1.0,
-        "quant_method": OVQuantizationMethod.AWQ,
     },
     "microsoft/Phi-4-mini-instruct": {
         "bits": 4,
@@ -296,13 +345,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 128,
         "ratio": 1.0,
-        "quant_method": OVQuantizationMethod.AWQ,
-    },
-    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 64,
-        "ratio": 0.8,
         "quant_method": OVQuantizationMethod.AWQ,
     },
     "microsoft/Phi-4-multimodal-instruct": {
