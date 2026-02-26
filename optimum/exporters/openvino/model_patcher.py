@@ -7067,9 +7067,9 @@ class Zamba2ModelPatcher(ModelPatcher):
             mamba_layer.forward = mamba_layer._orig_forward
 
 
-# unified torch representation for CausalConv1d operation
-# that will be used in all models with CausalConv1d
-# the resulted OV graph for this function can be fused into internal operation CausalConv1d
+# Unified torch representation of the CausalConv1d operation
+# This representation is used across all models with CausalConv1d.
+# The resulting OV graph for this function can be fused into the internal CausalConv1d operation.
 def ov_causal_conv1d(conv_state, input_embeds, weight, bias):
     _, hidden_size, seq_len = input_embeds.shape
     _, w_in_channels, _ = weight.shape
