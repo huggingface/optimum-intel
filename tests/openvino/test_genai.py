@@ -69,6 +69,7 @@ class LLMPipelineTestCase(unittest.TestCase):
         "starcoder2",
         "dbrx",
         "cohere",
+        "cohere2",
         "qwen2",
         "qwen2_moe",
         "phi3",
