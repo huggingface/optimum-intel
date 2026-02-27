@@ -28,9 +28,10 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=2.1",
-    "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git@main",
-    "transformers>=4.45,<4.58",
+    "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git@transformers-v5",
+    "transformers>=4.45,<5.1",
     "setuptools",
+    "huggingface-hub>=0.23.2,<2.0",
     "nncf>=2.19.0",
     "openvino>=2025.4.0",
     "openvino-tokenizers>=2025.4.0",
@@ -55,7 +56,7 @@ TESTS_REQUIRE = [
     "sentence-transformers",
     "open_clip_torch>=2.26.1",
     "peft",
-    "datasets[audio]>=1.4.0,<4.0.0",
+    "datasets>=1.4.0,<4.0.0",
     "tbb",
     "langchain-huggingface",
     "hf_xet",
@@ -69,10 +70,10 @@ QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 
 EXTRAS_REQUIRE = {
     "nncf": ["nncf>=2.19.0"],
-    "openvino": ["nncf>=2.19.0", "openvino>=2025.4.0", "openvino-tokenizers>=2025.4.0"],
+    "openvino": ["nncf>=2.19.0", "openvino>=2025.3.0", "openvino-tokenizers>=2025.3.0"],
     "neural-compressor": ["neural-compressor[pt]>=3.4.1", "accelerate", "transformers<4.46", "datasets"],
     "ipex": ["intel-extension-for-pytorch>=2.8", "transformers>4.54,<4.56", "accelerate"],
-    "diffusers": ["diffusers"],
+    "diffusers": ["diffusers", "transformers<5"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
 }

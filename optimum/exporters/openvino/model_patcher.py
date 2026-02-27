@@ -19,7 +19,7 @@ import logging as log
 import math
 import types
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
@@ -78,6 +78,28 @@ else:
 
 
 logger = logging.getLogger(__name__)
+
+
+def postprocess_past_key_values(past_key_values):
+    if isinstance(past_key_values, (EncoderDecoderCache, DynamicCache)):
+        if hasattr(past_key_values, "to_legacy_cache"):
+            past_key_values = past_key_values.to_legacy_cache()
+        elif isinstance(past_key_values, DynamicCache):
+            past_key_values = [(lay.keys, lay.values) for lay in past_key_values.layers]
+        elif isinstance(past_key_values, EncoderDecoderCache):
+            past_key_values = [
+                (self_lay.keys, self_lay.values, cross_lay.keys, cross_lay.values)
+                for self_lay, cross_lay in zip(
+                    past_key_values.self_attention_cache.layers,
+                    past_key_values.cross_attention_cache.layers,
+                )
+            ]
+    return past_key_values
+
+
+def _get_model_attribute(model, name):
+    target = getattr(model, "model", model) if is_transformers_version(">=", "5") else model
+    return getattr(target, name)
 
 
 for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
@@ -309,18 +331,21 @@ def _mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torc
 class MixtralModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-
-        for layer in self._model.model.layers:
-            layer.block_sparse_moe._unpatched_forward = layer.block_sparse_moe.forward
-            layer.block_sparse_moe.forward = types.MethodType(
-                _mixtral_sparse_moe_block_forward, layer.block_sparse_moe
-            )
+        if is_transformers_version("<", "5"):
+            for layer in self._model.model.layers:
+                layer.block_sparse_moe._unpatched_forward = layer.block_sparse_moe.forward
+                layer.block_sparse_moe.forward = types.MethodType(
+                    _mixtral_sparse_moe_block_forward, layer.block_sparse_moe
+                )
+        else:
+            self._model.set_experts_implementation("batched_mm")
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        for layer in self._model.model.layers:
-            layer.block_sparse_moe.forward = layer.block_sparse_moe._unpatched_forward
+        if is_transformers_version("<", "5"):
+            for layer in self._model.model.layers:
+                layer.block_sparse_moe.forward = layer.block_sparse_moe._unpatched_forward
 
 
 class ArcticModelPatcher(MixtralModelPatcher):
@@ -1364,7 +1389,11 @@ def phi3_442_forward(
     if use_cache:
         use_legacy_cache = not isinstance(past_key_values, Cache)
         if use_legacy_cache:
-            past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            if is_transformers_version("<", "5"):
+                past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                past_key_values = DynamicCache(past_key_values)
+
         past_key_values_length = past_key_values.get_usable_length(seq_length)
 
     if position_ids is None:
@@ -1437,7 +1466,7 @@ def phi3_442_forward(
 
     next_cache = None
     if use_cache:
-        next_cache = next_decoder_cache.to_legacy_cache() if use_legacy_cache else next_decoder_cache
+        next_cache = postprocess_past_key_values(next_decoder_cache) if use_legacy_cache else next_decoder_cache
     if not return_dict:
         return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
     return BaseModelOutputWithPast(
@@ -1621,16 +1650,22 @@ def _phi_moe_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torc
 class PhiMoEModelPatcher(Phi3ModelPatcher):
     def __enter__(self):
         super().__enter__()
-        for layer in self._model.model.layers:
-            layer.block_sparse_moe._orig_forward = layer.block_sparse_moe.forward
-            layer.block_sparse_moe.forward = types.MethodType(
-                _phi_moe_sparse_moe_block_forward, layer.block_sparse_moe
-            )
+
+        if is_transformers_version("<", "5"):
+            for layer in self._model.model.layers:
+                layer.block_sparse_moe._orig_forward = layer.block_sparse_moe.forward
+                layer.block_sparse_moe.forward = types.MethodType(
+                    _phi_moe_sparse_moe_block_forward, layer.block_sparse_moe
+                )
+        else:
+            self._model.set_experts_implementation("batched_mm")
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        for layer in self._model.model.layers:
-            layer.block_sparse_moe.forward = layer.block_sparse_moe._orig_forward
+
+        if is_transformers_version("<", "5"):
+            for layer in self._model.model.layers:
+                layer.block_sparse_moe.forward = layer.block_sparse_moe._orig_forward
 
 
 def _aquila_self_attn_sdpa_forward(
@@ -2697,15 +2732,19 @@ def gptj_attn_forward(
     if output_attentions:
         self._attn = self._orig_attn
 
+    kwargs = {}
+    if is_transformers_version("<", "5"):
+        kwargs["head_mask"] = head_mask
+
     return self._orig_forward(
         hidden_states,
         layer_past,
         attention_mask,
         position_ids,
-        head_mask,
         use_cache=use_cache,
         output_attentions=output_attentions,
         cache_position=cache_position,
+        **kwargs,
     )
 
 
@@ -2936,7 +2975,11 @@ class Gemma2ModelPatcher(OVDecoderModelPatcher):
                 legacy_pkv = args[pkv_argument_index]
                 pkv_in_args = True
             if legacy_pkv is not None:
-                pkv = DynamicCache.from_legacy_cache(legacy_pkv)
+                if is_transformers_version("<", "5"):
+                    pkv = DynamicCache.from_legacy_cache(legacy_pkv)
+                else:
+                    pkv = DynamicCache(legacy_pkv)
+
                 return_legacy_cache = True
                 if not pkv_in_args:
                     kwargs["past_key_values"] = pkv
@@ -2957,7 +3000,7 @@ class Gemma2ModelPatcher(OVDecoderModelPatcher):
 
             outputs = self.orig_forward(*args, **kwargs)
             if return_legacy_cache:
-                outputs.past_key_values = outputs.past_key_values.to_legacy_cache()
+                outputs.past_key_values = postprocess_past_key_values(outputs.past_key_values)
 
             return outputs
 
@@ -3213,7 +3256,7 @@ def llava_vision_embed_forward(self, pixel_values):
     # copied from https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/models/llava/modeling_llava.py#L428-L441
     # these changes does not bring any difference from original, it only packs model subcomponent inference together
     # that allow us avoid memory overheads and their inference results handling on code-level
-    image_outputs = self.vision_tower(pixel_values, output_hidden_states=True)
+    image_outputs = _get_model_attribute(self, "vision_tower")(pixel_values, output_hidden_states=True)
     # this is not memory efficient at all (output_hidden_states=True) will save all the hidden stated.
     selected_image_feature = image_outputs.hidden_states[self.config.vision_feature_layer]
 
@@ -3224,7 +3267,7 @@ def llava_vision_embed_forward(self, pixel_values):
     else:
         raise ValueError(f"Unexpected select feature strategy: {self.config.vision_feature_select_strategy}")
 
-    image_features = self.multi_modal_projector(selected_image_feature)
+    image_features = _get_model_attribute(self, "multi_modal_projector")(selected_image_feature)
     return image_features
 
 
@@ -3232,7 +3275,7 @@ def llava_next_video_vision_embed_forward(self, pixel_values):
     # copied from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/llava_next_video/modeling_llava_next_video.py#L519
     # these changes does not bring any difference from original, it only packs model subcomponent inference together
     # that allow us avoid memory overheads and their inference results handling on code-level
-    image_features = self.vision_tower(pixel_values, output_hidden_states=True)
+    image_features = _get_model_attribute(self, "vision_tower")(pixel_values, output_hidden_states=True)
     vision_feature_layer = self.config.vision_feature_layer
     if isinstance(vision_feature_layer, int):
         selected_image_feature = image_features.hidden_states[vision_feature_layer]
@@ -3265,7 +3308,6 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
     ):
         model.__orig_forward = model.forward
         model.forward = types.MethodType(llava_vision_embed_forward, model)
-
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -3298,8 +3340,9 @@ class LlavaNextVideoImageEmbeddingModelPatcher(ModelPatcher):
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
+        # TODO: use get_image_features instead and add image_sizes as input when exporting
+        # https://github.com/huggingface/transformers/blob/v4.48.0/src/transformers/models/llava_next_video/modeling_llava_next_video.py#L746
         model.forward = types.MethodType(llava_next_video_vision_embed_forward, model)
-
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -4067,7 +4110,11 @@ class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
             input_ids=None,
             use_cache=True,
         ):
-            new_past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            if is_transformers_version("<", "5"):
+                new_past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                new_past_key_values = DynamicCache(past_key_values)
+
             result = self.__orig_forward(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -4077,7 +4124,7 @@ class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
                 use_cache=use_cache,
             )
             if past_key_values is not None:
-                result["past_key_values"] = result["past_key_values"].to_legacy_cache()
+                result["past_key_values"] = postprocess_past_key_values(result["past_key_values"])
             return result
 
         model.forward = types.MethodType(forward_wrap, model)
@@ -4108,9 +4155,11 @@ class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
             deepstack_visual_embeds,
             use_cache=True,
         ):
-            from transformers.cache_utils import DynamicCache
+            if is_transformers_version("<", "5"):
+                pkv = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                pkv = DynamicCache(past_key_values)
 
-            pkv = DynamicCache.from_legacy_cache(past_key_values)
             outputs = self.model.language_model(
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
@@ -4123,7 +4172,7 @@ class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
             hidden_states = outputs[0]
             # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
             logits = self.lm_head(hidden_states)
-            return (logits, outputs.past_key_values.to_legacy_cache())
+            return (logits, postprocess_past_key_values(outputs.past_key_values))
 
         model.__orig_forward = model.forward
         model.forward = types.MethodType(lm_forward, model)
@@ -4435,6 +4484,7 @@ def _granite_moe_parallel_experts_forward(self, inputs, expert_size):
 class GraniteMoEModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
+
         for layer in self._model.model.layers:
             block_sparse_moe = layer.block_sparse_moe
             block_sparse_moe.router._orig_forward = block_sparse_moe.router.forward
@@ -4452,6 +4502,7 @@ class GraniteMoEModelPatcher(OVDecoderModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+
         for layer in self._model.model.layers:
             block_sparse_moe = layer.block_sparse_moe
             block_sparse_moe.router.forward = block_sparse_moe.router._orig_forward
@@ -4492,10 +4543,14 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
 
                 if pkv is not None:
                     if isinstance(pkv, EncoderDecoderCache):
-                        pkv = pkv.self_attention_cache.to_legacy_cache()
+                        pkv = postprocess_past_key_values(pkv.self_attention_cache)
                     else:
                         pkv = [pkv_item[:2] for pkv_item in pkv]
-                    pkv = EncoderDecoderCache.from_legacy_cache(pkv)
+
+                    if is_transformers_version("<", "5"):
+                        pkv = EncoderDecoderCache.from_legacy_cache(pkv)
+                    else:
+                        pkv = EncoderDecoderCache(DynamicCache(pkv), DynamicCache())
 
                     if "past_key_values" in kwargs:
                         kwargs["past_key_values"] = pkv
@@ -4506,7 +4561,7 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
 
             # the optimum-onnx seq2seq model patcher only converts to tuple starting from 4.48
             if isinstance(outputs.get("past_key_values"), (DynamicCache, EncoderDecoderCache)):
-                outputs["past_key_values"] = outputs["past_key_values"].to_legacy_cache()
+                outputs["past_key_values"] = postprocess_past_key_values(outputs["past_key_values"])
 
             # we still need to filter out cross attention in the case of non-stateful decoder
             filtered_outputs = {}
@@ -4602,18 +4657,29 @@ class CommonImageEmbeddingsModelPatcher(ModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
-        model.__orig_forward = model.forward
-        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/got_ocr2/modeling_got_ocr2.py#L835
-        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-Gemma-3/src/transformers/models/gemma3/modeling_gemma3.py#L1321
-        if hasattr(model, "model") and hasattr(model.model, "get_image_features"):
-            model.forward = model.model.get_image_features
-        else:
-            model.forward = model.get_image_features
         super().__init__(config, model, model_kwargs)
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-        self._model.forward = self._model.__orig_forward
+        @functools.wraps(self.orig_forward)
+        def patched_forward(*args, **kwargs):
+            # Adapted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/got_ocr2/modeling_got_ocr2.py#L835
+            # Adapted from https://github.com/huggingface/transformers/blob/v4.49.0-Gemma-3/src/transformers/models/gemma3/modeling_gemma3.py#L1321
+            if (
+                hasattr(self._model, "model")
+                and hasattr(self._model.model, "get_image_features")
+                and is_transformers_version("<", "5")
+            ):
+                get_image_features = self._model.model.get_image_features
+            else:
+                get_image_features = self._model.get_image_features
+
+            outputs = get_image_features(*args, **kwargs)
+
+            if is_transformers_version(">=", "5"):
+                outputs = BaseModelOutputWithPooling(pooler_output=outputs.pooler_output)
+
+            return outputs
+
+        self.patched_forward = patched_forward
 
 
 # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-Gemma-3/src/transformers/models/gemma3/modeling_gemma3.py#L1147
@@ -4680,7 +4746,10 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
         def forward(
             self, attention_mask, position_ids, past_key_values, token_type_ids, inputs_embeds, use_cache=True
         ):
-            pkv = DynamicCache.from_legacy_cache(past_key_values)
+            if is_transformers_version("<", "5"):
+                pkv = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                pkv = DynamicCache(past_key_values)
 
             past_seen_tokens = past_key_values[0][0].shape[-2]
             cache_position = torch.arange(
@@ -4706,7 +4775,7 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
                 **forward_kwargs,
             )
             upd_pkv = result["past_key_values"]
-            result["past_key_values"] = upd_pkv.to_legacy_cache()
+            result["past_key_values"] = postprocess_past_key_values(upd_pkv)
             return result
 
         if is_transformers_version("<", "4.53.0"):
@@ -5045,8 +5114,6 @@ def _blenderbot_attn_forward_new(
     output_attentions: bool = False,
     cache_position: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-    from transformers.cache_utils import EncoderDecoderCache
-
     """Input shape: Batch x Time x Channel"""
 
     # if key_value_states are provided this layer is used as a cross-attention layer
@@ -5264,14 +5331,18 @@ def _qwen2moe_sparse_block_forward(self, hidden_states: torch.Tensor) -> torch.T
 class Qwen2MoEPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "4.52.0"):
+
+        if is_transformers_version(">=", "4.52.0") and is_transformers_version("<", "5"):
             from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeSparseMoeBlock
 
             modulewise_patch(self._model, Qwen2MoeSparseMoeBlock, _qwen2moe_sparse_block_forward)
 
+        if is_transformers_version(">=", "5"):
+            self._model.set_experts_implementation("batched_mm")
+
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if is_transformers_version(">=", "4.52.0"):
+        if is_transformers_version(">=", "4.52.0") and is_transformers_version("<", "5"):
             from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeSparseMoeBlock
 
             modulewise_unpatch(self._model, Qwen2MoeSparseMoeBlock)
@@ -5594,7 +5665,10 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             if past_key_values is not None:
                 past_key_values = [cache_item[:2] for cache_item in past_key_values]
                 if is_transformers_version(">=", "4.56"):
-                    past_key_values = EncoderDecoderCache.from_legacy_cache(past_key_values)
+                    if is_transformers_version("<", "5"):
+                        past_key_values = EncoderDecoderCache.from_legacy_cache(past_key_values)
+                    else:
+                        past_key_values = EncoderDecoderCache(DynamicCache(past_key_values), DynamicCache())
 
             output_sequence = inputs_embeds
             output_cross_attentions = False
@@ -5627,7 +5701,7 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             past_key_values = decoder_out.past_key_values
             if past_key_values is not None:
                 if isinstance(past_key_values, EncoderDecoderCache):
-                    past_key_values = past_key_values.self_attention_cache.to_legacy_cache()
+                    past_key_values = postprocess_past_key_values(past_key_values.self_attention_cache)
                 else:
                     past_key_values = [cache_item[:2] for cache_item in past_key_values]
 
@@ -5678,7 +5752,11 @@ class Phi4MMLanguageModelPatcher(OVDecoderModelPatcher):
         # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L2156-L2178
         # moved audio and vision features processing outside model
         def lm_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values, use_cache=True):
-            pkv = DynamicCache.from_legacy_cache(past_key_values)
+            if is_transformers_version("<", "5"):
+                pkv = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                pkv = DynamicCache(past_key_values)
+
             outputs = self.model(
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
@@ -5689,7 +5767,7 @@ class Phi4MMLanguageModelPatcher(OVDecoderModelPatcher):
             hidden_states = outputs[0]
             # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
             logits = self.lm_head(hidden_states)
-            return (logits, outputs.past_key_values.to_legacy_cache())
+            return (logits, postprocess_past_key_values(outputs.past_key_values))
 
         model.__orig_forward = model.forward
         model.forward = types.MethodType(lm_forward, model)
@@ -6260,6 +6338,15 @@ def llama4_moe_forward(self, hidden_states):
     return out, router_scores
 
 
+# Copied from https://github.com/huggingface/transformers/blob/v4.56.0/src/transformers/masking_utils.py#L105
+# transformers.masking_utils._legacy_chunked_overlay deprecated since transformers v5
+def _legacy_chunked_overlay(chunk_size: int) -> Callable:
+    def inner_mask(batch_idx: int, head_idx: int, q_idx: int, kv_idx: int) -> bool:
+        return kv_idx // chunk_size == q_idx // chunk_size
+
+    return inner_mask
+
+
 class Llama4TextModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
@@ -6276,8 +6363,8 @@ class Llama4TextModelPatcher(ModelPatcher):
         if is_transformers_version(">=", "4.56"):
             # openvino is not able to trace through the new chunked_overlay with left_padding
             self.original_chunked_overlay = transformers.masking_utils.chunked_overlay
-            transformers.masking_utils.chunked_overlay = (
-                lambda chunk_size, left_padding: transformers.masking_utils._legacy_chunked_overlay(chunk_size)
+            transformers.masking_utils.chunked_overlay = lambda chunk_size, left_padding: _legacy_chunked_overlay(
+                chunk_size
             )
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -6619,14 +6706,16 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        if is_transformers_version(">=", "4.53"):
+        if is_transformers_version(">=", "4.53") and is_transformers_version("<", "5"):
             self.original_moe_forward = Qwen3MoeSparseMoeBlock.forward
             Qwen3MoeSparseMoeBlock.forward = qwen3_moe_forward_patched
+        if is_transformers_version(">=", "5"):
+            self._model.set_experts_implementation("batched_mm")
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if is_transformers_version(">=", "4.53"):
+        if is_transformers_version(">=", "4.53") and is_transformers_version("<", "5"):
             Qwen3MoeSparseMoeBlock.forward = self.original_moe_forward
 
 
@@ -7292,16 +7381,19 @@ class GptOssModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        if is_transformers_version(">=", "4.55.0"):
+        if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "5"):
             from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
 
             self.original_gpt_oss_forward = GptOssExperts.forward
             GptOssExperts.forward = gpt_oss_forward
 
+        if is_transformers_version(">=", "5"):
+            self._model.set_experts_implementation("batched_mm")
+
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if is_transformers_version(">=", "4.55.0"):
+        if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "5"):
             from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
 
             GptOssExperts.forward = self.original_gpt_oss_forward
@@ -7490,10 +7582,12 @@ class GraniteMoeHybridModelPatcher(ModelPatcher):
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
-        self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
-        self._model.model._update_causal_mask = types.MethodType(
-            granite_moe_hybrid_update_causal_mask, self._model.model
-        )
+        if is_transformers_version("<", "5"):
+            self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
+            self._model.model._update_causal_mask = types.MethodType(
+                granite_moe_hybrid_update_causal_mask, self._model.model
+            )
+
         for idx, layer in enumerate(self._model.model.layers):
             if hasattr(layer, "block_sparse_moe"):
                 patch_sparse_moe(layer.block_sparse_moe)
@@ -7513,7 +7607,9 @@ class GraniteMoeHybridModelPatcher(ModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
 
-        self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+        if is_transformers_version("<", "5"):
+            self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+
         for idx, layer in enumerate(self._model.model.layers):
             if hasattr(layer, "block_sparse_moe"):
                 unpatch_sparse_moe(layer.block_sparse_moe)
