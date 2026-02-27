@@ -78,7 +78,7 @@ class LLMPipelineTestCase(unittest.TestCase):
         "granitemoe",
     )
 
-    if is_transformers_version(">=", "4.45.0"):
+    if is_transformers_version(">=", "4.48.0"):
         SUPPORTED_ARCHITECTURES += ("cohere2",)
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phimoe", "opt")

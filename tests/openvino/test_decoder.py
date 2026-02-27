@@ -110,7 +110,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
-    if is_transformers_version(">=", "4.45.0"):
+    if is_transformers_version(">=", "4.48.0"):
         SUPPORTED_ARCHITECTURES += ("cohere2",)
 
     if is_transformers_version(">=", "4.46.0"):

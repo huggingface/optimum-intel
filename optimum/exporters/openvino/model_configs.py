@@ -900,7 +900,7 @@ class ArceeOpenVINOConfig(LlamaOpenVINOConfig):
     library_name="transformers",
 )
 class Cohere2OpenVINOConfig(LlamaOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = "4.45.0"
+    MIN_TRANSFORMERS_VERSION = "4.48.0"
 
 
 class QwenDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):

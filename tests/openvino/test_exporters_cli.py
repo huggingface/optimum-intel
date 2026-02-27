@@ -116,7 +116,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("zero-shot-image-classification", "clip"),
     ]
 
-    if is_transformers_version(">=", "4.45.0"):
+    if is_transformers_version(">=", "4.48.0"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "cohere2"),

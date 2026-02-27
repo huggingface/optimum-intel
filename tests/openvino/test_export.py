@@ -95,7 +95,7 @@ class ExportModelTest(unittest.TestCase):
         "ltx-video": OVLTXPipeline,
     }
 
-    if is_transformers_version(">=", "4.45.0"):
+    if is_transformers_version(">=", "4.48.0"):
         SUPPORTED_ARCHITECTURES.update({"cohere2": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.49"):
