@@ -150,6 +150,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "4.58.0"):
         SUPPORTED_ARCHITECTURES += ("afmoe",)
 
+    if is_transformers_version(">=", "4.57.0"):
+        SUPPORTED_ARCHITECTURES += ("hunyuan_v1_dense",)
+
     if is_transformers_version("<", "4.56.0"):
         SUPPORTED_ARCHITECTURES += ("qwen", "chatglm", "chatglm4")
 
@@ -233,6 +236,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_oss_mxfp4": 2,
         "zamba2": 1,
         "bitnet": 6,
+        "hunyuan_v1_dense": 2,
     }
     TASK = "text-generation"
 
@@ -399,7 +403,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
 
-        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
+        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49
         if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
             self.skipTest("Incompatible modeling code")
 
@@ -650,7 +654,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in ["lfm2"]:
             return
 
-        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
+        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49
         if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
             self.skipTest("Incompatible modeling code")
 
