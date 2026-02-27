@@ -7103,16 +7103,21 @@ def lfm2_short_conv_forward_patched(
 ):
     from transformers.models.lfm2.modeling_lfm2 import apply_mask_to_padding_states
 
+    seqlen = x.shape[1]
+
     x = apply_mask_to_padding_states(x, attention_mask)
     BCx = self.in_proj(x).transpose(-1, -2)
     B, C, x = BCx.chunk(3, dim=-2)
 
     Bx = B * x
 
-    layer_idx = past_key_values.conv_layer_idx_mapping[self.layer_idx]
-    conv_state = past_key_values.conv_cache[layer_idx]
-    conv_out, new_conv_state = ov_causal_conv1d(conv_state, Bx, self.conv.weight, self.conv.bias)
-    past_key_values.conv_cache[layer_idx].copy_(new_conv_state)
+    if past_key_values is not None:
+        layer_idx = past_key_values.conv_layer_idx_mapping[self.layer_idx]
+        conv_state = past_key_values.conv_cache[layer_idx]
+        conv_out, new_conv_state = ov_causal_conv1d(conv_state, Bx, self.conv.weight, self.conv.bias)
+        past_key_values.conv_cache[layer_idx].copy_(new_conv_state)
+    else:
+        conv_out = self.conv(Bx)[..., :seqlen]
 
     y = C * conv_out
     y = y.transpose(-1, -2).contiguous()
