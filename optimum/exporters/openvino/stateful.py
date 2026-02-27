@@ -99,7 +99,7 @@ def fuse_cache_reorder(
     beam_idx = opset13.parameter(name="beam_idx", dtype=ov.Type.i32, shape=ov.PartialShape([input_batch]))
     beam_idx.output(0).get_tensor().add_names({"beam_idx"})  # why list is not accepted?
     ov_model.add_parameters([beam_idx])
-    not_cache_inputs.append(ov_model.inputs[-1])
+    not_cache_inputs.append("beam_idx")
     # Go over all cache parameters and fuse _reorder_cache with indices provided by the new parameter beam_idx
     for input_name in cache_input_names:
         parameter_output_port = ov_model.input(input_name)
@@ -166,7 +166,8 @@ def make_stateful(
 
     if num_beams_and_batch is not None:
         # Set batch size for input_ids and attention mask to avoid dynamic dimension got propagated from the end of the model back to ReadValue
-        for input in not_kv_inputs:
+        for input_name in not_kv_inputs:
+            input = ov_model.input(input_name)
             shape = input.get_partial_shape()
             if shape.rank.get_length() <= 2:  # == 1 for beam_index
                 shape[0] = num_beams_and_batch
