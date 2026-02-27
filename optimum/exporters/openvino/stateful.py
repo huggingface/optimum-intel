@@ -48,9 +48,11 @@ def model_has_input_output_name(ov_model: ov.Model, name: str):
 
 def fuse_cache_reorder(
     ov_model: ov.Model,
-    not_cache_inputs: List[str],
-    cache_input_names: List[str],
-    gather_dim: int,
+    not_cache_inputs: List[str] = None,
+    cache_input_names: List[str] = None,
+    gather_dim: int = None,
+    not_kv_inputs: List[str] = None,
+    key_value_input_names: List[str] = None,
 ):
     """
     Fuses reordered_cache during generate cycle into ov.Model.
@@ -72,7 +74,23 @@ def fuse_cache_reorder(
           list of names for input layers with key, value, and fixed-sized cache states
       gather_dim (int):
           dimension for gathering cache during reorder pass
+
+    .. deprecated::
+        ``not_kv_inputs`` is deprecated, use ``not_cache_inputs`` instead.
+        ``key_value_input_names`` is deprecated, use ``cache_input_names`` instead.
     """
+    if not_kv_inputs is not None:
+        log.warning(
+            "`not_kv_inputs` is deprecated and will be removed in a future version. Use `not_cache_inputs` instead."
+        )
+        if not_cache_inputs is None:
+            not_cache_inputs = not_kv_inputs
+    if key_value_input_names is not None:
+        log.warning(
+            "`key_value_input_names` is deprecated and will be removed in a future version. Use `cache_input_names` instead."
+        )
+        if cache_input_names is None:
+            cache_input_names = key_value_input_names
 
     if model_has_input_output_name(ov_model, "beam_idx"):
         raise ValueError("Model already has fused cache")
