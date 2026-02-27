@@ -163,6 +163,7 @@ from .model_patcher import (
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
     Lfm2ModelPatcher,
+    Lfm2MoeModelPatcher,
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
     LlavaImageEmbeddingModelPatcher,
@@ -4915,6 +4916,19 @@ class LFM2OpenVINOConfig(MambaOpenVINOConfig):
         if self.use_past_in_inputs:
             self.add_past_key_values(common_inputs, direction="inputs")
         return common_inputs
+
+
+@register_in_tasks_manager(
+    "lfm2_moe",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class LFM2MoeOpenVINOConfig(LFM2OpenVINOConfig):
+    MAX_TRANSFORMERS_VERSION = "4.57.99"
+    _MODEL_PATCHER = Lfm2MoeModelPatcher
 
 
 @register_in_tasks_manager(
