@@ -637,6 +637,23 @@ def _main_quantize(
             token=token,
         )
 
+    # NOTE: The Phi-4-multimodal-instruct model card contains a pipeline_tag set to automatic-speech-recognition,
+    # which is returned as the inferred task. As a result, we try to load the exported model using the
+    # OVModelForSpeechSeq2Seq class instead of the OVModelForVisualCausalLM class when the task is not specified
+    # explicitly. Because of this, we get an error.
+    if original_task == "auto" and library_name == "transformers":
+        config = AutoConfig.from_pretrained(
+            model_name_or_path,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+            trust_remote_code=trust_remote_code,
+        )
+        model_type = config.model_type
+        if model_type in ["phi4mm", "phi4_multimodal"]:
+            task = "image-text-to-text"
+
     # Step 1. Obtain the correct OpenVINO model class
     if library_name == "diffusers":
         if not is_diffusers_available():
