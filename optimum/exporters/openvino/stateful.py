@@ -85,12 +85,17 @@ def fuse_cache_reorder(
         )
         if not_cache_inputs is None:
             not_cache_inputs = not_kv_inputs
+    elif not_cache_inputs is None:
+        raise ValueError("`not_cache_inputs` must be provided")
+
     if key_value_input_names is not None:
         log.warning(
             "`key_value_input_names` is deprecated and will be removed in a future version. Use `cache_input_names` instead."
         )
         if cache_input_names is None:
             cache_input_names = key_value_input_names
+    elif cache_input_names is None:
+        raise ValueError("`cache_input_names` must be provided")
 
     if model_has_input_output_name(ov_model, "beam_idx"):
         raise ValueError("Model already has fused cache")
