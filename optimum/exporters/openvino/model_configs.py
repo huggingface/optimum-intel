@@ -888,6 +888,21 @@ class ArceeOpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.53.0"
 
 
+@register_in_tasks_manager(
+    "cohere2",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class Cohere2OpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.48.0"
+
+
 class QwenDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
         self,

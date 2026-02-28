@@ -110,6 +110,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
+    if is_transformers_version(">=", "4.48.0"):
+        SUPPORTED_ARCHITECTURES += ("cohere2",)
+
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phimoe")
 
@@ -208,6 +211,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "starcoder2": 2,
         "dbrx": 2,
         "cohere": 2,
+        "cohere2": 2,
         "qwen2": 2,
         "qwen2_moe": 4,
         "arctic": 4,
