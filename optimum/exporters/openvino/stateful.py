@@ -48,30 +48,54 @@ def model_has_input_output_name(ov_model: ov.Model, name: str):
 
 def fuse_cache_reorder(
     ov_model: ov.Model,
-    not_kv_inputs: List[str],
-    key_value_input_names: List[str],
-    gather_dim: int,
+    not_cache_inputs: List[str] = None,
+    cache_input_names: List[str] = None,
+    gather_dim: int = None,
+    not_kv_inputs: List[str] = None,
+    key_value_input_names: List[str] = None,
 ):
     """
-    Fuses reored_cache during generate cycle into ov.Model. Used with stateful models, because we can not modify model state directly.
+    Fuses reordered_cache during generate cycle into ov.Model.
+    Used with stateful models, because we can not modify model state directly.
 
-    Adds a new beam_idx parameter and Gather op per each kv-cache input in a given model.
-    Should be run before make_stateful. Implements optimumum's _reorder_cache
+    Adds a new beam_idx parameter and Gather op per each cache input in a given model.
+    Should be run before make_stateful. Implements optimum's _reorder_cache
     inside the model in the beginning of each iteration.
     Gather works along given gather_dim dimension that may vary from model to model.
-    KV-cache inputs are identified based on names in key_value_input_names.
-    Append the new beam_idx parameter to not_kv_inputs.
+    Inputs with cache states (with key, value, and fixed-sized cache) are identified based on names in cache_input_names.
+    Append the new beam_idx parameter to not_cache_inputs.
 
     Parameters:
       ov_model (`ov.Model`):
           openvino model for processing
-      not_kv_inputs (`List[str]`):
-          list of input nodes in model that not related to past key values
-      key_value_input_names (`List[str]`):
-          list of names for key value input layers
+      not_cache_inputs (`List[str]`):
+          list of input nodes in model that not related to cache states
+      cache_input_names (`List[str]`):
+          list of names for input layers with key, value, and fixed-sized cache states
       gather_dim (int):
           dimension for gathering cache during reorder pass
+
+    .. deprecated::
+        ``not_kv_inputs`` is deprecated, use ``not_cache_inputs`` instead.
+        ``key_value_input_names`` is deprecated, use ``cache_input_names`` instead.
     """
+    if not_kv_inputs is not None:
+        log.warning(
+            "`not_kv_inputs` is deprecated and will be removed in a future version. Use `not_cache_inputs` instead."
+        )
+        if not_cache_inputs is None:
+            not_cache_inputs = not_kv_inputs
+    elif not_cache_inputs is None:
+        raise ValueError("`not_cache_inputs` must be provided")
+
+    if key_value_input_names is not None:
+        log.warning(
+            "`key_value_input_names` is deprecated and will be removed in a future version. Use `cache_input_names` instead."
+        )
+        if cache_input_names is None:
+            cache_input_names = key_value_input_names
+    elif cache_input_names is None:
+        raise ValueError("`cache_input_names` must be provided")
 
     if model_has_input_output_name(ov_model, "beam_idx"):
         raise ValueError("Model already has fused cache")
@@ -80,9 +104,9 @@ def fuse_cache_reorder(
     beam_idx = opset13.parameter(name="beam_idx", dtype=ov.Type.i32, shape=ov.PartialShape([input_batch]))
     beam_idx.output(0).get_tensor().add_names({"beam_idx"})  # why list is not accepted?
     ov_model.add_parameters([beam_idx])
-    not_kv_inputs.append(ov_model.inputs[-1])
+    not_cache_inputs.append("beam_idx")
     # Go over all cache parameters and fuse _reorder_cache with indices provided by the new parameter beam_idx
-    for input_name in key_value_input_names:
+    for input_name in cache_input_names:
         parameter_output_port = ov_model.input(input_name)
         consumers = parameter_output_port.get_target_inputs()
         gather = opset13.gather(parameter_output_port, beam_idx, opset13.constant(gather_dim))
@@ -147,7 +171,8 @@ def make_stateful(
 
     if num_beams_and_batch is not None:
         # Set batch size for input_ids and attention mask to avoid dynamic dimension got propagated from the end of the model back to ReadValue
-        for input in not_kv_inputs:
+        for input_name in not_kv_inputs:
+            input = ov_model.input(input_name)
             shape = input.get_partial_shape()
             if shape.rank.get_length() <= 2:  # == 1 for beam_index
                 shape[0] = num_beams_and_batch
@@ -262,8 +287,6 @@ def insert_state_for_nodes(model: ov.Model, nodes):
 
 
 def patch_stateful_hybrid_ssm(ov_model: ov.Model):
-    from openvino._offline_transformations import apply_make_stateful_transformation
-
     def get_kv_ssm_tensor_names(ssm_prefix_names: list, kv_prefix_names: list, ov_tensors):
         # return tensor names of model inputs/outputs tensors with KV and SSM states
         kv_names = []
@@ -287,31 +310,23 @@ def patch_stateful_hybrid_ssm(ov_model: ov.Model):
 
     ssm_prefix_input_names = ["cache_params.past.ssm", "cache_params.past.conv"]
     kv_prefix_input_names = ["cache_params.past.key", "cache_params.past.value"]
-    kv_input_names, ssm_input_names, other_input_names = get_kv_ssm_tensor_names(
+    kv_input_names, ssm_input_names, not_cache_inputs = get_kv_ssm_tensor_names(
         ssm_prefix_input_names, kv_prefix_input_names, ov_model.inputs
     )
-    not_kv_inputs = ssm_input_names + other_input_names
+    cache_inputs = kv_input_names + ssm_input_names
 
     ssm_prefix_output_names = ["cache_params.present.ssm", "cache_params.present.conv"]
     kv_prefix_output_names = ["cache_params.present.key", "cache_params.present.value"]
     kv_output_names, ssm_output_names, _ = get_kv_ssm_tensor_names(
         ssm_prefix_output_names, kv_prefix_output_names, ov_model.outputs
     )
+    cache_outputs = kv_output_names + ssm_output_names
 
     # hybrid models can contain transformer blocks as well
     # so KV tensors must be handled properly
     batch_dim = 0
-    if kv_input_names is not None and len(kv_input_names) > 0:
-        fuse_cache_reorder(ov_model, not_kv_inputs, kv_input_names, batch_dim)
-        make_stateful(ov_model, not_kv_inputs, kv_input_names, kv_output_names, batch_dim)
-
-    # create states for SSM cache
-    input_output_map = {}
-    for cache_name_pair in zip(ssm_input_names, ssm_output_names):
-        input_output_map[cache_name_pair[0]] = cache_name_pair[1]
-
-    apply_make_stateful_transformation(ov_model, input_output_map)
-    build_state_initializer(ov_model, batch_dim)
+    fuse_cache_reorder(ov_model, not_cache_inputs, cache_inputs, batch_dim)
+    make_stateful(ov_model, not_cache_inputs, cache_inputs, cache_outputs, batch_dim)
 
 
 def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):

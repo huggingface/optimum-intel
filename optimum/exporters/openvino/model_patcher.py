@@ -7353,7 +7353,7 @@ def granite_moe_hybrid_update_causal_mask(
     return causal_mask
 
 
-class GraniteMoeHybridModelPatcher(ModelPatcher):
+class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
