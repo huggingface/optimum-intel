@@ -4099,6 +4099,37 @@ class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
 
     _MODEL_PATCHER = DeepseekPatcher
 
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        use_past: bool = False,
+        use_past_in_inputs: bool = False,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        for attr, default in [
+            ("q_lora_rank", 512),
+            ("qk_nope_head_dim", 128),
+            ("qk_rope_head_dim", 64),
+            ("v_head_dim", 192),
+            ("kv_lora_rank", 512),
+            ("attention_bias", False),
+        ]:
+            if hasattr(config, attr) and getattr(config, attr) is None:
+                setattr(config, attr, default)
+
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            use_past=use_past,
+            use_past_in_inputs=use_past_in_inputs,
+            preprocessors=preprocessors,
+        )
+
 
 @register_in_tasks_manager("got_ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")
 class GotOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
