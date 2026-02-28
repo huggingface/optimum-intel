@@ -4082,53 +4082,7 @@ class M2M100OpenVINOConfig(BartOpenVINOConfig):
 class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.46.0"
     MAX_TRANSFORMERS_VERSION = "4.53.3"
-
-    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
-        hidden_size="hidden_size",
-        num_layers="num_hidden_layers",
-        num_attention_heads="num_attention_heads",
-        num_key_value_heads="num_key_value_heads",
-        q_lora_rank="q_lora_rank",
-        qk_nope_head_dim="qk_nope_head_dim",
-        qk_rope_head_dim="qk_rope_head_dim",
-        v_head_dim="v_head_dim",
-        kv_lora_rank="kv_lora_rank",
-        attention_bias="attention_bias",
-        allow_new=True,
-    )
-
     _MODEL_PATCHER = DeepseekPatcher
-
-    def __init__(
-        self,
-        config: "PretrainedConfig",
-        task: str = "feature-extraction",
-        int_dtype: str = "int64",
-        float_dtype: str = "fp32",
-        use_past: bool = False,
-        use_past_in_inputs: bool = False,
-        preprocessors: Optional[List[Any]] = None,
-    ):
-        for attr, default in [
-            ("q_lora_rank", 512),
-            ("qk_nope_head_dim", 128),
-            ("qk_rope_head_dim", 64),
-            ("v_head_dim", 192),
-            ("kv_lora_rank", 512),
-            ("attention_bias", False),
-        ]:
-            if hasattr(config, attr) and getattr(config, attr) is None:
-                setattr(config, attr, default)
-
-        super().__init__(
-            config=config,
-            task=task,
-            int_dtype=int_dtype,
-            float_dtype=float_dtype,
-            use_past=use_past,
-            use_past_in_inputs=use_past_in_inputs,
-            preprocessors=preprocessors,
-        )
 
 
 @register_in_tasks_manager("got_ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")
