@@ -3786,9 +3786,23 @@ def deepseek_v3_attn_forward(
     attention_mask: Optional[torch.Tensor] = None,
     position_ids: Optional[torch.LongTensor] = None,
     past_key_value=None,
+    cache_position=None,
     output_attentions: bool = False,
     use_cache: bool = False,
+    **kwargs,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    def _get_config_attr(name, default):
+        value = getattr(self.config, name, None)
+        return value if value is not None else default
+
+    q_lora_rank = _get_config_attr("q_lora_rank", 512)
+    qk_nope_head_dim = _get_config_attr("qk_nope_head_dim", 128)
+    qk_rope_head_dim = _get_config_attr("qk_rope_head_dim", 64)
+    v_head_dim = _get_config_attr("v_head_dim", 128)
+    kv_lora_rank = _get_config_attr("kv_lora_rank", 512)
+
+    q_head_dim = qk_nope_head_dim + qk_rope_head_dim
+
     # modified from https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L751
     def rotate_half(x):
         """Rotates half the hidden dims of the input."""
@@ -3818,23 +3832,26 @@ def deepseek_v3_attn_forward(
 
     bsz, q_len, _ = hidden_states.size()
 
-    if self.q_lora_rank is None:
+    if q_lora_rank is None:
         q = self.q_proj(hidden_states)
     else:
         q = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
-    q = q.view(bsz, q_len, self.num_heads, self.q_head_dim).transpose(1, 2)
-    q_nope, q_pe = torch.split(q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
+
+    q = q.view(bsz, q_len, self.num_heads, q_head_dim).transpose(1, 2)
+    q_nope, q_pe = torch.split(q, [qk_nope_head_dim, qk_rope_head_dim], dim=-1)
 
     compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
-    compressed_kv, k_pe = torch.split(compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
-    k_pe = k_pe.view(bsz, q_len, 1, self.qk_rope_head_dim).transpose(1, 2)
+    compressed_kv, k_pe = torch.split(compressed_kv, [kv_lora_rank, qk_rope_head_dim], dim=-1)
+    k_pe = k_pe.view(bsz, q_len, 1, qk_rope_head_dim).transpose(1, 2)
+
     kv = (
         self.kv_b_proj(self.kv_a_layernorm(compressed_kv))
-        .view(bsz, q_len, self.num_heads, self.qk_nope_head_dim + self.v_head_dim)
+        .view(bsz, q_len, self.num_heads, qk_nope_head_dim + v_head_dim)
         .transpose(1, 2)
     )
 
-    k_nope, value_states = torch.split(kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
+    k_nope, value_states = torch.split(kv, [qk_nope_head_dim, v_head_dim], dim=-1)
+
     kv_seq_len = value_states.shape[-2]
     if past_key_value is not None:
         if self.layer_idx is None:
@@ -3843,8 +3860,21 @@ def deepseek_v3_attn_forward(
                 "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
                 "with a layer index."
             )
-        kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-    cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+        if hasattr(past_key_value, 'get_usable_length'):
+            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+        elif hasattr(past_key_value, 'get_seq_length'):
+            kv_seq_len = past_key_value.get_seq_length(self.layer_idx)
+
+    if hasattr(self, 'rotary_emb') and callable(getattr(self, 'rotary_emb')):
+        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+    else:
+        # Fallback: compute RoPE manually for tracing compatibility
+        head_dim = value_states.shape[-1]
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, head_dim, 2, dtype=torch.float32, device=value_states.device) / head_dim))
+        t = torch.arange(kv_seq_len, device=value_states.device, dtype=torch.float32)
+        freqs = torch.outer(t, inv_freq)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        cos, sin = emb.cos()[None, None, :, :], emb.sin()[None, None, :, :]
 
     q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids)
 
@@ -3858,8 +3888,9 @@ def deepseek_v3_attn_forward(
     # key_states[:, :, :, : self.qk_nope_head_dim] = k_nope
     # key_states[:, :, :, self.qk_nope_head_dim :] = k_pe
     if past_key_value is not None:
-        cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-        key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+        cache_kwargs = {"sin": sin, "cos": cos}
+        if hasattr(past_key_value, 'update'):
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
     if attention_mask is not None:
         if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
@@ -3886,7 +3917,7 @@ def deepseek_v3_attn_forward(
 
     attn_output = attn_output.transpose(1, 2).contiguous()
 
-    attn_output = attn_output.reshape(bsz, q_len, self.num_heads * self.v_head_dim)
+    attn_output = attn_output.reshape(bsz, q_len, self.num_heads * v_head_dim)
 
     attn_output = self.o_proj(attn_output)
 
