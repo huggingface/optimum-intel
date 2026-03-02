@@ -48,11 +48,9 @@ def model_has_input_output_name(ov_model: ov.Model, name: str):
 
 def fuse_cache_reorder(
     ov_model: ov.Model,
-    not_cache_inputs: List[str] = None,
-    cache_input_names: List[str] = None,
-    gather_dim: int = None,
-    not_kv_inputs: List[str] = None,
-    key_value_input_names: List[str] = None,
+    not_kv_inputs: List[str],
+    key_value_input_names: List[str],
+    gather_dim: int,
 ):
     """
     Fuses reordered_cache during generate cycle into ov.Model.
