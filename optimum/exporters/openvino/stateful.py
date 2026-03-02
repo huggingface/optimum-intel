@@ -60,8 +60,8 @@ def fuse_cache_reorder(
     Should be run before make_stateful. Implements optimum's _reorder_cache
     inside the model in the beginning of each iteration.
     Gather works along given gather_dim dimension that may vary from model to model.
-    Inputs with cache states (with key, value, and fixed-sized cache) are identified based on names in cache_input_names.
-    Append the new beam_idx parameter to not_cache_inputs.
+    Inputs with cache states (with key, value, and fixed-sized cache) are identified based on names in `key_value_input_names`.
+    Append the new beam_idx parameter to `not_kv_inputs`.
 
     Parameters:
       ov_model (`ov.Model`):
