@@ -53,7 +53,7 @@ jobs:
         run: |
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install -r notebooks/openvino/requirements.txt
-          pip install .[tests,openvino] nbval
+          pip install .[tests] nbval
 
       - name: Change some variables
         run: |
