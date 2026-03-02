@@ -69,7 +69,7 @@ def fuse_cache_reorder(
       ov_model (`ov.Model`):
           openvino model for processing
       not_cache_inputs (`List[str]`):
-          list of input nodes in model that not related to cache states
+          list of names for input nodes in model that not related to cache states
       cache_input_names (`List[str]`):
           list of names for input layers with key, value, and fixed-sized cache states
       gather_dim (int):
