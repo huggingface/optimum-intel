@@ -154,7 +154,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("afmoe",)
 
     if is_transformers_version(">=", "4.57.0"):
-        SUPPORTED_ARCHITECTURES += ("hunyuan_v1_dense",)
+        SUPPORTED_ARCHITECTURES += ("hunyuan_v1_dense", "qwen3_next",)
 
     if is_transformers_version("<", "4.56.0"):
         SUPPORTED_ARCHITECTURES += ("qwen", "chatglm", "chatglm4")
@@ -241,6 +241,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "zamba2": 1,
         "bitnet": 6,
         "hunyuan_v1_dense": 2,
+        "qwen3_next": 2,
     }
     TASK = "text-generation"
 
