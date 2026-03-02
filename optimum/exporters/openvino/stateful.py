@@ -267,7 +267,7 @@ def patch_stateful_hybrid_ssm(ov_model: ov.Model):
         # return tensor names of model inputs/outputs tensors with KV and SSM states
         kv_names = []
         ssm_names = []
-        other_names = []
+        other_tensors = []
         for ov_tensor in ov_tensors:
             ov_tensor_names = ov_tensor.get_names()
             is_kv_or_ssm = False
@@ -281,8 +281,8 @@ def patch_stateful_hybrid_ssm(ov_model: ov.Model):
                     is_kv_or_ssm = True
                     break
             if not is_kv_or_ssm:
-                other_names.append(ov_tensor_name)
-        return kv_names, ssm_names, other_names
+                other_tensors.append(ov_tensor)
+        return kv_names, ssm_names, other_tensors
 
     ssm_prefix_input_names = ["cache_params.past.ssm", "cache_params.past.conv"]
     kv_prefix_input_names = ["cache_params.past.key", "cache_params.past.value"]
