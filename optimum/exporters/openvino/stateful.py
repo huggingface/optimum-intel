@@ -83,7 +83,7 @@ def fuse_cache_reorder(
     ov_model.add_parameters([beam_idx])
     not_kv_inputs.append(ov_model.inputs[-1])
     # Go over all cache parameters and fuse _reorder_cache with indices provided by the new parameter beam_idx
-    for input_name in cache_input_names:
+    for input_name in key_value_input_names:
         parameter_output_port = ov_model.input(input_name)
         consumers = parameter_output_port.get_target_inputs()
         gather = opset13.gather(parameter_output_port, beam_idx, opset13.constant(gather_dim))
