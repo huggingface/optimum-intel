@@ -171,8 +171,7 @@ def make_stateful(
 
     if num_beams_and_batch is not None:
         # Set batch size for input_ids and attention mask to avoid dynamic dimension got propagated from the end of the model back to ReadValue
-        for input_name in not_kv_inputs:
-            input = ov_model.input(input_name)
+        for input in not_kv_inputs:
             shape = input.get_partial_shape()
             if shape.rank.get_length() <= 2:  # == 1 for beam_index
                 shape[0] = num_beams_and_batch
