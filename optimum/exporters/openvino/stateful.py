@@ -81,7 +81,7 @@ def fuse_cache_reorder(
     beam_idx = opset13.parameter(name="beam_idx", dtype=ov.Type.i32, shape=ov.PartialShape([input_batch]))
     beam_idx.output(0).get_tensor().add_names({"beam_idx"})  # why list is not accepted?
     ov_model.add_parameters([beam_idx])
-    not_cache_inputs.append("beam_idx")
+    not_kv_inputs.append(ov_model.inputs[-1])
     # Go over all cache parameters and fuse _reorder_cache with indices provided by the new parameter beam_idx
     for input_name in cache_input_names:
         parameter_output_port = ov_model.input(input_name)
