@@ -53,22 +53,23 @@ def fuse_cache_reorder(
     gather_dim: int,
 ):
     """
-    Fuses reored_cache during generate cycle into ov.Model. Used with stateful models, because we can not modify model state directly.
+    Fuses reordered_cache during generate cycle into ov.Model.
+    Used with stateful models, because we can not modify model state directly.
 
-    Adds a new beam_idx parameter and Gather op per each kv-cache input in a given model.
-    Should be run before make_stateful. Implements optimumum's _reorder_cache
+    Adds a new beam_idx parameter and Gather op per each cache input in a given model.
+    Should be run before make_stateful. Implements optimum's _reorder_cache
     inside the model in the beginning of each iteration.
     Gather works along given gather_dim dimension that may vary from model to model.
-    KV-cache inputs are identified based on names in key_value_input_names.
-    Append the new beam_idx parameter to not_kv_inputs.
+    Inputs with cache states (with key, value, and fixed-sized cache) are identified based on names in `key_value_input_names`.
+    Append the new beam_idx parameter to `not_kv_inputs`.
 
     Parameters:
       ov_model (`ov.Model`):
           openvino model for processing
       not_kv_inputs (`List[str]`):
-          list of input nodes in model that not related to past key values
+          list of input nodes in model that not related to cache states
       key_value_input_names (`List[str]`):
-          list of names for key value input layers
+          list of names for input layers with key, value, and fixed-sized cache states
       gather_dim (int):
           dimension for gathering cache during reorder pass
     """
@@ -262,13 +263,11 @@ def insert_state_for_nodes(model: ov.Model, nodes):
 
 
 def patch_stateful_hybrid_ssm(ov_model: ov.Model):
-    from openvino._offline_transformations import apply_make_stateful_transformation
-
     def get_kv_ssm_tensor_names(ssm_prefix_names: list, kv_prefix_names: list, ov_tensors):
         # return tensor names of model inputs/outputs tensors with KV and SSM states
         kv_names = []
         ssm_names = []
-        other_names = []
+        other_tensors = []
         for ov_tensor in ov_tensors:
             ov_tensor_names = ov_tensor.get_names()
             is_kv_or_ssm = False
@@ -282,36 +281,28 @@ def patch_stateful_hybrid_ssm(ov_model: ov.Model):
                     is_kv_or_ssm = True
                     break
             if not is_kv_or_ssm:
-                other_names.append(ov_tensor_name)
-        return kv_names, ssm_names, other_names
+                other_tensors.append(ov_tensor)
+        return kv_names, ssm_names, other_tensors
 
     ssm_prefix_input_names = ["cache_params.past.ssm", "cache_params.past.conv"]
     kv_prefix_input_names = ["cache_params.past.key", "cache_params.past.value"]
-    kv_input_names, ssm_input_names, other_input_names = get_kv_ssm_tensor_names(
+    kv_input_names, ssm_input_names, not_cache_inputs = get_kv_ssm_tensor_names(
         ssm_prefix_input_names, kv_prefix_input_names, ov_model.inputs
     )
-    not_kv_inputs = ssm_input_names + other_input_names
+    cache_inputs = kv_input_names + ssm_input_names
 
     ssm_prefix_output_names = ["cache_params.present.ssm", "cache_params.present.conv"]
     kv_prefix_output_names = ["cache_params.present.key", "cache_params.present.value"]
     kv_output_names, ssm_output_names, _ = get_kv_ssm_tensor_names(
         ssm_prefix_output_names, kv_prefix_output_names, ov_model.outputs
     )
+    cache_outputs = kv_output_names + ssm_output_names
 
     # hybrid models can contain transformer blocks as well
     # so KV tensors must be handled properly
     batch_dim = 0
-    if kv_input_names is not None and len(kv_input_names) > 0:
-        fuse_cache_reorder(ov_model, not_kv_inputs, kv_input_names, batch_dim)
-        make_stateful(ov_model, not_kv_inputs, kv_input_names, kv_output_names, batch_dim)
-
-    # create states for SSM cache
-    input_output_map = {}
-    for cache_name_pair in zip(ssm_input_names, ssm_output_names):
-        input_output_map[cache_name_pair[0]] = cache_name_pair[1]
-
-    apply_make_stateful_transformation(ov_model, input_output_map)
-    build_state_initializer(ov_model, batch_dim)
+    fuse_cache_reorder(ov_model, not_cache_inputs, cache_inputs, batch_dim)
+    make_stateful(ov_model, not_cache_inputs, cache_inputs, cache_outputs, batch_dim)
 
 
 def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
