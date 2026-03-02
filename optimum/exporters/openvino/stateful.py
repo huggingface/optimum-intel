@@ -72,10 +72,6 @@ def fuse_cache_reorder(
           list of names for input layers with key, value, and fixed-sized cache states
       gather_dim (int):
           dimension for gathering cache during reorder pass
-
-    .. deprecated::
-        ``not_kv_inputs`` is deprecated, use ``not_cache_inputs`` instead.
-        ``key_value_input_names`` is deprecated, use ``cache_input_names`` instead.
     """
     if not_kv_inputs is not None:
         log.warning(
