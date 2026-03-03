@@ -8111,31 +8111,9 @@ def qwen3_next_gated_delta_net_forward(
     mixed_qkv = mixed_qkv.transpose(1, 2)
 
     if cache_params is not None:
-        # 2. Convolution sequence transformation
-        # NOTE: the conv state is updated in `causal_conv1d_update`
-        conv_state_dec = conv_state.clone()
-        mixed_qkv_dec = mixed_qkv.clone()
-        mixed_qkv_dec = self.causal_conv1d_update(
-            mixed_qkv_dec,
-            conv_state_dec,
-            self.conv1d.weight.squeeze(1),
-            self.conv1d.bias,
-            self.activation,
-        )
-
-        conv_state_prefill = F.pad(mixed_qkv, (self.conv_kernel_size - mixed_qkv.shape[-1], 0))
-        conv_state = conv_state_dec * use_precomputed_states + conv_state_prefill * (1.0 - use_precomputed_states)
-        mixed_qkv = mixed_qkv_dec * use_precomputed_states + mixed_qkv * (1.0 - use_precomputed_states)
-        cache_params.conv_states[layer_idx] = conv_state
-
-        if self.causal_conv1d_fn is not None:
-            mixed_qkv = self.causal_conv1d_fn(
-                x=mixed_qkv,
-                weight=self.conv1d.weight.squeeze(1),
-                bias=self.conv1d.bias,
-                activation=self.activation,
-                seq_idx=None,
-            )
+        new_mixed_qkv, new_conv_state = ov_causal_conv1d(conv_state, mixed_qkv, self.conv1d.weight, self.conv1d.bias)
+        mixed_qkv = F.silu(new_mixed_qkv)
+        cache_params.conv_states[layer_idx] = new_conv_state
     else:
         mixed_qkv = F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
 
