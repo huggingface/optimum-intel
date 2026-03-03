@@ -8092,8 +8092,6 @@ def qwen3_next_gated_delta_net_forward(
 
     # distinguish prefill and decoding stage
     dtype = hidden_states.dtype
-    # use_precomputed_states - is_decoding flag
-    use_precomputed_states = torch.tensor(seq_len == 1).to(dtype)
 
     # getting projected states from cache if it exists
     layer_idx = None
@@ -8138,32 +8136,16 @@ def qwen3_next_gated_delta_net_forward(
         query = query.repeat_interleave(self.num_v_heads // self.num_k_heads, dim=2)
         key = key.repeat_interleave(self.num_v_heads // self.num_k_heads, dim=2)
 
-    core_attn_out_prefill, last_recurrent_state_prefill = self.chunk_gated_delta_rule(
+    core_attn_out, last_recurrent_state = self.chunk_gated_delta_rule(
         self,
         query,
         key,
         value,
         g=g,
         beta=beta,
-        initial_state=None,
-        output_final_state=cache_params is not None,
-        use_qk_l2norm_in_kernel=True,
-    )
-
-    core_attn_out_dec, last_recurrent_state_dec = self.recurrent_gated_delta_rule(
-        query[:, :1],
-        key[:, :1],
-        value[:, :1],
-        g=g[:, :1],
-        beta=beta[:, :1],
         initial_state=recurrent_state,
         output_final_state=cache_params is not None,
         use_qk_l2norm_in_kernel=True,
-    )
-
-    core_attn_out = core_attn_out_dec * use_precomputed_states + core_attn_out_prefill * (1.0 - use_precomputed_states)
-    last_recurrent_state = last_recurrent_state_dec * use_precomputed_states + last_recurrent_state_prefill * (
-        1.0 - use_precomputed_states
     )
 
     # Update cache
