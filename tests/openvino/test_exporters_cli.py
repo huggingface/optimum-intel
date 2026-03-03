@@ -123,6 +123,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "4.50.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("image-text-to-text", "mistral3"),
+            ]
+        )
+
     if is_transformers_version(">=", "4.54.0"):
         SUPPORTED_ARCHITECTURES.extend(
             [
