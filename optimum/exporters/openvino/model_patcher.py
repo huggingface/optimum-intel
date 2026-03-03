@@ -4674,6 +4674,7 @@ class CommonImageEmbeddingsModelPatcher(ModelPatcher):
 
             outputs = get_image_features(*args, **kwargs)
 
+            # we should be able to specify pooler_output as output_name, not supported here as pooler_output key does not exist
             if is_transformers_version(">=", "5") and hasattr(outputs, "pooler_output"):
                 outputs = outputs.pooler_output
 
