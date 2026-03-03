@@ -70,6 +70,7 @@ MODEL_NAMES = {
     "deberta-v2": "optimum-intel-internal-testing/tiny-random-DebertaV2Model",
     "decilm": "optimum-intel-internal-testing/tiny-random-decilm",
     "deepseek": "optimum-intel-internal-testing/tiny-random-deepseek-v3",
+    "gigachat3": "mohamedahraf273/tiny-random-gigachat3",
     "deit": "optimum-intel-internal-testing/tiny-random-DeiTModel",
     "convnext": "optimum-intel-internal-testing/tiny-random-convnext",
     "convnextv2": "optimum-intel-internal-testing/tiny-random-ConvNextV2Model",

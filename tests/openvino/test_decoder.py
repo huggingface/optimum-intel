@@ -117,7 +117,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phimoe")
 
         if is_transformers_version("<", "4.54.0"):
-            SUPPORTED_ARCHITECTURES += ("deepseek",)
+            SUPPORTED_ARCHITECTURES += ("deepseek", "gigachat3")
 
         # gptq and awq install disabled for windows test environment
         if platform.system() != "Windows" and is_transformers_version("<", "4.56.0"):
@@ -227,6 +227,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "minicpm3": 6,
         "phimoe": 2,
         "deepseek": 2,
+        "gigachat3": 2,
         "opt_gptq": 12,
         "mixtral_awq": 2,
         "gemma3_text": 2,
@@ -383,9 +384,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
-        atol = 3e-2 if model_arch in ["deepseek"] else 3e-3 if model_arch in ["minicpm", "qwen2-moe"] else 1e-4
+        atol = 3e-2 if model_arch in ["deepseek", "gigachat3"] else 3e-3 if model_arch in ["minicpm", "qwen2-moe"] else 1e-4
         # quantized models have different logits value range
         if "awq" not in model_arch and "gptq" not in model_arch:
+            diff = torch.abs(ov_outputs.logits - transformers_outputs.logits)
+            print(f"\nMax diff: {diff.max()}, Mean diff: {diff.mean()}, aftol: {atol}")
+            print(f"OV logits sample: {ov_outputs.logits[0, 0, :5]}")
+            print(f"TF logits sample: {transformers_outputs.logits[0, 0, :5]}")
             self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
 
         # Qwen tokenizer does not support padding
@@ -410,7 +415,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49
-        if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
+        if model_arch in {"deepseek", "gigachat3"} and is_transformers_version(">=", "4.49"):
             self.skipTest("Incompatible modeling code")
 
         additional_inputs = {}
