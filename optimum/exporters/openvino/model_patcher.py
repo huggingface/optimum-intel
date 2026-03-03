@@ -3758,8 +3758,8 @@ class DeepseekPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         self_attn = {
-            "deepseek_v3": deepseek_v3_attn_forward,
-            "deepseek_v2": deepseek_v2_attn_forward,
+            "deepseek_v3": make_deepseek_attn_forward(version=3),
+            "deepseek_v2": make_deepseek_attn_forward(version=2),
             "deepseek": minicpm3_attn_forward,
         }
 
@@ -3770,249 +3770,118 @@ class DeepseekPatcher(OVDecoderModelPatcher):
                 block.self_attn.forward = types.MethodType(self_attn_fwd, block.self_attn)
             if hasattr(block.mlp, "moe_infer"):
                 block.mlp._org_moe_infer = block.mlp.moe_infer
-                block.mlp.moe_infer = types.MethodType(deepseek_moe_infer, block.mlp)
+            elif hasattr(block.mlp, "experts"):
+                block.mlp._org_moe_infer = None
+                block.mlp.ep_rank = 0
+                block.mlp.experts_per_rank = len(block.mlp.experts)
+            block.mlp.moe_infer = types.MethodType(deepseek_moe_infer, block.mlp)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         for block in self._model.model.layers:
-            block.self_attn.forward = block.self_attn._orig_forward
-            if hasattr(block.mlp, "_orig_moe_infer"):
-                block.mlp.moe_infer = block.mlp._orig_moe_infer
+            if hasattr(block.self_attn, "_orig_forward"):
+                block.self_attn.forward = block.self_attn._orig_forward
+            if hasattr(block.mlp, "_org_moe_infer"):
+                if block.mlp._org_moe_infer is not None:
+                    block.mlp.moe_infer = block.mlp._org_moe_infer
+                else:
+                    delattr(block.mlp, "moe_infer")
+                    if hasattr(block.mlp, "ep_rank"):
+                        delattr(block.mlp, "ep_rank")
+                    if hasattr(block.mlp, "experts_per_rank"):
+                        delattr(block.mlp, "experts_per_rank")
 
 
-def deepseek_v3_attn_forward(
-    self,
-    hidden_states: torch.Tensor,
-    attention_mask: Optional[torch.Tensor] = None,
-    position_ids: Optional[torch.LongTensor] = None,
-    past_key_value=None,
-    output_attentions: bool = False,
-    use_cache: bool = False,
-) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-    # modified from https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L751
-    def rotate_half(x):
-        """Rotates half the hidden dims of the input."""
-        x1 = x[..., : x.shape[-1] // 2]
-        x2 = x[..., x.shape[-1] // 2 :]
-        return torch.cat((-x2, x1), dim=-1)
+def make_deepseek_attn_forward(version: int = 3):
+    """Return a MLA attention forward function for the given DeepSeek version.
 
-    def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
-        orig_dtype = k.dtype
-        cos = cos[position_ids].unsqueeze(unsqueeze_dim)  # [bs, 1, seq_len, dim]
-        sin = sin[position_ids].unsqueeze(unsqueeze_dim)  # [bs, 1, seq_len, dim]
-        q_fp32 = q.to(dtype=torch.float32, device=q.device)
-        k_fp32 = k.to(dtype=torch.float32, device=k.device)
-        q_embed = (q_fp32 * cos) + (rotate_half(q_fp32) * sin)
-        k_embed = (k_fp32 * cos) + (rotate_half(k_fp32) * sin)
-        return q_embed.to(dtype=orig_dtype), k_embed.to(dtype=orig_dtype)
+    Both deepseek_v2 and deepseek_v3 share identical MLA attention logic — the
+    only differences are:
+    - v3: ``position_embeddings`` is a ``(cos, sin)`` tuple; RoPE applied via
+      ``apply_rotary_pos_emb(q_rot, k_rot, cos, sin)``; cache stores cos/sin.
+    - v2: ``position_embeddings`` is a complex ``freqs_cis`` tensor; RoPE applied
+      via ``apply_rotary_emb(q_pe, k_pe, freqs_cis)`` (complex multiplication).
+    """
 
-    if output_attentions:
-        return self._orig_forward(
-            hidden_states=hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
+    def deepseek_attn_forward(
+        self,
+        hidden_states: torch.Tensor,
+        position_embeddings=None,
+        attention_mask: Optional[torch.Tensor] = None,
+        past_key_value=None,
+        past_key_values=None,
+        cache_position: Optional[torch.LongTensor] = None,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        batch_size, seq_length = hidden_states.shape[:-1]
+        query_shape = (batch_size, seq_length, -1, self.qk_head_dim)
+        key_shape = (batch_size, seq_length, -1, self.qk_nope_head_dim + self.v_head_dim)
+
+        if self.q_lora_rank is None:
+            q = self.q_proj(hidden_states)
+        else:
+            q = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
+        q = q.view(query_shape).transpose(1, 2)
+        q_nope, q_pe = torch.split(q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
+
+        compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
+        k_nope, k_pe = torch.split(compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
+        k_nope = self.kv_b_proj(self.kv_a_layernorm(k_nope)).view(key_shape).transpose(1, 2)
+        k_nope, value_states = torch.split(k_nope, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
+        k_pe = k_pe.view(batch_size, 1, seq_length, self.qk_rope_head_dim)
+
+        if version == 3:
+            from transformers.models.deepseek_v3.modeling_deepseek_v3 import apply_rotary_pos_emb
+
+            cos, sin = position_embeddings
+            q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin)
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+        elif version == 2:
+
+            def apply_rotary_emb(
+                xq: torch.Tensor,
+                xk: torch.Tensor,
+                freqs_cis: torch.Tensor,
+            ) -> tuple[torch.Tensor, torch.Tensor]:
+                xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
+                xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
+
+                # Broadcast to [1, 1, seq_len, dim // 2]
+                freqs_cis = freqs_cis.unsqueeze(1).to(xq_.device)
+
+                xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3).type_as(xq)
+                xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3).type_as(xk)
+                return xq_out, xk_out
+
+            q_pe, k_pe = apply_rotary_emb(q_pe, k_pe, position_embeddings.to(q_pe.device))
+            cache_kwargs = {"cache_position": cache_position}
+
+        else:
+            raise ValueError(f"Unsupported DeepSeek version: {version}")
+
+        # Use expand+cat instead of new_empty+slice to avoid constant tensors in torchscript
+        k_pe = k_pe.expand(*k_nope.shape[:-1], -1)
+        query_states = torch.cat((q_nope, q_pe), dim=-1)
+        key_states = torch.cat((k_nope, k_pe), dim=-1)
+
+        kv_cache = past_key_value if past_key_value is not None else past_key_values
+        if kv_cache is not None:
+            key_states, value_states = kv_cache.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+        attn_output = torch.nn.functional.scaled_dot_product_attention(
+            query_states,
+            key_states,
+            value_states,
+            attn_mask=attention_mask,
+            dropout_p=self.attention_dropout if self.training else 0.0,
+            is_causal=self.is_causal and attention_mask is None and seq_length > 1,
         )
 
-    bsz, q_len, _ = hidden_states.size()
+        attn_output = attn_output.reshape(batch_size, seq_length, -1).contiguous()
+        attn_output = self.o_proj(attn_output)
+        return attn_output, None
 
-    if self.q_lora_rank is None:
-        q = self.q_proj(hidden_states)
-    else:
-        q = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
-    q = q.view(bsz, q_len, self.num_heads, self.q_head_dim).transpose(1, 2)
-    q_nope, q_pe = torch.split(q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
-
-    compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
-    compressed_kv, k_pe = torch.split(compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
-    k_pe = k_pe.view(bsz, q_len, 1, self.qk_rope_head_dim).transpose(1, 2)
-    kv = (
-        self.kv_b_proj(self.kv_a_layernorm(compressed_kv))
-        .view(bsz, q_len, self.num_heads, self.qk_nope_head_dim + self.v_head_dim)
-        .transpose(1, 2)
-    )
-
-    k_nope, value_states = torch.split(kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
-    kv_seq_len = value_states.shape[-2]
-    if past_key_value is not None:
-        if self.layer_idx is None:
-            raise ValueError(
-                f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
-                "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
-                "with a layer index."
-            )
-        kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-    cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-
-    q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids)
-
-    # Difference with original code, k_pe.new_empty create constant tensor in torchscript
-    query_states = torch.concat([q_nope, q_pe], dim=-1)
-    # query_states = k_pe.new_empty(bsz, self.num_heads, q_len, self.q_head_dim)
-    # query_states[:, :, :, : self.qk_nope_head_dim] = q_nope
-    # query_states[:, :, :, self.qk_nope_head_dim :] = q_pe
-    key_states = torch.concat([k_nope, k_pe.expand(-1, self.num_heads, -1, -1)], dim=-1)
-    # key_states = k_pe.new_empty(bsz, self.num_heads, q_len, self.q_head_dim)
-    # key_states[:, :, :, : self.qk_nope_head_dim] = k_nope
-    # key_states[:, :, :, self.qk_nope_head_dim :] = k_pe
-    if past_key_value is not None:
-        cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-        key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-
-    if attention_mask is not None:
-        if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-            raise ValueError(
-                f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-            )
-
-    # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
-    # Reference: https://github.com/pytorch/pytorch/issues/112577.
-    if query_states.device.type == "cuda" and attention_mask is not None:
-        query_states = query_states.contiguous()
-        key_states = key_states.contiguous()
-        value_states = value_states.contiguous()
-
-    attn_output = torch.nn.functional.scaled_dot_product_attention(
-        query_states,
-        key_states,
-        value_states,
-        attn_mask=attention_mask,
-        dropout_p=self.attention_dropout if self.training else 0.0,
-        # The q_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create a causal mask in case q_len == 1.
-        is_causal=self.is_causal and attention_mask is None and q_len > 1,
-    )
-
-    attn_output = attn_output.transpose(1, 2).contiguous()
-
-    attn_output = attn_output.reshape(bsz, q_len, self.num_heads * self.v_head_dim)
-
-    attn_output = self.o_proj(attn_output)
-
-    return attn_output, None, past_key_value
-
-
-def deepseek_v2_attn_forward(
-    self,
-    hidden_states: torch.Tensor,
-    attention_mask: Optional[torch.Tensor] = None,
-    position_ids: Optional[torch.LongTensor] = None,
-    past_key_value=None,
-    output_attentions: bool = False,
-    use_cache: bool = False,
-    **kwargs,
-) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-    # modified from https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite/blob/main/modeling_deepseek.py#L806
-    def rotate_half(x):
-        """Rotates half the hidden dims of the input."""
-        x1 = x[..., : x.shape[-1] // 2]
-        x2 = x[..., x.shape[-1] // 2 :]
-        return torch.cat((-x2, x1), dim=-1)
-
-    def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
-        cos = cos[position_ids].unsqueeze(unsqueeze_dim)
-        sin = sin[position_ids].unsqueeze(unsqueeze_dim)
-
-        b, h, s, d = q.shape
-        q = q.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
-
-        b, h, s, d = k.shape
-        k = k.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
-
-        q_embed = (q * cos) + (rotate_half(q) * sin)
-        k_embed = (k * cos) + (rotate_half(k) * sin)
-        return q_embed, k_embed
-
-    if output_attentions:
-        return self._orig_forward(
-            hidden_states=hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-        )
-
-    bsz, q_len, _ = hidden_states.shape
-
-    if self.q_lora_rank is None:
-        q = self.q_proj(hidden_states)
-    else:
-        q = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
-    q = q.view(bsz, q_len, self.num_heads, self.q_head_dim).transpose(1, 2)
-    q_nope, q_pe = torch.split(q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
-
-    compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
-    compressed_kv, k_pe = torch.split(compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
-    k_pe = k_pe.view(bsz, q_len, 1, self.qk_rope_head_dim).transpose(1, 2)
-    kv = (
-        self.kv_b_proj(self.kv_a_layernorm(compressed_kv))
-        .view(bsz, q_len, self.num_heads, self.qk_nope_head_dim + self.v_head_dim)
-        .transpose(1, 2)
-    )
-
-    k_nope, value_states = torch.split(kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
-    kv_seq_len = value_states.shape[-2]
-    if past_key_value is not None:
-        if self.layer_idx is None:
-            raise ValueError(
-                f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
-                "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
-                "with a layer index."
-            )
-        kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-    cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-
-    q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids)
-
-    # Difference with original code, k_pe.new_empty create constant tensor in torchscript
-    query_states = torch.concat([q_nope, q_pe], dim=-1)
-    # query_states = k_pe.new_empty(bsz, self.num_heads, q_len, self.q_head_dim)
-    # query_states[:, :, :, : self.qk_nope_head_dim] = q_nope
-    # query_states[:, :, :, self.qk_nope_head_dim :] = q_pe
-    key_states = torch.concat([k_nope, k_pe.expand(-1, self.num_heads, -1, -1)], dim=-1)
-    # key_states = k_pe.new_empty(bsz, self.num_heads, q_len, self.q_head_dim)
-    # key_states[:, :, :, : self.qk_nope_head_dim] = k_nope
-    # key_states[:, :, :, self.qk_nope_head_dim :] = k_pe
-    if past_key_value is not None:
-        cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-        key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-
-    if attention_mask is not None:
-        if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-            raise ValueError(
-                f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-            )
-
-    if attention_mask is not None:
-        if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-            raise ValueError(
-                f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-            )
-    # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
-    # Reference: https://github.com/pytorch/pytorch/issues/112577.
-    if query_states.device.type == "cuda" and attention_mask is not None:
-        query_states = query_states.contiguous()
-        key_states = key_states.contiguous()
-        value_states = value_states.contiguous()
-
-    attn_output = torch.nn.functional.scaled_dot_product_attention(
-        query_states,
-        key_states,
-        value_states,
-        attn_mask=attention_mask,
-        dropout_p=self.attention_dropout if self.training else 0.0,
-        # The q_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create a causal mask in case q_len == 1.
-        is_causal=self.is_causal and attention_mask is None and q_len > 1,
-    )
-    attn_output = attn_output.transpose(1, 2).contiguous()
-
-    attn_output = attn_output.reshape(bsz, q_len, self.num_heads * self.v_head_dim)
-
-    attn_output = self.o_proj(attn_output)
-
-    return attn_output, None, past_key_value
+    return deepseek_attn_forward
 
 
 def deepseek_moe_infer(self, x, topk_ids, topk_weight):
