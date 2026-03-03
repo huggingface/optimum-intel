@@ -474,7 +474,19 @@ def main_export(
 
             model_dir, model_jit_scripts = export(model, kwargs, type="torchscript", quantize=False, device=device)
             ovm = ov.convert_model(model_jit_scripts, input=[([-1, -1, -1], torch.float32), ([-1], torch.int32)])
-            ov.serialize(ovm, str(output) + "/ov_models/openvino_model.xml")
+
+            # Apply INT8 weight compression if requested via ov_config
+            if ov_config is not None and ov_config.quantization_config is not None:
+                from nncf import compress_weights, CompressWeightsMode
+                logger.info("Applying INT8 weight compression to paraformer model (symmetric)...")
+                # INT8_SYM: no zero-point bias ops → significantly faster on GPU
+                ovm = compress_weights(ovm, mode=CompressWeightsMode.INT8_SYM)
+                logger.info("Weight compression complete.")
+                # compress_to_fp16=True: stores remaining FP32 constants as FP16
+                # → avoids a second FP32→FP16 conversion pass on GPU at runtime
+                ov.save_model(ovm, str(output) + "/ov_models/openvino_model.xml", compress_to_fp16=True)
+            else:
+                ov.serialize(ovm, str(output) + "/ov_models/openvino_model.xml")
 
             # Copy model other parafmeter files
             PARAFORMER_PARAM_FILES = ['am.mvn', 'config.yaml', 'configuration.json', 'seg_dict', 'tokens.json']
@@ -652,7 +664,10 @@ def _main_quantize(
             cache_dir=cache_dir,
             token=token,
         )
-
+    if library_name == "paraformer":
+        # Paraformer handles quantization during export, skip _main_quantize
+        logger.info("Paraformer quantization already applied during export, skipping _main_quantize.")
+        return
     # Step 1. Obtain the correct OpenVINO model class
     if library_name == "diffusers":
         if not is_diffusers_available():

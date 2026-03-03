@@ -104,7 +104,7 @@ class SinusoidalPositionEncoder(torch.nn.Module):
 
     def forward(self, x):
         batch_size, timesteps, input_dim = x.size()
-        positions = torch.arange(1, timesteps + 1, device=x.device)[None, :]
+        positions = torch.arange(1, timesteps + 1, dtype=torch.int32, device=x.device)[None, :]
         position_encoding = self.encode(positions, input_dim, x.dtype).to(x.device)
 
         return x + position_encoding
@@ -259,8 +259,8 @@ class sequence_mask(nn.Module):
     def forward(self, lengths, max_seq_len=None, dtype=torch.float32, device=None):
         if max_seq_len is None:
             max_seq_len = lengths.max()
-        row_vector = torch.arange(0, max_seq_len, 1).to(lengths.device)
-        matrix = torch.unsqueeze(lengths, dim=-1)
+        row_vector = torch.arange(0, max_seq_len, 1, dtype=torch.int32, device=lengths.device)
+        matrix = torch.unsqueeze(lengths, dim=-1).to(torch.int32)
         mask = row_vector < matrix
 
         return mask.type(dtype).to(device) if device is not None else mask.type(dtype)
@@ -1224,8 +1224,12 @@ class SANMEncoderExport(nn.Module):
     def forward(self, speech: torch.Tensor, speech_lengths: torch.Tensor, online: bool = False):
         if not online:
             speech = speech * self._output_size**0.5
-
-        mask = self.make_pad_mask(speech_lengths)
+        batch_size, seq_len, feat_dim = speech.shape
+        # Create range [0, 1, 2, ..., seq_len-1] that's shape-dependent, not value-dependent
+        arange = torch.arange(seq_len, dtype=torch.int32, device=speech.device).unsqueeze(0).expand(batch_size, -1)
+        lengths_expanded = speech_lengths.unsqueeze(1).to(torch.int32)
+        # Mask where position < length (convert bool to float for prepare_mask)
+        mask = (arange < lengths_expanded).to(torch.float32)
         mask = self.prepare_mask(mask)
         if self.embed is None:
             xs_pad = speech
@@ -1512,12 +1516,17 @@ class ParaformerSANMDecoderExport(torch.nn.Module):
     ):
 
         tgt = ys_in_pad
-        tgt_mask = self.make_pad_mask(ys_in_lens)
+        batch_size = tgt.shape[0]
+        tgt_seq_len = tgt.shape[1]
+        arange_tgt = torch.arange(tgt_seq_len, dtype=torch.int32, device=tgt.device).unsqueeze(0).expand(batch_size, -1)
+        tgt_mask = (arange_tgt < ys_in_lens.unsqueeze(1).to(torch.int32)).to(torch.float32)
         tgt_mask, _ = self.prepare_mask(tgt_mask)
         # tgt_mask = myutils.sequence_mask(ys_in_lens, device=tgt.device)[:, :, None]
 
         memory = hs_pad
-        memory_mask = self.make_pad_mask(hlens)
+        mem_seq_len = memory.shape[1]
+        arange_mem = torch.arange(mem_seq_len, dtype=torch.int32, device=memory.device).unsqueeze(0).expand(batch_size, -1)
+        memory_mask = (arange_mem < hlens.unsqueeze(1).to(torch.int32)).to(torch.float32)
         _, memory_mask = self.prepare_mask(memory_mask)
         # memory_mask = myutils.sequence_mask(hlens, device=memory.device)[:, None, :]
 
@@ -1755,12 +1764,12 @@ def cif_v1_export(hidden, alphas, threshold: float):
 
     # max_label_len = batch_len.max()
     max_label_len = alphas.sum(dim=-1)
-    max_label_len = torch.floor(max_label_len).max().to(dtype=torch.int64)
+    max_label_len = torch.floor(max_label_len).max().to(dtype=torch.int32)
 
     # frame_fires = torch.zeros(batch_size, max_label_len, hidden_size, dtype=dtype, device=device)
     frame_fires = torch.zeros(batch_size, max_label_len, hidden_size, dtype=dtype, device=device)
-    indices = torch.arange(max_label_len, device=device).expand(batch_size, -1)
-    frame_fires_idxs = indices < batch_len.unsqueeze(1)
+    indices = torch.arange(max_label_len, dtype=torch.int32, device=device).expand(batch_size, -1)
+    frame_fires_idxs = indices < batch_len.unsqueeze(1).to(torch.int32)
     frame_fires[frame_fires_idxs] = frames
     return frame_fires, fires
 
