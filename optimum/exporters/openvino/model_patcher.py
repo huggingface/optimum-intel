@@ -3795,91 +3795,125 @@ class DeepseekPatcher(OVDecoderModelPatcher):
 def make_deepseek_attn_forward(version: int = 3):
     """Return a MLA attention forward function for the given DeepSeek version.
 
-    Both deepseek_v2 and deepseek_v3 share identical MLA attention logic — the
-    only differences are:
-    - v3: ``position_embeddings`` is a ``(cos, sin)`` tuple; RoPE applied via
-      ``apply_rotary_pos_emb(q_rot, k_rot, cos, sin)``; cache stores cos/sin.
-    - v2: ``position_embeddings`` is a complex ``freqs_cis`` tensor; RoPE applied
-      via ``apply_rotary_emb(q_pe, k_pe, freqs_cis)`` (complex multiplication).
+    Args:
+        version: 2 for deepseek_v2 (uses freqs_cis), 3 for deepseek_v3 (uses cos/sin tuple)
     """
+    from typing import Callable
+
+    from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+
+    if version == 3:
+        from transformers.models.deepseek_v3.modeling_deepseek_v3 import (
+            apply_rotary_pos_emb,
+            apply_rotary_pos_emb_interleave,
+            eager_attention_forward,
+        )
+    elif version == 2:
+
+        def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+            batch, num_key_value_heads, slen, head_dim = hidden_states.shape
+            if n_rep == 1:
+                return hidden_states
+            hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+            return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+
+        def apply_rotary_emb(xq: torch.Tensor, xk: torch.Tensor, freqs_cis: torch.Tensor):
+            xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
+            xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
+            freqs_cis = freqs_cis.unsqueeze(1).to(xq_.device)
+            xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3).type_as(xq)
+            xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3).type_as(xk)
+            return xq_out, xk_out
+
+        def eager_attention_forward(module, query, key, value, attention_mask, scaling, dropout=0.0, **kwargs):
+            key = repeat_kv(key, module.num_key_value_groups)
+            value = repeat_kv(value, module.num_key_value_groups)
+            attn_weights = torch.matmul(query, key.transpose(2, 3)) * scaling
+            if attention_mask is not None:
+                attn_weights = attn_weights + attention_mask
+            attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+            attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+            attn_output = torch.matmul(attn_weights, value)
+            return attn_output.transpose(1, 2).contiguous(), attn_weights
+    else:
+        raise ValueError(f"Unsupported DeepSeek version: {version}")
 
     def deepseek_attn_forward(
         self,
         hidden_states: torch.Tensor,
-        position_embeddings=None,
-        attention_mask: Optional[torch.Tensor] = None,
-        past_key_value=None,
+        position_embeddings,
+        attention_mask: Optional[torch.Tensor],
+        past_key_value: Optional[Cache] = None,
         past_key_values=None,
         cache_position: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         batch_size, seq_length = hidden_states.shape[:-1]
-        query_shape = (batch_size, seq_length, -1, self.qk_head_dim)
-        key_shape = (batch_size, seq_length, -1, self.qk_nope_head_dim + self.v_head_dim)
 
         if self.q_lora_rank is None:
-            q = self.q_proj(hidden_states)
+            q_states = self.q_proj(hidden_states)
         else:
-            q = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
-        q = q.view(query_shape).transpose(1, 2)
-        q_nope, q_pe = torch.split(q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
+            q_states = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
+        q_states = q_states.view(batch_size, seq_length, -1, self.qk_head_dim).transpose(1, 2)
+        q_pass, q_rot = torch.split(q_states, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
 
         compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
-        k_nope, k_pe = torch.split(compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
-        k_nope = self.kv_b_proj(self.kv_a_layernorm(k_nope)).view(key_shape).transpose(1, 2)
-        k_nope, value_states = torch.split(k_nope, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
-        k_pe = k_pe.view(batch_size, 1, seq_length, self.qk_rope_head_dim)
+        k_pass, k_rot = torch.split(compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
+        k_pass = self.kv_b_proj(self.kv_a_layernorm(k_pass))
+        k_pass = k_pass.view(batch_size, seq_length, -1, self.qk_nope_head_dim + self.v_head_dim).transpose(1, 2)
+        k_pass, value_states = torch.split(k_pass, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
+        k_rot = k_rot.view(batch_size, 1, seq_length, self.qk_rope_head_dim)
 
         if version == 3:
-            from transformers.models.deepseek_v3.modeling_deepseek_v3 import apply_rotary_pos_emb
-
             cos, sin = position_embeddings
-            q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin)
+            if self.config.rope_interleave:
+                q_rot, k_rot = apply_rotary_pos_emb_interleave(q_rot, k_rot, cos, sin)
+            else:
+                q_rot, k_rot = apply_rotary_pos_emb(q_rot, k_rot, cos, sin)
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-        elif version == 2:
-
-            def apply_rotary_emb(
-                xq: torch.Tensor,
-                xk: torch.Tensor,
-                freqs_cis: torch.Tensor,
-            ) -> tuple[torch.Tensor, torch.Tensor]:
-                xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-                xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-
-                # Broadcast to [1, 1, seq_len, dim // 2]
-                freqs_cis = freqs_cis.unsqueeze(1).to(xq_.device)
-
-                xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3).type_as(xq)
-                xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3).type_as(xk)
-                return xq_out, xk_out
-
-            q_pe, k_pe = apply_rotary_emb(q_pe, k_pe, position_embeddings.to(q_pe.device))
-            cache_kwargs = {"cache_position": cache_position}
-
+            kv_cache = past_key_value
         else:
-            raise ValueError(f"Unsupported DeepSeek version: {version}")
+            q_rot, k_rot = apply_rotary_emb(q_rot, k_rot, position_embeddings.to(q_rot.device))
+            cache_kwargs = {"cache_position": cache_position}
+            kv_cache = past_key_values
 
-        # Use expand+cat instead of new_empty+slice to avoid constant tensors in torchscript
-        k_pe = k_pe.expand(*k_nope.shape[:-1], -1)
-        query_states = torch.cat((q_nope, q_pe), dim=-1)
-        key_states = torch.cat((k_nope, k_pe), dim=-1)
+        k_rot = k_rot.expand(*k_pass.shape[:-1], -1)
+        query_states = torch.cat((q_pass, q_rot), dim=-1)
+        key_states = torch.cat((k_pass, k_rot), dim=-1)
 
-        kv_cache = past_key_value if past_key_value is not None else past_key_values
         if kv_cache is not None:
             key_states, value_states = kv_cache.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
-        attn_output = torch.nn.functional.scaled_dot_product_attention(
+        is_flash_attn = "flash" in self.config._attn_implementation
+        if is_flash_attn and self.qk_head_dim != self.v_head_dim:
+            value_states = F.pad(value_states, [0, self.qk_head_dim - self.v_head_dim])
+
+        attention_interface: Callable = eager_attention_forward
+        if self.config._attn_implementation != "eager":
+            if version == 2:
+                attention_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
+                    self.config._attn_implementation, eager_attention_forward
+                )
+            else:
+                attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+
+        attn_output, attn_weights = attention_interface(
+            self,
             query_states,
             key_states,
             value_states,
-            attn_mask=attention_mask,
-            dropout_p=self.attention_dropout if self.training else 0.0,
-            is_causal=self.is_causal and attention_mask is None and seq_length > 1,
+            attention_mask,
+            dropout=0.0 if not self.training else self.attention_dropout,
+            scaling=self.scaling,
+            **kwargs,
         )
+
+        if is_flash_attn and self.qk_head_dim != self.v_head_dim:
+            attn_output = attn_output[:, :, :, : self.v_head_dim]
 
         attn_output = attn_output.reshape(batch_size, seq_length, -1).contiguous()
         attn_output = self.o_proj(attn_output)
-        return attn_output, None
+        return attn_output, attn_weights
 
     return deepseek_attn_forward
 

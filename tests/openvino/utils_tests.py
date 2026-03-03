@@ -395,7 +395,6 @@ REMOTE_CODE_MODELS = (
     "exaone4",
     "decilm",
     "minicpm3",
-    "deepseek",
     "qwen3_eagle3",
 )
 
