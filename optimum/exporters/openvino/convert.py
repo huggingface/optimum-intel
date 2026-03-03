@@ -63,6 +63,7 @@ from .stateful import (
 )
 from .utils import (
     MULTI_MODAL_TEXT_GENERATION_MODELS,
+    ONNX_SUPPORTED_ARCHITECTURES,
     OV_XML_FILE_NAME,
     _get_dynamic_shapes_info,
     _get_input_info,
@@ -132,6 +133,10 @@ def _save_model(
 
     runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}
     model = _add_runtime_options_to_rt_info(model, runtime_options)
+
+    if getattr(config, "eagle3", False):
+        model = _add_eagle3_mode_to_rt_info(model)
+
     save_model(model, path, compress_to_fp16)
     del model
     gc.collect()
@@ -574,6 +579,11 @@ def export_from_model(
     else:
         model_type = getattr(model.config, "model_type", None) or ""
 
+    if model_type in ONNX_SUPPORTED_ARCHITECTURES:
+        logger.warning(
+            f"The OpenVINO export of {model_type} models is not officially supported by optimum-intel, export at your own risks."
+        )
+
     custom_architecture = library_name == "transformers" and model_type not in TasksManager._SUPPORTED_MODEL_TYPE
 
     if task is not None and task != "auto":
@@ -671,6 +681,10 @@ def export_from_model(
             stateful=stateful,
         )
         logging.disable(logging.NOTSET)
+
+    # Remove empty model and export_configs pairs, they can be empty when a config class is shared between model versions.
+    # Example: Qwen2VL and Qwen3VL share config class, but "vision_embeddings_pos" is used in Qwen3VL only.
+    models_and_export_configs = {k: v for k, v in models_and_export_configs.items() if v != (None, None)}
 
     if library_name == "open_clip":
         if hasattr(model.config, "save_pretrained"):
@@ -835,6 +849,18 @@ def _add_runtime_options_to_rt_info(model: Model, options: Dict):
     try:
         for name, value in options.items():
             model.set_rt_info(value, ["runtime_options", name])
+    except Exception:
+        pass
+
+    return model
+
+
+def _add_eagle3_mode_to_rt_info(model: Model):
+    """
+    Add eagle3 mode
+    """
+    try:
+        model.set_rt_info("True", ["eagle3_mode"])
     except Exception:
         pass
 

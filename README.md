@@ -4,7 +4,7 @@
 
 # Optimum Intel
 
-🤗 [Optimum Intel](https://huggingface.co/docs/optimum-intel/en/index) is the interface between the 🤗 Transformers and Diffusers libraries and the different tools and libraries provided by Intel to accelerate end-to-end pipelines on Intel architectures.
+🤗 [Optimum Intel](https://huggingface.co/docs/optimum-intel/en/index) is the interface between the 🤗 Transformers and Diffusers libraries and the different tools and libraries provided by [OpenVINO](https://docs.openvino.ai) to accelerate end-to-end pipelines on Intel architectures.
 
 [OpenVINO](https://docs.openvino.ai) is an open-source toolkit that enables high performance inference capabilities for Intel CPUs, GPUs, and special DL inference accelerators ([see](https://docs.openvino.ai/2024/about-openvino/compatibility-and-support/supported-devices.html) the full list of supported devices). It is supplied with a set of tools to optimize your models with compression techniques such as quantization, pruning and knowledge distillation. Optimum Intel provides a simple interface to optimize your Transformers and Diffusers models, convert them to the OpenVINO Intermediate Representation (IR) format and run inference using OpenVINO Runtime.
 
@@ -14,69 +14,50 @@
 To install the latest release of 🤗 Optimum Intel with the corresponding required dependencies, you can use `pip` as follows:
 
 ```bash
-python -m pip install --upgrade-strategy eager "optimum-intel[openvino]"
+python -m pip install -U "optimum-intel[openvino]"
 ```
 
-The `--upgrade-strategy eager` option is needed to ensure `optimum-intel` is upgraded to the latest version.
-
-We recommend creating a [virtual environment](https://packaging.python.org/en/latest/guides/installing-using-pip-and-virtual-environments/#creating-a-virtual-environment) and upgrading
-pip with `python -m pip install --upgrade pip`.
-
-Optimum Intel is a fast-moving project, and you may want to install from source with the following command:
+Optimum Intel is a fast-moving project with regular additions of new model support, so you may want to install from source with the following command:
 
 ```bash
-python -m pip install "optimum-intel[openvino]"@git+https://github.com/huggingface/optimum-intel.git
+python -m pip install "optimum-intel"@git+https://github.com/huggingface/optimum-intel.git
 ```
 
+**Deprecation Notice:** The `extras` for `openvino` (e.g., `pip install optimum-intel[openvino,nncf]`), `nncf`, `neural-compressor`, `ipex` are **deprecated** and will be **removed in a future release**.  
 
-# Quick tour
 
-## OpenVINO
+## Export:
 
-Below are examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/2025/openvino-workflow/model-optimization.html) framework to accelerate inference.
+To export your model to [OpenVINO IR](https://docs.openvino.ai/2025/documentation/openvino-ir-format.html) format, use the optimum-cli tool.
+Below is an example of exporting [TinyLlama/TinyLlama_v1.1](https://huggingface.co/TinyLlama/TinyLlama_v1.1) model:
 
-#### Export:
-
-It is also possible to export your model to the [OpenVINO IR](https://docs.openvino.ai/2025/documentation/openvino-ir-format.html) format with the CLI :
-
-```plain
-optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B ov_llama/
+```sh
+optimum-cli export openvino --model TinyLlama/TinyLlama_v1.1 ov_TinyLlama_v1_1
 ```
 
-You can also apply 8-bit weight-only quantization when exporting your model : the model linear, embedding and convolution weights will be quantized to INT8, the activations will be kept in floating point precision.
+Additional information on exporting models is available in the [documentation](https://huggingface.co/docs/optimum-intel/en/openvino/export).
 
-```plain
-optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B --weight-format int8 ov_llama_int8/
+## Inference:
+
+To load an exported model and run inference using Optimum Intel, use the corresponding `OVModelForXxx` class instead of `AutoModelForXxx`:
+
+```python
+from optimum.intel import OVModelForCausalLM
+from transformers import AutoTokenizer, pipeline
+
+model_id = "ov_TinyLlama_v1_1"
+model = OVModelForCausalLM.from_pretrained(model_id)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+results = pipe("Hey, how are you doing today?", max_new_tokens=100)
 ```
 
-Quantization in hybrid mode can be applied to Stable Diffusion pipeline during model export. This involves applying hybrid post-training quantization to the UNet model and weight-only quantization for the rest of the pipeline components. In the hybrid mode, weights in MatMul and Embedding layers are quantized, as well as activations of other layers.
+For more details on Optimum Intel inference, refer to the [documentation](https://huggingface.co/docs/optimum-intel/en/openvino/inference).
 
-```plain
-optimum-cli export openvino --model stabilityai/stable-diffusion-2-1 --dataset conceptual_captions --weight-format int8 ov_model_sd/
-```
+**Note:** Alternatively, an exported model can also be inferred using [OpenVINO GenAI](https://github.com/openvinotoolkit/openvino.genai) framework,
+that provides optimized execution methods for highly performant Generative AI.
 
-To apply quantization on both weights and activations, you can find more information in the [documentation](https://huggingface.co/docs/optimum-intel/en/openvino/optimization).
-
-#### Inference:
-
-To load a model and run inference with OpenVINO Runtime, you can just replace your `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
-
-```diff
-- from transformers import AutoModelForSeq2SeqLM
-+ from optimum.intel import OVModelForSeq2SeqLM
-  from transformers import AutoTokenizer, pipeline
-
-  model_id = "echarlaix/t5-small-openvino"
-- model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-+ model = OVModelForSeq2SeqLM.from_pretrained(model_id)
-  tokenizer = AutoTokenizer.from_pretrained(model_id)
-  pipe = pipeline("translation_en_to_fr", model=model, tokenizer=tokenizer)
-  results = pipe("He never went out without a book under his arm, and he often came back with two.")
-
-  [{'translation_text': "Il n'est jamais sorti sans un livre sous son bras, et il est souvent revenu avec deux."}]
-```
-
-#### Quantization:
+## Quantization:
 
 Post-training static quantization can also be applied. Here is an example on how to apply static quantization on a Whisper model using the [LibriSpeech](https://huggingface.co/datasets/openslr/librispeech_asr) dataset for the calibration step.
 
@@ -91,8 +72,8 @@ q_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, quantization_config=
 save_dir = "nncf_results"
 q_model.save_pretrained(save_dir)
 ```
-You can find more information in the [documentation](https://huggingface.co/docs/optimum-intel/en/openvino/optimization).
 
+You can find more information in the [documentation](https://huggingface.co/docs/optimum-intel/en/openvino/optimization).
 
 ## Running the examples
 
@@ -100,7 +81,7 @@ Check out the [`notebooks`](https://github.com/huggingface/optimum-intel/tree/ma
 
 Do not forget to install requirements for every example:
 
-```
+```sh
 cd <example-folder>
 pip install -r requirements.txt
 ```
