@@ -415,7 +415,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "quantization_config1": {
             "bits": 4,
             "sym": False,
-            "group_size": 128,
+            "group_size": 64,
             # With ignored scope below we keep some weights in their original precision during the first quantization
             # run and then quantize them to int8 in the second run.
             "ignored_scope": {"patterns": [".*self_attn.*", ".*router.*"]},
