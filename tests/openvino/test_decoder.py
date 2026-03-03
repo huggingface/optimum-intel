@@ -244,7 +244,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "zamba2": 1,
         "bitnet": 6,
         "hunyuan_v1_dense": 2,
-        "qwen3_next": 2,
+        "qwen3_next": 1,
     }
     TASK = "text-generation"
 
