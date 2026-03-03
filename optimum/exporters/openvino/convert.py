@@ -435,7 +435,7 @@ def export_pytorch(
 
                     __make_16bit_traceable(model)
 
-                conversion_extensions = getattr(patcher, "conversion_extensions", [])
+                conversion_extensions = getattr(patcher, "conversion_extensions", None)
                 module_extensions = getattr(patcher, "module_extensions", None)
                 if module_extensions is not None:
                     ts_decoder_kwargs["module_extensions"] = module_extensions
