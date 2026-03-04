@@ -5408,7 +5408,6 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
 
         for i in range(self.num_linear_attn_layers):
             inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
-            # [batch_size, d_state, d_model]
             inputs_or_outputs[f"{cache_name_prefix}.ssm.{i}"] = {0: "batch_size"}
 
         for i in range(self.num_full_attn_layers):
