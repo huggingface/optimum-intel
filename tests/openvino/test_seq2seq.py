@@ -558,6 +558,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     ]
     SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl"]
     SUPPORT_AUDIO = []
+    UNSUPPORTED_ARCHITECTURES = {"phi4_multimodal"}
     OVMODEL_CLASS = OVModelForVisualCausalLM
     TASK = "image-text-to-text"
 
@@ -610,14 +611,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("llava_next_video",)
     else:
-        UNSUPPORTED_ARCHITECTURES = {
-            "got_ocr2",
-            "idefics3",
-            "llama4",
-            "llava_next_video",
-            "phi4_multimodal",
-            "smolvlm",
-        }
+        UNSUPPORTED_ARCHITECTURES.update({"got_ocr2", "idefics3", "llama4", "llava_next_video", "smolvlm"})
     REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "minicpmo", "llava-qwen2", "phi3_v", "maira2", "phi4mm"]
     IMAGE = Image.open(
         requests.get(
