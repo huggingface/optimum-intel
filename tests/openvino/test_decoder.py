@@ -405,9 +405,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             max_new_tokens=30,
             min_new_tokens=30,
             # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
-            # CVS-177964 GraniteMoeHybrid fails due to lack support of Beam search for hybrid models in OpenVINO
+            # CVS-177964 GraniteMoeHybrid, Qwen3-Next fail due to lack support of Beam search for hybrid models in OpenVINO
             # For this support, we expect changes in IRs to have connected beam_idx with Mamba/Linear attention states
-            num_beams=1 if model_arch in ["chatglm4", "lfm2", "granitemoehybrid"] else 2,
+            num_beams=1 if model_arch in ["chatglm4", "lfm2", "granitemoehybrid", "qwen3_next"] else 2,
             do_sample=False,
         )
 
