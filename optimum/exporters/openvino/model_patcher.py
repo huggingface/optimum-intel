@@ -3770,11 +3770,12 @@ class DeepseekPatcher(OVDecoderModelPatcher):
                 block.self_attn.forward = types.MethodType(self_attn_fwd, block.self_attn)
             if hasattr(block.mlp, "moe_infer"):
                 block.mlp._org_moe_infer = block.mlp.moe_infer
+                block.mlp.moe_infer = types.MethodType(deepseek_moe_infer, block.mlp)
             elif hasattr(block.mlp, "experts"):
                 block.mlp._org_moe_infer = None
                 block.mlp.ep_rank = 0
                 block.mlp.experts_per_rank = len(block.mlp.experts)
-            block.mlp.moe_infer = types.MethodType(deepseek_moe_infer, block.mlp)
+                block.mlp.moe_infer = types.MethodType(deepseek_moe_infer, block.mlp)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
