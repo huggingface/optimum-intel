@@ -7902,8 +7902,7 @@ class LlamaEagle3ForCausalLM(LlamaPreTrainedModel, GenerationMixin):
 
 
 def patched_recurrent_gated_delta_rule(
-    self,
-    query, key, value, g, beta, initial_state, output_final_state, use_qk_l2norm_in_kernel=False
+    self, query, key, value, g, beta, initial_state, output_final_state, use_qk_l2norm_in_kernel=False
 ):
     def l2norm(x: torch.FloatTensor, dim: int = -1, eps: float = 1e-6):
         """This function is intended to align with the l2norm implementation in the FLA library."""
@@ -8115,6 +8114,7 @@ class RecurrentAttentionCell(torch.nn.Module):
 
 def convert_recurrent_attention_cell(context):
     import numpy as np
+
     import openvino as ov
     import openvino.opset14 as ops
 
@@ -8154,7 +8154,9 @@ def convert_recurrent_attention_cell(context):
     kv_mem = ops.multiply(last_recurrent_state_in, ops.unsqueeze(k_t, const_minus_one))
     kv_mem = ops.reduce_sum(kv_mem, const_minus_two, False)
     delta = ops.multiply(ops.subtract(v_t, kv_mem), beta_t)
-    last_recurrent_state_delta = ops.multiply(ops.unsqueeze(k_t, const_minus_one), ops.unsqueeze(delta, const_minus_two))
+    last_recurrent_state_delta = ops.multiply(
+        ops.unsqueeze(k_t, const_minus_one), ops.unsqueeze(delta, const_minus_two)
+    )
     last_recurrent_state_in = ops.add(last_recurrent_state_in, last_recurrent_state_delta)
     core_attn_update = ops.multiply(last_recurrent_state_in, ops.unsqueeze(q_t, const_minus_one))
     core_attn_update = ops.reduce_sum(core_attn_update, const_minus_two, True)
