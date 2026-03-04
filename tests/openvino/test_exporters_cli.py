@@ -1233,13 +1233,14 @@ class OVCLIExportTestCase(unittest.TestCase):
             {"model": 65},
         ),
         (
-            "gpt_oss",
+            # mxfp4 fixing saving broken since v5, fixed in https://github.com/huggingface/transformers/pull/43148, test can be added back for v5.3
+            "gpt_oss_mxfp4" if is_transformers_version("<", "5") else "gpt_oss",
             "openai/gpt-oss-20b",
             AutoModelForCausalLM,
             OVModelForCausalLM,
             "--task text-generation-with-past --weight-format int4",
             _DEFAULT_4BIT_WQ_CONFIGS,
-            {"model": {"int8": 40, "int4": 0}},
+            {"model": {"int8": 22, "int4": 4} if is_transformers_version("<", "5") else {"int8": 40, "int4": 0}},
             {"model": 0},
         ),
         (
