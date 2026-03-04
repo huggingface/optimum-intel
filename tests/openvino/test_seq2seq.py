@@ -630,6 +630,21 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
+        def compare_outputs(inputs, ov_model, transformers_model, generation_config):
+            transformers_inputs = copy.deepcopy(inputs)
+            ov_outputs = ov_model.generate(**inputs, generation_config=generation_config)
+            # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
+            if model_arch in ["minicpmv", "minicpmo", "internvl_chat"]:
+                ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1]:]
+            with torch.no_grad():
+                transformers_outputs = transformers_model.generate(
+                    **transformers_inputs, generation_config=generation_config, **additional_inputs
+                )
+            self.assertTrue(
+                torch.equal(ov_outputs, transformers_outputs),
+                f"generation config : {generation_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
+            )
+
         prompt = "What is shown in this image?"
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -659,7 +674,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         )
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
 
-        inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
+        image = self.IMAGE.resize((600, 600))
+        inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=image)
         if model_arch == "gemma3":
             # validate that preprocessed input ids contain exactly one bos token
             bos_token = preprocessors["processor"].tokenizer.vocab["<bos>"]
@@ -779,37 +795,17 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
             question = "Why is this video funny?"
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video)
-            transformers_inputs = copy.deepcopy(inputs)
-            ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
-            # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-            if model_arch in ["minicpmv", "minicpmo", "internvl_chat"]:
-                ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
-            with torch.no_grad():
-                transformers_outputs = transformers_model.generate(
-                    **transformers_inputs, generation_config=gen_config, **additional_inputs
-                )
-            self.assertTrue(
-                torch.equal(ov_outputs, transformers_outputs),
-                f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
-            )
+            compare_outputs(inputs, ov_model, transformers_model, gen_config)
+
+            # check video+image scenario
+            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video, image=image)
+            compare_outputs(inputs, ov_model, transformers_model, gen_config)
 
         if model_arch in self.SUPPORT_AUDIO:
             input_audio = self._generate_random_audio_data()
             question = "Translate this audio to French"
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
-            transformers_inputs = copy.deepcopy(inputs)
-            ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
-            # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-            if model_arch in ["minicpmv", "minicpmo", "internvl_chat"]:
-                ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
-            with torch.no_grad():
-                transformers_outputs = transformers_model.generate(
-                    **transformers_inputs, generation_config=gen_config, **additional_inputs
-                )
-            self.assertTrue(
-                torch.equal(ov_outputs, transformers_outputs),
-                f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
-            )
+            compare_outputs(inputs, ov_model, transformers_model, gen_config)
         del transformers_model
         del ov_model
 
