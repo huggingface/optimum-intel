@@ -7982,6 +7982,7 @@ def qwen3_next_gated_delta_net_forward(
 
     # getting projected states from cache if it exists
     layer_idx = None
+    recurrent_state = None
     if cache_params is not None:
         layer_idx = cache_params.linear_attn_mapping[self.layer_idx]
         conv_state = cache_params.conv_states[layer_idx]
