@@ -8229,7 +8229,7 @@ def convert_recurrent_attention_cell(context):
     return [final_output.output(0)]
 
 
-class Qwen3NextModelPatcher(ModelPatcher):
+class Qwen3NextModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
