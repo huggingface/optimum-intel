@@ -116,12 +116,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phimoe")
 
-        if is_transformers_version("<", "4.54.0"):
-            SUPPORTED_ARCHITECTURES += ("deepseek", "gigachat3")
-
         # gptq and awq install disabled for windows test environment
         if platform.system() != "Windows" and is_transformers_version("<", "4.56.0"):
             SUPPORTED_ARCHITECTURES += ("opt_gptq", "mixtral_awq")
+
+    if is_transformers_version(">=", "4.53.0"):
+        SUPPORTED_ARCHITECTURES += ("deepseek", "gigachat3")
 
     if is_transformers_version(">", "4.47"):
         SUPPORTED_ARCHITECTURES += ("olmo2",)
@@ -384,13 +384,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
-        atol = 3e-2 if model_arch in ["deepseek", "gigachat3"] else 3e-3 if model_arch in ["minicpm", "qwen2-moe"] else 1e-4
+        atol_by_arch = {
+            "deepseek": 3e-2,
+            "gigachat3": 3e-2,
+            "minicpm": 3e-3,
+            "qwen2-moe": 3e-3,
+        }
+        atol = atol_by_arch.get(model_arch, 1e-4)
         # quantized models have different logits value range
         if "awq" not in model_arch and "gptq" not in model_arch:
-            diff = torch.abs(ov_outputs.logits - transformers_outputs.logits)
-            print(f"\nMax diff: {diff.max()}, Mean diff: {diff.mean()}, aftol: {atol}")
-            print(f"OV logits sample: {ov_outputs.logits[0, 0, :5]}")
-            print(f"TF logits sample: {transformers_outputs.logits[0, 0, :5]}")
             self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
 
         # Qwen tokenizer does not support padding
@@ -668,7 +670,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             return
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49
-        if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
+        if model_arch in {"deepseek", "gigachat3"}:
             self.skipTest("Incompatible modeling code")
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)

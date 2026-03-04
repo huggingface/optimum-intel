@@ -3835,6 +3835,7 @@ def make_deepseek_attn_forward(version: int = 3):
             attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
             attn_output = torch.matmul(attn_weights, value)
             return attn_output.transpose(1, 2).contiguous(), attn_weights
+
     else:
         raise ValueError(f"Unsupported DeepSeek version: {version}")
 
