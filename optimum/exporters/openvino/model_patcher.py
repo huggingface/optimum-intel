@@ -3769,10 +3769,10 @@ class DeepseekPatcher(OVDecoderModelPatcher):
                 block.self_attn._orig_forward = block.self_attn.forward
                 block.self_attn.forward = types.MethodType(self_attn_fwd, block.self_attn)
             if hasattr(block.mlp, "moe_infer"):
-                block.mlp._org_moe_infer = block.mlp.moe_infer
+                block.mlp._orig_moe_infer = block.mlp.moe_infer
                 block.mlp.moe_infer = types.MethodType(deepseek_moe_infer, block.mlp)
             elif hasattr(block.mlp, "experts"):
-                block.mlp._org_moe_infer = None
+                block.mlp._orig_moe_infer = None
                 block.mlp.ep_rank = 0
                 block.mlp.experts_per_rank = len(block.mlp.experts)
                 block.mlp.moe_infer = types.MethodType(deepseek_moe_infer, block.mlp)
@@ -3782,9 +3782,9 @@ class DeepseekPatcher(OVDecoderModelPatcher):
         for block in self._model.model.layers:
             if hasattr(block.self_attn, "_orig_forward"):
                 block.self_attn.forward = block.self_attn._orig_forward
-            if hasattr(block.mlp, "_org_moe_infer"):
-                if block.mlp._org_moe_infer is not None:
-                    block.mlp.moe_infer = block.mlp._org_moe_infer
+            if hasattr(block.mlp, "_orig_moe_infer"):
+                if block.mlp._orig_moe_infer is not None:
+                    block.mlp.moe_infer = block.mlp._orig_moe_infer
                 else:
                     delattr(block.mlp, "moe_infer")
                     if hasattr(block.mlp, "ep_rank"):
