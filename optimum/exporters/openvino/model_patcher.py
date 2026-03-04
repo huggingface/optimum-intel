@@ -3794,11 +3794,6 @@ class DeepseekPatcher(OVDecoderModelPatcher):
 
 
 def make_deepseek_attn_forward(version: int = 3):
-    """Return a MLA attention forward function for the given DeepSeek version.
-
-    Args:
-        version: 2 for deepseek_v2 (uses freqs_cis), 3 for deepseek_v3 (uses cos/sin tuple)
-    """
     from typing import Callable
 
     from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
