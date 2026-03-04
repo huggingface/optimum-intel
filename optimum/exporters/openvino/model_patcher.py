@@ -8072,7 +8072,7 @@ def patched_qwen3_next_sparse_moe_block(self, hidden_states: torch.Tensor) -> to
     new_routing_weights.scatter_(dim=1, index=selected_experts, src=routing_weights)
 
     shared_expert_output = self.shared_expert(hidden_states)
-    shared_expert_output = F.sigmoid(self.shared_expert_gate(hidden_states)) * shared_expert_output
+    shared_expert_output = torch.sigmoid(self.shared_expert_gate(hidden_states)) * shared_expert_output
 
     hidden_states = hidden_states.repeat(num_experts, 1)
     hidden_states = hidden_states.view(num_experts, -1, hidden_dim)
