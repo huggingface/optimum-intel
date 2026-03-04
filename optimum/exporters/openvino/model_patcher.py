@@ -8376,7 +8376,6 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
                 linear_attn_layer = decoder_layer.linear_attn
                 linear_attn_layer._orig_forward = linear_attn_layer.forward
                 linear_attn_layer.forward = types.MethodType(qwen3_next_gated_delta_net_forward, linear_attn_layer)
-                linear_attn_layer._orig_chunk_gated_delta_rule = linear_attn_layer.chunk_gated_delta_rule
                 linear_attn_layer.recurrent_gated_delta_rule = patched_recurrent_gated_delta_rule
                 linear_attn_layer.recurrent_attention_cell = RecurrentAttentionCell()
             if isinstance(decoder_layer.mlp, Qwen3NextSparseMoeBlock):
@@ -8404,7 +8403,6 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
             if layer_type == "linear_attention":
                 linear_attn_layer = decoder_layer.linear_attn
                 linear_attn_layer.forward = linear_attn_layer._orig_forward
-                linear_attn_layer.chunk_gated_delta_rule = linear_attn_layer._orig_chunk_gated_delta_rule
             if isinstance(decoder_layer.mlp, Qwen3NextSparseMoeBlock):
                 sparse_moe_block = decoder_layer.mlp
                 decoder_layer.mlp.forward = decoder_layer.mlp._orig_forward
