@@ -406,6 +406,8 @@ def deduce_diffusers_dtype(model_name_or_path, **loading_kwargs):
             else:
                 # filter out variant files
                 safetensors_files = [filename for filename in directory.glob(pattern) if len(filename.suffixes) == 1]
+                if not safetensors_files:
+                    safetensors_files = list(directory.glob(pattern))
             safetensors_file = None
             if len(safetensors_files) > 0:
                 safetensors_file = safetensors_files.pop(0)
