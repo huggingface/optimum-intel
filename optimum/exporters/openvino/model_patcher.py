@@ -7947,6 +7947,16 @@ def patched_recurrent_gated_delta_rule(
     return core_attn_out, last_recurrent_state
 
 
+# Adopted from:
+# https://github.com/huggingface/transformers/blob/v4.57-release/src/transformers/models/qwen3_next/modeling_qwen3_next.py#L660
+#
+# The CausalConv1D block is overridden with a generic patch provided by `ov_causal_conv1d()`.
+# The GatedDeltaNet block is overridden with a recurrent version of its implementation.
+#
+# To replace GatedDeltaNet with its recurrent form, patching uses the ModuleExtension
+# approach, which replaces the GatedDeltaNet block with a single operation,
+# `GatedDeltaNetOp`. OpenVINO then applies the `convert_recurrent_attention_cell()`
+# conversion rule to this operation.
 def qwen3_next_gated_delta_net_forward(
     self,
     hidden_states: torch.Tensor,
@@ -8041,6 +8051,8 @@ def qwen3_next_gated_delta_net_forward(
     return output
 
 
+# Patches the MoE block with a vectorized implementation.
+# The vectorized form is required to ensure correct torch.jit tracing for this component.
 def patched_qwen3_next_sparse_moe_block(self, hidden_states: torch.Tensor) -> torch.Tensor:
     num_experts = self.num_experts
     batch_size, sequence_length, hidden_dim = hidden_states.shape
@@ -8079,6 +8091,8 @@ def patched_qwen3_next_sparse_moe_block(self, hidden_states: torch.Tensor) -> to
     return output.view(batch_size, sequence_length, hidden_dim)
 
 
+# This torch.nn.Module represents the GatedDeltaNet layer in its recurrent form.
+# It is required for converting the GatedDeltaNet layer with OpenVINO using the ModuleExtension mechanism.
 class RecurrentAttentionCell(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -8108,13 +8122,19 @@ class RecurrentAttentionCell(torch.nn.Module):
             last_recurrent_state = last_recurrent_state + k_t.unsqueeze(-1) * delta.unsqueeze(-2)
             core_attn_out[:, :, i] = (last_recurrent_state * q_t.unsqueeze(-1)).sum(dim=-2)
 
+        # This is a workaround to ensure a single output from the torch.nn.Module.
+        # The OpenVINO ModuleExtension mechanism has a limitation and expects
+        # the module to produce only one output.
         output_cell = torch.cat([core_attn_out.flatten(), last_recurrent_state.flatten()], dim=0)
         return output_cell
 
 
+# Conversion rule for the `RecurrentAttentionCellOp` operation in a Torch graph.
+# The `RecurrentAttentionCellOp` appears in the Torch graph as a result of replacing
+# the `torch.nn.Module` block `RecurrentAttentionCell` via a registered
+# `ModuleExtension` for `RecurrentAttentionCell` in the OpenVINO PyTorch frontend.
 def convert_recurrent_attention_cell(context):
     import numpy as np
-
     import openvino as ov
     import openvino.opset14 as ops
 
@@ -8186,7 +8206,7 @@ def convert_recurrent_attention_cell(context):
     seq_len = ops.convert(seq_len, "i32")
     loop = ops.loop(seq_len, ops.constant(True, dtype="bool"))
     loop.set_function(body_model)
-    # set_sliced_input(parameter, value, start, stride, part_size, end, axis)
+
     loop.set_sliced_input(q_t_param, query, 0, 1, 1, -1, 2)
     loop.set_sliced_input(k_t_param, key, 0, 1, 1, -1, 2)
     loop.set_sliced_input(v_t_param, value, 0, 1, 1, -1, 2)
@@ -8194,7 +8214,6 @@ def convert_recurrent_attention_cell(context):
     loop.set_sliced_input(beta_t_param, beta, 0, 1, 1, -1, 2)
     loop.set_merged_input(last_recurrent_state_t, last_recurrent_state_old, last_recurrent_state_res.output(0))
     loop.set_merged_input(core_attn_out_t, core_attn_out.output(0), core_attn_out_res.output(0))
-
     loop.set_special_body_ports([0, 0])
 
     core_attn_out_new = loop.get_iter_value(core_attn_out_res.output(0), -1)
@@ -8217,7 +8236,6 @@ class Qwen3NextModelPatcher(ModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextDynamicCache
-
         from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
 
         super().__init__(config, model, model_kwargs)

@@ -5319,7 +5319,7 @@ class HunyuanV1DenseOpenVINOConfig(LlamaOpenVINOConfig):
 
 class Qwen3NextDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     """
-    Generates dummy cache_params inputs for Zamba2 architectures.
+    Generates dummy cache_params inputs for Qwen3-Next architectures.
     """
 
     SUPPORTED_INPUT_NAMES = ("cache_params",)
@@ -5365,7 +5365,6 @@ class Qwen3NextDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             )
             conv_state = self.random_float_tensor(conv_state_shape, framework=framework, dtype=float_dtype)
             cache_params.append(conv_state)
-            # num_heads = self.num_key_value_heads * (self.num_v_heads // self.num_k_heads)
             num_heads = self.num_v_heads
             recurrent_state_shape = (self.batch_size, num_heads, self.head_k_dim, self.head_v_dim)
             recurrent_state = self.random_float_tensor(recurrent_state_shape, framework=framework, dtype=float_dtype)
