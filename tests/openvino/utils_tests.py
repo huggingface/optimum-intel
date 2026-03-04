@@ -326,7 +326,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "lm_model": 30,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 16,
-        "mulit_modal_projector_model": 3,
+        "multi_modal_projector_model": 3,
     },
     "qwen2_vl": {
         "lm_model": 30,
