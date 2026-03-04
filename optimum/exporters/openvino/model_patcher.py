@@ -8135,6 +8135,7 @@ class RecurrentAttentionCell(torch.nn.Module):
 # `ModuleExtension` for `RecurrentAttentionCell` in the OpenVINO PyTorch frontend.
 def convert_recurrent_attention_cell(context):
     import numpy as np
+
     import openvino as ov
     import openvino.opset14 as ops
 
@@ -8236,6 +8237,7 @@ class Qwen3NextModelPatcher(ModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextDynamicCache
+
         from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
 
         super().__init__(config, model, model_kwargs)
