@@ -635,7 +635,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             ov_outputs = ov_model.generate(**inputs, generation_config=generation_config)
             # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
             if model_arch in ["minicpmv", "minicpmo", "internvl_chat"]:
-                ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1]:]
+                ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
             with torch.no_grad():
                 transformers_outputs = transformers_model.generate(
                     **transformers_inputs, generation_config=generation_config, **additional_inputs
