@@ -670,7 +670,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             return
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49
-        if model_arch in {"deepseek", "gigachat3"}:
+        if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
             self.skipTest("Incompatible modeling code")
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
