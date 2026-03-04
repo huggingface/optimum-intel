@@ -8079,10 +8079,10 @@ def patched_qwen3_next_sparse_moe_block(self, hidden_states: torch.Tensor) -> to
     act_fn = self.experts[0].act_fn
 
     # compute experts outputs in a vectorized form
-    gate = torch.bmm(hidden_states, self.gate_projs)
-    up = torch.bmm(hidden_states, self.up_projs)
+    gate = torch.bmm(hidden_states, self.gate_projs.transpose(1, 2))
+    up = torch.bmm(hidden_states, self.up_projs.transpose(1, 2))
     gate_up = act_fn(gate) * up
-    next_states = torch.bmm(gate_up, self.down_projs)
+    next_states = torch.bmm(gate_up, self.down_projs.transpose(1, 2))
     next_states = next_states.view(num_experts, batch_size, -1, hidden_dim)
     next_states = next_states * new_routing_weights.transpose(0, 1).view(num_experts, batch_size, -1)[..., None]
     next_states = next_states.sum(dim=0)
@@ -8383,15 +8383,17 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
                 num_experts = sparse_moe_block.num_experts
                 sparse_moe_block._orig_forward = decoder_layer.mlp.forward
                 sparse_moe_block.forward = types.MethodType(patched_qwen3_next_sparse_moe_block, sparse_moe_block)
+                # TODO: remove `float()` casting when CVS-181449 is fixed
+                # now it is needed to have MoE optimizations to be applied
                 sparse_moe_block.down_projs = torch.concat(
                     tuple(sparse_moe_block.experts[i].down_proj.weight.unsqueeze(0) for i in range(num_experts)), dim=0
-                ).transpose(1, 2)
+                ).float()
                 sparse_moe_block.gate_projs = torch.concat(
                     tuple(sparse_moe_block.experts[i].gate_proj.weight.unsqueeze(0) for i in range(num_experts)), dim=0
-                ).transpose(1, 2)
+                ).float()
                 sparse_moe_block.up_projs = torch.concat(
                     tuple(sparse_moe_block.experts[i].up_proj.weight.unsqueeze(0) for i in range(num_experts)), dim=0
-                ).transpose(1, 2)
+                ).float()
 
     def __exit__(self, exc_type, exc_value, traceback):
         from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextSparseMoeBlock
