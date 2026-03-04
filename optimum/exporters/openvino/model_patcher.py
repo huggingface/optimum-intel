@@ -7901,92 +7901,8 @@ class LlamaEagle3ForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         )
 
 
-def patched_chunk_gated_delta_rule(
-    self,
-    query,
-    key,
-    value,
-    g,
-    beta,
-    initial_state=None,
-    output_final_state=False,
-    use_qk_l2norm_in_kernel=False,
-):
-    def l2norm(x: torch.FloatTensor, dim: int = -1, eps: float = 1e-6):
-        """This function is intended to align with the l2norm implementation in the FLA library."""
-        inv_norm = torch.rsqrt((x * x).sum(dim=dim, keepdim=True) + eps)
-        return x * inv_norm
-
-    initial_dtype = query.dtype
-    if use_qk_l2norm_in_kernel:
-        query = l2norm(query, dim=-1, eps=1e-6)
-        key = l2norm(key, dim=-1, eps=1e-6)
-    query, key, value, beta, g = [
-        x.transpose(1, 2).contiguous().to(torch.float32) for x in (query, key, value, beta, g)
-    ]
-
-    batch_size, num_heads, sequence_length, k_head_dim = key.shape
-    v_head_dim = value.shape[-1]
-    total_sequence_length = sequence_length
-    scale = 1 / (query.shape[-1] ** 0.5)
-    query = query * scale
-
-    v_beta = value * beta.unsqueeze(-1)
-    k_beta = key * beta.unsqueeze(-1)
-    # reshape to chunks
-    query, key, value, k_beta, v_beta = [
-        x.reshape(x.shape[0], x.shape[1], -1, 1, x.shape[-1]) for x in (query, key, value, k_beta, v_beta)
-    ]
-    g = g.reshape(g.shape[0], g.shape[1], -1, 1)
-    mask = torch.triu(torch.ones(1, 1, dtype=torch.bool, device=query.device), diagonal=0)
-
-    # chunk decay
-    g = g.cumsum(dim=-1)
-    decay_mask = ((g.unsqueeze(-1) - g.unsqueeze(-2)).tril().exp().float()).tril()
-    attn = -((k_beta @ key.transpose(-1, -2)) * decay_mask).masked_fill(mask, 0)
-
-    N = attn.size(-1)
-    i = torch.arange(N, device=attn.device).view(-1, 1)
-    j = torch.arange(N, device=attn.device).view(1, -1)
-    lower_mask = j < i  # True where column < row
-    row = attn * lower_mask  # broadcast over batch dims
-    idx = torch.arange(N, device=attn.device)
-    i_idx = idx.view(N, 1, 1)
-    j_idx = idx.view(1, N, 1)
-    k_idx = idx.view(1, 1, N)
-    mask = (k_idx < i_idx) & (k_idx < j_idx)
-    prod = row.unsqueeze(-1) * attn.unsqueeze(-2)
-    prod = prod * mask
-    upd = prod.sum(-1)
-    attn = torch.where(lower_mask, row + upd, attn)
-
-    attn = attn + torch.eye(1, dtype=attn.dtype, device=attn.device)
-    value = attn @ v_beta
-    k_cumdecay = attn @ (k_beta * g.exp().unsqueeze(-1))
-    last_recurrent_state = (
-        torch.zeros(batch_size, num_heads, k_head_dim, v_head_dim).to(value)
-        if initial_state is None
-        else initial_state.to(value)
-    )
-    mask = torch.triu(torch.ones(1, 1, dtype=torch.bool, device=query.device), diagonal=1)
-    num_chunks = total_sequence_length
-
-    output_cell = self.chunked_attention_cell(
-        query, key, value, decay_mask, mask, k_cumdecay, g, last_recurrent_state, num_chunks
-    )
-
-    num_elems = value.numel()
-    core_attn_out = output_cell[:num_elems].reshape(value.shape)
-    last_recurrent_state = output_cell[num_elems:].reshape(last_recurrent_state.shape)
-
-    if not output_final_state:
-        last_recurrent_state = None
-
-    core_attn_out = core_attn_out.transpose(1, 2).contiguous().to(initial_dtype)
-    return core_attn_out, last_recurrent_state
-
-
 def patched_recurrent_gated_delta_rule(
+    self,
     query, key, value, g, beta, initial_state, output_final_state, use_qk_l2norm_in_kernel=False
 ):
     def l2norm(x: torch.FloatTensor, dim: int = -1, eps: float = 1e-6):
@@ -8007,28 +7923,27 @@ def patched_recurrent_gated_delta_rule(
     scale = 1 / (query.shape[-1] ** 0.5)
     query = query * scale
 
-    core_attn_out = torch.zeros(batch_size, num_heads, sequence_length, v_head_dim).to(value)
     last_recurrent_state = (
         torch.zeros(batch_size, num_heads, k_head_dim, v_head_dim).to(value)
         if initial_state is None
         else initial_state.to(value)
     )
 
-    q_t = query[:, :, 0]
-    k_t = key[:, :, 0]
-    v_t = value[:, :, 0]
-    g_t = g[:, :, 0].exp().unsqueeze(-1).unsqueeze(-1)
-    beta_t = beta[:, :, 0].unsqueeze(-1)
+    output_cell = self.recurrent_attention_cell(
+        query,  # (B, H, T, D1)
+        key,  # (B, H, T, D1)
+        value,  # (B, H, T, D2)
+        g,  # (B, H, T)
+        beta,  # (B, H, T)
+        last_recurrent_state,  # (B, H, D1, D2)
+    )
 
-    last_recurrent_state = last_recurrent_state * g_t
-    kv_mem = (last_recurrent_state * k_t.unsqueeze(-1)).sum(dim=-2)
-    delta = (v_t - kv_mem) * beta_t
-    last_recurrent_state = last_recurrent_state + k_t.unsqueeze(-1) * delta.unsqueeze(-2)
-    core_attn_out[:, :, 0] = (last_recurrent_state * q_t.unsqueeze(-1)).sum(dim=-2)
+    num_elems = value.numel()
+    core_attn_out = output_cell[:num_elems].reshape(value.shape)
+    last_recurrent_state = output_cell[num_elems:].reshape(last_recurrent_state.shape)
 
     if not output_final_state:
         last_recurrent_state = None
-
     core_attn_out = core_attn_out.transpose(1, 2).contiguous().to(initial_dtype)
     return core_attn_out, last_recurrent_state
 
@@ -8055,9 +7970,6 @@ def qwen3_next_gated_delta_net_forward(
 
     # Set up dimensions for reshapes later
     batch_size, seq_len, _ = hidden_states.shape
-
-    # distinguish prefill and decoding stage
-    dtype = hidden_states.dtype
 
     # getting projected states from cache if it exists
     layer_idx = None
@@ -8102,7 +8014,7 @@ def qwen3_next_gated_delta_net_forward(
         query = query.repeat_interleave(self.num_v_heads // self.num_k_heads, dim=2)
         key = key.repeat_interleave(self.num_v_heads // self.num_k_heads, dim=2)
 
-    core_attn_out, last_recurrent_state = self.chunk_gated_delta_rule(
+    core_attn_out, last_recurrent_state = self.recurrent_gated_delta_rule(
         self,
         query,
         key,
@@ -8168,182 +8080,118 @@ def patched_qwen3_next_sparse_moe_block(self, hidden_states: torch.Tensor) -> to
     return output.view(batch_size, sequence_length, hidden_dim)
 
 
-class ChunkedAttentionCell(torch.nn.Module):
+class RecurrentAttentionCell(torch.nn.Module):
     def __init__(self):
         super().__init__()
 
     def forward(
         self,
-        query,  # (B, H, T, D)
-        key,  # (B, H, T, D)
-        value,  # (B, H, T, D)
-        decay_mask,  # (B, H, T)
-        mask,  # (B, H, D, D) or broadcastable
-        k_cumdecay,  # (B, H, T, D, D)
-        g,  # (B, H, T, G)
-        last_recurrent_state,  # (B, H, D, D)
-        num_chunks,  # int
+        query,  # (B, H, T, D1)
+        key,  # (B, H, T, D1)
+        value,  # (B, H, T, D2)
+        g,  # (B, H, T)
+        beta,  # (B, H, T)
+        last_recurrent_state,  # (B, H, D1, D2)
     ):
+        _, _, sequence_length, _ = key.shape
         core_attn_out = torch.zeros_like(value)
 
-        # Loop over chunks using total_sequence_length instead of T
-        for i in range(0, num_chunks):
-            q_i = query[:, :, i]  # (B, H, D)
-            k_i = key[:, :, i]
-            v_i = value[:, :, i]
-            dec_i = decay_mask[:, :, i]
+        for i in range(sequence_length):
+            q_t = query[:, :, i]
+            k_t = key[:, :, i]
+            v_t = value[:, :, i]
+            g_t = g[:, :, i].exp().unsqueeze(-1).unsqueeze(-1)
+            beta_t = beta[:, :, i].unsqueeze(-1)
 
-            # attention
-            attn = (q_i @ k_i.transpose(-1, -2)) * dec_i
-            attn = attn.masked_fill(mask, 0)
-
-            # recurrent decay contribution
-            v_prime = k_cumdecay[:, :, i] @ last_recurrent_state
-            v_new = v_i - v_prime
-
-            # intermediate attention term
-            g_i = g[:, :, i]  # (B, H, G)
-            attn_inter = (q_i * g_i[..., None].exp()) @ last_recurrent_state
-
-            # final output
-            core_attn_out[:, :, i] = attn_inter + attn @ v_new
-
-            # update recurrent state
-            g_last = g[:, :, i, -1]  # (B, H)
-            decay_factor = g_last[..., None, None].exp()
-
-            g_diff = (g_last[..., None] - g_i).exp()  # (B, H, G)
-            update_term = (k_i * g_diff[..., None]).transpose(-1, -2) @ v_new
-
-            last_recurrent_state = last_recurrent_state * decay_factor + update_term
+            last_recurrent_state = last_recurrent_state * g_t
+            kv_mem = (last_recurrent_state * k_t.unsqueeze(-1)).sum(dim=-2)
+            delta = (v_t - kv_mem) * beta_t
+            last_recurrent_state = last_recurrent_state + k_t.unsqueeze(-1) * delta.unsqueeze(-2)
+            core_attn_out[:, :, i] = (last_recurrent_state * q_t.unsqueeze(-1)).sum(dim=-2)
 
         output_cell = torch.cat([core_attn_out.flatten(), last_recurrent_state.flatten()], dim=0)
         return output_cell
 
 
-def convert_chunked_attention_cell(context):
+def convert_recurrent_attention_cell(context):
     import numpy as np
-
     import openvino as ov
     import openvino.opset14 as ops
 
-    # context.get_input(0)
     query = context.get_input(0)
     key = context.get_input(1)
     value = context.get_input(2)
-    decay_mask = context.get_input(3)
-    mask = context.get_input(4)
-    k_cumdecay = context.get_input(5)
-    g = context.get_input(6)
-    last_recurrent_state = context.get_input(7)
-    num_chunks_param = context.get_input(8)
-
-    # context.get_input(0)
-    # query = ops.parameter([-1, -1, -1, 64, -1], np.float32, "query")
-    # key = ops.parameter([-1, -1, -1, 64, -1], np.float32, "key")
-    # value = ops.parameter([-1, -1, -1, 64, -1], np.float32, "value")
-    # decay_mask = ops.parameter([-1, -1, -1, 64, -1], np.float32, "decay_mask")
-    # mask = ops.parameter([64, 64], bool, "mask")
-    # k_cumdecay = ops.parameter([-1, -1, -1, 64, -1], np.float32, "k_cumdecay")
-    # g = ops.parameter([-1, -1, -1, 64], np.float32, "g")
-    # last_recurrent_state = ops.parameter([-1, -1, 8, 8], np.float32, "last_recurrent_state")
-    # num_chunks_param = ops.parameter([], np.int64, "num_chunks")
+    g = context.get_input(3)
+    beta = context.get_input(4)
+    last_recurrent_state_old = context.get_input(5)
 
     value_shape = ops.shape_of(value)
     const_zero = ops.constant(0, dtype=np.float32)
     core_attn_out = ops.broadcast(const_zero, value_shape)
+    const_two_out = ops.constant(2, dtype=np.int32)
+    const_zero_out = ops.constant(0, dtype=np.int32)
+    seq_len = ops.gather(value_shape, const_two_out, const_zero_out)
 
-    const_one_float = ops.constant(1, dtype=np.float32)
-    const_zero_float = ops.constant(0, dtype=np.float32)
-    mask_float = ops.select(mask, const_zero_float, const_one_float)
-
-    # create a body graph
-    # q_i, k_i, v_i = query[:, :, i], key[:, :, i], value[:, :, i]
-    # attn = (q_i @ k_i.transpose(-1, -2) * decay_mask[:, :, i]).masked_fill_(mask, 0)
-    # v_prime = (k_cumdecay[:, :, i]) @ last_recurrent_state
-    # v_new = v_i - v_prime
-    # attn_inter = (q_i * g[:, :, i, :, None].exp()) @ last_recurrent_state
-    # core_attn_out[:, :, i] = attn_inter + attn @ v_new
-    # last_recurrent_state = (
-    #        last_recurrent_state * g[:, :, i, -1, None, None].exp()
-    #        + (k_i * (g[:, :, i, -1, None] - g[:, :, i]).exp()[..., None]).transpose(-1, -2) @ v_new
-    # )
-    timestep = ops.parameter([], np.int32, "timestep")
-    q_i_param = ops.parameter([-1, -1, 1, -1, -1], np.float32, "q_i")
-    k_i_param = ops.parameter([-1, -1, 1, -1, -1], np.float32, "k_i")
-    v_i_param = ops.parameter([-1, -1, 1, -1, -1], np.float32, "v_i")
-    decay_mask_i_param = ops.parameter([-1, -1, 1, -1, -1], np.float32, "decay_mask_i")
-    mask_i = ops.parameter([-1, -1], np.float32, "mask_i")
-    k_cumdecay_i_param = ops.parameter([-1, -1, 1, -1, -1], np.float32, "k_cumdecay_i")
-    last_recurrent_state_i = ops.parameter([-1, -1, -1, -1], np.float32, "last_recurrent_state_i")
-    g_i_param = ops.parameter([-1, -1, 1, -1], np.float32, "g_i")
-    core_attn_out_i = ops.parameter([-1, -1, -1, -1, -1], np.float32, "core_attn_out_i")
+    timestep_param = ops.parameter([], np.int32, "timestep")
+    q_t_param = ops.parameter([-1, -1, 1, -1], np.float32, "q_t")
+    k_t_param = ops.parameter([-1, -1, 1, -1], np.float32, "k_t")
+    v_t_param = ops.parameter([-1, -1, 1, -1], np.float32, "v_t")
+    g_t_param = ops.parameter([-1, -1, 1], np.float32, "g_t")
+    beta_t_param = ops.parameter([-1, -1, 1], np.float32, "beta_t")
+    last_recurrent_state_t = ops.parameter([-1, -1, -1, -1], np.float32, "last_recurrent_state_t")
+    core_attn_out_t = ops.parameter([-1, -1, -1, -1], np.float32, "core_attn_out_t")
 
     const_two = ops.constant(2, dtype=np.int32)
-    q_i = ops.squeeze(q_i_param, const_two)
-    k_i = ops.squeeze(k_i_param, const_two)
-    v_i = ops.squeeze(v_i_param, const_two)
-    decay_mask_i = ops.squeeze(decay_mask_i_param, const_two)
-    k_cumdecay_i = ops.squeeze(k_cumdecay_i_param, const_two)
-    g_i = ops.squeeze(g_i_param, const_two)
+    q_t = ops.squeeze(q_t_param, const_two)
+    k_t = ops.squeeze(k_t_param, const_two)
+    v_t = ops.squeeze(v_t_param, const_two)
+    const_minus_one = ops.constant(-1, dtype=np.int32)
+    g_t = ops.unsqueeze(ops.exp(g_t_param), const_minus_one)
+    beta_t = beta_t_param
 
-    attn = ops.einsum([q_i, k_i], "bhwd,bhld->bhwl")
-    attn = ops.multiply(attn, decay_mask_i)
-    attn = ops.multiply(attn, mask_i)
+    last_recurrent_state_in = ops.multiply(last_recurrent_state_t, g_t)
+    const_minus_two = ops.constant(-2, dtype=np.int32)
+    kv_mem = ops.multiply(last_recurrent_state_in, ops.unsqueeze(k_t, const_minus_one))
+    kv_mem = ops.reduce_sum(kv_mem, const_minus_two, False)
+    delta = ops.multiply(ops.subtract(v_t, kv_mem), beta_t)
+    last_recurrent_state_delta = ops.multiply(ops.unsqueeze(k_t, const_minus_one), ops.unsqueeze(delta, const_minus_two))
+    last_recurrent_state_in = ops.add(last_recurrent_state_in, last_recurrent_state_delta)
+    core_attn_update = ops.multiply(last_recurrent_state_in, ops.unsqueeze(q_t, const_minus_one))
+    core_attn_update = ops.reduce_sum(core_attn_update, const_minus_two, True)
+    const_zero = ops.constant(0, dtype=np.int32)
+    timestep = ops.unsqueeze(timestep_param, const_zero)
 
-    v_prime = ops.einsum([k_cumdecay_i, last_recurrent_state_i], "bhwd,bhdl->bhwl")
-    v_new = ops.subtract(v_i, v_prime)
-
-    const_three = ops.constant(3, dtype=np.int32)
-    attn_inter = ops.einsum(
-        [ops.multiply(q_i, ops.exp(ops.unsqueeze(g_i, const_three))), last_recurrent_state_i], "bhwd,bhdl->bhwl"
-    )
-
-    update_core_attn = ops.add(attn_inter, ops.einsum([attn, v_new], "bhwd,bhdl->bhwl"))
-    update_core_attn = ops.unsqueeze(update_core_attn, const_two)
-    const_zero_int = ops.constant(0, dtype=np.int32)
-    timestep_unsq = ops.unsqueeze(timestep, const_zero_int)
-    core_attn_out_res = ops.scatter_update(core_attn_out_i, timestep_unsq, update_core_attn, const_two)
-
-    const_minus1 = ops.constant(-1, dtype=np.int32)
-    g_i_minus1 = ops.gather(g_i, const_minus1, const_two)
-    subtract_g = ops.unsqueeze(ops.exp(ops.subtract(ops.unsqueeze(g_i_minus1, const_minus1), g_i)), const_minus1)
-    update_lrs = ops.einsum([ops.multiply(k_i, subtract_g), v_new], "bhdw,bhdl->bhwl")
-    last_recurrent_state_res = ops.unsqueeze(ops.unsqueeze(g_i_minus1, const_minus1), const_minus1)
-    last_recurrent_state_res = ops.multiply(last_recurrent_state_i, ops.exp(last_recurrent_state_res))
-    last_recurrent_state_res = ops.add(last_recurrent_state_res, update_lrs)
+    core_attn_out_res = ops.scatter_update(core_attn_out_t, timestep, core_attn_update, const_two)
+    last_recurrent_state_res = last_recurrent_state_in
 
     body_cond = ops.constant([True], dtype=bool)
 
     body_model = ov.Model(
         [body_cond, last_recurrent_state_res, core_attn_out_res],
         [
-            timestep,
-            q_i_param,
-            k_i_param,
-            v_i_param,
-            decay_mask_i_param,
-            mask_i,
-            k_cumdecay_i_param,
-            last_recurrent_state_i,
-            g_i_param,
-            core_attn_out_i,
+            timestep_param,
+            q_t_param,
+            k_t_param,
+            v_t_param,
+            g_t_param,
+            beta_t_param,
+            last_recurrent_state_t,
+            core_attn_out_t,
         ],
         "body_model",
     )
 
-    num_chunks = ops.convert(num_chunks_param, "i32")
-    loop = ops.loop(num_chunks, ops.constant(True, dtype="bool"))
+    seq_len = ops.convert(seq_len, "i32")
+    loop = ops.loop(seq_len, ops.constant(True, dtype="bool"))
     loop.set_function(body_model)
-    loop.set_sliced_input(q_i_param, query, 0, 1, 1, -1, 2)
-    loop.set_sliced_input(k_i_param, key, 0, 1, 1, -1, 2)
-    loop.set_sliced_input(v_i_param, value, 0, 1, 1, -1, 2)
-    loop.set_sliced_input(decay_mask_i_param, decay_mask, 0, 1, 1, -1, 2)
-    loop.set_invariant_input(mask_i, mask_float.output(0))
-    loop.set_sliced_input(k_cumdecay_i_param, k_cumdecay, 0, 1, 1, -1, 2)
-    loop.set_merged_input(last_recurrent_state_i, last_recurrent_state, last_recurrent_state_res.output(0))
-    loop.set_sliced_input(g_i_param, g, 0, 1, 1, -1, 2)
-    loop.set_merged_input(core_attn_out_i, core_attn_out.output(0), core_attn_out_res.output(0))
+    # set_sliced_input(parameter, value, start, stride, part_size, end, axis)
+    loop.set_sliced_input(q_t_param, query, 0, 1, 1, -1, 2)
+    loop.set_sliced_input(k_t_param, key, 0, 1, 1, -1, 2)
+    loop.set_sliced_input(v_t_param, value, 0, 1, 1, -1, 2)
+    loop.set_sliced_input(g_t_param, g, 0, 1, 1, -1, 2)
+    loop.set_sliced_input(beta_t_param, beta, 0, 1, 1, -1, 2)
+    loop.set_merged_input(last_recurrent_state_t, last_recurrent_state_old, last_recurrent_state_res.output(0))
+    loop.set_merged_input(core_attn_out_t, core_attn_out.output(0), core_attn_out_res.output(0))
 
     loop.set_special_body_ports([0, 0])
 
@@ -8469,7 +8317,6 @@ class Qwen3NextModelPatcher(ModelPatcher):
 
             if use_cache:
                 past_key_values = causal_lm_output.past_key_values
-                # unwrap Zamba2HybridDynamicCache object
                 present_key_values = []
                 for idx in range(num_linear_attn_layers):
                     present_key_values.append(past_key_values.conv_states[idx])
@@ -8488,10 +8335,10 @@ class Qwen3NextModelPatcher(ModelPatcher):
         self.orig_forward = patched_forward
 
         self.module_extensions = {
-            ChunkedAttentionCell: ModuleExtension(ChunkedAttentionCell, "ChunkedAttentionCellOp"),
+            RecurrentAttentionCell: ModuleExtension(RecurrentAttentionCell, "RecurrentAttentionCellOp"),
         }
         self.conversion_extensions = [
-            ConversionExtension("ChunkedAttentionCellOp", convert_chunked_attention_cell),
+            ConversionExtension("RecurrentAttentionCellOp", convert_recurrent_attention_cell),
         ]
 
     def __enter__(self):
@@ -8500,8 +8347,6 @@ class Qwen3NextModelPatcher(ModelPatcher):
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
-        chunked_attention_cell_list = []
-
         for idx, decoder_layer in enumerate(self._model.model.layers):
             layer_type = self._model.model.config.layer_types[idx]
             if layer_type == "linear_attention":
@@ -8509,11 +8354,8 @@ class Qwen3NextModelPatcher(ModelPatcher):
                 linear_attn_layer._orig_forward = linear_attn_layer.forward
                 linear_attn_layer.forward = types.MethodType(qwen3_next_gated_delta_net_forward, linear_attn_layer)
                 linear_attn_layer._orig_chunk_gated_delta_rule = linear_attn_layer.chunk_gated_delta_rule
-                linear_attn_layer.chunk_gated_delta_rule = patched_chunk_gated_delta_rule
-                linear_attn_layer._orig_recurrent_gated_delta_rule = linear_attn_layer.recurrent_gated_delta_rule
                 linear_attn_layer.recurrent_gated_delta_rule = patched_recurrent_gated_delta_rule
-                linear_attn_layer.chunked_attention_cell = ChunkedAttentionCell()
-                chunked_attention_cell_list.append(linear_attn_layer.chunked_attention_cell)
+                linear_attn_layer.recurrent_attention_cell = RecurrentAttentionCell()
             if isinstance(decoder_layer.mlp, Qwen3NextSparseMoeBlock):
                 sparse_moe_block = decoder_layer.mlp
                 num_experts = sparse_moe_block.num_experts
@@ -8540,7 +8382,6 @@ class Qwen3NextModelPatcher(ModelPatcher):
                 linear_attn_layer = decoder_layer.linear_attn
                 linear_attn_layer.forward = linear_attn_layer._orig_forward
                 linear_attn_layer.chunk_gated_delta_rule = linear_attn_layer._orig_chunk_gated_delta_rule
-                linear_attn_layer.recurrent_gated_delta_rule = linear_attn_layer._orig_recurrent_gated_delta_rule
             if isinstance(decoder_layer.mlp, Qwen3NextSparseMoeBlock):
                 sparse_moe_block = decoder_layer.mlp
                 decoder_layer.mlp.forward = decoder_layer.mlp._orig_forward
