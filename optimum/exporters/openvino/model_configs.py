@@ -5356,7 +5356,6 @@ class Qwen3NextDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         cache_params = []
 
         for idx in range(self.num_linear_attn_layers):
-            # (batch_size, d_inner, d_conv)
             d_inner = self.num_k_heads * (2 * self.head_k_dim + self.head_v_dim * self.num_v_heads // self.num_k_heads)
             conv_state_shape = (
                 self.batch_size,
