@@ -51,6 +51,9 @@ from .utils import (
     patch_qwenvl_configs,
 )
 
+import os
+from optimum.exporters.openvino.modeling_paraformer import build_model, export
+import openvino as ov
 
 if is_transformers_version(">=", "4.55"):
     from transformers import Mxfp4Config
@@ -86,6 +89,8 @@ def infer_task(
     if task == "auto":
         if library_name == "open_clip":
             task = "zero-shot-image-classification"
+        elif library_name == "paraformer":
+            task = "paraformer-auto-speech-recognition"
         else:
             try:
                 task = TasksManager._infer_task_from_model_name_or_path(
@@ -471,6 +476,36 @@ def main_export(
     try:
         if library_name == "open_clip":
             model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
+        elif library_name == "paraformer":
+            model, kwargs = build_model(model=model_name_or_path, device=device)
+
+            model_dir, model_jit_scripts = export(model, kwargs, type="torchscript", quantize=False, device=device)
+            ovm = ov.convert_model(model_jit_scripts, input=[([-1, -1, -1], torch.float32), ([-1], torch.int32)])
+
+            # Apply INT8 weight compression if requested via ov_config
+            if ov_config is not None and ov_config.quantization_config is not None:
+                from nncf import compress_weights, CompressWeightsMode
+                logger.info("Applying INT8 weight compression to paraformer model (symmetric)...")
+                # INT8_SYM: no zero-point bias ops → significantly faster on GPU
+                ovm = compress_weights(ovm, mode=CompressWeightsMode.INT8_SYM)
+                logger.info("Weight compression complete.")
+                # compress_to_fp16=True: stores remaining FP32 constants as FP16
+                # → avoids a second FP32→FP16 conversion pass on GPU at runtime
+                ov.save_model(ovm, str(output) + "/ov_models/openvino_model.xml", compress_to_fp16=True)
+            else:
+                ov.serialize(ovm, str(output) + "/ov_models/openvino_model.xml")
+
+            # Copy model other parafmeter files
+            PARAFORMER_PARAM_FILES = ['am.mvn', 'config.yaml', 'configuration.json', 'seg_dict', 'tokens.json']
+            target_dir = str(output) + "/ov_models"
+            os.makedirs(target_dir, exist_ok=True)
+            for file_name in PARAFORMER_PARAM_FILES:
+                source_file = os.path.join(model_dir, file_name)
+                target_file = os.path.join(target_dir, file_name)
+                if os.path.exists(source_file):
+                    shutil.copy2(source_file, target_file)
+
+            return model, kwargs
         else:
             # remote code models like phi3_v internvl2, minicpmv, internvl2, nanollava, maira2 should be loaded using AutoModelForCausalLM and not AutoModelForImageTextToText
             # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)
@@ -636,6 +671,10 @@ def _main_quantize(
             cache_dir=cache_dir,
             token=token,
         )
+    if library_name == "paraformer":
+        # Paraformer handles quantization during export, skip _main_quantize
+        logger.info("Paraformer quantization already applied during export, skipping _main_quantize.")
+        return
 
     # NOTE: The Phi-4-multimodal-instruct model card contains a pipeline_tag set to automatic-speech-recognition,
     # which is returned as the inferred task. As a result, we try to load the exported model using the
