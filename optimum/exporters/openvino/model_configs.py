@@ -5407,7 +5407,6 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
         self.num_linear_attn_layers = self._normalized_config.layer_types.count("linear_attention")
 
         for i in range(self.num_linear_attn_layers):
-            # [batch_size, conv_kernel_size - 1, d_model]
             inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
             # [batch_size, d_state, d_model]
             inputs_or_outputs[f"{cache_name_prefix}.ssm.{i}"] = {0: "batch_size"}
