@@ -61,6 +61,10 @@ jobs:
           python -m pip install --upgrade pip uv
           uv pip install .[tests,diffusers] transformers[testing]
 
+      - name: Install OpenVINO Nightly
+        run: |
+          uv pip install --upgrade --pre openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/pre-release
+
       - if: ${{ matrix.transformers-version != 'latest' && matrix.transformers-version != 'main' }}
         name: Install specific dependencies and versions required for older transformers
         run: |

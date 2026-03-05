@@ -78,7 +78,7 @@ jobs:
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Install Nightly OpenVINO
         run: |
-          uv pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+          uv pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/pre-release
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Test with Pytest - Nightly OpenVINO
