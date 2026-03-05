@@ -58,6 +58,7 @@ from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_vers
 
 from ._ov_ops import convert_recurrent_attention_cell
 
+
 if is_transformers_version(">=", "4.53"):
     from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, eager_mask, sdpa_mask
     from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock

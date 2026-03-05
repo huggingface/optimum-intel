@@ -21,6 +21,7 @@ import numpy as np
 import openvino as ov
 import openvino.opset14 as ops
 
+
 def convert_recurrent_attention_cell(context):
     query = context.get_input(0)
     key = context.get_input(1)
