@@ -381,7 +381,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         atol_by_arch = {
             "minicpm": 3e-3,
             "qwen2-moe": 3e-3,
-            "gigachat3": 3e-3,
         }
         atol = atol_by_arch.get(model_arch, 1e-4)
         # quantized models have different logits value range
