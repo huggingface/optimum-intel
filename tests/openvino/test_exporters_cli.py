@@ -524,6 +524,18 @@ class OVCLIExportTestCase(unittest.TestCase):
     TRANSFORMERS_4BIT_CONFIGURATIONS = [
         (
             "text-generation-with-past",
+            "llama",
+            "fp4 --group-size 16",
+            {"model": {"int8": 4, "f4e2m1": 14}},
+        ),
+        (
+            "text-generation-with-past",
+            "llama",
+            "fp8_e4m3 --group-size 16",
+            {"model": {"int8": 4, "f8e4m3": 14}},
+        ),
+        (
+            "text-generation-with-past",
             "opt125m",
             "int4 --sym --group-size 128",
             {"model": {"int8": 4, "int4": 72}},
