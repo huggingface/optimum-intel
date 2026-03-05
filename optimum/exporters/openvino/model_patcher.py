@@ -7901,6 +7901,14 @@ class LlamaEagle3ForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         )
 
 
+# Patched implementation of the gated delta rule in recurrent form.
+# Adapted from:
+# https://github.com/huggingface/transformers/blob/v4.57-release/src/transformers/models/qwen3_next/modeling_qwen3_next.py#L522
+#
+# To represent the for-loop that generates output embeddings, we use a module
+# and the conversion extension mechanism. This is necessary because there is
+# no known vectorized form of this loop that would allow it to be correctly
+# traced with torch.jit.trace
 def patched_recurrent_gated_delta_rule(
     self, query, key, value, g, beta, initial_state, output_final_state, use_qk_l2norm_in_kernel=False
 ):
