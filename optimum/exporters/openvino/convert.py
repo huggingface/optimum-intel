@@ -716,7 +716,27 @@ def export_from_model(
         generation_config = getattr(model, "generation_config", None)
         if generation_config is not None:
             try:
+                # Preserve the original `transformers_version` from the source model's generation_config.json.
+                # Starting in transformers 4.50, _prepare_generation_config() applies model-default generation
+                # parameters (do_sample, temperature, top_p, …) when the user-provided GenerationConfig uses
+                # the global default value for those fields AND the stored `transformers_version` is >= 4.50.
+                # Exporting bumps the version to the current transformers release, which causes user-supplied
+                # params (e.g. do_sample=False) to be silently overridden by the model defaults at inference
+                # time. Preserving the original version keeps the OV model consistent with the PT original.
+                orig_transformers_version = getattr(generation_config, "transformers_version", None)
                 generation_config.save_pretrained(output)
+                if orig_transformers_version is not None:
+                    import json as _json
+                    from pathlib import Path as _Path
+
+                    gen_cfg_path = _Path(output) / "generation_config.json"
+                    if gen_cfg_path.exists():
+                        with open(gen_cfg_path, "r", encoding="utf-8") as _f:
+                            _cfg = _json.load(_f)
+                        if _cfg.get("transformers_version") != orig_transformers_version:
+                            _cfg["transformers_version"] = orig_transformers_version
+                            with open(gen_cfg_path, "w", encoding="utf-8") as _f:
+                                _json.dump(_cfg, _f, indent=2)
             except Exception as exception:
                 logger.warning(
                     f"The generation config will not be saved, saving failed with following error:\n{exception}"

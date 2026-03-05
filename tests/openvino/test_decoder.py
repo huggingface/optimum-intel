@@ -24,7 +24,6 @@ from utils_tests import (
 
 from optimum.exporters.openvino.model_configs import (
     BitnetOpenVINOConfig,
-    DeepseekOpenVINOConfig,
     LFM2OpenVINOConfig,
     Qwen3VLOpenVINOConfig,
 )
@@ -287,11 +286,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         if "llama4_text" in supported_architectures:
             supported_architectures.remove("llama4_text")
-        if is_transformers_version(">=", str(DeepseekOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
-            if "deepseek_v2" in supported_architectures:
-                supported_architectures.remove("deepseek_v2")
-            if "deepseek_v3" in supported_architectures:
-                supported_architectures.remove("deepseek_v3")
         if is_transformers_version("<", str(BitnetOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"bitnet"}
         if is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
@@ -385,10 +379,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         # Compare tensor outputs
         atol_by_arch = {
-            "deepseek": 3e-2,
-            "gigachat3": 3e-2,
             "minicpm": 3e-3,
             "qwen2-moe": 3e-3,
+            "gigachat3": 3e-3,
         }
         atol = atol_by_arch.get(model_arch, 1e-4)
         # quantized models have different logits value range
@@ -400,6 +393,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             return
 
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
+
+        # Gigachat3 tokenizer add token_type_ids which DeepSeekV3
+        # and similar models do not accept in generate(); strip it so both OV and PT calls succeed.
+        if model_arch in ["gigachat3"]:
+            tokens.pop("token_type_ids", None)
+
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
         ov_model.config.eos_token_id = None
@@ -415,10 +414,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
 
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
-
-        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49
-        if model_arch in {"deepseek", "gigachat3"} and is_transformers_version(">=", "4.49"):
-            self.skipTest("Incompatible modeling code")
 
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
@@ -668,10 +663,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # For this support, we expect changes in IRs to have connected beam_idx with Mamba/Linear attention states
         if model_arch in ["lfm2", "granitemoehybrid"]:
             return
-
-        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49
-        if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
-            self.skipTest("Incompatible modeling code")
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
         if model_arch == "persimmon":

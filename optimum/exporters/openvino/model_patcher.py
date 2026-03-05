@@ -3769,10 +3769,21 @@ class DeepseekPatcher(OVDecoderModelPatcher):
                 block.self_attn._orig_forward = block.self_attn.forward
                 block.self_attn.forward = types.MethodType(self_attn_fwd, block.self_attn)
             if hasattr(block.mlp, "moe_infer"):
+                # old interface (transformers < 4.57): moe_infer(self, x, topk_ids, topk_weight)
                 block.mlp._orig_moe_infer = block.mlp.moe_infer
+                block.mlp._orig_moe = None
+                block.mlp.ep_rank = getattr(block.mlp, "ep_rank", 0)
+                block.mlp.experts_per_rank = getattr(block.mlp, "experts_per_rank", len(block.mlp.experts))
                 block.mlp.moe_infer = types.MethodType(deepseek_moe_infer, block.mlp)
-            elif hasattr(block.mlp, "experts"):
+            elif hasattr(block.mlp, "moe") and hasattr(block.mlp, "experts"):
+                # new interface (transformers >= 4.57): moe(self, hidden_states, topk_indices, topk_weights)
+                block.mlp._orig_moe = block.mlp.moe
                 block.mlp._orig_moe_infer = None
+                block.mlp.moe = types.MethodType(deepseek_moe, block.mlp)
+            elif hasattr(block.mlp, "experts"):
+                # fallback: patch by injecting moe_infer with required attributes
+                block.mlp._orig_moe_infer = None
+                block.mlp._orig_moe = None
                 block.mlp.ep_rank = 0
                 block.mlp.experts_per_rank = len(block.mlp.experts)
                 block.mlp.moe_infer = types.MethodType(deepseek_moe_infer, block.mlp)
@@ -3782,15 +3793,21 @@ class DeepseekPatcher(OVDecoderModelPatcher):
         for block in self._model.model.layers:
             if hasattr(block.self_attn, "_orig_forward"):
                 block.self_attn.forward = block.self_attn._orig_forward
+            if hasattr(block.mlp, "_orig_moe"):
+                if block.mlp._orig_moe is not None:
+                    block.mlp.moe = block.mlp._orig_moe
+                delattr(block.mlp, "_orig_moe")
             if hasattr(block.mlp, "_orig_moe_infer"):
                 if block.mlp._orig_moe_infer is not None:
                     block.mlp.moe_infer = block.mlp._orig_moe_infer
                 else:
-                    delattr(block.mlp, "moe_infer")
+                    if hasattr(block.mlp, "moe_infer"):
+                        delattr(block.mlp, "moe_infer")
                     if hasattr(block.mlp, "ep_rank"):
                         delattr(block.mlp, "ep_rank")
                     if hasattr(block.mlp, "experts_per_rank"):
                         delattr(block.mlp, "experts_per_rank")
+                delattr(block.mlp, "_orig_moe_infer")
 
 
 def make_deepseek_attn_forward(version: int = 3):
@@ -3868,7 +3885,7 @@ def make_deepseek_attn_forward(version: int = 3):
             else:
                 q_rot, k_rot = apply_rotary_pos_emb(q_rot, k_rot, cos, sin)
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            kv_cache = past_key_value
+            kv_cache = past_key_values if past_key_values is not None else past_key_value
         else:
             q_rot, k_rot = apply_rotary_emb(q_rot, k_rot, position_embeddings.to(q_rot.device))
             cache_kwargs = {"cache_position": cache_position}
@@ -3947,6 +3964,29 @@ def deepseek_moe_infer(self, x, topk_ids, topk_weight):
         .to(new_x.dtype)
     )
     return final_out
+
+
+def deepseek_moe(self, hidden_states: torch.Tensor, topk_indices: torch.Tensor, topk_weights: torch.Tensor):
+    """
+    Replacement for DeepseekV3MoE.moe (transformers >= 4.57).
+    The original skips experts with no tokens (data-dependent control flow that breaks tracing).
+    This version unconditionally runs all experts to produce a traceable static graph.
+    """
+    final_hidden_states = torch.zeros_like(hidden_states, dtype=topk_weights.dtype)
+    expert_mask = torch.nn.functional.one_hot(topk_indices, num_classes=len(self.experts))
+    expert_mask = expert_mask.permute(2, 0, 1)
+
+    for expert_idx in range(len(self.experts)):
+        expert = self.experts[expert_idx]
+        mask = expert_mask[expert_idx]
+        token_indices, weight_indices = torch.where(mask)
+        expert_weights = topk_weights[token_indices, weight_indices]
+        expert_input = hidden_states[token_indices]
+        expert_output = expert(expert_input)
+        weighted_output = expert_output * expert_weights.unsqueeze(-1)
+        final_hidden_states.index_add_(0, token_indices, weighted_output)
+
+    return final_hidden_states.type(hidden_states.dtype)
 
 
 class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):

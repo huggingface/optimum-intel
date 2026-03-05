@@ -70,7 +70,7 @@ MODEL_NAMES = {
     "deberta-v2": "optimum-intel-internal-testing/tiny-random-DebertaV2Model",
     "decilm": "optimum-intel-internal-testing/tiny-random-decilm",
     "deepseek": "optimum-intel-internal-testing/tiny-random-deepseek-v3",
-    "gigachat3": "mohamedahraf273/tiny-random-gigachat3",
+    "gigachat3": "optimum-intel-internal-testing/tiny-random-gigachat3",
     "deit": "optimum-intel-internal-testing/tiny-random-DeiTModel",
     "convnext": "optimum-intel-internal-testing/tiny-random-convnext",
     "convnextv2": "optimum-intel-internal-testing/tiny-random-ConvNextV2Model",
@@ -551,8 +551,10 @@ def get_supported_model_for_library(library_name):
         if supported_model_type[model_type].get("openvino"):
             export_config = next(iter(supported_model_type[model_type]["openvino"].values()))
 
-            min_transformers = str(getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", "0"))
-            max_transformers = str(getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", "999"))
+            raw_min = getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", None)
+            raw_max = getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", None)
+            min_transformers = str(raw_min) if raw_min is not None else "0"
+            max_transformers = str(raw_max) if raw_max is not None else "999"
 
             if is_transformers_version(">=", min_transformers) and is_transformers_version("<=", max_transformers):
                 valid_model.add(model_type)
