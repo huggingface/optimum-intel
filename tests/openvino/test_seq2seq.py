@@ -551,6 +551,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     if is_transformers_version("<", "4.52"):
         SUPPORTED_ARCHITECTURES += ["minicpmo"]
+    if is_transformers_version(">=", "4.57.0"):
+        SUPPORTED_ARCHITECTURES += ["qwen3_vl"]
+        SUPPORT_VIDEO += ["qwen3_vl"]
 
     if is_transformers_version(">=", "4.54.0"):
         # remote code models differs after transformers v4.54
@@ -576,6 +579,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "idefics3",
             "smolvlm",
             "llama4",
+            "qwen3_vl",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -889,7 +893,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             question = "Hi, how are you?"
             inputs = model.preprocess_inputs(**preprocessors, text=question, image=None)
             outputs = model.generate(**inputs, max_new_tokens=10)
-            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+            # filter out original prompt because it may contain out of tokenizer tokens e.g. in nanollava text separator = -200
             outputs = outputs[:, inputs["input_ids"].shape[1] :]
             outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
             self.assertIsInstance(outputs[0], str)
@@ -911,7 +915,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 question = "Why is this video funny?"
                 inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
                 outputs = model.generate(**inputs, max_new_tokens=10)
-                # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+                # filter out original prompt because it may contain out of tokenizer tokens e.g. in nanollava text separator = -200
                 outputs = outputs[:, inputs["input_ids"].shape[1] :]
                 outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
                 self.assertIsInstance(outputs[0], str)
@@ -921,7 +925,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             question = "Translate this audio to French"
             inputs = model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
             outputs = model.generate(**inputs, max_new_tokens=10)
-            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+            # filter out original prompt because it may contain out of tokenizer tokens e.g. in nanollava text separator = -200
             outputs = outputs[:, inputs["input_ids"].shape[1] :]
             outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
             self.assertIsInstance(outputs[0], str)

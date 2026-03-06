@@ -57,6 +57,7 @@ MODEL_NAMES = {
     "clip": "optimum-intel-internal-testing/tiny-random-CLIPModel",
     "convbert": "optimum-intel-internal-testing/tiny-random-ConvBertForSequenceClassification",
     "cohere": "optimum-intel-internal-testing/tiny-random-CohereForCausalLM",
+    "cohere2": "optimum-intel-internal-testing/tiny-random-aya-base",
     "chatglm": "optimum-intel-internal-testing/tiny-random-chatglm",
     "chatglm4": "optimum-intel-internal-testing/tiny-random-chatglm4",
     "codegen": "optimum-intel-internal-testing/tiny-random-CodeGenForCausalLM",
@@ -106,6 +107,7 @@ MODEL_NAMES = {
     "granitemoe": "optimum-intel-internal-testing/tiny-random-granite-moe",
     "granitemoehybrid": "optimum-intel-internal-testing/tiny-random-granitemoehybrid",
     "hubert": "optimum-intel-internal-testing/tiny-random-HubertModel",
+    "hunyuan_v1_dense": "optimum-intel-internal-testing/tiny-random-hunyuan-v1-dense",
     "ibert": "optimum-intel-internal-testing/tiny-random-ibert",
     "idefics3": "optimum-intel-internal-testing/tiny-random-Idefics3ForConditionalGeneration",
     "internlm": "optimum-intel-internal-testing/tiny-random-internlm",
@@ -169,6 +171,7 @@ MODEL_NAMES = {
     "qwen2_5_vl": "optimum-intel-internal-testing/tiny-random-qwen2.5-vl",
     "qwen3": "optimum-intel-internal-testing/tiny-random-qwen3",
     "qwen3_moe": "optimum-intel-internal-testing/tiny-random-qwen3moe",
+    "qwen3_vl": "optimum-intel-internal-testing/tiny-random-qwen3-vl",
     "rembert": "optimum-intel-internal-testing/tiny-random-rembert",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",
     "roberta": "optimum-intel-internal-testing/tiny-random-roberta",
@@ -223,8 +226,10 @@ MODEL_NAMES = {
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
+    "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
 }
 
+EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7B")}
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "afmoe": {"model": 16},
@@ -233,6 +238,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "albert": {"model": 84},
     "vit": {"model": 64},
     "blenderbot": {"model": 70},
+    "cohere2": {"model": 30},
     "gpt2": {"model": 44},
     "granitemoehybrid": {"model": 118},
     "wav2vec2": {"model": 34},
@@ -321,6 +327,13 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 1,
         "vision_embeddings_merger_model": 10,
     },
+    "qwen3_vl": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 32,
+        "vision_embeddings_pos_model": 1,
+    },
     "sana": {
         "transformer": 58,
         "vae_decoder": 28,
@@ -355,6 +368,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "zamba2": {"model": 44},
     "exaone4": {"model": 16},
     "lfm2": {"model": 52},
+    "hunyuan_v1_dense": {"model": 32},
+    "qwen3_eagle3": {"model": 20},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -381,6 +396,7 @@ REMOTE_CODE_MODELS = (
     "decilm",
     "minicpm3",
     "deepseek",
+    "qwen3_eagle3",
 )
 
 
