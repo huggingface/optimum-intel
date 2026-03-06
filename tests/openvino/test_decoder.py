@@ -116,12 +116,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phimoe")
 
-        if is_transformers_version("<", "4.54.0"):
-            SUPPORTED_ARCHITECTURES += ("deepseek",)
-
         # gptq and awq install disabled for windows test environment
         if platform.system() != "Windows" and is_transformers_version("<", "4.56.0"):
             SUPPORTED_ARCHITECTURES += ("opt_gptq", "mixtral_awq")
+
+    if is_transformers_version(">=", "4.53.0"):
+        SUPPORTED_ARCHITECTURES += ("deepseek", "gigachat3")
 
     if is_transformers_version(">", "4.47"):
         SUPPORTED_ARCHITECTURES += ("olmo2",)
@@ -227,6 +227,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "minicpm3": 6,
         "phimoe": 2,
         "deepseek": 2,
+        "gigachat3": 2,
         "opt_gptq": 12,
         "mixtral_awq": 2,
         "gemma3_text": 2,
@@ -393,6 +394,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             return
 
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
+
+        # Gigachat3 tokenizer add token_type_ids which DeepSeekV3
+        # and similar models do not accept in generate(); strip it so both OV and PT calls succeed.
+        if model_arch in ["gigachat3"]:
+            tokens.pop("token_type_ids", None)
+
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
         ov_model.config.eos_token_id = None
@@ -408,10 +415,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
 
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
-
-        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49
-        if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
-            self.skipTest("Incompatible modeling code")
 
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
@@ -661,10 +664,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # For this support, we expect changes in IRs to have connected beam_idx with Mamba/Linear attention states
         if model_arch in ["lfm2", "granitemoehybrid"]:
             return
-
-        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49
-        if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
-            self.skipTest("Incompatible modeling code")
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
         if model_arch == "persimmon":
