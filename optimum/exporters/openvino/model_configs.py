@@ -5015,7 +5015,7 @@ class DummyVideoChatFlashQwenProjectorInputGenerator(DummyInputGenerator):
     ):
         self.task = task
         self.batch_size = batch_size
-        self.hidden_size = normalized_config.hidden_size
+        self.hidden_size = normalized_config.mm_hidden_size
         self.num_patches = 64
         self.normalized_config = normalized_config
 
