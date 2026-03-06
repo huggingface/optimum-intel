@@ -59,7 +59,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip uv
-          uv pip install .[tests,diffusers] transformers[testing]
+          uv pip install .[tests] librosa diffusers
+
+      - if: ${{ matrix.transformers-version == 'latest' }}
+        name: Install diffusers
+        run: |
+          uv pip install git+https://github.com/huggingface/diffusers
 
       - if: ${{ matrix.transformers-version != 'latest' && matrix.transformers-version != 'main' }}
         name: Install specific dependencies and versions required for older transformers

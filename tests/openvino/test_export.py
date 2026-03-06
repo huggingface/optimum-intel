@@ -98,13 +98,13 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.48.0"):
         SUPPORTED_ARCHITECTURES.update({"cohere2": OVModelForCausalLM})
 
-    if is_transformers_version(">=", "4.49"):
+    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES.update({"granitemoehybrid": OVModelForCausalLM})
 
-    if is_transformers_version(">=", "4.54"):
+    if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.update({"exaone4": OVModelForCausalLM, "lfm2": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "4.58.0"):

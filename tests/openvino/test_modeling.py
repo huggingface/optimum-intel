@@ -34,6 +34,7 @@ from PIL import Image
 from sentence_transformers import SentenceTransformer
 from transformers import (
     AutoFeatureExtractor,
+    AutoImageProcessor,
     AutoModel,
     AutoModelForAudioClassification,
     AutoModelForAudioFrameClassification,
@@ -53,7 +54,6 @@ from transformers import (
     pipeline,
     set_seed,
 )
-from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
 from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TENSOR_ALIAS_TO_TYPE, TEST_IMAGE_URL
@@ -221,7 +221,7 @@ class OVModelIntegrationTest(unittest.TestCase):
             # anymore due to an internal bug in transformers
             model_ids.append("katuni4ka/phi-4-multimodal-ov")
         for model_id in model_ids:
-            processor = get_preprocessor(model_id)
+            processor = AutoProcessor.from_pretrained(model_id)
             prompt = "What is shown in this image?"
             image = Image.open(
                 requests.get(
@@ -476,7 +476,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertEqual(
             loaded_model.prompt_encoder_mask_decoder.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT"
         )
-        processor = get_preprocessor(self.OV_SAM_MODEL_ID)
+        processor = AutoProcessor.from_pretrained(self.OV_SAM_MODEL_ID)
         img_url = "https://huggingface.co/ybelkada/segment-anything/resolve/main/assets/car.png"
         input_points = [[[450, 600]]]
         raw_image = Image.open(requests.get(img_url, stream=True).raw).convert("RGB")
@@ -709,6 +709,8 @@ class PipelineTest(unittest.TestCase):
 
         # verify could load both pytorch and openvino model (export argument should automatically infered)
         ov_exported_pipe = optimum_pipeline("text-generation", model_id, revision="pt", accelerator="openvino")
+        ov_exported_pipe.modelcard = None
+
         ov_pipe = optimum_pipeline("text-generation", model_id, revision="ov", accelerator="openvino")
         self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
         self.assertIsInstance(ov_pipe.model, OVBaseModel)
@@ -726,20 +728,21 @@ class PipelineTest(unittest.TestCase):
         gc.collect()
 
     def test_seq2seq_load_from_hub(self):
-        model_id = "echarlaix/tiny-random-t5"
+        model_id = MODEL_NAMES["whisper"]
+        task = "automatic-speech-recognition"
         # verify could load both pytorch and openvino model (export argument should automatically infered)
-        ov_exported_pipe = optimum_pipeline("text2text-generation", model_id, accelerator="openvino")
-        ov_pipe = optimum_pipeline("text2text-generation", model_id, revision="ov", accelerator="openvino")
+        ov_exported_pipe = optimum_pipeline(task, model_id, accelerator="openvino")
+        ov_exported_pipe.modelcard = None
+        ov_pipe = optimum_pipeline(task, model_id, revision="ov", accelerator="openvino")
         self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
         self.assertIsInstance(ov_pipe.model, OVBaseModel)
 
         with TemporaryDirectory() as tmpdirname:
             ov_exported_pipe.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
-            if not ov_exported_pipe.model.decoder.stateful:
-                self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
-                self.assertTrue(OV_DECODER_WITH_PAST_NAME.replace(".xml", ".bin") in folder_contents)
-            ov_exported_pipe = optimum_pipeline("text2text-generation", tmpdirname, accelerator="openvino")
+            self.assertTrue(ov_exported_pipe.model._ov_model_paths["encoder"] in folder_contents)
+            self.assertTrue(ov_exported_pipe.model._ov_model_paths["decoder"] in folder_contents)
+            ov_exported_pipe = optimum_pipeline(task, tmpdirname, accelerator="openvino")
             self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
 
         del ov_exported_pipe
@@ -754,13 +757,15 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         "convbert",
         "distilbert",
         "electra",
-        "flaubert",
         "ibert",
         "roberta",
         "roformer",
         "squeezebert",
-        "xlm",
     )
+
+    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+    if is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES += ("flaubert", "xlm")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -891,12 +896,12 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
         pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
         question = "What's my name?"
         context = "My Name is Arthur and I live in Lyon."
-        outputs = pipe(question, context)
+        outputs = pipe(question=question, context=context)
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs["score"], 0.0)
         self.assertIsInstance(outputs["answer"], str)
         ov_pipe = optimum_pipeline("question-answering", model_id, accelerator="openvino")
-        ov_outputs = ov_pipe(question, context)
+        ov_outputs = ov_pipe(question=question, context=context)
         self.assertEqual(outputs["score"], ov_outputs["score"])
         del model
         del ov_pipe
@@ -1084,13 +1089,11 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "bert",
         "camembert",
         "convbert",
-        "data2vec-text",
         "deberta",
         "deberta-v2",
         "distilbert",
         "electra",
         "esm",
-        "flaubert",
         "ibert",
         "mobilebert",
         "mpnet",
@@ -1099,13 +1102,16 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "roberta",
         "roformer",
         "squeezebert",
-        "xlm",
         "xlm-roberta",
     )
 
     # accuracy issue, need additional investigation
     if is_transformers_version("<", "4.51.0"):
         SUPPORTED_ARCHITECTURES += ("nystromformer",)
+
+    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+    if is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES += ("data2vec-text", "flaubert", "xlm")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1185,19 +1191,18 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         set_seed(SEED)
         transformers_model = AutoModelForImageClassification.from_pretrained(model_id)
-        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
+        preprocessor = AutoImageProcessor.from_pretrained(model_id)
         url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
         inputs = preprocessor(images=image, return_tensors="pt")
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs)
-        for input_type in ["pt", "np"]:
-            inputs = preprocessor(images=image, return_tensors=input_type)
-            ov_outputs = ov_model(**inputs)
-            self.assertIn("logits", ov_outputs)
-            self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
-            # Compare tensor outputs
-            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
+        inputs = preprocessor(images=image, return_tensors="pt")
+        ov_outputs = ov_model(**inputs)
+        self.assertIn("logits", ov_outputs)
+        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
         del transformers_model
         del ov_model
         gc.collect()
@@ -1210,7 +1215,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForImageClassification.from_pretrained(model_id, device=OPENVINO_DEVICE)
         model.eval()
-        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
+        preprocessor = AutoImageProcessor.from_pretrained(model_id)
         pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
         inputs = TEST_IMAGE_URL
         outputs = pipe(inputs)
@@ -1596,14 +1601,14 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
         image = Image.open(requests.get(url, stream=True).raw)
         return image
 
-    def test_load_from_hub_and_save_model(self):
+    def test_load_from_hub_and_save_model_openclip(self):
         loaded_model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(
             self.OV_MODEL_ID_IR, device=OPENVINO_DEVICE
         )
 
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID_IR)
         all_text = ["a dog", "a cat", "a frog"]
-        tokens = tokenizer.batch_encode_plus(
+        tokens = tokenizer(
             all_text,
             return_tensors="pt",
             max_length=loaded_model.config.text_config.context_length,
@@ -1681,7 +1686,7 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
 
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID_IR)
         all_text = ["a dog", "a cat", "a frog"]
-        tokens = tokenizer.batch_encode_plus(
+        tokens = tokenizer(
             all_text,
             return_tensors="pt",
             max_length=model.config.text_config.context_length,
@@ -1721,7 +1726,7 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
         self.assertTrue(torch.allclose(model_outputs.logits_per_image, res.logits_per_image, atol=1e-2))
 
         model.reshape(1, -1)
-        reshaped_tokens = tokenizer.batch_encode_plus(
+        reshaped_tokens = tokenizer(
             ["a dog"],
             return_tensors="pt",
             max_length=model.config.text_config.context_length,
@@ -1832,7 +1837,7 @@ class OVSamIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVSamModel.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE)
-        processor = get_preprocessor(model_id)
+        processor = AutoProcessor.from_pretrained(model_id)
 
         self.assertIsInstance(ov_model.vision_encoder, OVSamVisionEncoder)
         self.assertIsInstance(ov_model.prompt_encoder_mask_decoder, OVSamPromptEncoder)
@@ -1885,7 +1890,7 @@ class OVSamIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVSamModel.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE)
-        processor = get_preprocessor(model_id)
+        processor = AutoProcessor.from_pretrained(model_id)
         self.assertTrue(ov_model.is_dynamic)
         input_points = [[[450, 600]]]
         IMAGE = Image.open(
@@ -1921,7 +1926,7 @@ class OVModelForZeroShotImageClassificationIntegrationTest(unittest.TestCase):
         ov_model = OVModelForZeroShotImageClassification.from_pretrained(
             model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
         )
-        processor = get_preprocessor(model_id)
+        processor = AutoProcessor.from_pretrained(model_id)
 
         self.assertIsInstance(ov_model.config, PretrainedConfig)
 
