@@ -783,11 +783,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
             transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
-        if model_arch == "arctic" or "mxfp4" in model_arch:
+        if model_arch in ["arctic", "gemma3_text"] or "mxfp4" in model_arch:
             transformers_model.to(torch.float32)
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache, align cache representation in torch model
-        if model_arch in ["gemma2", "gemma3_text"]:
+        if model_arch in ["gemma2", "gemma3_text"] and is_transformers_version("<", "4.53.0"):
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
             transformers_model.generation_config.cache_implementation = None
