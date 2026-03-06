@@ -24,6 +24,7 @@ from utils_tests import (
 
 from optimum.exporters.openvino.model_configs import (
     BitnetOpenVINOConfig,
+    DeepseekOpenVINOConfig,
     LFM2OpenVINOConfig,
     Qwen3VLOpenVINOConfig,
 )
@@ -290,6 +291,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             supported_architectures -= {"bitnet"}
         if is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"lfm2"}
+        # deepseek_v2 and deepseek_v3 are aliases of the same architecture tested under "deepseek"
+        if is_transformers_version(">=", str(DeepseekOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"deepseek_v2", "deepseek_v3"}
 
         # qwen3_vl_text a part of qwen3_vl architecture and is tested in seq2seq group
         if is_transformers_version(">=", str(Qwen3VLOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
