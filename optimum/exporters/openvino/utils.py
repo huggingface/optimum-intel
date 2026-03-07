@@ -288,6 +288,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llava_next",
     "llava_next_video",
     "llava-qwen2",
+    "mistral3",
     "internvl_chat",
     "maira2",
     "minicpmv",

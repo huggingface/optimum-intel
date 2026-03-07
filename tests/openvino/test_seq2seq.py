@@ -545,6 +545,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         SUPPORT_AUDIO.append("phi4mm")
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
+    if is_transformers_version(">=", "4.50.0"):
+        SUPPORTED_ARCHITECTURES += ["mistral3"]
     if is_transformers_version(">=", "4.51"):
         # SUPPORTED_ARCHITECTURES += ["llama4", "phi4_multimodal"]
         SUPPORTED_ARCHITECTURES += ["llama4"]
@@ -572,6 +574,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "llava",
             "llava_next",
             "llava_next_mistral",
+            "mistral3",
             "qwen2_vl",
             "qwen2_5_vl",
             "got_ocr2",
