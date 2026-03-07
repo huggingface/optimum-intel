@@ -2062,9 +2062,7 @@ class Mistral3ConfigBehavior(str, enum.Enum):
     MULTI_MODAL_PROJECTOR = "multi_modal_projector"
 
 
-class DummyMistral3MultiModalProjectorInputGenerator(DummyInputGenerator):
-    SUPPORTED_INPUT_NAMES = ["image_features"]
-
+class DummyMistral3MultiModalProjectorInputGenerator(DummyLLavaMultiModalProjectorInputGenerator):
     def __init__(
         self,
         task: str,
@@ -2073,18 +2071,12 @@ class DummyMistral3MultiModalProjectorInputGenerator(DummyInputGenerator):
         random_batch_size_range: Optional[Tuple[int, int]] = None,
         **kwargs,
     ):
-        self.task = task
-        self.batch_size = batch_size
-        self.hidden_size = normalized_config.hidden_size
+        super().__init__(task, normalized_config, batch_size, random_batch_size_range, **kwargs)
         self.spatial_merge_size = getattr(
             normalized_config.config, "spatial_merge_size",
             getattr(normalized_config, "spatial_merge_size", 2)
         )
-        image_size = normalized_config.image_size
-        patch_size = normalized_config.patch_size
-        patches_per_side = image_size // patch_size
-        merged_per_side = patches_per_side // self.spatial_merge_size
-        self.num_merged_patches = merged_per_side * merged_per_side
+        self.num_merged_patches = self.num_patches // (self.spatial_merge_size ** 2)
 
     def generate(
         self,
