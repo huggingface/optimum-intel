@@ -259,10 +259,6 @@ def init_model_configs():
         "transformers",
         "AutoModelForVision2Seq",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "mistral3", "image-text-to-text")] = (
-        "transformers",
-        "AutoModelForImageTextToText",
-    )
     TasksManager._CUSTOM_CLASSES[("pt", "gemma3", "image-text-to-text")] = (
         "transformers",
         "Gemma3ForConditionalGeneration",
