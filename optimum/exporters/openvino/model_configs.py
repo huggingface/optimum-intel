@@ -2057,6 +2057,11 @@ class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
 
 class Mistral3ConfigBehavior(str, enum.Enum):
     LANGUAGE = "language"
+    # VISION_EMBEDDINGS extracts visual features and applies projector.norm().
+    # Combined with the cycle block
+    # (https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L76-L94)
+    # and MULTI_MODAL_PROJECTOR, this is equivalent to get_image_features
+    # (https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L223-L248).
     VISION_EMBEDDINGS = "vision_embeddings"
     TEXT_EMBEDDINGS = "text_embeddings"
     MULTI_MODAL_PROJECTOR = "multi_modal_projector"

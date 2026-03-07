@@ -3307,7 +3307,7 @@ class LlavaNextVideoImageEmbeddingModelPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
-# Adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/mistral3/modeling_mistral3.py#L223-L248
+# Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L223-L248
 # Mistral3Model.get_image_features() with only projector.norm() applied instead of full projector forward,
 # as the patch_merger cycle block (unfold loop) cannot be traced to OpenVINO IR.
 def mistral3_vision_embed_forward(self, pixel_values):
@@ -3322,7 +3322,8 @@ def mistral3_vision_embed_forward(self, pixel_values):
     return image_features
 
 
-# Adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/mistral3/modeling_mistral3.py#L118-L124
+# Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L76-L94 
+# and https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L118-L124
 # Mistral3MultiModalProjector.forward() and Mistral3PatchMerger.forward() with norm and cycle block excluded.
 # norm is moved to vision_embed_forward, cycle block runs in PyTorch at runtime.
 def mistral3_multi_modal_projector_forward(self, image_features):

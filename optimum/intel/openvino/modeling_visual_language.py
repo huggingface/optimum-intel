@@ -1709,7 +1709,7 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
         image_features = self.vision_embeddings(pixel_values).last_hidden_state
         image_features = torch.from_numpy(image_features) if isinstance(image_features, np.ndarray) else image_features
 
-        # Adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/mistral3/modeling_mistral3.py#L75-L96
+        # Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L75-L96
         patch_size = self.config.vision_config.patch_size
         spatial_merge_size = self.config.spatial_merge_size
         d = image_features.shape[-1]
@@ -1737,8 +1737,8 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
 
         return image_features
 
-    # Adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/mistral3/modeling_mistral3.py#L258-L280
-    # and https://github.com/huggingface/transformers/blob/main/src/transformers/models/mistral3/modeling_mistral3.py#L313-L324
+    # Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L258-L280
+    # and https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L313-L324
     def merge_vision_text_embeddings(
         self,
         vision_embeds,
