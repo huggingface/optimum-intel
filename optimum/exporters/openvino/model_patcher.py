@@ -56,8 +56,6 @@ from optimum.exporters.onnx.model_patcher import (
 )
 from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_version, is_transformers_version
 
-from ._ov_ops import convert_recurrent_attention_cell
-
 
 if is_transformers_version(">=", "4.53"):
     from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, eager_mask, sdpa_mask
@@ -8204,6 +8202,8 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
         from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DynamicCache
 
         from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
+
+        from ._ov_ops import convert_recurrent_attention_cell
 
         super().__init__(config, model, model_kwargs)
 

@@ -5540,6 +5540,11 @@ class Qwen3_5OpenVINOConfig(Qwen2VLOpenVINOConfig):
             vision_emb_pos.config = model.config.vision_config
             return vision_emb_pos
 
+        if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.model.language_model.embed_tokens
+            text_embedding.config = model.config
+            return text_embedding
+
         return Qwen2VLOpenVINOConfig.get_model_for_behavior(model, behavior)
 
     def with_behavior(
