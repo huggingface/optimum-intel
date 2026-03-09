@@ -169,6 +169,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "hunyuan_v1_dense"),
+                ("text-generation-with-past", "qwen3_next"),
             ]
         )
 
