@@ -5435,6 +5435,7 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
     DUMMY_PKV_GENERATOR_CLASS = Qwen3NextDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     MIN_TRANSFORMERS_VERSION = "4.57.0"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     _MODEL_PATCHER = Qwen3NextModelPatcher
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):

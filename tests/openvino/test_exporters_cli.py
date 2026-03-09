@@ -169,6 +169,12 @@ class OVCLIExportTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "hunyuan_v1_dense"),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
                 ("text-generation-with-past", "qwen3_next"),
             ]
         )

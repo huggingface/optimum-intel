@@ -111,7 +111,10 @@ class ExportModelTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.update({"afmoe": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.57.0"):
-        SUPPORTED_ARCHITECTURES.update({"hunyuan_v1_dense": OVModelForCausalLM, "qwen3_next": OVModelForCausalLM})
+        SUPPORTED_ARCHITECTURES.update({"hunyuan_v1_dense": OVModelForCausalLM})
+
+    if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES.update({"qwen3_next": OVModelForCausalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
