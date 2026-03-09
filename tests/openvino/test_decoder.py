@@ -287,11 +287,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         if "llama4_text" in supported_architectures:
             supported_architectures.remove("llama4_text")
-        if is_transformers_version(">=", str(DeepseekOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
-            if "deepseek_v2" in supported_architectures:
-                supported_architectures.remove("deepseek_v2")
-            if "deepseek_v3" in supported_architectures:
-                supported_architectures.remove("deepseek_v3")
+        if is_transformers_version(">=", str(DeepseekOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"deepseek_v2", "deepseek_v3"}
         if is_transformers_version("<", str(BitnetOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"bitnet"}
         if is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
