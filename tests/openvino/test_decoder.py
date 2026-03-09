@@ -336,6 +336,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "marian",
                 "llama4",
                 "exaone4",
+                "qwen3_next",
             }
 
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
