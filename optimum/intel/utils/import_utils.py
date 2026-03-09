@@ -84,11 +84,9 @@ if _openvino_available:
         from openvino import get_version
 
         version = get_version()
-        # avoid invalid format
+        # avoid invalid format: strip dev/commit suffixes (e.g. "2026.0.0-17740-abc" -> "2026.0.0")
         if "-" in version:
-            ov_major_version, dev_info = version.split("-", 1)
-            commit_id = dev_info.split("-")[0]
-            version = f"{ov_major_version}-{commit_id}"
+            version = version.split("-")[0]
         _openvino_version = version
     except ImportError:
         _openvino_available = False
@@ -425,7 +423,8 @@ def is_openvino_tokenizers_version(operation: str, version: str):
         except importlib_metadata.PackageNotFoundError:
             pass
 
-    tokenizers_version = tokenizers_version[: len("2025.0.0.0")]
+    # Take only the first 4 version components (e.g. "2026.10.0.0" -> "2026.10.0.0")
+    tokenizers_version = ".".join(tokenizers_version.split(".")[:4])
     return compare_versions(parse(tokenizers_version), operation, version)
 
 

@@ -6919,10 +6919,211 @@ def zamba2_mamba_mixer(
 
 
 # This patcher class serves the following purposes:
-# 1. Packs the KV-cache, conv_state, and ssm_state tensors into a Zamba2HybridDynamicCache structure
+# 1. Packs the conv_state, recurrent_state, and KV-cache tensors into a Qwen3_5DynamicCache structure
 #    for subsequent invocation of the model's `forward` method.
-# 2. Patches the Zamba2MambaMixer so that the traced `forward` function works correctly
-#    during both the prefill and decoding steps.
+# 2. Ensures GatedDeltaNet layers use torch fallback paths (not CUDA-only fast kernels)
+#    during export tracing.
+#
+# Qwen3.5 is a hybrid model:
+#   - Linear attention layers (GatedDeltaNet) with conv_states and recurrent_states (fixed-size)
+#   - Full attention layers with standard KV cache (variable-size)
+#
+# The flat cache_params list is ordered as (matching the dummy generator):
+#   [conv_0, rec_0, conv_1, rec_1, ..., conv_{L-1}, rec_{L-1},
+#    key_0, val_0, key_1, val_1, ..., key_{A-1}, val_{A-1}]
+# where L = number of linear attention layers, A = number of full attention layers.
+class Qwen3_5Patcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DynamicCache
+
+        super().__init__(config, model, model_kwargs)
+        orig_model = model
+
+        model_config = self.real_config._config
+        layer_types = model_config.layer_types
+        num_hidden_layers = model_config.num_hidden_layers
+
+        # Compute absolute indices for each layer type
+        linear_layer_indices = [i for i in range(num_hidden_layers) if layer_types[i] == "linear_attention"]
+        attention_layer_indices = [i for i in range(num_hidden_layers) if layer_types[i] == "full_attention"]
+        num_linear = len(linear_layer_indices)
+        num_attention = len(attention_layer_indices)
+
+        # Cache wrapper that reconstructs Qwen3_5DynamicCache from compact per-type lists.
+        # The model accesses cache fields by absolute layer index (0..num_hidden_layers-1),
+        # so we expand compact lists into full-length lists with None at unused positions.
+        class Qwen3_5HybridCacheWrap(Qwen3_5DynamicCache):
+            def __init__(self, cfg, conv_states_compact, recurrent_states_compact, key_cache_compact, value_cache_compact):
+                # Initialize full-length lists of None
+                super().__init__(cfg)
+                # Place conv/recurrent tensors at linear layer positions
+                for compact_idx, abs_idx in enumerate(linear_layer_indices):
+                    self.conv_states[abs_idx] = conv_states_compact[compact_idx]
+                    self.recurrent_states[abs_idx] = recurrent_states_compact[compact_idx]
+                # Place key/value tensors at attention layer positions
+                for compact_idx, abs_idx in enumerate(attention_layer_indices):
+                    self.key_cache[abs_idx] = key_cache_compact[compact_idx]
+                    self.value_cache[abs_idx] = value_cache_compact[compact_idx]
+
+            def update(
+                self,
+                key_states: torch.Tensor,
+                value_states: torch.Tensor,
+                layer_idx: int,
+                cache_kwargs: Optional[dict[str, Any]] = None,
+            ) -> tuple[torch.Tensor, torch.Tensor]:
+                # key_cache at attention positions is an actual tensor (possibly empty with
+                # seq_len=0 from the dummy generator), never None. Concatenation with an
+                # empty tensor (dim=2 size 0) produces the correct result.
+                self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=2)
+                self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=2)
+                return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+            def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+                layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
+                if self.key_cache[layer_idx] is None:
+                    return 0
+                return self.key_cache[layer_idx].shape[-2]
+
+        # Patched forward that converts between flat tensor list and cache object.
+        def patched_forward(
+            input_ids,
+            position_ids=None,
+            cache_params=None,
+        ):
+            use_cache = False
+            wrapped_cache_params = None
+            if cache_params is not None:
+                use_cache = True
+
+                # Unpack flat list (grouped order: all linear pairs, then all attention pairs)
+                conv_states = []
+                recurrent_states = []
+                for idx in range(num_linear):
+                    conv_states.append(cache_params[2 * idx])
+                    recurrent_states.append(cache_params[2 * idx + 1])
+
+                key_cache = []
+                value_cache = []
+                offset = 2 * num_linear
+                for idx in range(num_attention):
+                    key_cache.append(cache_params[offset + 2 * idx])
+                    value_cache.append(cache_params[offset + 2 * idx + 1])
+
+                # Remember input dtype for output matching (stateful transform needs same dtypes)
+                input_dtype = conv_states[0].dtype if conv_states else key_cache[0].dtype
+
+                # Cast cache tensors to model dtype for computation
+                model_dtype = next(orig_model.parameters()).dtype
+                if model_dtype != input_dtype:
+                    conv_states = [s.to(model_dtype) for s in conv_states]
+                    recurrent_states = [s.to(model_dtype) for s in recurrent_states]
+                    key_cache = [s.to(model_dtype) for s in key_cache]
+                    value_cache = [s.to(model_dtype) for s in value_cache]
+
+                wrapped_cache_params = Qwen3_5HybridCacheWrap(
+                    model_config, conv_states, recurrent_states, key_cache, value_cache
+                )
+
+            # Pass attention_mask=None to avoid tracing the mask-dependent indexing
+            # in create_causal_mask/sdpa_mask, which produces hardcoded reshapes
+            # from torch.jit.trace. Without attention_mask, the model creates a
+            # pure causal mask that depends only on KV cache shape (dynamic).
+            # Pass position_ids explicitly so the model uses correct RoPE positions
+            # instead of computing from cache state (which would be baked by trace).
+            causal_lm_output = self.model_orig_forward(
+                input_ids=input_ids,
+                attention_mask=None,
+                position_ids=position_ids,
+                past_key_values=wrapped_cache_params,
+                use_cache=use_cache,
+            )
+            outputs = {
+                "logits": causal_lm_output.logits,
+            }
+
+            if use_cache:
+                past_key_values = causal_lm_output.past_key_values
+                # Repack into flat list (same grouped order), casting back to input dtype
+                present_key_values = []
+                for abs_idx in linear_layer_indices:
+                    present_key_values.append(past_key_values.conv_states[abs_idx].to(input_dtype))
+                    present_key_values.append(past_key_values.recurrent_states[abs_idx].to(input_dtype))
+
+                for abs_idx in attention_layer_indices:
+                    present_key_values.append(past_key_values.key_cache[abs_idx].to(input_dtype))
+                    present_key_values.append(past_key_values.value_cache[abs_idx].to(input_dtype))
+
+                outputs["present_key_values"] = present_key_values
+
+            return outputs
+
+        self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+    def __enter__(self):
+        import transformers.models.qwen3_5.modeling_qwen3_5 as _qwen3_5_module
+        from transformers.models.qwen3_5.modeling_qwen3_5 import (
+            Qwen3_5GatedDeltaNet,
+            torch_causal_conv1d_update,
+            torch_chunk_gated_delta_rule,
+            torch_recurrent_gated_delta_rule,
+        )
+
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
+        # Patch apply_mask_to_padding_states to no-op during export.
+        # This function broadcasts hidden_states * attention_mask[:,:,None], which would
+        # expand hidden_states from [B,1,D] to [B,mask_len,D] if attention_mask is longer
+        # than input_ids. It's only needed for padding during training, not inference.
+        self._orig_apply_mask = _qwen3_5_module.apply_mask_to_padding_states
+        _qwen3_5_module.apply_mask_to_padding_states = lambda hidden_states, attention_mask: hidden_states
+
+        # Patch each GatedDeltaNet layer to use torch fallback paths instead of
+        # CUDA-only fast kernels (causal-conv1d, flash-linear-attention).
+        for layer in self._model.model.layers:
+            if not (hasattr(layer, "linear_attn") and isinstance(layer.linear_attn, Qwen3_5GatedDeltaNet)):
+                continue
+            gdn = layer.linear_attn
+            # Save originals for restoration
+            gdn._orig_causal_conv1d_fn = gdn.causal_conv1d_fn
+            gdn._orig_causal_conv1d_update = gdn.causal_conv1d_update
+            gdn._orig_chunk_gated_delta_rule = gdn.chunk_gated_delta_rule
+            gdn._orig_recurrent_gated_delta_rule = gdn.recurrent_gated_delta_rule
+            # Force torch fallback paths
+            gdn.causal_conv1d_fn = None  # triggers native conv1d path in prefill
+            gdn.causal_conv1d_update = torch_causal_conv1d_update
+            gdn.chunk_gated_delta_rule = torch_chunk_gated_delta_rule
+            gdn.recurrent_gated_delta_rule = torch_recurrent_gated_delta_rule
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        import transformers.models.qwen3_5.modeling_qwen3_5 as _qwen3_5_module
+        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5GatedDeltaNet
+
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+
+        # Restore apply_mask_to_padding_states
+        _qwen3_5_module.apply_mask_to_padding_states = self._orig_apply_mask
+
+        # Restore original GatedDeltaNet methods
+        for layer in self._model.model.layers:
+            if not (hasattr(layer, "linear_attn") and isinstance(layer.linear_attn, Qwen3_5GatedDeltaNet)):
+                continue
+            gdn = layer.linear_attn
+            gdn.causal_conv1d_fn = gdn._orig_causal_conv1d_fn
+            gdn.causal_conv1d_update = gdn._orig_causal_conv1d_update
+            gdn.chunk_gated_delta_rule = gdn._orig_chunk_gated_delta_rule
+            gdn.recurrent_gated_delta_rule = gdn._orig_recurrent_gated_delta_rule
+
+
 class Zamba2ModelPatcher(ModelPatcher):
     def __init__(
         self,

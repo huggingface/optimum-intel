@@ -172,6 +172,22 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "ratio": 1.0,
         "quant_method": OVQuantizationMethod.AWQ,
     },
+    "Qwen/Qwen3.5-3B": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1.0,
+        "quant_method": OVQuantizationMethod.AWQ,
+    },
+    "Qwen/Qwen3.5-8B": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
     "openlm-research/open_llama_3b": {"bits": 4, "sym": False, "group_size": 64, "all_layers": True},
     "openlm-research/open_llama_3b_v2": {
         "bits": 4,

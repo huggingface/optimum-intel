@@ -284,14 +284,14 @@ def patch_stateful_hybrid_ssm(ov_model: ov.Model):
                 other_tensors.append(ov_tensor)
         return kv_names, ssm_names, other_tensors
 
-    ssm_prefix_input_names = ["cache_params.past.ssm", "cache_params.past.conv"]
+    ssm_prefix_input_names = ["cache_params.past.ssm", "cache_params.past.recurrent", "cache_params.past.conv"]
     kv_prefix_input_names = ["cache_params.past.key", "cache_params.past.value"]
     kv_input_names, ssm_input_names, not_cache_inputs = get_kv_ssm_tensor_names(
         ssm_prefix_input_names, kv_prefix_input_names, ov_model.inputs
     )
     cache_inputs = kv_input_names + ssm_input_names
 
-    ssm_prefix_output_names = ["cache_params.present.ssm", "cache_params.present.conv"]
+    ssm_prefix_output_names = ["cache_params.present.ssm", "cache_params.present.recurrent", "cache_params.present.conv"]
     kv_prefix_output_names = ["cache_params.present.key", "cache_params.present.value"]
     kv_output_names, ssm_output_names, _ = get_kv_ssm_tensor_names(
         ssm_prefix_output_names, kv_prefix_output_names, ov_model.outputs
@@ -307,10 +307,11 @@ def patch_stateful_hybrid_ssm(ov_model: ov.Model):
 
 def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     if config.is_encoder_decoder and model_has_input_output_name(ov_model, "encoder_hidden_states"):
-        return patch_stateful_encoder_decoder(config, ov_model)
-    if config.model_type in SSM_MODELS:
-        return patch_stateful_hybrid_ssm(ov_model)
-    return patch_stateful_decoder(config, ov_model)
+        patch_stateful_encoder_decoder(config, ov_model)
+    elif config.model_type in SSM_MODELS:
+        patch_stateful_hybrid_ssm(ov_model)
+    else:
+        patch_stateful_decoder(config, ov_model)
 
 
 def patch_stateful_decoder(config: PretrainedConfig, ov_model: ov.Model):

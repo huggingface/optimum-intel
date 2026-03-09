@@ -1082,6 +1082,7 @@ class OVCacheWithMambaStates(MambaCache):
         max_batch_size: Optional[int] = None,
         conv_states: Optional[List[torch.Tensor]] = None,
         ssm_states: Optional[List[torch.Tensor]] = None,
+        recurrent_states: Optional[List[torch.Tensor]] = None,
         key_cache: Optional[List[torch.Tensor]] = None,
         value_cache: Optional[List[torch.Tensor]] = None,
     ):
@@ -1093,9 +1094,27 @@ class OVCacheWithMambaStates(MambaCache):
         self.mamba_d_conv = getattr(config, "mamba_d_conv", None)
         self.mamba_expand = getattr(config, "mamba_expand", None)
         self.mamba_d_state = getattr(config, "mamba_d_state", None)
-        self.intermediate_size = config.intermediate_size
+        self.intermediate_size = getattr(config, "intermediate_size", None)
         self.conv_kernel_size = getattr(config, "conv_kernel", getattr(config, "mamba_d_conv", None))
-        if config.model_type == "granitemoehybrid":
+        if config.model_type in ("qwen3_5", "qwen3_5_text"):
+            text_cfg = getattr(config, "text_config", config)
+            layer_types = text_cfg.layer_types
+            self.num_key_value_heads = text_cfg.num_key_value_heads
+            self.head_dim = text_cfg.head_dim
+            self.num_mamba_layers = layer_types.count("linear_attention")
+            self.num_attn_layers = layer_types.count("full_attention")
+            # Store linear attention parameters for state initialization
+            self._linear_num_key_heads = text_cfg.linear_num_key_heads
+            self._linear_key_head_dim = text_cfg.linear_key_head_dim
+            self._linear_num_value_heads = text_cfg.linear_num_value_heads
+            self._linear_value_head_dim = text_cfg.linear_value_head_dim
+            self._linear_conv_kernel_dim = text_cfg.linear_conv_kernel_dim
+            # Not applicable to qwen3_5
+            self.mamba_ngroups = None
+            self.n_mamba_heads = None
+            self.mamba_headdim = None
+            self.ssm_state_size = None
+        elif config.model_type == "granitemoehybrid":
             layer_types = getattr(config, "layer_types", None)
             self.num_key_value_heads = getattr(config, "num_key_value_heads", None)
             self.head_dim = int(self.hidden_size / self.num_attention_heads)
@@ -1123,7 +1142,14 @@ class OVCacheWithMambaStates(MambaCache):
         if self.conv_states is None:
             self.conv_states = []
             for _ in range(self.num_mamba_layers):
-                if (
+                if hasattr(self, "_linear_conv_kernel_dim"):
+                    # Qwen3.5 linear attention conv state:
+                    # d_inner = key_dim * 2 + value_dim
+                    key_dim = self._linear_key_head_dim * self._linear_num_key_heads
+                    value_dim = self._linear_value_head_dim * self._linear_num_value_heads
+                    d_inner = key_dim * 2 + value_dim
+                    conv_state_shape = (self.max_batch_size, d_inner, self._linear_conv_kernel_dim)
+                elif (
                     self.mamba_ngroups
                     and self.mamba_d_state
                     and self.mamba_d_conv
@@ -1146,25 +1172,46 @@ class OVCacheWithMambaStates(MambaCache):
         self.ssm_states = ssm_states
         if self.ssm_states is None:
             self.ssm_states: List[torch.Tensor] = []
-            for _ in range(self.num_mamba_layers):
-                if self.n_mamba_heads and self.mamba_headdim:
-                    # Mamba2 block
-                    ssm_state_shape = (
-                        self.max_batch_size,
-                        self.n_mamba_heads,
-                        self.mamba_headdim,
-                        self.ssm_state_size,
-                    )
-                else:
-                    # Mamba block
-                    ssm_state_shape = (self.max_batch_size, self.intermediate_size, self.ssm_state_size)
+            if not hasattr(self, "_linear_conv_kernel_dim"):
+                # SSM states only apply to Mamba-based models, not Qwen3.5
+                for _ in range(self.num_mamba_layers):
+                    if self.n_mamba_heads and self.mamba_headdim:
+                        # Mamba2 block
+                        ssm_state_shape = (
+                            self.max_batch_size,
+                            self.n_mamba_heads,
+                            self.mamba_headdim,
+                            self.ssm_state_size,
+                        )
+                    else:
+                        # Mamba block
+                        ssm_state_shape = (self.max_batch_size, self.intermediate_size, self.ssm_state_size)
 
-                ssm_state: torch.Tensor = torch.zeros(
-                    ssm_state_shape,
-                    device=self.device,
-                    dtype=dtype,
-                )
-                self.ssm_states.append(ssm_state)
+                    ssm_state: torch.Tensor = torch.zeros(
+                        ssm_state_shape,
+                        device=self.device,
+                        dtype=dtype,
+                    )
+                    self.ssm_states.append(ssm_state)
+
+        # Recurrent states for Qwen3.5 linear attention layers (gated delta rule K^T V accumulation)
+        self.recurrent_states = recurrent_states
+        if self.recurrent_states is None:
+            self.recurrent_states: List[torch.Tensor] = []
+            if hasattr(self, "_linear_conv_kernel_dim"):
+                for _ in range(self.num_mamba_layers):
+                    recurrent_state_shape = (
+                        self.max_batch_size,
+                        self._linear_num_key_heads,
+                        self._linear_key_head_dim,
+                        self._linear_value_head_dim,
+                    )
+                    recurrent_state: torch.Tensor = torch.zeros(
+                        recurrent_state_shape,
+                        device=self.device,
+                        dtype=dtype,
+                    )
+                    self.recurrent_states.append(recurrent_state)
 
         self.key_cache = key_cache
         if self.key_cache is None:
@@ -1245,6 +1292,7 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         self.key_cache_names = []
         self.value_cache_names = []
         self.ssm_cache_names = []
+        self.recurrent_cache_names = []
         self.conv_cache_names = []
 
         super().__init__(
@@ -1261,6 +1309,9 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         self.key_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.key" in key])
         self.value_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.value" in key])
         self.ssm_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.ssm" in key])
+        self.recurrent_cache_input_names = sorted(
+            [key for key in self.input_names if "cache_params.past.recurrent" in key]
+        )
         self.conv_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.conv" in key])
 
         self.key_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.key" in key])
@@ -1268,6 +1319,9 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
             [key for key in self.output_names if "cache_params.present.value" in key]
         )
         self.ssm_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.ssm" in key])
+        self.recurrent_cache_output_names = sorted(
+            [key for key in self.output_names if "cache_params.present.recurrent" in key]
+        )
         self.conv_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.conv" in key])
 
         if hasattr(config, "conv_kernel") and config.conv_kernel is not None:
@@ -1280,17 +1334,23 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         super().compile()
         if is_first_time_compile and self.stateful:
             for state in self.request.query_state():
-                if "cache_params.present.key" in state.name:
-                    self.key_cache_names.append(state.name)
-                elif "cache_params.present.value" in state.name:
-                    self.value_cache_names.append(state.name)
-                elif "cache_params.present.ssm" in state.name:
-                    self.ssm_cache_names.append(state.name)
-                elif "cache_params.present.conv" in state.name:
-                    self.conv_cache_names.append(state.name)
+                name = state.name
+                # Match both "past" and "present" prefixes since the variable_id
+                # may use either convention depending on the stateful conversion method
+                if ".key" in name and ("cache_params.present.key" in name or "cache_params.past.key" in name):
+                    self.key_cache_names.append(name)
+                elif ".value" in name and ("cache_params.present.value" in name or "cache_params.past.value" in name):
+                    self.value_cache_names.append(name)
+                elif "cache_params.present.ssm" in name or "cache_params.past.ssm" in name:
+                    self.ssm_cache_names.append(name)
+                elif "cache_params.present.recurrent" in name or "cache_params.past.recurrent" in name:
+                    self.recurrent_cache_names.append(name)
+                elif "cache_params.present.conv" in name or "cache_params.past.conv" in name:
+                    self.conv_cache_names.append(name)
             self.key_cache_names = sorted(self.key_cache_names)
             self.value_cache_names = sorted(self.value_cache_names)
             self.ssm_cache_names = sorted(self.ssm_cache_names)
+            self.recurrent_cache_names = sorted(self.recurrent_cache_names)
             self.conv_cache_names = sorted(self.conv_cache_names)
 
     @staticmethod
@@ -1310,20 +1370,21 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
     ) -> Dict:
         if kwargs.get("past_key_values") is not None:
             raise ValueError("`past_key_values` input is not supported for `OVModelWithMambaForCausalLM`")
-        if kwargs.get("position_ids") is not None:
-            raise ValueError("`position_ids` input is not supported for `OVModelWithMambaForCausalLM`")
 
         inputs = {"input_ids": input_ids}
         if "cache_position" in self.input_names:
             if cache_position is None:
                 # initialize it as for prefill stage
-                cache_position = torch.arange(0, self.config.conv_kernel)
+                cache_position = torch.arange(0, self.conv_kernel)
             inputs["cache_position"] = cache_position
         if "attention_mask" in self.input_names:
             if attention_mask is None:
                 # during decoding stage it must be a tensor of ones
                 attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
             inputs["attention_mask"] = attention_mask
+        position_ids = kwargs.get("position_ids", None)
+        if "position_ids" in self.input_names and position_ids is not None:
+            inputs["position_ids"] = position_ids
 
         if self.stateful and cache_params is None:
             # this is prefill step, reset all states
@@ -1335,6 +1396,7 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                 cache_params = OVCacheWithMambaStates(self.config, input_ids.shape[0])
 
             ssm_cache = cache_params.ssm_states
+            recurrent_cache = cache_params.recurrent_states
             conv_cache = cache_params.conv_states
             key_cache = cache_params.key_cache
             value_cache = cache_params.value_cache
@@ -1342,6 +1404,7 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
             inputs.update(zip(self.key_cache_input_names, key_cache))
             inputs.update(zip(self.value_cache_input_names, value_cache))
             inputs.update(zip(self.ssm_cache_input_names, ssm_cache))
+            inputs.update(zip(self.recurrent_cache_input_names, recurrent_cache))
             inputs.update(zip(self.conv_cache_input_names, conv_cache))
 
         # prepare beam_idx input that is required for hybrid models with both KV cache and Mamba states
@@ -1361,19 +1424,50 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         **kwargs,
     ):
         self.compile()
-        inputs = self.prepare_inputs(input_ids, attention_mask, cache_params, use_cache, cache_position, **kwargs)
 
-        self.request.start_async(inputs, share_inputs=True)
-        self.request.wait()
-        logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+        seq_len = input_ids.shape[1] if input_ids is not None else 1
+
+        # For models exported in decode mode (seq_len=1), process prefill
+        # tokens one at a time. This is needed for hybrid models like Qwen3.5
+        # where the model graph contains hardcoded shapes for seq_len=1.
+        if seq_len > 1 and self.stateful:
+            # Reset state once at the start of prefill (NOT per-token).
+            # We avoid calling prepare_inputs in the loop since it would
+            # reset the OV state on every token (cache_params=None triggers reset).
+            if cache_params is None:
+                if self.request is not None:
+                    self.request.reset_state()
+                self._past_length = 0
+            batch_size = input_ids.shape[0]
+            for t in range(seq_len):
+                token = input_ids[:, t : t + 1]
+                inputs = {"input_ids": token}
+                if "position_ids" in self.input_names:
+                    inputs["position_ids"] = torch.tensor([[t]], dtype=torch.int64)
+                if "beam_idx" in self.input_names:
+                    inputs["beam_idx"] = np.arange(batch_size, dtype=int)
+                self.request.start_async(inputs, share_inputs=True)
+                self.request.wait()
+            logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+        else:
+            position_ids = torch.tensor([[self._past_length]], dtype=torch.int64) if hasattr(self, "_past_length") else None
+            inputs = self.prepare_inputs(
+                input_ids, attention_mask, cache_params, use_cache, cache_position,
+                position_ids=position_ids, **kwargs,
+            )
+            self.request.start_async(inputs, share_inputs=True)
+            self.request.wait()
+            logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
 
         ssm_states = None
+        recurrent_states = None
         conv_states = None
         key_cache = None
         value_cache = None
         if self.stateful:
             self._past_length += input_ids.shape[1]
             ssm_states = [None] * len(self.ssm_cache_names)
+            recurrent_states = [None] * len(self.recurrent_cache_names)
             conv_states = [None] * len(self.conv_cache_names)
             key_cache = [None] * len(self.key_cache_names)
             value_cache = [None] * len(self.value_cache_names)
@@ -1381,6 +1475,9 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                 if "cache_params.past.ssm" in state.name:
                     idx = int(state.name.rsplit(".", 1)[-1])
                     ssm_states[idx] = state.state.data
+                elif "cache_params.past.recurrent" in state.name:
+                    idx = int(state.name.rsplit(".", 1)[-1])
+                    recurrent_states[idx] = state.state.data
                 elif "cache_params.past.conv" in state.name:
                     idx = int(state.name.rsplit(".", 1)[-1])
                     conv_states[idx] = state.state.data
@@ -1392,6 +1489,9 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                     value_cache[idx] = state.state.data
         elif not self.stateful and use_cache:
             ssm_states = [self.request.get_tensor(key).data for key in self.ssm_cache_output_names]
+            recurrent_states = [
+                self.request.get_tensor(key).data for key in self.recurrent_cache_output_names
+            ]
             conv_states = [self.request.get_tensor(key).data for key in self.conv_cache_output_names]
             key_cache = [self.request.get_tensor(key).data for key in self.key_cache_output_names]
             value_cache = [self.request.get_tensor(key).data for key in self.value_cache_output_names]
@@ -1401,6 +1501,7 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
             batch_size=input_ids.shape[0],
             conv_states=conv_states,
             ssm_states=ssm_states,
+            recurrent_states=recurrent_states,
             key_cache=key_cache,
             value_cache=value_cache,
         )
@@ -1418,6 +1519,8 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
             model_kwargs["cache_position"] = model_kwargs["cache_position"][-1:] + num_new_tokens
 
         if "attention_mask" in model_kwargs:
+            config = getattr(self, "config", None)
+            model_type = getattr(config, "model_type", "")
             attention_mask = model_kwargs["attention_mask"]
             model_kwargs["attention_mask"] = torch.cat(
                 [attention_mask, attention_mask.new_ones((attention_mask.shape[0], 1))], dim=-1
@@ -1449,8 +1552,8 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                 # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)
 
-                if self.config.model_type not in ["lfm2", "granitemoehybrid"]:
-                    # LFM2 and GraniteMoeHybrid (Granite-4.0) require the attention mask
+                if self.config.model_type not in ["lfm2", "granitemoehybrid", "qwen3_5", "qwen3_5_text"]:
+                    # LFM2, GraniteMoeHybrid (Granite-4.0), and Qwen3.5 require the attention mask
                     # to be the length of the full context, so default mask from OVModelForCausalLM needs to be used.
                     # Other models like Mamba typically do not require an attention_mask
                     # for the decoding step after the first token so use attention mask of ones.

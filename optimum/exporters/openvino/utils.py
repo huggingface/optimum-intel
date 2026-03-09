@@ -103,7 +103,13 @@ def _get_input_info(
     for i in range(len(ordered_input_names)):
         name = ordered_input_names[i]
         example = flatten_inputs[i]
-        type = get_element_type(example.cpu().numpy().dtype)
+        # NumPy doesn't support bfloat16; convert to float32 for dtype detection, then fix up
+        import torch
+        if example.dtype == torch.bfloat16:
+            from openvino import Type as OVType
+            type = OVType.bf16
+        else:
+            type = get_element_type(example.cpu().numpy().dtype)
         shape = PartialShape(example.shape)
         if name in inputs:
             named_dims = inputs[name]
@@ -305,7 +311,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "minicpmo",
 ]
 
-SSM_MODELS = ["mamba", "falcon_mamba", "zamba2", "lfm2", "granitemoehybrid"]
+SSM_MODELS = ["mamba", "falcon_mamba", "zamba2", "lfm2", "granitemoehybrid", "qwen3_5", "qwen3_5_text"]
 
 # All transformers, diffusers, timm and sentence transformers models that are supported via optimum-onnx OnnxConfigs but that have currently no test
 # TODO: add tests for all models that are compatible and remove support for all others
@@ -504,6 +510,8 @@ SKIP_CHECK_TRACE_MODELS = (
     "esm",
     "levit",
     "llama4",
+    "qwen3_5",
+    "qwen3_5_text",
 )
 
 
