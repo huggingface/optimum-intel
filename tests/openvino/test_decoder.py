@@ -86,7 +86,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon_mamba")
 
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
 
@@ -180,7 +179,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "dbrx",
             # "phimoe",
             "marian",
-            # "zamba2",
         )
     GENERATION_LENGTH = 100
 
