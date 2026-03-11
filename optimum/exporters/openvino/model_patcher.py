@@ -8419,62 +8419,6 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
                 del sparse_moe_block.down_projs, sparse_moe_block.gate_projs, sparse_moe_block.up_projs
 
 
-
-
-# Patched implementation of the gated delta rule in recurrent form.
-# Adapted from:
-# https://github.com/huggingface/transformers/blob/v4.57-release/src/transformers/models/qwen3_next/modeling_qwen3_next.py#L522
-#
-# To represent the for-loop that generates output embeddings, we use a module
-# and the conversion extension mechanism. This is necessary because there is
-# no known vectorized form of this loop that would allow it to be correctly
-# traced with torch.jit.trace
-def patched_recurrent_gated_delta_rule(
-    self, query, key, value, g, beta, initial_state, output_final_state, use_qk_l2norm_in_kernel=False
-):
-    def l2norm(x: torch.FloatTensor, dim: int = -1, eps: float = 1e-6):
-        """This function is intended to align with the l2norm implementation in the FLA library."""
-        inv_norm = torch.rsqrt((x * x).sum(dim=dim, keepdim=True) + eps)
-        return x * inv_norm
-
-    initial_dtype = query.dtype
-    if use_qk_l2norm_in_kernel:
-        query = l2norm(query, dim=-1, eps=1e-6)
-        key = l2norm(key, dim=-1, eps=1e-6)
-    query, key, value, beta, g = [
-        x.transpose(1, 2).contiguous().to(torch.float32) for x in (query, key, value, beta, g)
-    ]
-
-    batch_size, num_heads, sequence_length, k_head_dim = key.shape
-    v_head_dim = value.shape[-1]
-    scale = 1 / (query.shape[-1] ** 0.5)
-    query = query * scale
-
-    last_recurrent_state = (
-        torch.zeros(batch_size, num_heads, k_head_dim, v_head_dim).to(value)
-        if initial_state is None
-        else initial_state.to(value)
-    )
-
-    output_cell = self.recurrent_attention_cell(
-        query,  # (B, H, T, D1)
-        key,  # (B, H, T, D1)
-        value,  # (B, H, T, D2)
-        g,  # (B, H, T)
-        beta,  # (B, H, T)
-        last_recurrent_state,  # (B, H, D1, D2)
-    )
-
-    num_elems = value.numel()
-    core_attn_out = output_cell[:num_elems].reshape(value.shape)
-    last_recurrent_state = output_cell[num_elems:].reshape(last_recurrent_state.shape)
-
-    if not output_final_state:
-        last_recurrent_state = None
-    core_attn_out = core_attn_out.transpose(1, 2).contiguous().to(initial_dtype)
-    return core_attn_out, last_recurrent_state
-
-
 # The CausalConv1D block is overridden with a generic patch provided by `ov_causal_conv1d()`.
 # The GatedDeltaNet block is overridden with a recurrent version of its implementation.
 #
@@ -8574,44 +8518,6 @@ def qwen3_5_gated_delta_net_forward(
 
     output = self.out_proj(core_attn_out)
     return output
-
-
-# This torch.nn.Module represents the GatedDeltaNet layer in its recurrent form.
-# It is required for converting the GatedDeltaNet layer with OpenVINO using the ModuleExtension mechanism.
-class RecurrentAttentionCell(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(
-        self,
-        query,  # (B, H, T, D1)
-        key,  # (B, H, T, D1)
-        value,  # (B, H, T, D2)
-        g,  # (B, H, T)
-        beta,  # (B, H, T)
-        last_recurrent_state,  # (B, H, D1, D2)
-    ):
-        _, _, sequence_length, _ = key.shape
-        core_attn_out = torch.zeros_like(value)
-
-        for i in range(sequence_length):
-            q_t = query[:, :, i]
-            k_t = key[:, :, i]
-            v_t = value[:, :, i]
-            g_t = g[:, :, i].exp().unsqueeze(-1).unsqueeze(-1)
-            beta_t = beta[:, :, i].unsqueeze(-1)
-
-            last_recurrent_state = last_recurrent_state * g_t
-            kv_mem = (last_recurrent_state * k_t.unsqueeze(-1)).sum(dim=-2)
-            delta = (v_t - kv_mem) * beta_t
-            last_recurrent_state = last_recurrent_state + k_t.unsqueeze(-1) * delta.unsqueeze(-2)
-            core_attn_out[:, :, i] = (last_recurrent_state * q_t.unsqueeze(-1)).sum(dim=-2)
-
-        # This is a workaround to ensure a single output from the torch.nn.Module.
-        # The OpenVINO ModuleExtension mechanism has a limitation and expects
-        # the module to produce only one output.
-        output_cell = torch.cat([core_attn_out.flatten(), last_recurrent_state.flatten()], dim=0)
-        return output_cell
 
 
 class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
