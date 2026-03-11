@@ -5434,7 +5434,7 @@ class Qwen3_5DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     *["text-generation", "text-generation-with-past"],
     library_name="transformers",
 )
-class Qwen3_5TextOpenVINOConfig(Qwen3OpenVINOConfig):
+class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Qwen3_5DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Qwen3_5DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -5506,9 +5506,9 @@ class Qwen3_5TextOpenVINOConfig(Qwen3OpenVINOConfig):
     *["image-text-to-text"],
     library_name="transformers",
 )
-class Qwen3_5OpenVINOConfig(Qwen2VLOpenVINOConfig):
+class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior]
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLVisionEmbedInputGenerator,)
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
     MIN_TRANSFORMERS_VERSION = "4.57.0"
 
     def __init__(
@@ -5532,20 +5532,6 @@ class Qwen3_5OpenVINOConfig(Qwen2VLOpenVINOConfig):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self._normalized_config.use_embed_dim = True
-
-    @staticmethod
-    def get_model_for_behavior(model, behavior: Union[str, QwenVLConfigBehavior]):
-        if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
-            vision_emb_pos = model.visual.pos_embed
-            vision_emb_pos.config = model.config.vision_config
-            return vision_emb_pos
-
-        if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
-            text_embedding = model.model.language_model.embed_tokens
-            text_embedding.config = model.config
-            return text_embedding
-
-        return Qwen2VLOpenVINOConfig.get_model_for_behavior(model, behavior)
 
     def with_behavior(
         self,
@@ -5572,8 +5558,8 @@ class Qwen3_5OpenVINOConfig(Qwen2VLOpenVINOConfig):
                 self.int_dtype,
                 self.float_dtype,
                 model_patcher=Qwen3_5ModelPatcher,
-                dummy_input_generator=DummyQwen2VLLMInputGenerator,
-                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                #dummy_input_generator=DummyQwen2VLLMInputGenerator,
+                #inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
             )
 
         if behavior in (
