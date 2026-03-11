@@ -452,7 +452,12 @@ class OVExportCommand(BaseOptimumCLICommand):
         # We apply main_quantize only if quantization_config is explicitly provided and it is not a GPT-OSS workaround config.
         # Otherwise, quantization can still be applied inside main_export if a model has more than 1B parameters.
         # TODO: Remove GPT-OSS workaround when possible
-        apply_main_quantize = quantization_config and not isinstance(quantization_config, _GPTOSSQuantizationConfig)
+        # Paraformer handles quantization during export, so skip _main_quantize for it.
+        apply_main_quantize = (
+            quantization_config
+            and not isinstance(quantization_config, _GPTOSSQuantizationConfig)
+            and library_name != "paraformer"
+        )
         if apply_main_quantize:
             # In case main_quantize will be applied, export to a temporary directory first. This is to avoid confusion
             # in the case when quantization unexpectedly fails, and an intermediate floating point model ends up at the
