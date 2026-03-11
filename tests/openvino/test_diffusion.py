@@ -157,7 +157,12 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
         auto_cls = self.AUTOMODEL_CLASS if "sana" not in model_arch else DiffusionPipeline
-        diffusers_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
+        model_kwargs = (
+            {"torch_dtype": torch.float32}
+            if is_transformers_version(">=", "5") and model_arch == "stable-diffusion-3"
+            else {}
+        )
+        diffusers_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch], **model_kwargs)
 
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
@@ -632,7 +637,12 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         height, width, batch_size = 128, 128, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
 
-        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        model_kwargs = (
+            {"torch_dtype": torch.float32}
+            if is_transformers_version(">=", "5") and model_arch == "stable-diffusion-3"
+            else {}
+        )
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], **model_kwargs)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         for output_type in ["latent", "np", "pt"]:
@@ -898,12 +908,18 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     @require_diffusers
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+        model_kwargs = (
+            {"torch_dtype": torch.float32}
+            if is_transformers_version(">=", "5") and model_arch == "stable-diffusion-3"
+            else {}
+        )
+
         if model_arch != "flux-fill":
-            diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+            diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], **model_kwargs)
         else:
             from diffusers import FluxFillPipeline
 
-            diffusers_pipeline = FluxFillPipeline.from_pretrained(MODEL_NAMES[model_arch])
+            diffusers_pipeline = FluxFillPipeline.from_pretrained(MODEL_NAMES[model_arch], **model_kwargs)
 
         height, width, batch_size = 64, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_arch=model_arch)
