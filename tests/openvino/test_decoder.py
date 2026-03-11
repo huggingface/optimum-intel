@@ -97,6 +97,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.54.0"):
         SUPPORTED_SSM_ARCHITECTURES += ("lfm2",)
 
+    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+    if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
+        SUPPORTED_SSM_ARCHITECTURES += ("qwen3_next",)
+
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
     if is_transformers_version(">=", "4.48.0"):
@@ -261,6 +265,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "zamba2": 1,
         "bitnet": 6,
         "hunyuan_v1_dense": 2,
+        "qwen3_next": 1,
     }
     TASK = "text-generation"
 
@@ -332,6 +337,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "marian",
                 "llama4",
                 "exaone4",
+                "qwen3_next",
             }
 
         # qwen3_5_text a part of qwen3_5 architecture and is tested in seq2seq group
@@ -450,9 +456,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             max_new_tokens=30,
             min_new_tokens=30,
             # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
-            # CVS-177964 GraniteMoeHybrid fails due to lack support of Beam search for hybrid models in OpenVINO
+            # CVS-177964 GraniteMoeHybrid, Qwen3-Next fail due to lack of support for beam search for hybrid models in OpenVINO
             # For this support, we expect changes in IRs to have connected beam_idx with Mamba/Linear attention states
-            num_beams=1 if model_arch in ["chatglm4", "lfm2", "granitemoehybrid"] else 2,
+            num_beams=1 if model_arch in ["chatglm4", "lfm2", "granitemoehybrid", "qwen3_next"] else 2,
             do_sample=False,
         )
 
