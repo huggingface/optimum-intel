@@ -779,7 +779,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         transformers_model.config.eos_token_id = None
 
         if is_transformers_version(">=", "4.51"):
-                additional_inputs["use_model_defaults"] = False
+            additional_inputs["use_model_defaults"] = False
 
         for gen_config in gen_configs:
             if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo", "zamba2"]:
