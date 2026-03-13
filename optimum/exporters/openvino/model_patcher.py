@@ -7640,6 +7640,64 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                 del afmoe_moe.down_projs, afmoe_moe.gate_projs, afmoe_moe.up_projs
 
 
+class VideochatFlashQwenVisionEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def forward_wrap(self, pixel_values):
+            return self.__orig_forward(x=pixel_values)
+
+        model.forward = types.MethodType(forward_wrap, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class VideochatFlashQwenLanguageModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def forward_wrap(
+            self,
+            attention_mask,
+            position_ids=None,
+            past_key_values=None,
+            inputs_embeds=None,
+        ):
+            from transformers.cache_utils import DynamicCache
+
+            outputs, labels = self.model(
+                input_ids=None,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+            )
+            hidden_states = outputs[0]
+            logits = self.lm_head(hidden_states)
+            logits = logits.float()
+            output = (logits,) + outputs[1:]
+            return output
+
+        model.forward = types.MethodType(forward_wrap, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
 # adopted from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/llama/modeling_llama.py#L197
 class LlamaEagle3Attention(LlamaAttention):
     """

@@ -28,6 +28,7 @@ from transformers import (
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
 from transformers.utils import ModelOutput
+from transformers import StoppingCriteria
 
 from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
@@ -4802,6 +4803,99 @@ class _OVLlama4ForCausalLM(OVModelForVisualCausalLM):
         return inputs
 
 
+def tokenizer_image_token(prompt, tokenizer, image_token_index=-200, return_tensors=None):
+    prompt_chunks = [tokenizer(chunk).input_ids for chunk in prompt.split("<image>")]
+
+    def insert_separator(X, sep):
+        return [ele for sublist in zip(X, [sep] * len(X)) for ele in sublist][:-1]
+
+    input_ids = []
+    offset = 0
+    if len(prompt_chunks) > 0 and len(prompt_chunks[0]) > 0 and prompt_chunks[0][0] == tokenizer.bos_token_id:
+        offset = 1
+        input_ids.append(prompt_chunks[0][0])
+
+    for x in insert_separator(prompt_chunks, [image_token_index] * (offset + 1)):
+        input_ids.extend(x[offset:])
+
+    if return_tensors is not None:
+        if return_tensors == "pt":
+            return torch.tensor(input_ids, dtype=torch.long)
+        raise ValueError(f"Unsupported tensor type: {return_tensors}")
+    return input_ids
+
+class KeywordsStoppingCriteria(StoppingCriteria):
+    def __init__(self, keywords, tokenizer, input_ids):
+        self.keywords = keywords
+        self.keyword_ids = []
+        for keyword in keywords:
+            cur_keyword_ids = tokenizer(keyword).input_ids
+            if len(cur_keyword_ids) > 1 and cur_keyword_ids[0] == tokenizer.bos_token_id:
+                cur_keyword_ids = cur_keyword_ids[1:]
+            self.keyword_ids.append(torch.tensor(cur_keyword_ids))
+        self.tokenizer = tokenizer
+        self.start_len = input_ids.shape[1]
+
+    def __call__(self, output_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+        assert output_ids.shape[0] == 1, "Only support batch size 1 (yet)"  # TODO
+        offset = min(output_ids.shape[1] - self.start_len, 3)
+        self.keyword_ids = [keyword_id.to(output_ids.device) for keyword_id in self.keyword_ids]
+        for keyword_id in self.keyword_ids:
+            if output_ids[0, -keyword_id.shape[0] :] == keyword_id:
+                return True
+        outputs = self.tokenizer.batch_decode(output_ids[:, -offset:], skip_special_tokens=True)[0]
+        for keyword in self.keywords:
+            if keyword in outputs:
+                return True
+        return False
+
+
+class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = ["vision_projection"]
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        # Note: The implementation of this function is not validated, it's only there to allow this subclass to be initialized.
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        if tokenizer is None:
+            raise ValueError("Tokenizer is required.")
+
+        # preprocess text
+        prompt = f"<image>\n{text}"
+        messages = [{"role": "user", "content": prompt}]
+        text_prompt = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True,
+        )
+        input_ids = tokenizer_image_token(text_prompt, tokenizer, -200, return_tensors="pt").unsqueeze(0)
+
+        # preprocess video
+        frames = [processor(images=video, return_tensors="pt")]
+
+        if tokenizer.pad_token_id is None:
+            if "qwen" in tokenizer.name_or_path.lower():
+                print("Setting pad token to bos token for qwen model.")
+                tokenizer.pad_token_id = 151643
+        attention_masks = input_ids.ne(tokenizer.pad_token_id).long()
+
+        stop_str = "<|im_end|>"
+        keywords = [stop_str]
+        stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
+
+        inputs = {"images": frames, "inputs": input_ids, "attention_mask": attention_masks, "modalities": ["video"], "stopping_criteria": [stopping_criteria]}
+        return inputs
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
@@ -4824,4 +4918,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "llama4": _OVLlama4ForCausalLM,
     "qwen3_vl": _OVQwen3VLForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
+    "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
 }

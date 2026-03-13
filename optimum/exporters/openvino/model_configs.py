@@ -200,6 +200,8 @@ from .model_patcher import (
     Qwen3VLVisionEmbMergerPatcher,
     QwenModelPatcher,
     SanaTextEncoderModelPatcher,
+    VideochatFlashQwenLanguageModelPatcher,
+    VideochatFlashQwenVisionEmbeddingModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
 )
@@ -5303,6 +5305,190 @@ class SiglipTextOpenVINOConfig(SiglipTextOnnxConfig):
     pass
 
 
+class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        visual_seq_length: int = DEFAULT_DUMMY_SHAPES["visual_seq_length"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, visual_seq_length, **kwargs)
+        if hasattr(normalized_config, "config") and hasattr(normalized_config.config, "mm_local_num_frames"):
+            self.num_frames = normalized_config.config.mm_local_num_frames
+            self.height = 224
+            self.width = 224
+            self.image_size = (self.height, self.width)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            return self.random_float_tensor(
+                shape=[
+                    self.batch_size,
+                    self.num_channels,
+                    self.num_frames,
+                    self.height,
+                    self.width,
+                ],
+                framework=framework,
+                dtype=float_dtype,
+            )
+
+
+class DummyVideoChatFlashQwenProjectorInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ["input"]
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        self.hidden_size = normalized_config.mm_hidden_size
+        self.num_patches = 64
+        self.normalized_config = normalized_config
+
+    def generate(
+        self,
+        input_name: str,
+        framework: str = "pt",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+    ):
+        shape = [self.batch_size, self.num_patches, self.hidden_size]
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
+class VideoChatFlashQWENProjectorOpenVINOConfig(OnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyVideoChatFlashQwenProjectorInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"input": {0: "batch_size", 1: "num_patches", 2: "hidden_size"}}
+
+
+class VideoChatFlashQwenConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    VISION_PROJECTION = "vision_projection"
+    TEXT_EMBEDDINGS = "text_embeddings"
+
+
+@register_in_tasks_manager("videochat_flash_qwen", *["image-text-to-text"], library_name="transformers")
+class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.42.0"
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in VideoChatFlashQwenConfigBehavior]
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyVideoChatFlashQwenInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VideoChatFlashQwenConfigBehavior = VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            behavior=behavior,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if not self._behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"pixel_values": {0: "batch_size", 1: "num_channels", 2: "num_frames", 3: "height", 4: "width"}}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VideoChatFlashQwenConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+
+        Args:
+            behavior ([`ConfigBehavior`]):
+                The behavior to use for the new instance.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, VideoChatFlashQwenConfigBehavior):
+            behavior = VideoChatFlashQwenConfigBehavior(behavior)
+
+        if behavior == VideoChatFlashQwenConfigBehavior.VISION_PROJECTION:
+            export_config = VideoChatFlashQWENProjectorOpenVINOConfig(
+                self._orig_config,
+                task="feature-extraction",
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            return export_config
+
+        if behavior == VideoChatFlashQwenConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "qwen2", self._orig_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == VideoChatFlashQwenConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "qwen2", self._orig_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VideoChatFlashQwenConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VideoChatFlashQwenConfigBehavior):
+            behavior = VideoChatFlashQwenConfigBehavior(behavior)
+
+        if behavior == VideoChatFlashQwenConfigBehavior.VISION_PROJECTION:
+            return model.get_model().mm_projector.mlp
+
+        if behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
+            return model.get_vision_tower().vision_tower
+
+        if behavior == VideoChatFlashQwenConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.config
+            return text_embedding
+
+        if behavior == VideoChatFlashQwenConfigBehavior.LANGUAGE:
+            model.model.llm_compress_layer_list = []
+            return model.language_model if not hasattr(model, "lm_head") else model
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == VideoChatFlashQwenConfigBehavior.LANGUAGE:
+            return VideochatFlashQwenLanguageModelPatcher(self, model, model_kwargs)
+
+        if self._behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
+            return VideochatFlashQwenVisionEmbeddingModelPatcher(self, model, model_kwargs)
+
+        return super().patch_model_for_export(model, model_kwargs)
 @register_in_tasks_manager(
     "hunyuan_v1_dense",
     *[
