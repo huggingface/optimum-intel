@@ -192,6 +192,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         if is_openvino_version(">=", "2026.0")
         else 0,  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
         "llava": 2,
+        "mistral3": 2,
         "sana": 2,
         "ltx-video": 2,
         "sam": 0,  # no tokenizer
