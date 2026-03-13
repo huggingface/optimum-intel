@@ -25,16 +25,11 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 from transformers.generation import GenerationMixin
-from transformers.utils import is_offline_mode
 from transformers.utils.hub import cached_file
 
 from optimum.exporters.base import ExportConfig
-from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
-
-from ...exporters.openvino import export, main_export
-from ..utils.import_utils import is_nncf_available
-from ..utils.modeling_utils import _find_files_matching_pattern
-from .configuration import (
+from optimum.exporters.openvino import export, main_export
+from optimum.intel.openvino.configuration import (
     _DEFAULT_4BIT_WQ_CONFIG,
     OVConfig,
     OVQuantizationConfigBase,
@@ -43,7 +38,7 @@ from .configuration import (
     _quantization_config_from_dict,
     get_default_quantization_config,
 )
-from .utils import (
+from optimum.intel.openvino.utils import (
     ONNX_WEIGHTS_NAME,
     OV_TO_PT_TYPE,
     OV_XML_FILE_NAME,
@@ -52,6 +47,15 @@ from .utils import (
     classproperty,
     model_has_dynamic_inputs,
 )
+from optimum.intel.utils.import_utils import is_huggingface_hub_version, is_nncf_available, is_transformers_version
+from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
+from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
+
+
+if is_huggingface_hub_version(">=", "1.2.1"):
+    from huggingface_hub import is_offline_mode
+else:
+    from transformers.utils import is_offline_mode
 
 
 core = Core()
@@ -261,21 +265,21 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         if self.can_generate():
             self.generation_config = generation_config or GenerationConfig.from_model_config(config)
 
-            # some model configs may have issues with loading without parameters initialization
-            try:
-                misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
-            except (KeyError, TypeError):
-                misplaced_generation_parameters = {}
-            if len(misplaced_generation_parameters) > 0:
-                logger.warning(
-                    "Moving the following attributes in the config to the generation config: "
-                    f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
-                    "generation parameters in the model config, as opposed to in the generation config.",
-                )
-                for param_name, param_value in misplaced_generation_parameters.items():
-                    setattr(self.generation_config, param_name, param_value)
-                    setattr(self.config, param_name, None)
-
+            if is_transformers_version("<", "5"):
+                # some model configs may have issues with loading without parameters initialization
+                try:
+                    misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+                except (KeyError, TypeError):
+                    misplaced_generation_parameters = {}
+                if len(misplaced_generation_parameters) > 0:
+                    logger.warning(
+                        "Moving the following attributes in the config to the generation config: "
+                        f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                        "generation parameters in the model config, as opposed to in the generation config.",
+                    )
+                    for param_name, param_value in misplaced_generation_parameters.items():
+                        setattr(self.generation_config, param_name, param_value)
+                        setattr(self.config, param_name, None)
         else:
             self.generation_config = None
 
@@ -793,16 +797,14 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         **kwargs,
     ):
         """
-        Export a vanilla Transformers model into an ONNX model using `transformers.onnx.export_onnx`.
+        Load and export a model to the OpenVINO IR.
 
         Arguments:
             model_id (`str` or `Path`):
                 The directory from which to load the model.
                 Can be either:
                     - The model id of a pretrained model hosted inside a model repo on huggingface.co.
-                    - The path to a directory containing the model weights.            save_dir (`str` or `Path`):
-                The directory where the exported ONNX model should be saved, default to
-                `transformers.file_utils.default_cache_path`, which is the cache directory for transformers.
+                    - The path to a directory containing the model weights.
             token (Optional[Union[bool, str]], defaults to `None`):
                 The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
                 when running `huggingface-cli login` (stored in `~/.huggingface`).

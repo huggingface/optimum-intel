@@ -403,7 +403,7 @@ class OVSamModel(OVBaseModel):
         x_embed = x_embed / size
 
         positional_embedding = self.shared_image_embedding(torch.stack([x_embed, y_embed], dim=-1))
-        return positional_embedding.permute(2, 0, 1).unsqueeze(0)
+        return positional_embedding.permute(2, 0, 1).unsqueeze(0).detach()
 
     def get_image_features(self, pixel_values, *args, **kwargs):
         return torch.from_numpy(self.vision_encoder(pixel_values).image_embeddings)

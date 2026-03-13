@@ -202,6 +202,7 @@ from .model_patcher import (
     SanaTextEncoderModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
+    _get_model_attribute,
 )
 
 
@@ -238,38 +239,7 @@ if TYPE_CHECKING:
 def init_model_configs():
     if "open_clip" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
         TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["open_clip"] = {}
-    TasksManager._CUSTOM_CLASSES[("pt", "llava", "image-text-to-text")] = (
-        "transformers",
-        "LlavaForConditionalGeneration",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "llava_next", "image-text-to-text")] = (
-        "transformers",
-        "LlavaNextForConditionalGeneration",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen2_vl", "image-text-to-text")] = (
-        "transformers",
-        "Qwen2VLForConditionalGeneration",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen2_5_vl", "image-text-to-text")] = (
-        "transformers",
-        "AutoModelForImageTextToText",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "llava_next_video", "image-text-to-text")] = (
-        "transformers",
-        "AutoModelForVision2Seq",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "gemma3", "image-text-to-text")] = (
-        "transformers",
-        "Gemma3ForConditionalGeneration",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "idefics3", "image-text-to-text")] = (
-        "transformers",
-        "AutoModelForImageTextToText",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "smolvlm", "image-text-to-text")] = (
-        "transformers",
-        "AutoModelForImageTextToText",
-    )
+
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "image-text-to-text")] = ("transformers", "AutoModelForCausalLM")
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "automatic-speech-recognition")] = (
         "transformers",
@@ -283,15 +253,45 @@ def init_model_configs():
         "transformers",
         "AutoModelForCausalLM",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "llama4", "image-text-to-text")] = (
-        "transformers",
-        "AutoModelForImageTextToText",
-    )
+
+    # since transformers v4.46, model can be loaded using default AutoModelForImageTextToText
+    # https://github.com/huggingface/transformers/blob/v4.46.0/src/transformers/models/auto/modeling_auto.py#L776
+    if is_transformers_version("<", "4.46"):
+        TasksManager._CUSTOM_CLASSES[("pt", "llava", "image-text-to-text")] = (
+            "transformers",
+            "LlavaForConditionalGeneration",
+        )
+        TasksManager._CUSTOM_CLASSES[("pt", "llava_next", "image-text-to-text")] = (
+            "transformers",
+            "LlavaNextForConditionalGeneration",
+        )
+        TasksManager._CUSTOM_CLASSES[("pt", "qwen2_vl", "image-text-to-text")] = (
+            "transformers",
+            "Qwen2VLForConditionalGeneration",
+        )
+
+    # since transformers v4.50, model can be loaded using default AutoModelForImageTextToText
+    # https://github.com/huggingface/transformers/blob/v4.50.0/src/transformers/models/auto/modeling_auto.py#L835
+    if is_transformers_version("<", "4.50"):
+        TasksManager._CUSTOM_CLASSES[("pt", "gemma3", "image-text-to-text")] = (
+            "transformers",
+            "Gemma3ForConditionalGeneration",
+        )
+
+    # since transformers v4.52, model can be loaded using default AutoModelForImageTextToText
+    # https://github.com/huggingface/transformers/blob/v4.52.0/src/transformers/models/auto/modeling_auto.py#L899
+    if is_transformers_version("<", "4.52"):
+        TasksManager._CUSTOM_CLASSES[("pt", "llava_next_video", "image-text-to-text")] = (
+            "transformers",
+            "AutoModelForVision2Seq",
+        )
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["fill"] = {"flux": "FluxFillPipeline"}
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["text-to-image"] = ("AutoPipelineForText2Image", "SanaPipeline")
+        if "text-to-image" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS:
+            TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"] = {}
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["sana"] = "SanaPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["sana-sprint"] = "SanaSprintPipeline"
     if is_diffusers_available() and "text-to-video" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS:
@@ -330,6 +330,7 @@ class BaichaunOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         num_layers="num_hidden_layers", num_attention_heads="num_attention_heads", hidden_size="hidden_size"
     )
     _MODEL_PATCHER = BaichuanModelPatcher
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
 
 @register_in_tasks_manager(
@@ -844,6 +845,7 @@ class GptOssOpenVINOConfig(LlamaOpenVINOConfig):
 )
 class BitnetOpenVINOConfig(LlamaOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.52.1"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     _MODEL_PATCHER = OVDecoderModelPatcher
 
 
@@ -859,7 +861,7 @@ class BitnetOpenVINOConfig(LlamaOnnxConfig):
     library_name="transformers",
 )
 class ExaoneOpenVINOConfig(LlamaOpenVINOConfig):
-    pass
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
 
 @register_in_tasks_manager(
@@ -872,6 +874,8 @@ class ExaoneOpenVINOConfig(LlamaOpenVINOConfig):
 )
 class Exaone4OpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.54.0"
+    # TODO (@echarlaix): add v5 support
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
 
 @register_in_tasks_manager(
@@ -1031,6 +1035,7 @@ class Starcoder2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 @register_in_tasks_manager("internlm2", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class InternLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -1040,7 +1045,7 @@ class InternLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 @register_in_tasks_manager("orion", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class OrionOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
-
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -1093,6 +1098,8 @@ class Phi3OpenVINOConfig(PhiOnnxConfig):
 )
 class PhiMoEOpenVINOConfig(Phi3OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.46.0"
+    # TODO (@echarlaix): add v5 support
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     _MODEL_PATCHER = PhiMoEModelPatcher
 
 
@@ -1297,6 +1304,7 @@ class AquilaDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
 @register_in_tasks_manager("aquila", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class AquilaMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, AquilaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = AquilaDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(num_key_value_heads="num_key_value_heads", allow_new=True)
@@ -1306,6 +1314,7 @@ class AquilaMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 @register_in_tasks_manager("xverse", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class XverseMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -1315,6 +1324,7 @@ class XverseMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 @register_in_tasks_manager("internlm", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class InternLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -1337,6 +1347,7 @@ class CodeGenOpenVINOConfig(CodeGenOnnxConfig):
 )
 class DBRXOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
         num_attention_heads="n_heads",
         hidden_size="d_model",
@@ -1356,6 +1367,7 @@ class DBRXOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 )
 class JaisOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = DummyPastKeyValuesGenerator
@@ -1524,6 +1536,7 @@ class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
 @register_in_tasks_manager("deci", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class DeciOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DeciDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = DeciDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -1882,14 +1895,14 @@ class BaseVLMOpenVINOConfig(OnnxConfig):
             behavior = VLMConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.LANGUAGE:
-            return model.language_model if not hasattr(model, "lm_head") else model
+            return _get_model_attribute(model, "language_model") if not hasattr(model, "lm_head") else model
 
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
 
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = model.get_input_embeddings()
-            text_embedding.config = model.language_model.config
+            text_embedding.config = _get_model_attribute(model, "language_model").config
             return text_embedding
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
@@ -1995,6 +2008,8 @@ class LlavaNextVideoConfigBehavior(str, enum.Enum):
 @register_in_tasks_manager("llava_next_video", *["image-text-to-text"], library_name="transformers")
 class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.42.0"
+    # TODO (@echarlaix): add v5 support
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in LlavaNextVideoConfigBehavior]
 
     def with_behavior(
@@ -2076,11 +2091,16 @@ class MairaOpenVINOConfig(LlavaOpenVINOConfig):
             text_embedding.config = model.language_model.config
             return text_embedding
 
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return model.language_model
+
         return super().get_model_for_behavior(model, behavior)
 
 
 @register_in_tasks_manager("internvl_chat", *["image-text-to-text"], library_name="transformers")
 class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
+
     def __init__(
         self,
         config: "PretrainedConfig",
@@ -2149,14 +2169,14 @@ class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
             behavior = VLMConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.LANGUAGE:
-            return model.language_model
+            return _get_model_attribute(model, "language_model")
 
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
 
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
-            text_embedding = model.language_model.get_input_embeddings()
-            text_embedding.config = model.language_model.config
+            text_embedding = _get_model_attribute(model, "language_model").get_input_embeddings()
+            text_embedding.config = _get_model_attribute(model, "language_model").config
             return text_embedding
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
@@ -2865,6 +2885,7 @@ class MiniCPMVConfigBehavior(str, enum.Enum):
 
 @register_in_tasks_manager("minicpmv", *["image-text-to-text"], library_name="transformers")
 class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in MiniCPMVConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = ()
@@ -3682,18 +3703,20 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return model
 
         if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
-            vision_embeddings = model.visual.patch_embed
+            vision_embeddings = _get_model_attribute(model, "visual").patch_embed
             vision_embeddings.config = model.config.vision_config
             return vision_embeddings
 
         if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
-            vision_emb_merger = model.visual
+            vision_emb_merger = _get_model_attribute(model, "visual")
             vision_emb_merger.config = model.config.vision_config
             return vision_emb_merger
 
         if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = (
-                model.model.embed_tokens if hasattr(model.model, "embed_tokens") else model.language_model.embed_tokens
+                model.model.embed_tokens
+                if hasattr(model.model, "embed_tokens")
+                else _get_model_attribute(model, "language_model").embed_tokens
             )
             text_embedding.config = model.config
             return text_embedding
@@ -3712,12 +3735,17 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             behavior = QwenVLConfigBehavior(behavior)
 
         if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
-            return get_vlm_text_embeddings_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
+            return get_vlm_text_embeddings_config(
+                "qwen2",
+                self._orig_config if is_transformers_version("<", "5") else self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+            )
 
         if behavior == QwenVLConfigBehavior.LANGUAGE:
             return get_vlm_text_generation_config(
                 "qwen2",
-                self._orig_config,
+                self._orig_config if is_transformers_version("<", "5") else self._orig_config.text_config,
                 self.int_dtype,
                 self.float_dtype,
                 model_patcher=Qwen2VLLanguageModelPatcher,
@@ -3828,7 +3856,7 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
     @staticmethod
     def get_model_for_behavior(model, behavior: Union[str, QwenVLConfigBehavior]):
         if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
-            vision_emb_pos = model.visual.pos_embed
+            vision_emb_pos = _get_model_attribute(model, "visual").pos_embed
             vision_emb_pos.config = model.config.vision_config
             return vision_emb_pos
 
@@ -4000,7 +4028,8 @@ class T5OpenVINOConfig(T5OnnxConfig):
     library_name="transformers",
 )
 class MT5OpenVINOConfig(T5OpenVINOConfig):
-    pass
+    # TODO (@echarlaix): add v5 support
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
 
 @register_in_tasks_manager(
@@ -4089,6 +4118,8 @@ class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
 @register_in_tasks_manager("got_ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")
 class GotOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.49.0"
+    # TODO (@echarlaix): add v5 support
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
     def __init__(
         self,
@@ -4204,6 +4235,8 @@ class DummyVisionPositionIdsInputGenerator(DummyVisionInputGenerator):
 class Idefics3OpenVINOConfig(BaseVLMOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyVisionPositionIdsInputGenerator)
     MIN_TRANSFORMERS_VERSION = "4.46.0"
+    # TODO (@echarlaix): add v5 support
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
     def __init__(
         self,
@@ -4262,6 +4295,8 @@ class Idefics3OpenVINOConfig(BaseVLMOpenVINOConfig):
 @register_in_tasks_manager("smolvlm", *["image-text-to-text"], library_name="transformers")
 class SmolVLMOpenVINOConfig(Idefics3OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
+    # TODO (@echarlaix): add v5 support
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
 
 @register_in_tasks_manager(
@@ -4326,6 +4361,8 @@ class PegasusOpenVINOConfig(PegasusOnnxConfig):
 )
 class MarianOpenVINOConfig(MarianOnnxConfig):
     _MODEL_PATCHER = MarianModelPatcher
+    # TODO (@echarlaix): add v5 support
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
 
 class DummySpeechT5OpenVINOInputGenerator(DummyInputGenerator):
@@ -4529,6 +4566,8 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
 )
 class Llama4TextOpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
+    # TODO (@echarlaix): add v5 support
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
     _MODEL_PATCHER = Llama4TextModelPatcher
@@ -4539,6 +4578,8 @@ class Llama4TextOpenVINOConfig(LlamaOpenVINOConfig):
 )
 class Llama4OpenVINOConfig(GotOCR2OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
+    # TODO (@echarlaix): add v5 support
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
@@ -4780,6 +4821,8 @@ class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
     DUMMY_PKV_GENERATOR_CLASS = Zamba2DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     MIN_TRANSFORMERS_VERSION = "4.49.0"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
+    # MIN_TRANSFORMERS_VERSION = "5.2.0"
     _MODEL_PATCHER = Zamba2ModelPatcher
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
@@ -4977,7 +5020,7 @@ class ASTOpenVINOConfig(ASTOnnxConfig):
 )
 class AfmoeOpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.55.0"
-    MAX_TRANSFORMERS_VERSION = "4.57.99"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     _MODEL_PATCHER = AfmoeModelPatcher
 
 
@@ -5006,7 +5049,7 @@ class GPTBigCodeOpenVINOConfig(GPTBigCodeOnnxConfig):
     ],
 )
 class Pix2StructOpenVINOConfig(Pix2StructOnnxConfig):
-    pass
+    _MODEL_PATCHER = OVSeq2SeqModelPatcher
 
 
 @register_in_tasks_manager("bert", *COMMON_TEXT_TASKS)
@@ -5051,7 +5094,8 @@ class MobileBertOpenVINOConfig(MobileBertOnnxConfig):
 
 @register_in_tasks_manager("xlm", *COMMON_TEXT_TASKS)
 class XLMOpenVINOConfig(XLMOnnxConfig):
-    pass
+    # TODO (@echarlaix): add v5 support
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
 
 @register_in_tasks_manager("xlm-roberta", *COMMON_TEXT_TASKS)
@@ -5076,7 +5120,8 @@ class CamembertOpenVINOConfig(CamembertOnnxConfig):
 
 @register_in_tasks_manager("flaubert", *COMMON_TEXT_TASKS)
 class FlaubertOpenVINOConfig(FlaubertOnnxConfig):
-    pass
+    # TODO (@echarlaix): add v5 support
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
 
 @register_in_tasks_manager(
@@ -5108,7 +5153,8 @@ class Data2VecAudioOpenVINOConfig(Data2VecAudioOnnxConfig):
 
 @register_in_tasks_manager("data2vec-text", *COMMON_TEXT_TASKS)
 class Data2VecTextOpenVINOConfig(Data2VecTextOnnxConfig):
-    pass
+    # TODO (@echarlaix): add v5 support
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
 
 @register_in_tasks_manager("data2vec-vision", *["feature-extraction", "image-classification"])
@@ -5389,6 +5435,7 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
     DUMMY_PKV_GENERATOR_CLASS = Qwen3NextDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     MIN_TRANSFORMERS_VERSION = "4.57.0"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     _MODEL_PATCHER = Qwen3NextModelPatcher
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
