@@ -62,7 +62,6 @@ from optimum.intel.utils.import_utils import _transformers_version, is_transform
 from optimum.utils import logging
 from optimum.utils.save_utils import maybe_load_preprocessors
 
-
 logger = logging.get_logger()
 
 

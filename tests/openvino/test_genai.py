@@ -36,7 +36,6 @@ from optimum.intel.openvino import (
 from optimum.intel.utils.import_utils import is_openvino_version
 from optimum.utils import is_transformers_version
 
-
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 

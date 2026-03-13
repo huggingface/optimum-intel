@@ -205,7 +205,6 @@ from .model_patcher import (
     Zamba2ModelPatcher,
 )
 
-
 COMMON_TEXT_TASKS = [
     "feature-extraction",
     "fill-mask",
@@ -2078,10 +2077,9 @@ class DummyMistral3MultiModalProjectorInputGenerator(DummyLLavaMultiModalProject
     ):
         super().__init__(task, normalized_config, batch_size, random_batch_size_range, **kwargs)
         self.spatial_merge_size = getattr(
-            normalized_config.config, "spatial_merge_size",
-            getattr(normalized_config, "spatial_merge_size", 2)
+            normalized_config.config, "spatial_merge_size", getattr(normalized_config, "spatial_merge_size", 2)
         )
-        self.num_merged_patches = self.num_patches // (self.spatial_merge_size ** 2)
+        self.num_merged_patches = self.num_patches // (self.spatial_merge_size**2)
 
     def generate(
         self,
@@ -2090,7 +2088,7 @@ class DummyMistral3MultiModalProjectorInputGenerator(DummyLLavaMultiModalProject
         int_dtype: str = "int64",
         float_dtype: str = "fp32",
     ):
-        input_dim = self.hidden_size * self.spatial_merge_size ** 2
+        input_dim = self.hidden_size * self.spatial_merge_size**2
         shape = [self.num_merged_patches, input_dim]
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
@@ -2107,7 +2105,7 @@ class Mistral3MultiModalProjectorOpenVINOConfig(OnnxConfig):
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {"hidden_states": {0: "num_patches"}}
-    
+
 
 @register_in_tasks_manager("mistral3", *["image-text-to-text"], library_name="transformers")
 class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
@@ -2153,9 +2151,7 @@ class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
 
         return super().with_behavior(behavior)
 
-    def get_model_for_behavior(
-        self, model, behavior: Union[str, Mistral3ConfigBehavior]
-    ):
+    def get_model_for_behavior(self, model, behavior: Union[str, Mistral3ConfigBehavior]):
         if isinstance(behavior, str) and not isinstance(behavior, Mistral3ConfigBehavior):
             behavior = Mistral3ConfigBehavior(behavior)
 
@@ -2168,9 +2164,7 @@ class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
 
         return super().get_model_for_behavior(model, behavior)
 
-    def patch_model_for_export(
-        self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None
-    ):
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
 
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:

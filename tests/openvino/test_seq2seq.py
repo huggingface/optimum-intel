@@ -69,7 +69,6 @@ from optimum.intel.openvino.modeling_visual_language import MODEL_PARTS_CLS_MAPP
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 
-
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 

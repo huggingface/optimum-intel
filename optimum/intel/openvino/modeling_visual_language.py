@@ -44,7 +44,6 @@ from .utils import (
     classproperty,
 )
 
-
 if is_transformers_version(">=", "4.46.0"):
     from transformers import AutoModelForImageTextToText
 
@@ -1714,10 +1713,7 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
         spatial_merge_size = self.config.spatial_merge_size
         d = image_features.shape[-1]
 
-        image_sizes_scaled = [
-            (size[0] // patch_size, size[1] // patch_size)
-            for size in image_sizes
-        ]
+        image_sizes_scaled = [(size[0] // patch_size, size[1] // patch_size) for size in image_sizes]
         tokens_per_image = [h * w for h, w in image_sizes_scaled]
 
         permuted_tensor = []
@@ -1785,7 +1781,7 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
         prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
         inputs = processor(images=image, text=prompt, return_tensors="pt")
         return inputs
-    
+
 
 class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):

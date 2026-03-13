@@ -56,7 +56,6 @@ from optimum.exporters.onnx.model_patcher import (
 )
 from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_version, is_transformers_version
 
-
 if is_transformers_version(">=", "4.53"):
     from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, eager_mask, sdpa_mask
     from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
@@ -2246,7 +2245,7 @@ def _persimmon_self_attn_sdpa_forward(
     fused_qkv = self.query_key_value(hidden_states)
 
     # 3 x [batch_size, seq_length, num_heads, head_dim]
-    (query_states, key_states, value_states) = self._split_heads(fused_qkv)
+    query_states, key_states, value_states = self._split_heads(fused_qkv)
 
     if self.qk_layernorm:
         query_states = self.q_layernorm(query_states)
@@ -3322,7 +3321,7 @@ def mistral3_vision_embed_forward(self, pixel_values):
     return image_features
 
 
-# Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L76-L94 
+# Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L76-L94
 # and https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L118-L124
 # Mistral3MultiModalProjector.forward() and Mistral3PatchMerger.forward() with norm and cycle block excluded.
 # norm is moved to vision_embed_forward, cycle block runs in PyTorch at runtime.
@@ -6337,8 +6336,8 @@ class Llama4TextModelPatcher(ModelPatcher):
         if is_transformers_version(">=", "4.56"):
             # openvino is not able to trace through the new chunked_overlay with left_padding
             self.original_chunked_overlay = transformers.masking_utils.chunked_overlay
-            transformers.masking_utils.chunked_overlay = (
-                lambda chunk_size, left_padding: transformers.masking_utils._legacy_chunked_overlay(chunk_size)
+            transformers.masking_utils.chunked_overlay = lambda chunk_size, left_padding: (
+                transformers.masking_utils._legacy_chunked_overlay(chunk_size)
             )
 
     def __exit__(self, exc_type, exc_value, traceback):
