@@ -401,8 +401,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in ["gigachat3"]:
             tokens.pop("token_type_ids", None)
 
-        if model_arch == "deepseek":
-            gen_config.do_sample = False
 
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
@@ -417,6 +415,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             num_beams=1 if model_arch in ["chatglm4", "lfm2", "granitemoehybrid", "qwen3_next"] else 2,
             do_sample=False,
         )
+
+        if model_arch == "deepseek":
+            gen_config.do_sample = False
 
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
 
