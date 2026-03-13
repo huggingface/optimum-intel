@@ -401,6 +401,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in ["gigachat3"]:
             tokens.pop("token_type_ids", None)
 
+        if model_arch == "deepseek":
+            gen_config.do_sample = False
+
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
         ov_model.config.eos_token_id = None
