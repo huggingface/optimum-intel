@@ -426,6 +426,14 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "weight_only": True,
         },
     },
+    "qnguyen3/nanoLLaVA": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "contextual",
+        "scale_estimation": True,
+    },
 }
 
 _DEFAULT_8BIT_WQ_CONFIGS = {
