@@ -30,6 +30,7 @@ from optimum.intel.utils.import_utils import is_safetensors_available
 from optimum.utils import is_diffusers_available
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
+
 logger = logging.getLogger(__name__)
 
 

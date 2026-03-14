@@ -206,6 +206,7 @@ from .model_patcher import (
     Zamba2ModelPatcher,
 )
 
+
 COMMON_TEXT_TASKS = [
     "feature-extraction",
     "fill-mask",

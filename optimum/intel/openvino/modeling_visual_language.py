@@ -44,6 +44,7 @@ from .utils import (
     classproperty,
 )
 
+
 if is_transformers_version(">=", "4.46.0"):
     from transformers import AutoModelForImageTextToText
 
