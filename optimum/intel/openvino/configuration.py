@@ -426,6 +426,18 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "weight_only": True,
         },
     },
+    "VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B": {
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 128,
+                "ratio": 1.0,
+            },
+            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+            "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+        },
+    },
 }
 
 _DEFAULT_8BIT_WQ_CONFIGS = {
