@@ -22,7 +22,7 @@ jobs:
             echo "branch=${{ github.event.pull_request.head.ref }}" >> $GITHUB_ENV
           fi
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{env.branch}}
           fetch-depth: ${{env.depth}}
