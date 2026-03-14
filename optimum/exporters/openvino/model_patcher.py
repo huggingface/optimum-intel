@@ -7647,8 +7647,79 @@ class VideochatFlashQwenVisionEmbeddingModelPatcher(ModelPatcher):
     ):
         model.__orig_forward = model.forward
 
-        def forward_wrap(self, pixel_values):
-            return self.__orig_forward(x=pixel_values)
+        def forward_wrap(self, hidden_states, rotary_pos_emb=None, mask=None, use_image=False):
+            hidden_states = self.patch_embed(hidden_states.type(self.dtype))
+            B, T, L, C = hidden_states.shape  # T: temporal; L: spatial
+            hidden_states = hidden_states.view([B, T * L, C])
+
+            # append cls token
+            cls_tokens = self.cls_token.expand(B, -1, -1)
+            hidden_states = torch.cat((cls_tokens, hidden_states), dim=1)
+
+            # add pos_embed
+            if self.sep_pos_embed:
+                raise NotImplementedError
+            else:
+                if use_image:
+                    if self.sep_image_video_pos_embed:
+                        rotary_pos_emb = self.img_pos_embed
+                    else:
+                        # (1, num_img_patches + 1, embed_dim)
+                        cls_pos_embed = self.pos_embed[:, 0:1, :]
+
+                        img_pos_embed = self.pos_embed[:, 1:, :].view(1, self.num_frames, self.patch_embed.num_patches // self.num_frames, self.embed_dim).mean(dim=1)
+
+                        rotary_pos_emb = torch.cat([cls_pos_embed, img_pos_embed], dim=1)
+                else:
+                    if rotary_pos_emb is None:
+                        rotary_pos_emb = self.pos_embed
+
+            hidden_states = hidden_states + rotary_pos_emb
+
+            # mask tokens, ~mask means visible
+            if mask is not None:
+                hidden_states = hidden_states[~mask].reshape(B, -1, C)
+            else:
+                hidden_states = hidden_states.reshape(B, -1, C)
+
+            residual = None
+
+            for idx, blk in enumerate(self.blocks):
+                if isinstance(hidden_states, tuple) and len(hidden_states) == 2:
+                    hidden_states, residual = hidden_states
+                hidden_states = blk(hidden_states, residual=residual)
+
+            if isinstance(hidden_states, tuple) and len(hidden_states) == 2:
+                hidden_states, residual = hidden_states
+                if residual is not None:
+                    hidden_states = hidden_states + residual
+
+            x_vis = hidden_states
+            if self.x_vis_only:
+                return x_vis
+            else:
+                x_pool_vis = self.clip_projector(x_vis)
+                return x_vis, x_pool_vis, None, None
+
+        model.forward = types.MethodType(forward_wrap, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class VideochatFlashQwenVisionProjectionModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def forward_wrap(self, hidden_states):
+            return self.__orig_forward(input=hidden_states)
 
         model.forward = types.MethodType(forward_wrap, model)
         super().__init__(config, model, model_kwargs)

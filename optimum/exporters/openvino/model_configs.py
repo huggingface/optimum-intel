@@ -201,6 +201,7 @@ from .model_patcher import (
     SanaTextEncoderModelPatcher,
     VideochatFlashQwenLanguageModelPatcher,
     VideochatFlashQwenVisionEmbeddingModelPatcher,
+    VideochatFlashQwenVisionProjectionModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
 )
@@ -5372,7 +5373,11 @@ class VideoChatFlashQWENProjectorOpenVINOConfig(OnnxConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {"input": {0: "batch_size", 1: "num_patches", 2: "hidden_size"}}
+        return {"hidden_states": {0: "batch_size", 1: "num_patches", 2: "hidden_size"}}
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        return VideochatFlashQwenVisionProjectionModelPatcher(self, model, model_kwargs)
 
 
 class VideoChatFlashQwenConfigBehavior(str, enum.Enum):
@@ -5415,7 +5420,8 @@ class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if not self._behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
             return {}
-        return {"pixel_values": {0: "batch_size", 1: "num_channels", 2: "num_frames", 3: "height", 4: "width"}}
+        return {"hidden_states": {0: "batch_size", 1: "num_channels", 2: "num_frames", 3: "height", 4: "width"},
+                "rotary_pos_emb": {0: "batch_size", 1: "num_tokens",2: "hidden_size"}}
 
     def with_behavior(
         self,
