@@ -5306,6 +5306,7 @@ class SiglipTextOpenVINOConfig(SiglipTextOnnxConfig):
 
 
 class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("hidden_states", "rotary_pos_emb")
     def __init__(
         self,
         task: str,
@@ -5320,12 +5321,14 @@ class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, visual_seq_length, **kwargs)
         if hasattr(normalized_config, "config") and hasattr(normalized_config.config, "mm_local_num_frames"):
             self.num_frames = normalized_config.config.mm_local_num_frames
-            self.height = 224
-            self.width = 224
-            self.image_size = (self.height, self.width)
+        self.height = 224
+        self.width = 224
+        self.image_size = (self.height, self.width)
+        self.patch_size = 14
+        self.embed_dim = 1408
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name == "pixel_values":
+        if input_name == "hidden_states":
             return self.random_float_tensor(
                 shape=[
                     self.batch_size,
@@ -5337,10 +5340,14 @@ class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
                 framework=framework,
                 dtype=float_dtype,
             )
+        elif input_name == "rotary_pos_emb":
+            grid_h, grid_w = self.height // self.patch_size, self.width // self.patch_size
+            grid_t = self.num_frames
+            return self.random_float_tensor([1, 1 + grid_h * grid_t * grid_w, self.embed_dim], framework=framework, dtype=float_dtype)
 
 
 class DummyVideoChatFlashQwenProjectorInputGenerator(DummyInputGenerator):
-    SUPPORTED_INPUT_NAMES = ["input"]
+    SUPPORTED_INPUT_NAMES = ["hidden_states"]
 
     def __init__(
         self,
