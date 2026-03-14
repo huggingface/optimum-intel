@@ -2248,7 +2248,7 @@ def _persimmon_self_attn_sdpa_forward(
     fused_qkv = self.query_key_value(hidden_states)
 
     # 3 x [batch_size, seq_length, num_heads, head_dim]
-    (query_states, key_states, value_states) = self._split_heads(fused_qkv)
+    query_states, key_states, value_states = self._split_heads(fused_qkv)
 
     if self.qk_layernorm:
         query_states = self.q_layernorm(query_states)
@@ -3301,6 +3301,67 @@ class LlavaNextVideoImageEmbeddingModelPatcher(ModelPatcher):
     ):
         model.__orig_forward = model.forward
         model.forward = types.MethodType(llava_next_video_vision_embed_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+# Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L223-L248
+# Mistral3Model.get_image_features() with only projector.norm() applied instead of full projector forward,
+# as the patch_merger cycle block (unfold loop) cannot be traced to OpenVINO IR.
+def mistral3_vision_embed_forward(self, pixel_values):
+    image_features = self.vision_tower(pixel_values, output_hidden_states=True)
+    vision_feature_layer = self.config.vision_feature_layer
+    if isinstance(vision_feature_layer, int):
+        selected_image_feature = image_features.hidden_states[vision_feature_layer]
+    else:
+        hs_pool = [image_features.hidden_states[layer_idx] for layer_idx in vision_feature_layer]
+        selected_image_feature = torch.cat(hs_pool, dim=-1)
+    image_features = self.multi_modal_projector.norm(selected_image_feature.squeeze(0))
+    return image_features
+
+
+# Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L76-L94
+# and https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L118-L124
+# Mistral3MultiModalProjector.forward() and Mistral3PatchMerger.forward() with norm and cycle block excluded.
+# norm is moved to vision_embed_forward, cycle block runs in PyTorch at runtime.
+def mistral3_multi_modal_projector_forward(self, image_features):
+    hidden_states = self.patch_merger.merging_layer(image_features)
+    hidden_states = self.linear_1(hidden_states)
+    hidden_states = self.act(hidden_states)
+    hidden_states = self.linear_2(hidden_states)
+    return hidden_states
+
+
+class Mistral3ImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(mistral3_vision_embed_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Mistral3MultiModalProjectorPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(mistral3_multi_modal_projector_forward, model)
 
         super().__init__(config, model, model_kwargs)
 
@@ -6278,8 +6339,8 @@ class Llama4TextModelPatcher(ModelPatcher):
         if is_transformers_version(">=", "4.56"):
             # openvino is not able to trace through the new chunked_overlay with left_padding
             self.original_chunked_overlay = transformers.masking_utils.chunked_overlay
-            transformers.masking_utils.chunked_overlay = (
-                lambda chunk_size, left_padding: transformers.masking_utils._legacy_chunked_overlay(chunk_size)
+            transformers.masking_utils.chunked_overlay = lambda chunk_size, left_padding: (
+                transformers.masking_utils._legacy_chunked_overlay(chunk_size)
             )
 
     def __exit__(self, exc_type, exc_value, traceback):
