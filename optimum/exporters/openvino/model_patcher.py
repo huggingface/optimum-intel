@@ -8383,15 +8383,17 @@ def qwen3_5_gated_delta_net_forward(
         mixed_qkv = F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
 
     mixed_qkv = mixed_qkv.transpose(1, 2)
-    query, key, value = torch.split(
-        mixed_qkv,
-        [self.key_dim, self.key_dim, self.value_dim],
-        dim=-1,
-    )
+    # Split QKV: the flat dim is [key_dim, key_dim, value_dim] contiguous blocks.
+    # Reshape to 4D BEFORE split to avoid 3D bf16 ops that the GPU plugin can't handle.
+    # Insert a dummy head dim of 1: [batch, seq, 1, total] → split on dim 3 → reshape per-tensor.
+    mixed_qkv = mixed_qkv.unsqueeze(2)  # [batch, seq, 1, 6144] — now 4D
+    query = mixed_qkv[:, :, :, :self.key_dim]                          # [batch, seq, 1, key_dim]
+    key = mixed_qkv[:, :, :, self.key_dim:2 * self.key_dim]            # [batch, seq, 1, key_dim]
+    value = mixed_qkv[:, :, :, 2 * self.key_dim:]                      # [batch, seq, 1, value_dim]
 
-    query = query.reshape(batch_size, seq_len, -1, self.head_k_dim)
-    key = key.reshape(batch_size, seq_len, -1, self.head_k_dim)
-    value = value.reshape(batch_size, seq_len, -1, self.head_v_dim)
+    query = query.reshape(batch_size, seq_len, self.num_k_heads, self.head_k_dim)
+    key = key.reshape(batch_size, seq_len, self.num_k_heads, self.head_k_dim)
+    value = value.reshape(batch_size, seq_len, self.num_v_heads, self.head_v_dim)
 
     beta = b.sigmoid()
     g = -self.A_log.float().exp() * F.softplus(a.float() + self.dt_bias)
@@ -8584,6 +8586,7 @@ class Qwen3_5TextModelPatcher(OVDecoderModelPatcher):
             if layer_type == "linear_attention":
                 linear_attn_layer = decoder_layer.linear_attn
                 linear_attn_layer.forward = linear_attn_layer._orig_forward
+
 
 
 class Qwen3_5MoeTextModelPatcher(Qwen3_5TextModelPatcher):

@@ -24,6 +24,48 @@ from openvino import opset13
 from .utils import MULTI_MODAL_TEXT_GENERATION_MODELS, SSM_MODELS
 
 
+def _convert_bf16_to_f16(ov_model: ov.Model):
+    """
+    Convert all bf16 tensors in the model to f16 by:
+    1. Replacing bf16 Constants with f16 equivalents
+    2. Replacing bf16 Convert/ConvertLike ops with f16 targets
+    Required for GPU devices that support f16 but not bf16.
+    """
+    from openvino import Type as OVType
+    changed = False
+
+    # Pass 1: Convert bf16 Constants to f16
+    for op in list(ov_model.get_ops()):
+        if op.get_type_name() == "Constant" and op.get_output_element_type(0) == OVType.bf16:
+            data_f16 = op.get_data().astype(np.float32).astype(np.float16)
+            new_const = opset13.constant(data_f16, dtype=OVType.f16)
+            new_const.set_friendly_name(op.get_friendly_name())
+            for target in list(op.output(0).get_target_inputs()):
+                target.replace_source_output(new_const.output(0))
+            changed = True
+
+    # Pass 2: Replace Convert ops that target bf16 with f16
+    for op in list(ov_model.get_ops()):
+        if op.get_type_name() == "Convert" and op.get_output_element_type(0) == OVType.bf16:
+            convert_f16 = opset13.convert(op.input(0).get_source_output(), OVType.f16)
+            convert_f16.set_friendly_name(op.get_friendly_name())
+            for target in list(op.output(0).get_target_inputs()):
+                target.replace_source_output(convert_f16.output(0))
+            changed = True
+
+    # Pass 3: Replace ConvertLike ops that produce bf16
+    for op in list(ov_model.get_ops()):
+        if op.get_type_name() == "ConvertLike" and op.get_output_element_type(0) == OVType.bf16:
+            convert_f16 = opset13.convert(op.input(0).get_source_output(), OVType.f16)
+            convert_f16.set_friendly_name(op.get_friendly_name())
+            for target in list(op.output(0).get_target_inputs()):
+                target.replace_source_output(convert_f16.output(0))
+            changed = True
+
+    if changed:
+        ov_model.validate_nodes_and_infer_types()
+
+
 def model_has_state(ov_model: ov.Model):
     if isinstance(ov_model, ov.CompiledModel):
         return len(ov_model.query_state()) > 0
@@ -323,6 +365,9 @@ def patch_stateful_hybrid_ssm(ov_model: ov.Model):
 
     fuse_cache_reorder(ov_model, not_cache_inputs, cache_inputs, batch_dim)
     make_stateful(ov_model, not_cache_inputs, cache_inputs, cache_outputs, batch_dim)
+
+    # Note: bf16 models require GPU devices with bf16 support.
+    # For GPUs without bf16 (e.g. Intel Arc Xe-LPG), the model runs on CPU only.
 
     # Ensure logits output is f32 for runtime compatibility (e.g. openvino_genai)
     logits_output = None
