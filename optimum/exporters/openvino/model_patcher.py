@@ -3781,6 +3781,34 @@ class DeepseekPatcher(OVDecoderModelPatcher):
                 # new interface (transformers >= 4.57): moe(self, hidden_states, topk_indices, topk_weights)
                 block.mlp._orig_moe = block.mlp.moe
                 block.mlp._orig_moe_infer = None
+                num_experts = len(block.mlp.experts)
+                block.mlp.gate_projs = (
+                    torch.concat(
+                        tuple(block.mlp.experts[i].gate_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                        dim=0,
+                    )
+                    .transpose(1, 2)
+                    .float()
+                )
+
+                block.mlp.up_projs = (
+                    torch.concat(
+                        tuple(block.mlp.experts[i].up_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                        dim=0,
+                    )
+                    .transpose(1, 2)
+                    .float()
+                )
+
+                block.mlp.down_projs = (
+                    torch.concat(
+                        tuple(block.mlp.experts[i].down_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                        dim=0,
+                    )
+                    .transpose(1, 2)
+                    .float()
+                )
+
                 block.mlp.moe = types.MethodType(deepseek_moe, block.mlp)
             elif hasattr(block.mlp, "experts"):
                 # fallback: patch by injecting moe_infer with required attributes
@@ -3798,6 +3826,12 @@ class DeepseekPatcher(OVDecoderModelPatcher):
             if hasattr(block.mlp, "_orig_moe"):
                 if block.mlp._orig_moe is not None:
                     block.mlp.moe = block.mlp._orig_moe
+                if hasattr(block.mlp, "gate_projs"):
+                    del block.mlp.gate_projs
+                if hasattr(block.mlp, "up_projs"):
+                    del block.mlp.up_projs
+                if hasattr(block.mlp, "down_projs"):
+                    del block.mlp.down_projs
                 delattr(block.mlp, "_orig_moe")
             if hasattr(block.mlp, "_orig_moe_infer"):
                 if block.mlp._orig_moe_infer is not None:
@@ -3974,21 +4008,27 @@ def deepseek_moe(self, hidden_states: torch.Tensor, topk_indices: torch.Tensor, 
     The original skips experts with no tokens (data-dependent control flow that breaks tracing).
     This version unconditionally runs all experts to produce a traceable static graph.
     """
-    final_hidden_states = torch.zeros_like(hidden_states, dtype=topk_weights.dtype)
-    expert_mask = torch.nn.functional.one_hot(topk_indices, num_classes=len(self.experts))
-    expert_mask = expert_mask.permute(2, 0, 1)
+    num_experts = len(self.experts)
+    batch_tokens, hidden_dim = hidden_states.shape
 
-    for expert_idx in range(len(self.experts)):
-        expert = self.experts[expert_idx]
-        mask = expert_mask[expert_idx]
-        token_indices, weight_indices = torch.where(mask)
-        expert_weights = topk_weights[token_indices, weight_indices]
-        expert_input = hidden_states[token_indices]
-        expert_output = expert(expert_input)
-        weighted_output = expert_output * expert_weights.unsqueeze(-1)
-        final_hidden_states.index_add_(0, token_indices, weighted_output)
+    routing = torch.zeros(
+        batch_tokens, num_experts,
+        dtype=topk_weights.dtype,
+        device=hidden_states.device
+    )
+    routing.scatter_(1, topk_indices, topk_weights)
 
-    return final_hidden_states.type(hidden_states.dtype)
+    hidden_states = hidden_states.repeat(num_experts, 1)
+    hidden_states = hidden_states.view(num_experts, batch_tokens, hidden_dim)
+    act_fn = self.experts[0].act_fn
+    gate = torch.bmm(hidden_states, self.gate_projs)
+    up = torch.bmm(hidden_states, self.up_projs)
+    gate_up = act_fn(gate) * up
+    next_states = torch.bmm(gate_up, self.down_projs)
+    routing = routing.transpose(0, 1).unsqueeze(-1)
+    next_states = next_states * routing
+    next_states = next_states.sum(dim=0)
+    return next_states.type(hidden_states.dtype)
 
 
 class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
