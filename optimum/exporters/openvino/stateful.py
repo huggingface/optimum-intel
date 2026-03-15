@@ -301,8 +301,39 @@ def patch_stateful_hybrid_ssm(ov_model: ov.Model):
     # hybrid models can contain transformer blocks as well
     # so KV tensors must be handled properly
     batch_dim = 0
+
+    # Normalize cache state dtypes to f32 for CPU compatibility.
+    # bf16 state variables can cause issues with some CPU plugin versions.
+    # Also reconciles dummy input (f32) vs model output (bf16/f16) mismatches.
+    from openvino.preprocess import PrePostProcessor
+    from openvino import Type as OVType
+    ppp = PrePostProcessor(ov_model)
+    needs_ppp = False
+    for inp_name, out_name in zip(cache_inputs, cache_outputs):
+        inp_type = ov_model.input(inp_name).get_element_type()
+        out_type = ov_model.output(out_name).get_element_type()
+        if inp_type != OVType.f32:
+            ppp.input(inp_name).tensor().set_element_type(OVType.f32)
+            needs_ppp = True
+        if out_type != OVType.f32:
+            ppp.output(out_name).tensor().set_element_type(OVType.f32)
+            needs_ppp = True
+    if needs_ppp:
+        ov_model = ppp.build()
+
     fuse_cache_reorder(ov_model, not_cache_inputs, cache_inputs, batch_dim)
     make_stateful(ov_model, not_cache_inputs, cache_inputs, cache_outputs, batch_dim)
+
+    # Ensure logits output is f32 for runtime compatibility (e.g. openvino_genai)
+    logits_output = None
+    for out in ov_model.outputs:
+        if "logits" in out.get_any_name():
+            logits_output = out
+            break
+    if logits_output is not None and logits_output.get_element_type() != OVType.f32:
+        ppp = PrePostProcessor(ov_model)
+        ppp.output(logits_output.get_any_name()).tensor().set_element_type(OVType.f32)
+        ov_model = ppp.build()
 
 
 def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
