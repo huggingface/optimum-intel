@@ -195,6 +195,7 @@ from .model_patcher import (
     Qwen2VLLanguageModelPatcher,
     Qwen2VLVisionEmbMergerPatcher,
     Qwen3MoeModelPatcher,
+    Qwen3_5MoeModelPatcher,
     Qwen3NextModelPatcher,
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
@@ -481,6 +482,33 @@ class Qwen3VLTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     library_name="transformers",
 )
 class Qwen3MoEOpenVINOConfig(Qwen3OpenVINOConfig):
+    _MODEL_PATCHER = Qwen3MoeModelPatcher
+
+
+@register_in_tasks_manager(
+    "qwen3_5_moe",
+    *["text-generation", "text-generation-with-past", "feature-extraction", "feature-extraction-with-past"],
+    library_name="transformers",
+)
+class Qwen3_5MoEOpenVINOConfig(Qwen3OpenVINOConfig):
+    _MODEL_PATCHER = Qwen3_5MoeModelPatcher
+
+
+@register_in_tasks_manager(
+    "qwen3_5",
+    *["text-generation", "text-generation-with-past", "feature-extraction", "feature-extraction-with-past"],
+    library_name="transformers",
+)
+class Qwen3_5OpenVINOConfig(Qwen3OpenVINOConfig):
+    _MODEL_PATCHER = Qwen3MoeModelPatcher
+
+
+@register_in_tasks_manager(
+    "qwen3_5_text",
+    *["text-generation", "text-generation-with-past", "feature-extraction", "feature-extraction-with-past"],
+    library_name="transformers",
+)
+class Qwen3_5TextOpenVINOConfig(Qwen3OpenVINOConfig):
     _MODEL_PATCHER = Qwen3MoeModelPatcher
 
 

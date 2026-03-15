@@ -32,7 +32,17 @@ from openvino import Core, Model, properties
 from openvino import Type as OVType
 from packaging.version import Version
 from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
-from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
+try:
+    from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
+except ModuleNotFoundError:
+    # transformers >= 5.x removed transformers.onnx; inline the trivial logic
+    from enum import Enum
+
+    class ParameterFormat(Enum):
+        Float = 4  # bytes per float32
+
+    def compute_serialized_parameters_size(num_parameters: int, fmt: ParameterFormat) -> int:
+        return num_parameters * fmt.value
 
 from optimum.intel.utils.import_utils import is_torch_version
 

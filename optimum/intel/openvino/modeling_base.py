@@ -25,7 +25,10 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 from transformers.generation import GenerationMixin
-from transformers.utils import is_offline_mode
+try:
+    from transformers.utils import is_offline_mode
+except ImportError:
+    from huggingface_hub.constants import is_offline_mode
 from transformers.utils.hub import cached_file
 
 from optimum.exporters.base import ExportConfig

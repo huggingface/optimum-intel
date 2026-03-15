@@ -23,7 +23,16 @@ from pathlib import Path
 from typing import Dict, List, Optional, Type, Union
 
 import torch
-from huggingface_hub import HfApi, HfFolder, hf_hub_download
+from huggingface_hub import HfApi, hf_hub_download
+try:
+    from huggingface_hub import HfFolder
+except ImportError:
+    # HfFolder removed in newer huggingface_hub; provide shim
+    class HfFolder:
+        @staticmethod
+        def get_token():
+            from huggingface_hub import get_token
+            return get_token()
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.hf_api import file_exists
 from transformers import CLIPConfig, PretrainedConfig, PreTrainedModel

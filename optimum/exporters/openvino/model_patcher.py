@@ -8319,3 +8319,36 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
                 sparse_moe_block = decoder_layer.mlp
                 decoder_layer.mlp.forward = decoder_layer.mlp._orig_forward
                 del sparse_moe_block.down_projs, sparse_moe_block.gate_projs, sparse_moe_block.up_projs
+
+# Qwen3.5 MoE forward patch — replaces dynamic expert loop with static iteration
+# The original uses torch.no_grad() + nonzero() + dynamic for loop which breaks OV tracing
+def qwen3_5_moe_experts_forward_patched(self, hidden_states, top_k_index, top_k_weights):
+    import torch.nn as nn
+    final_hidden_states = torch.zeros_like(hidden_states)
+    expert_mask = torch.nn.functional.one_hot(top_k_index, num_classes=self.num_experts)
+    expert_mask = expert_mask.permute(2, 1, 0)
+    for expert_idx in range(self.num_experts):
+        top_k_pos, token_idx = torch.where(expert_mask[expert_idx])
+        if token_idx.shape[0] == 0:
+            continue
+        current_state = hidden_states[token_idx]
+        gate, up = nn.functional.linear(current_state, self.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+        current_hidden_states = self.act_fn(gate) * up
+        current_hidden_states = nn.functional.linear(current_hidden_states, self.down_proj[expert_idx])
+        current_hidden_states = current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
+        final_hidden_states.index_add_(0, token_idx, current_hidden_states.to(final_hidden_states.dtype))
+    return final_hidden_states
+
+
+class Qwen3_5MoeModelPatcher(OVDecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import Qwen3_5MoeExperts
+        self.original_experts_forward = Qwen3_5MoeExperts.forward
+        Qwen3_5MoeExperts.forward = qwen3_5_moe_experts_forward_patched
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import Qwen3_5MoeExperts
+        Qwen3_5MoeExperts.forward = self.original_experts_forward
+
