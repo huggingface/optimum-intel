@@ -5325,7 +5325,7 @@ class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
         self.width = 224
         self.image_size = (self.height, self.width)
         self.patch_size = 14
-        self.embed_dim = 1408
+        self.embed_dim = normalized_config.config.mm_hidden_size
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "hidden_states":
