@@ -381,6 +381,8 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "bits": 4,
         "sym": False,
         "group_size": 128,
+        "dataset": "gsm8k",
+        "quant_method": OVQuantizationMethod.AWQ,
     },
     "inceptionai/jais-13b": {
         "bits": 4,
@@ -437,6 +439,14 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
+    },
+    "qnguyen3/nanoLLaVA": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "contextual",
+        "scale_estimation": True,
     },
 }
 
