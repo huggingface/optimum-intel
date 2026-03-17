@@ -3782,32 +3782,50 @@ class DeepseekPatcher(OVDecoderModelPatcher):
                 block.mlp._orig_moe = block.mlp.moe
                 block.mlp._orig_moe_infer = None
                 num_experts = len(block.mlp.experts)
-                block.mlp.gate_projs = (
-                    torch.concat(
-                        tuple(block.mlp.experts[i].gate_proj.weight.unsqueeze(0) for i in range(num_experts)),
-                        dim=0,
-                    )
-                    .transpose(1, 2)
-                    .float()
+
+                # Concatenate expert weights
+                gate_projs = torch.concat(
+                    tuple(block.mlp.experts[i].gate_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                    dim=0,
+                )
+                up_projs = torch.concat(
+                    tuple(block.mlp.experts[i].up_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                    dim=0,
+                )
+                down_projs = torch.concat(
+                    tuple(block.mlp.experts[i].down_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                    dim=0,
                 )
 
-                block.mlp.up_projs = (
-                    torch.concat(
-                        tuple(block.mlp.experts[i].up_proj.weight.unsqueeze(0) for i in range(num_experts)),
-                        dim=0,
-                    )
-                    .transpose(1, 2)
-                    .float()
-                )
+                # Handle OpenVINO version check with proper version string parsing
+                import re
+                import warnings
 
-                block.mlp.down_projs = (
-                    torch.concat(
-                        tuple(block.mlp.experts[i].down_proj.weight.unsqueeze(0) for i in range(num_experts)),
-                        dim=0,
-                    )
-                    .transpose(1, 2)
-                    .float()
-                )
+                from packaging import version
+
+                import openvino as ov
+
+                ov_version_str = ov.__version__
+                version_match = re.match(r'(\d+\.\d+\.\d+)', ov_version_str)
+                if version_match:
+                    ov_version = version.parse(version_match.group(1))
+                    if ov_version <= version.parse("2026.0.0"):
+                        warnings.warn(
+                            "This model works best with OpenVINO 2026.1 or later. "
+                            "Earlier versions require float() conversion for MoE weights, "
+                            "which may affect performance."
+                        )
+                        block.mlp.gate_projs = gate_projs.float()
+                        block.mlp.up_projs = up_projs.float()
+                        block.mlp.down_projs = down_projs.float()
+                    else:
+                        block.mlp.gate_projs = gate_projs
+                        block.mlp.up_projs = up_projs
+                        block.mlp.down_projs = down_projs
+                else:
+                    block.mlp.gate_projs = gate_projs
+                    block.mlp.up_projs = up_projs
+                    block.mlp.down_projs = down_projs
 
                 block.mlp.moe = types.MethodType(deepseek_moe, block.mlp)
             elif hasattr(block.mlp, "experts"):
@@ -4021,10 +4039,10 @@ def deepseek_moe(self, hidden_states: torch.Tensor, topk_indices: torch.Tensor, 
     hidden_states = hidden_states.repeat(num_experts, 1)
     hidden_states = hidden_states.view(num_experts, batch_tokens, hidden_dim)
     act_fn = self.experts[0].act_fn
-    gate = torch.bmm(hidden_states, self.gate_projs)
-    up = torch.bmm(hidden_states, self.up_projs)
+    gate = torch.bmm(hidden_states, self.gate_projs.transpose(1, 2))
+    up = torch.bmm(hidden_states, self.up_projs.transpose(1, 2))
     gate_up = act_fn(gate) * up
-    next_states = torch.bmm(gate_up, self.down_projs)
+    next_states = torch.bmm(gate_up, self.down_projs.transpose(1, 2))
     routing = routing.transpose(0, 1).unsqueeze(-1)
     next_states = next_states * routing
     next_states = next_states.sum(dim=0)
