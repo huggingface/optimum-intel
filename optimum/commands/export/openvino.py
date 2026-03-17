@@ -349,8 +349,23 @@ class OVExportCommand(BaseOptimumCLICommand):
             get_default_quantization_config,
         )
         from ...intel.openvino.utils import TemporaryDirectory
-        from ...intel.utils.import_utils import is_nncf_available
+        from ...intel.utils.import_utils import is_nncf_available, is_transformers_version
         from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
+        import os
+
+        is_local = os.path.isdir(self.args.model)
+        if (
+            "OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B" in self.args.model
+            and not is_local
+            and (is_transformers_version(">=", "4.49"))
+        ):
+            raise ValueError(
+                "The model OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B in hugging face "
+                "contains custom code and requires transformers version prior to 4.49. "
+                "It is recommended to install transformers version 4.48 in your environment or download "
+                "https://modelscope.cn/models/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B "
+                "to your local path and use local path to convert."
+            )
 
         if self.args.library is None:
             # TODO: add revision, subfolder and token to args
