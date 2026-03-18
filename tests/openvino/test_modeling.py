@@ -887,6 +887,10 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow
     @slow
+    @pytest.mark.skipif(
+        is_transformers_version(">=", "5.3"),
+        reason="requires transformers < v5.3 since question-answering pipeline is deprecated in v5.3",
+    )
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
@@ -909,6 +913,10 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
 
     @pytest.mark.run_slow
     @slow
+    @pytest.mark.skipif(
+        is_transformers_version(">=", "5.3"),
+        reason="requires transformers < v5.3 since question-answering pipeline is deprecated in v5.3",
+    )
     def test_metric(self):
         model_id = "distilbert-base-cased-distilled-squad"
         set_seed(SEED)
