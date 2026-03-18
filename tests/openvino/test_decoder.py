@@ -87,7 +87,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon_mamba")
 
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
 
@@ -181,7 +180,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "dbrx",
             # "phimoe",
             "marian",
-            # "zamba2",
         )
     GENERATION_LENGTH = 100
 
@@ -901,11 +899,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             )
 
     @parameterized.expand(EAGLE3_MODELS.items())
-    # TODO (@echarlaix) transformers v5 support
-    @pytest.mark.skipif(
-        is_transformers_version("<", "4.54") or is_transformers_version(">=", "5"),
-        reason="Eagle3 requires transformers >= 4.54",
-    )
+    @pytest.mark.skipif(is_transformers_version("<", "4.54"), reason="Eagle3 requires transformers >= 4.54")
     def test_load_and_infer_with_eagle3_model(self, model_arch, model_pair):
         draft_model_id, target_model_id = model_pair
 

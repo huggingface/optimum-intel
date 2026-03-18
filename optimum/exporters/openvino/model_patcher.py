@@ -7804,7 +7804,7 @@ class LlamaEagle3DecoderLayer(nn.Module):
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
-            past_key_value=past_key_values,
+            **{"past_key_values" if is_transformers_version(">=", "5.0") else "past_key_value": past_key_values},
             output_attentions=output_attentions,
             position_embeddings=position_embeddings,
             use_cache=use_cache,

@@ -30,11 +30,15 @@ MODEL_NAMES = {
     "hf-internal-testing/tiny-random-bert": "OVModelForMaskedLM",
     "hf-internal-testing/tiny-random-distilbert": "OVModelForSequenceClassification",
     "hf-internal-testing/tiny-random-mbart": "OVModelForSeq2SeqLM",
-    "hf-internal-testing/tiny-random-roberta": "OVModelForQuestionAnswering",
     "hf-internal-testing/tiny-random-gpt2": "OVModelForCausalLM",
     "hf-internal-testing/tiny-random-t5": "OVModelForSeq2SeqLM",
     "hf-internal-testing/tiny-random-bart": "OVModelForSeq2SeqLM",
 }
+
+# question-answering pipeline is deprecated in transformers v5.3
+if is_transformers_version("<", "5.3"):
+    MODEL_NAMES["hf-internal-testing/tiny-random-roberta"] = "OVModelForQuestionAnswering"
+
 
 TASKS = {
     "OVModelForMaskedLM": "fill-mask",

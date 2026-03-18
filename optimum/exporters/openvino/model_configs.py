@@ -4827,8 +4827,8 @@ class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
     DUMMY_PKV_GENERATOR_CLASS = Zamba2DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     MIN_TRANSFORMERS_VERSION = "4.49.0"
-    # TODO (@echarlaix): add v5 support
     MAX_TRANSFORMERS_VERSION = "4.57.6"
+    # MIN_TRANSFORMERS_VERSION = "5.2.0"
     _MODEL_PATCHER = Zamba2ModelPatcher
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):

@@ -702,6 +702,15 @@ class OVModelIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
+    def test_export_dtype(self):
+        model_id = "optimum-intel-internal-testing/tiny-random-GemmaForCausalLM"
+        for dtype in [torch.float32, torch.bfloat16, torch.float16]:
+            with TemporaryDirectory() as tmpdirname:
+                model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype)
+                self.assertEqual(model.dtype, dtype)
+                model.save_pretrained(tmpdirname)
+                ov_model = OVModelForCausalLM.from_pretrained(tmpdirname, export=True)
+
 
 class PipelineTest(unittest.TestCase):
     def test_load_model_from_hub(self):
@@ -887,6 +896,10 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow
     @slow
+    @pytest.mark.skipif(
+        is_transformers_version(">=", "5.3"),
+        reason="requires transformers < v5.3 since question-answering pipeline is deprecated in v5.3",
+    )
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
@@ -909,6 +922,10 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
 
     @pytest.mark.run_slow
     @slow
+    @pytest.mark.skipif(
+        is_transformers_version(">=", "5.3"),
+        reason="requires transformers < v5.3 since question-answering pipeline is deprecated in v5.3",
+    )
     def test_metric(self):
         model_id = "distilbert-base-cased-distilled-squad"
         set_seed(SEED)
