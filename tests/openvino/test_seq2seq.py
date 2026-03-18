@@ -530,8 +530,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "minicpmv",
         "phi3_v",
         "qwen2_vl",
+        "videochat_flash_qwen",
     ]
-    SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl"]
+    SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl", "videochat_flash_qwen"]
     SUPPORT_AUDIO = []
     OVMODEL_CLASS = OVModelForVisualCausalLM
     TASK = "image-text-to-text"
@@ -559,7 +560,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         # remote code models differs after transformers v4.54
         SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"llava-qwen2", "phi3_v", "phi4mm"}
 
-    REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "minicpmo", "llava-qwen2", "phi3_v", "maira2", "phi4mm"]
+    REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "minicpmo", "llava-qwen2", "phi3_v", "maira2", "phi4mm", "videochat_flash_qwen"]
     IMAGE = Image.open(
         requests.get(
             TEST_IMAGE_URL,
@@ -630,6 +631,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
+        if model_arch == "videochat_flash_qwen":
+            self.skipTest("Skipping comparison against Transformers because videochat_flash_qwen in OV does not support image input")
         def compare_outputs(inputs, ov_model, transformers_model, generation_config):
             transformers_inputs = copy.deepcopy(inputs)
             ov_outputs = ov_model.generate(**inputs, generation_config=generation_config)
@@ -875,13 +878,16 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             model_id, export=True, trust_remote_code=trust_remote_code, device=OPENVINO_DEVICE
         )
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
-        question = "Describe image"
         preprocessors = self.get_preprocessors(model_arch)
-        inputs = model.preprocess_inputs(**preprocessors, text=question, image=self.IMAGE.resize((600, 600)))
-        # General case
-        outputs = model.generate(**inputs, max_new_tokens=10)
-        outputs = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
-        self.assertIsInstance(outputs[0], str)
+
+        # videochat_flash_qwen does not support image input
+        if model_arch != "videochat_flash_qwen":
+            question = "Describe image"
+            inputs = model.preprocess_inputs(**preprocessors, text=question, image=self.IMAGE.resize((600, 600)))
+            # General case
+            outputs = model.generate(**inputs, max_new_tokens=10)
+            outputs = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
+            self.assertIsInstance(outputs[0], str)
 
         # GOT-OCR2 does not support text-only input
         if model_arch != "got_ocr2":
@@ -907,7 +913,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                     repo_type="dataset",
                     user_agent=http_user_agent(),
                 )
-                input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
+                if model_arch == "videochat_flash_qwen":
+                    # videochat_flash_qwen need frame number to be multiple of 4
+                    input_video, _ = load_video(video_path, num_frames=8, backend="opencv")
+                else:
+                    input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
                 question = "Why is this video funny?"
                 inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
                 outputs = model.generate(**inputs, max_new_tokens=10)
@@ -953,6 +963,22 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             preprocessors = {"processor": None, "tokenizer": tokenizer, "config": config}
+        elif model_arch == "videochat_flash_qwen":
+            class VideochatProcessorWrapper:
+                def __init__(self, model_id):
+                    from transformers import AutoModel
+                    hf_model = AutoModel.from_pretrained(model_id, trust_remote_code=True)
+                    self.processor = hf_model.get_vision_tower().image_processor.preprocess
+                    self.model_dtype = hf_model.dtype
+                    del hf_model
+
+                def __call__(self, images, return_tensors):
+                    return self.processor(images, return_tensors="pt")["pixel_values"].to(dtype=self.model_dtype)
+            processor = VideochatProcessorWrapper(model_id)
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            preprocessors = {"processor": processor, "tokenizer": tokenizer, "config": config}
         else:
             processor = AutoProcessor.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS

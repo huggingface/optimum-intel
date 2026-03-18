@@ -4806,6 +4806,8 @@ class _OVLlama4ForCausalLM(OVModelForVisualCausalLM):
 
 
 class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
+    from transformers import AutoModel
+    auto_model_class = AutoModel
     additional_parts = ["vision_projection"]
     IMAGE_TOKEN_INDEX = -200
     IGNORE_INDEX = -100
@@ -4928,7 +4930,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         self.grid_size = (num_frames, self.image_size // self.patch_size, self.image_size // self.patch_size) # (T, H, W)
         self.num_patches = self.grid_size[0] * self.grid_size[1] * self.grid_size[2]
         self.num_img_patches = self.grid_size[1] * self.grid_size[2]
-        self.embed_dim = 1408
+        self.embed_dim = getattr(config, "mm_hidden_size", 1408)
         self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches + 1, self.embed_dim))
         self.img_pos_embed = nn.Parameter(torch.zeros(1, self.num_img_patches + 1, self.embed_dim))
         pos_embed = _OVVideoChatFlashQwenForCausalLM.get_3d_sincos_pos_embed(
