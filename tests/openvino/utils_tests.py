@@ -358,8 +358,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vocoder": 80,
     },
     "clip": {"model": 130},
-    "mamba": {"model": 322 if is_transformers_version("<", "5") else 324},
-    "falcon_mamba": {"model": 162 if is_transformers_version("<", "5") else 164},
+    "mamba": {"model": 324 if is_transformers_version("==", "5.0") else 322},
+    "falcon_mamba": {"model": 164 if is_transformers_version("==", "5.0") else 162},
     "minicpmo": {
         "lm_model": 16,
         "text_embeddings_model": 1,
