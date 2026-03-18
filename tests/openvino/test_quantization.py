@@ -1175,8 +1175,12 @@ class OVWeightCompressionTest(unittest.TestCase):
             "llama",
             {
                 "model": {
-                    "names": ["__module.layers.1.self_attn.v_proj/aten::linear/MatMul"],
-                    "patterns": ["__module.layers.\\d.self_attn.o_proj/aten::linear/MatMul"],
+                    "names": [
+                        f"__module.layers.1.self_attn.v_proj/{'aten' if is_transformers_version('<', '5') else 'ov_ext'}::linear/MatMul"
+                    ],
+                    "patterns": [
+                        f"__module.layers.\\d.self_attn.o_proj/{'aten' if is_transformers_version('<', '5') else 'ov_ext'}::linear/MatMul"
+                    ],
                 }
             },
         ),
