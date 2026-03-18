@@ -2248,7 +2248,7 @@ def _persimmon_self_attn_sdpa_forward(
     fused_qkv = self.query_key_value(hidden_states)
 
     # 3 x [batch_size, seq_length, num_heads, head_dim]
-    query_states, key_states, value_states = self._split_heads(fused_qkv)
+    (query_states, key_states, value_states) = self._split_heads(fused_qkv)
 
     if self.qk_layernorm:
         query_states = self.q_layernorm(query_states)
@@ -6339,8 +6339,8 @@ class Llama4TextModelPatcher(ModelPatcher):
         if is_transformers_version(">=", "4.56"):
             # openvino is not able to trace through the new chunked_overlay with left_padding
             self.original_chunked_overlay = transformers.masking_utils.chunked_overlay
-            transformers.masking_utils.chunked_overlay = lambda chunk_size, left_padding: (
-                transformers.masking_utils._legacy_chunked_overlay(chunk_size)
+            transformers.masking_utils.chunked_overlay = (
+                lambda chunk_size, left_padding: transformers.masking_utils._legacy_chunked_overlay(chunk_size)
             )
 
     def __exit__(self, exc_type, exc_value, traceback):

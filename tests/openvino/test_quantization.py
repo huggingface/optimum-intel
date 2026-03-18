@@ -340,14 +340,12 @@ class OVQuantizerTest(unittest.TestCase):
                 dataset="wikitext2:seq_len=64",
                 num_samples=1,
             ),
-            (
-                {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
-                if is_transformers_version("<=", "4.45")
-                else {
-                    "encoder": 30,
-                    "decoder": 52,
-                }
-            ),
+            {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
+            if is_transformers_version("<=", "4.45")
+            else {
+                "encoder": 30,
+                "decoder": 52,
+            },
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
                 if is_transformers_version("<=", "4.45")
@@ -641,11 +639,9 @@ class OVWeightCompressionTest(unittest.TestCase):
                 group_size=32,
                 ignored_scope={
                     "names": [
-                        (
-                            "__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
-                            if is_transformers_version("<", "4.57")
-                            else "__module.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
-                        )
+                        "__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
+                        if is_transformers_version("<", "4.57")
+                        else "__module.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
                     ]
                 },
             ),
