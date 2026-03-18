@@ -711,6 +711,7 @@ class OVModelIntegrationTest(unittest.TestCase):
                 model.save_pretrained(tmpdirname)
                 ov_model = OVModelForCausalLM.from_pretrained(tmpdirname, export=True)
 
+
 class PipelineTest(unittest.TestCase):
     def test_load_model_from_hub(self):
         model_id = "echarlaix/tiny-random-PhiForCausalLM"
