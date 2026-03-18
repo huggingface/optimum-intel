@@ -3431,12 +3431,6 @@ if is_transformers_version(">=", "4.57.0"):
         Qwen3VLVisionModel,
         Qwen3VLVisionRotaryEmbedding,
     )
-
-    from transformers.models.qwen3_5.modeling_qwen3_5 import (
-        Qwen3_5Model,
-        Qwen3_5VisionModel,
-        Qwen3_5VisionRotaryEmbedding,
-    )
 else:
 
     class Qwen3VLModel:
@@ -3451,6 +3445,22 @@ else:
     class Qwen3_5VisionModel:
         pass
 
+if is_transformers_version(">=", "5.2.0"):
+    from transformers.models.qwen3_5.modeling_qwen3_5 import (
+        Qwen3_5Model,
+        Qwen3_5VisionModel,
+        Qwen3_5VisionRotaryEmbedding,
+    )
+else:
+
+    class Qwen3_5Model:
+        pass
+
+    class Qwen3_5VisionModel:
+        pass
+
+    class Qwen3_5VisionRotaryEmbedding:
+        pass
 
 # The inheritance from Qwen3VLModel is needed to get access to methods:
 # get_placeholder_mask(): https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1066

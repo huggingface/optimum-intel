@@ -310,6 +310,10 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
         return patch_stateful_encoder_decoder(config, ov_model)
     if config.model_type in SSM_MODELS:
         return patch_stateful_hybrid_ssm(ov_model)
+    # For VLM models, the text sub-model may be SSM-based (e.g. qwen3_5 VLM with qwen3_5_text language model)
+    text_config = getattr(config, "text_config", None)
+    if text_config is not None and getattr(text_config, "model_type", None) in SSM_MODELS:
+        return patch_stateful_hybrid_ssm(ov_model)
     return patch_stateful_decoder(config, ov_model)
 
 
