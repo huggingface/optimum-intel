@@ -5199,38 +5199,38 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         if tokenizer is None:
             raise ValueError("Tokenizer is required.")
         image_sizes = None
+        frames = None
+        results = {}
 
         # preprocess text
-        prompt = f"<image>\n{text}"
+        prompt = f"<image>\n{text}" if (image is not None or video is not None) else text
         messages = [{"role": "user", "content": prompt}]
         text_prompt = tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True,
         )
         input_ids = _OVVideoChatFlashQwenForCausalLM.tokenizer_image_token(text_prompt, tokenizer, _OVVideoChatFlashQwenForCausalLM.IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0)
-
-        if isinstance(video, list):
-            if isinstance(video[0], np.ndarray):
-                image_sizes = [video[0].shape[:2]]
-            else:
-                width, height = video[0].size
-                image_sizes = [(height, width)]
+        results["input_ids"] = input_ids
 
         # preprocess video
-        frames = [processor(images=video, return_tensors="pt")]
+        if video is not None:
+            if isinstance(video, list):
+                if isinstance(video[0], np.ndarray):
+                    image_sizes = [video[0].shape[:2]]
+                else:
+                    width, height = video[0].size
+                    image_sizes = [(height, width)]
+            frames = [processor(images=video, return_tensors="pt")]
+            results["images"] = frames
+            results["image_sizes"] = image_sizes
 
         if tokenizer.pad_token_id is None:
             if "qwen" in tokenizer.name_or_path.lower():
                 print("Setting pad token to bos token for qwen model.")
                 tokenizer.pad_token_id = 151643
         attention_masks = input_ids.ne(tokenizer.pad_token_id).long()
+        results["attention_mask"] = attention_masks
 
-        stop_str = "<|im_end|>"
-        keywords = [stop_str]
-        stopping_criteria = _OVVideoChatFlashQwenForCausalLM.KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
-
-        # inputs = {"images": frames, "inputs": input_ids, "attention_mask": attention_masks, "modalities": ["video"], "stopping_criteria": [stopping_criteria], "image_sizes":image_sizes}
-        inputs = {"images": frames, "inputs": input_ids, "attention_mask": attention_masks, "stopping_criteria": [stopping_criteria], "image_sizes":image_sizes}
-        return inputs
+        return results
 
     def encode_video_image(self, images_list, video_idx_in_batch):
         # video encoder编码后按图像的connector处理
@@ -5370,10 +5370,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
     # def get_multimodal_embeddings(self, input_ids, position_ids, attention_mask, past_key_values, labels, images, modalities=["image"], image_sizes=None):
     def get_multimodal_embeddings(self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, past_key_values=None, labels=None, modalities=["image"], image_sizes=None, **kwargs):
-        # assert type(modalities) is list, modalities
-        print('get_multimodal_embeddings enter')
-        # if input_ids is not None:
-        #     print(f'input_ids: {input_ids.shape}, attention_mask: {attention_mask.shape}, position_ids: {position_ids.shape}')
         images = pixel_values
 
         if images is None:
