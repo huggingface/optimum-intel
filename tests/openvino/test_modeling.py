@@ -702,6 +702,14 @@ class OVModelIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
+    def test_export_dtype(self):
+        model_id = "optimum-intel-internal-testing/tiny-random-GemmaForCausalLM"
+        for dtype in [torch.float32, torch.bfloat16, torch.float16]:
+            with TemporaryDirectory() as tmpdirname:
+                model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype)
+                self.assertEqual(model.dtype, dtype)
+                model.save_pretrained(tmpdirname)
+                ov_model = OVModelForCausalLM.from_pretrained(tmpdirname, export=True)
 
 class PipelineTest(unittest.TestCase):
     def test_load_model_from_hub(self):
