@@ -4955,11 +4955,40 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
     def inputs(self) -> Dict[str, Dict[int, str]]:
         common_inputs = {
             "input_ids": {0: "batch_size", 1: "sequence_length"},
-            "attention_mask": {0: "batch_size", 1: "sequence_length"},
         }
         if self.use_past_in_inputs:
+            common_inputs["attention_mask"] = {0: "batch_size", 1: "past_sequence_length + sequence_length"}
             self.add_past_key_values(common_inputs, direction="inputs")
+        else:
+            common_inputs["attention_mask"] = {0: "batch_size", 1: "sequence_length"}
         return common_inputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        dummy_inputs = super().generate_dummy_inputs(framework=framework, **kwargs)
+
+        if self.use_past_in_inputs and "attention_mask" in dummy_inputs and "cache_params" in dummy_inputs:
+            # Pad attention_mask to cover past KV-cache sequence length + current input length.
+            # This ensures the exported graph builds a rectangular causal mask
+            # (seq_len x total_seq_len) instead of a square one (seq_len x seq_len),
+            # which is required for stateful KV-cache inference where attention_mask
+            # is longer than input_ids.
+            num_mamba_layers = self._normalized_config.layer_types.count("mamba")
+            num_attention_layers = self._normalized_config.layer_types.count("attention")
+            if num_attention_layers > 0:
+                # KV cache tensors start after mamba states (conv + ssm per mamba layer)
+                kv_cache_offset = 2 * num_mamba_layers
+                past_key = dummy_inputs["cache_params"][kv_cache_offset]
+                past_seq_len = past_key.shape[2]
+                if past_seq_len > 0:
+                    past_present_length = dummy_inputs["input_ids"].shape[1] + past_seq_len
+                    dummy_inputs["attention_mask"] = DummyInputGenerator.pad_input_on_dim(
+                        dummy_inputs["attention_mask"],
+                        desired_length=past_present_length,
+                        dim=1,
+                        dtype=dummy_inputs["attention_mask"].dtype,
+                    )
+
+        return dummy_inputs
 
 
 @register_in_tasks_manager("audio-spectrogram-transformer", *["feature-extraction", "audio-classification"])
