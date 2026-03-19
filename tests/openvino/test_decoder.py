@@ -946,16 +946,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
             cache = Qwen3NextDynamicCache(config=transformers_model.config)
 
-        tf_past_len = 0
+        past_len = 0
         for chunk_ids in chunks:
             cur_len = chunk_ids.shape[1]
-            attn_mask = torch.ones((1, tf_past_len + cur_len), dtype=torch.int64)
+            attn_mask = torch.ones((1, past_len + cur_len), dtype=torch.int64)
             with torch.no_grad():
                 tf_out = transformers_model(
                     input_ids=chunk_ids, attention_mask=attn_mask, past_key_values=cache, use_cache=True
                 )
             cache = tf_out.past_key_values
-            tf_past_len += cur_len
+            past_len += cur_len
 
         self.assertTrue(
             torch.allclose(
