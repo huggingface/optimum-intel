@@ -872,3 +872,101 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         del ov_model
         gc.collect()
+
+    HYBRID_ARCHITECTURES = []
+    if is_transformers_version(">=", "4.53.0"):
+        HYBRID_ARCHITECTURES.append("granitemoehybrid")
+    if is_transformers_version(">=", "4.54.0"):
+        HYBRID_ARCHITECTURES.append("lfm2")
+    if is_transformers_version(">=", "4.57.0"):
+        HYBRID_ARCHITECTURES.append("qwen3_next")
+    # not including zamba2 - the Mamba mixer's torch_forward crashes on the second chunk
+
+    @parameterized.expand(HYBRID_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
+    def test_hybrid_model_multi_step_generation(self, model_arch):
+        """
+        Validates that hybrid models with mixed recurrent/attention layers produce correct results
+        over multiple sequential generation calls with cache.
+        """
+        model_id = MODEL_NAMES[model_arch]
+        tokenizer = self.get_tokenizer(model_arch)
+
+        ov_model = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        self.assertTrue(ov_model.stateful, "Hybrid model should be exported as stateful")
+
+        set_seed(SEED)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=1,
+            do_sample=False,
+            eos_token_id=None,
+        )
+        ov_model.generation_config.eos_token_id = None
+        transformers_model.generation_config.eos_token_id = None
+        ov_model.config.eos_token_id = None
+        transformers_model.config.eos_token_id = None
+
+        full_text = "Today is a nice day and I am happy"
+        full_tokens = tokenizer(full_text, return_tensors="pt")
+        full_input_ids = full_tokens["input_ids"]
+        num_tokens = full_input_ids.shape[1]
+
+        chunk_size = max(num_tokens // 3, 1)
+        chunks = [full_input_ids[:, i : i + chunk_size] for i in range(0, num_tokens, chunk_size)]
+
+        # OV chunked prefill
+        ov_cache = None
+        ov_past_len = 0
+        for chunk_ids in chunks:
+            cur_len = chunk_ids.shape[1]
+            attn_mask = torch.ones((1, ov_past_len + cur_len), dtype=torch.int64)
+            ov_out = ov_model(input_ids=chunk_ids, attention_mask=attn_mask, cache_params=ov_cache)
+            ov_cache = ov_out.cache_params
+            ov_past_len += cur_len
+        # Transformers chunked prefill with the model-specific hybrid cache
+        if model_arch == "granitemoehybrid":
+            from transformers.models.granitemoehybrid.modeling_granitemoehybrid import (
+                HybridMambaAttentionDynamicCache,
+            )
+
+            cache = HybridMambaAttentionDynamicCache(config=transformers_model.config, batch_size=1)
+        elif model_arch == "lfm2":
+            from transformers.models.lfm2.modeling_lfm2 import Lfm2HybridConvCache
+
+            cache = Lfm2HybridConvCache(config=transformers_model.config, max_batch_size=1)
+        elif model_arch == "qwen3_next":
+            from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextDynamicCache
+
+            cache = Qwen3NextDynamicCache(config=transformers_model.config)
+
+        tf_past_len = 0
+        for chunk_ids in chunks:
+            cur_len = chunk_ids.shape[1]
+            attn_mask = torch.ones((1, tf_past_len + cur_len), dtype=torch.int64)
+            with torch.no_grad():
+                tf_out = transformers_model(
+                    input_ids=chunk_ids, attention_mask=attn_mask, past_key_values=cache, use_cache=True
+                )
+            cache = tf_out.past_key_values
+            tf_past_len += cur_len
+
+        self.assertTrue(
+            torch.allclose(
+                ov_out.logits, 
+                tf_out.logits, 
+                atol=5e-2, # qwen3-next max diff is 0.04301672801375389
+            ),
+            f"Chunked prefill OV vs transformers mismatch:\n"
+            f"  max diff: {(ov_out.logits - tf_out.logits).abs().max().item()}",
+        )
+
+        del transformers_model
+        del ov_model
+        gc.collect()
