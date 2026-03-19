@@ -4668,9 +4668,9 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
         return dummy_inputs
 
 
-class HybridCacheConfigMixin:
+class HybridCacheOpenVINOConfig(TextDecoderOnnxConfig):
     """
-    Mixin for hybrid models that use cache_params with both recurrent/conv and attention states.
+    Base config for hybrid models that use cache_params with both recurrent/conv and attention states.
     Handles attention_mask dynamic axis and padding for stateful KV-cache inference.
 
     Subclasses must define:
@@ -4679,6 +4679,7 @@ class HybridCacheConfigMixin:
         _NON_KV_ENTRIES_PER_LAYER: number of cache entries per non-KV layer (default: 2)
     """
 
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _NON_KV_LAYER_TYPES = ()
     _KV_LAYER_TYPES = ()
     _NON_KV_ENTRIES_PER_LAYER = 2
@@ -4956,7 +4957,7 @@ class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     ],
     library_name="transformers",
 )
-class LFM2OpenVINOConfig(HybridCacheConfigMixin, MambaOpenVINOConfig):
+class LFM2OpenVINOConfig(HybridCacheOpenVINOConfig):
     _NON_KV_LAYER_TYPES = ("conv",)
     _KV_LAYER_TYPES = ("full_attention",)
     _NON_KV_ENTRIES_PER_LAYER = 1
@@ -4991,12 +4992,11 @@ class LFM2OpenVINOConfig(HybridCacheConfigMixin, MambaOpenVINOConfig):
 @register_in_tasks_manager(
     "granitemoehybrid", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
-class GraniteMoeHybridOpenVINOConfig(HybridCacheConfigMixin, MambaOpenVINOConfig):
+class GraniteMoeHybridOpenVINOConfig(HybridCacheOpenVINOConfig):
     _NON_KV_LAYER_TYPES = ("mamba",)
     _KV_LAYER_TYPES = ("attention",)
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Zamba2DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Zamba2DummyPastKeyValuesGenerator
-    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     MIN_TRANSFORMERS_VERSION = "4.53.0"
     _MODEL_PATCHER = GraniteMoeHybridModelPatcher
 
@@ -5446,12 +5446,11 @@ class Qwen3NextDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     *["text-generation", "text-generation-with-past"],
     library_name="transformers",
 )
-class Qwen3NextOpenVINOConfig(HybridCacheConfigMixin, Qwen3OpenVINOConfig):
+class Qwen3NextOpenVINOConfig(HybridCacheOpenVINOConfig):
     _NON_KV_LAYER_TYPES = ("linear_attention",)
     _KV_LAYER_TYPES = ("full_attention",)
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Qwen3NextDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Qwen3NextDummyPastKeyValuesGenerator
-    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     MIN_TRANSFORMERS_VERSION = "4.57.0"
     _MODEL_PATCHER = Qwen3NextModelPatcher
 
