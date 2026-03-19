@@ -218,6 +218,18 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             inputs["beam_idx"] = (
                 self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=int)
             )
+
+        if "per_layer_inputs" in self.input_names:
+            per_layer_inputs = kwargs.pop("per_layer_inputs", None)
+            assert per_layer_inputs is not None, "Expected 'per_layer_inputs', but it was not passed"
+            inputs["per_layer_inputs"] = torch.Tensor(per_layer_inputs)
+            # if deepstack_visual_embeds is not None:
+            #     inputs["deepstack_visual_embeds"] = torch.Tensor(deepstack_visual_embeds)
+            # else:
+            #     num_layers = len(self.config.vision_config.deepstack_visual_indexes)
+            #     emd_dim = self.config.text_config.hidden_size
+            #     inputs["deepstack_visual_embeds"] = torch.zeros((num_layers, 1, emd_dim), dtype=torch.float32)
+
         return inputs
 
     def forward(
@@ -347,6 +359,7 @@ class OVAudioEncoder(OVModelPart):
 MODEL_PARTS_CLS_MAPPING = {
     "resampler": OVResampler,
     "language_model": OVModelWithEmbedForCausalLM,
+    "text_embeddings_per_layer": OVVisionProjection,
     "vision_embeddings": OVVisionEmbedding,
     "vision_projection": OVVisionProjection,
     "vision_resampler": OVVisionResampler,
@@ -785,8 +798,11 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             additional_kwargs["visual_pos_masks"] = extra_outputs[0]
             additional_kwargs["deepstack_visual_embeds"] = extra_outputs[1]
 
-        return self.language_model.forward(
-            input_ids=None,
+        if self.config.model_type in ("gemma3n",) and extra_outputs:
+            additional_kwargs["per_layer_inputs"] = extra_outputs[0]
+
+        out =  self.language_model.forward(
+            input_ids=input_ids,
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -795,6 +811,10 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             **additional_kwargs,
             **kwargs,
         )
+
+
+
+        return out
 
     def _reorder_cache(self, past_key_values, beam_idx):
         return self.language_model._reorder_cache(past_key_values, beam_idx)
@@ -3940,6 +3960,32 @@ class _OVGemma3ForCausalLM(OVModelForVisualCausalLM):
         return model_kwargs
 
 
+class _OVGemma3NForCausalLM(_OVGemma3ForCausalLM):
+    additional_parts = ["text_embeddings_per_layer"]
+
+    def get_multimodal_embeddings(
+            self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        embeds_from_args = kwargs.pop("inputs_embeds", None)
+        inputs_embeds = (
+            embeds_from_args if embeds_from_args is not None else self.get_text_embeddings(input_ids, **kwargs)
+        )
+        per_layer_inputs = self.text_embeddings_per_layer(input_ids)
+        if pixel_values is not None:
+            vision_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, **kwargs)
+
+            if vision_embeds is not None:
+                inputs_embeds, attention_mask, position_ids = self.merge_vision_text_embeddings(
+                    vision_embeds,
+                    inputs_embeds,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    **kwargs,
+                )
+        return inputs_embeds, attention_mask, position_ids, per_layer_inputs
+
+
 class _OVGotOCR2ForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1 and kwargs.get("past_key_values") is not None:
@@ -4820,7 +4866,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen2_5_vl_text": _OVQwen2_5_VLForCausalLM,
     "got_ocr2": _OVGotOCR2ForCausalLM,
     "gemma3": _OVGemma3ForCausalLM,
-    "gemma3n": _OVGemma3ForCausalLM,
+    "gemma3n": _OVGemma3NForCausalLM,
     "idefics3": _OVIdefics3ForCausalLM,
     "smolvlm": _OVSmolVLForCasualLM,
     "phi4mm": _OVPhi4MMForCausalLM,

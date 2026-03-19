@@ -4805,9 +4805,182 @@ def _gaussian_topk(self, inputs: torch.Tensor) -> torch.Tensor:
     return nn.functional.relu(inputs - cutoff_x)
 
 
+def gemma3n_language_model_forward(
+    self,
+    input_ids: Optional[torch.LongTensor] = None,  # text inputs
+    pixel_values: Optional[torch.FloatTensor] = None,  # vision inputs
+    input_features: Optional[torch.FloatTensor] = None,  # audio inputs
+    attention_mask: Optional[torch.Tensor] = None,
+    input_features_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    past_key_values: Optional[Cache] = None,
+    token_type_ids: Optional[torch.LongTensor] = None,
+    cache_position: Optional[torch.LongTensor] = None,
+    inputs_embeds: Optional[torch.FloatTensor] = None,
+    labels: Optional[torch.LongTensor] = None,
+    use_cache: Optional[bool] = None,
+    output_attentions: Optional[bool] = None,
+    output_hidden_states: Optional[bool] = None,
+    per_layer_inputs = None,
+    **lm_kwargs,
+):
+    from transformers.models.gemma3n.modeling_gemma3n import Gemma3nModelOutputWithPast
+
+    if (input_ids is None) ^ (inputs_embeds is not None):
+        raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+
+    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+    output_hidden_states = (
+        output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+    )
+
+    # Merge text and images
+    if pixel_values is not None:
+        image_features = self.get_image_features(pixel_values)
+        image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
+        special_image_mask, _ = self.get_placeholder_mask(
+            input_ids, inputs_embeds=inputs_embeds, image_features=image_features
+        )
+        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+
+    # Merge text and audio
+    if input_features is not None and input_features_mask is not None:
+        audio_features, audio_mask = self.get_audio_features(input_features, ~input_features_mask)
+
+        # The Gemma3nProcessor expects all audio will be 30s in length and inserts 188 audio soft tokens into the
+        # text to account for this. However, the audio preprocessing and encoder do not gurarantee they will
+        # produce 188 soft tokens; they will produce at most that many tokens, but they may produce fewer tokens
+        # depending on the length of the longest audio input in the batch. When we encounter this situation, we pad
+        # the audio feature out to 188 soft tokens with the emebedding of the last token in the embed_audio vocab.
+        audio_padding_toks = torch.tensor([[self.vocab_size - 1]], dtype=torch.long, device=audio_features.device)
+        audio_padding_embs = self.embed_audio(input_ids=audio_padding_toks)
+        audio_features = torch.where(audio_mask.unsqueeze(-1), audio_padding_embs, audio_features)
+
+        audio_batch_size, audio_seq_len, audio_embed_dim = audio_features.shape
+        extra_padding_tokens = self.config.audio_soft_tokens_per_image - audio_seq_len
+        extra_padding_features = audio_padding_embs.expand(audio_batch_size, extra_padding_tokens, audio_embed_dim)
+
+        audio_features = torch.cat((audio_features, extra_padding_features), dim=1)
+        audio_features = audio_features.to(inputs_embeds.device, inputs_embeds.dtype)
+        _, special_audio_mask = self.get_placeholder_mask(
+            input_ids, inputs_embeds=inputs_embeds, audio_features=audio_features
+        )
+        inputs_embeds = inputs_embeds.masked_scatter(special_audio_mask, audio_features)
+
+    outputs = self.language_model(
+        input_ids=None,
+        per_layer_inputs=per_layer_inputs,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+        past_key_values=past_key_values,
+        inputs_embeds=inputs_embeds,
+        use_cache=use_cache,
+        output_attentions=output_attentions,
+        output_hidden_states=output_hidden_states,
+        cache_position=cache_position,
+        **lm_kwargs,
+    )
+
+    return Gemma3nModelOutputWithPast(
+        last_hidden_state=outputs.last_hidden_state,
+        past_key_values=outputs.past_key_values if use_cache else None,
+        hidden_states=outputs.hidden_states,
+        attentions=outputs.attentions,
+        image_hidden_states=image_features if pixel_values is not None else None,
+        audio_hidden_states=audio_features if input_features is not None else None,
+    )
+
+
+def gemma3n_lm_forward(
+    self,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    past_key_values: Optional[Cache] = None,
+    inputs_embeds: Optional[torch.FloatTensor] = None,
+    per_layer_inputs = None,
+    input_ids: Optional[torch.LongTensor] = None,  # text inputs
+    pixel_values: Optional[torch.FloatTensor] = None,  # vision inputs
+    input_features: Optional[torch.FloatTensor] = None,  # audio inputs
+    input_features_mask: Optional[torch.Tensor] = None,
+    token_type_ids: Optional[torch.LongTensor] = None,
+    cache_position: Optional[torch.LongTensor] = None,
+    labels: Optional[torch.LongTensor] = None,
+    use_cache: Optional[bool] = None,
+    output_attentions: Optional[bool] = None,
+    output_hidden_states: Optional[bool] = None,
+    logits_to_keep: Union[int, torch.Tensor] = 0,
+    **lm_kwargs,
+):
+    from transformers.models.gemma3n.modeling_gemma3n import Gemma3nCausalLMOutputWithPast
+    from optimum.exporters.onnx.model_patcher import preprocess_past_key_values, postprocess_past_key_values
+    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+    output_hidden_states = (
+        output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+    )
+    use_cache = False
+
+    if past_key_values is not None:
+        use_cache = True
+        num_atten_layers = len(past_key_values)
+        past_key_values = preprocess_past_key_values(past_key_values)
+
+    outputs = self.model(
+        input_ids=input_ids,
+        pixel_values=pixel_values,
+        input_features=input_features,
+        attention_mask=attention_mask,
+        input_features_mask=input_features_mask,
+        position_ids=position_ids,
+        past_key_values=past_key_values,
+        token_type_ids=token_type_ids,
+        cache_position=cache_position,
+        inputs_embeds=inputs_embeds,
+        labels=labels,
+        use_cache=use_cache,
+        output_attentions=output_attentions,
+        output_hidden_states=output_hidden_states,
+        return_dict=True,
+        per_layer_inputs=per_layer_inputs,
+        **lm_kwargs,
+    )
+
+    hidden_states = outputs.last_hidden_state
+    # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+    slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+    tmp_logits = self.lm_head(hidden_states[:, slice_indices, :])
+    if (final_logit_softcapping := self.config.get_text_config().final_logit_softcapping) is not None:
+        tmp_logits = tmp_logits / final_logit_softcapping
+        tmp_logits = torch.tanh(tmp_logits)
+        tmp_logits = tmp_logits * final_logit_softcapping
+
+    outputs_dict = {
+       "logits": tmp_logits,
+    }
+
+    if use_cache:
+        key_values = outputs.past_key_values
+        present_key_values = postprocess_past_key_values(key_values, ['logits', 'present.0.key', 'present.0.value', 'present.1.key', 'present.1.value', 'present.2.key', 'present.2.value', 'present.3.key', 'present.3.value', 'present.4.key', 'present.4.value', 'present.5.key', 'present.5.value', 'present.6.key', 'present.6.value', 'present.7.key', 'present.7.value', 'present.8.key', 'present.8.value', 'present.9.key', 'present.9.value', 'present.10.key', 'present.10.value', 'present.11.key', 'present.11.value', 'present.12.key', 'present.12.value', 'present.13.key', 'present.13.value', 'present.14.key', 'present.14.value', 'present.15.key', 'present.15.value', 'present.16.key', 'present.16.value', 'present.17.key', 'present.17.value', 'present.18.key', 'present.18.value', 'present.19.key', 'present.19.value'])
+        outputs_dict["past_key_values"] = present_key_values
+    return tuple([value if not isinstance(value, list) else tuple(value) for value in outputs_dict.values()])
+
+
+
 class Gemma3nLMModelPatcher(Gemma3LMModelPatcher):
+    def __init__(self, config, model, model_kwargs):
+        super().__init__(config, model, model_kwargs)
+
+        self.patched_forward = gemma3n_lm_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = gemma3n_lm_forward
+
+        self.model_orig_language_model_forward = self._model.model.forward
+
     def __enter__(self):
         super().__enter__()
+
+        setattr(self._model, self.orig_forward_name, types.MethodType(gemma3n_lm_forward, self._model))
+        setattr(self._model.model, "forward", types.MethodType(gemma3n_language_model_forward, self._model))
+
         self._model.model.language_model._orig_project_per_layer_inputs = (
             self._model.model.language_model.project_per_layer_inputs
         )
@@ -4827,6 +5000,9 @@ class Gemma3nLMModelPatcher(Gemma3LMModelPatcher):
 
         for decoder_layer in self._model.model.language_model.layers:
             decoder_layer.mlp._gaussian_topk = decoder_layer.mlp._orig_gaussian_topk
+
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+        setattr(self._model.model, "forward", self.model_orig_language_model_forward)
 
 
 class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
@@ -7983,3 +8159,78 @@ class LlamaEagle3ForCausalLM(LlamaPreTrainedModel, GenerationMixin):
             hidden_states=outputs.hidden_states,
             d2t=d2t_out,
         )
+
+
+class Gemma3nPerLayerInputsGetterModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def per_layer_inputs_forward(
+            self, input_ids: torch.Tensor) -> torch.Tensor:
+            per_layer_inputs_mask = torch.logical_and(input_ids >= 0, input_ids < self.vocab_size_per_layer_input)
+            per_layer_inputs_tokens = torch.where(per_layer_inputs_mask, input_ids, torch.zeros_like(input_ids))
+            per_layer_inputs = self.language_model.get_per_layer_inputs(per_layer_inputs_tokens)
+            return per_layer_inputs
+
+        model.forward = types.MethodType(per_layer_inputs_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+# Patched forward for MobileNetV5MultiScaleFusionAdapter (MSFA) used by the Gemma3n vision tower.
+# The original MSFA forward has data-dependent control flow that branches on tensor spatial
+# dimensions to choose between F.interpolate and F.avg_pool2d for resizing to output_resolution.
+# torch.jit.trace bakes only the path taken with dummy inputs, causing incorrect results when
+# actual inference images have different spatial dimensions.
+# This patch replaces the conditional resize with F.adaptive_avg_pool2d which:
+#   - accepts a constant output_size making it trace-friendly
+#   - is equivalent to avg_pool2d when input dims are evenly divisible by output dims
+#   - handles identity (no-op) when input dims == output dims
+# Adopted from timm.models.mobilenetv5.MobileNetV5MultiScaleFusionAdapter.forward
+def _gemma3n_msfa_forward(self, inputs: List[torch.Tensor]) -> torch.Tensor:
+    high_resolution = inputs[0].shape[-2:]
+    resized_inputs = []
+    for img in inputs:
+        feat_size = img.shape[-2:]
+        if feat_size[0] < high_resolution[0] or feat_size[1] < high_resolution[1]:
+            img = F.interpolate(img, size=high_resolution, mode=self.interpolation_mode)
+        resized_inputs.append(img)
+
+    channel_cat_imgs = torch.cat(resized_inputs, dim=1)
+    img = self.ffn(channel_cat_imgs)
+
+    # Use adaptive_avg_pool2d instead of conditional avg_pool2d / interpolate.
+    # output_resolution is a constant tuple, so this is trace-friendly.
+    img = F.adaptive_avg_pool2d(img, self.output_resolution)
+
+    img = self.norm(img)
+    return img
+
+
+class Gemma3nImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        # Patch MSFA forward to be trace-friendly
+        vision_tower = self._model.model.vision_tower
+        timm_model = vision_tower.timm_model
+        if hasattr(timm_model, "msfa") and timm_model.msfa is not None:
+            timm_model.msfa._orig_forward = timm_model.msfa.forward
+            timm_model.msfa.forward = types.MethodType(_gemma3n_msfa_forward, timm_model.msfa)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        vision_tower = self._model.model.vision_tower
+        timm_model = vision_tower.timm_model
+        if hasattr(timm_model, "msfa") and timm_model.msfa is not None and hasattr(timm_model.msfa, "_orig_forward"):
+            timm_model.msfa.forward = timm_model.msfa._orig_forward

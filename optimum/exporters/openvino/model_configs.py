@@ -202,6 +202,8 @@ from .model_patcher import (
     SanaTextEncoderModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
+    Gemma3nPerLayerInputsGetterModelPatcher,
+    Gemma3nImageEmbeddingsModelPatcher,
 )
 
 
@@ -1819,6 +1821,11 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
             dummy_inputs["token_type_ids"] = self.orig_export_config.DUMMY_INPUT_GENERATOR_CLASSES[
                 0
             ].random_int_tensor(token_type_ids_shape, min_value=0, max_value=2)
+        if "per_layer_inputs" in self.inputs:
+            per_layer_inputs_shape = (input_ids.shape[0], input_ids.shape[1], 30, 256)
+            dummy_inputs["per_layer_inputs"] = self.orig_export_config.DUMMY_INPUT_GENERATOR_CLASSES[
+                0
+            ].random_int_tensor(per_layer_inputs_shape, min_value=0, max_value=2)
         return dummy_inputs
 
 
@@ -4268,19 +4275,48 @@ class Gemma3OpenVINOConfig(BaseVLMOpenVINOConfig):
         return super().with_behavior(behavior)
 
 
+class Gemma3nConfigBehavior(str, enum.Enum):
+    VISION_EMBEDDINGS = "vision_embeddings"
+    TEXT_EMBEDDINGS = "text_embeddings"
+    LANGUAGE = "language"
+    TEXT_EMBEDDINGS_PER_LAYER = "text_embeddings_per_layer"
+
+
 @register_in_tasks_manager("gemma3n", *["image-text-to-text"], library_name="transformers")
 class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
-    def with_behavior(self, behavior: Union[str, VLMConfigBehavior]):
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in Gemma3nConfigBehavior]
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyTextInputGenerator)
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: Gemma3nConfigBehavior = Gemma3nConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+            behavior=behavior,
+        )
+        self._behavior = behavior
+
+
+    def with_behavior(self, behavior: Union[str, Gemma3nConfigBehavior]):
         """
         Creates a config for different behaviour specific to Gemma3n.
 
         For LANGUAGE behavior, this explicitly uses the Gemma3n text model_type
         instead of relying on the underlying text_config.model_type value.
         """
-        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
-            behavior = VLMConfigBehavior(behavior)
+        if isinstance(behavior, str) and not isinstance(behavior, Gemma3nConfigBehavior):
+            behavior = Gemma3nConfigBehavior(behavior)
 
-        if behavior == VLMConfigBehavior.LANGUAGE:
+        if behavior == Gemma3nConfigBehavior.LANGUAGE:
             # Force the Gemma3n-specific text model type to ensure proper behavior
             model_type = "gemma3n_text"
             return get_vlm_text_generation_config(
@@ -4289,9 +4325,110 @@ class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
                 self.int_dtype,
                 self.float_dtype,
                 model_patcher=Gemma3nLMModelPatcher,
-                inputs_update={"token_type_ids": {0: "batch_size", 1: "sequence_length"}},
+                inputs_update={"per_layer_inputs": {0: "batch_size", 1: "sequence_length"}},
             )
+        if behavior == Gemma3nConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+            config = self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+            return config
         return super().with_behavior(behavior)
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if behavior == Gemma3nConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+            import torch
+            class PerLayerInputsModule(torch.nn.Module):
+                def __init__(self, language_model, vocab_size_per_layer_input: int):
+                    super().__init__()
+                    self.language_model = language_model
+                    self.vocab_size_per_layer_input = vocab_size_per_layer_input
+
+                def forward(self, input_ids: torch.Tensor):
+                    per_layer_inputs_mask = torch.logical_and(
+                        input_ids >= 0,
+                        input_ids < self.vocab_size_per_layer_input
+                    )
+
+                    per_layer_inputs_tokens = torch.where(
+                        per_layer_inputs_mask,
+                        input_ids,
+                        torch.zeros_like(input_ids)
+                    )
+
+                    per_layer_inputs = self.language_model.get_per_layer_inputs(
+                        per_layer_inputs_tokens
+                    )
+
+                    return per_layer_inputs
+
+            model = PerLayerInputsModule(model.language_model, model.config.text_config.vocab_size_per_layer_input)
+            return model
+        #
+        # if behavior == VLMConfigBehavior.LANGUAGE:
+        #     return model.language_model
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return model
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            import torch
+            class TextEmbeddingsModule(torch.nn.Module):
+                def __init__(self, model): #, vocab_size_per_layer_input: int):
+                    super().__init__()
+                    self.model = model
+                   # self.vocab_size_per_layer_input = vocab_size_per_layer_input
+
+                def forward(self, input_ids: torch.Tensor):
+                    inputs_embeds = self.model.get_input_embeddings()(input_ids)
+                    vision_mask = torch.logical_and(
+                        input_ids >= self.model.model.embed_vision.vocab_offset, input_ids < self.model.model.embed_audio.vocab_offset
+                    )
+                    dummy_vision_token_id = self.model.model.embed_vision.vocab_offset + self.model.model.embed_vision.vocab_size - 1
+                    vision_input_ids = torch.where(vision_mask, input_ids, dummy_vision_token_id).to(
+                        inputs_embeds.device)
+                    vision_embeds = self.model.model.embed_vision(input_ids=vision_input_ids)
+                    expanded_vision_mask = vision_mask.unsqueeze(-1).expand_as(inputs_embeds)
+                    inputs_embeds = torch.where(expanded_vision_mask, vision_embeds, inputs_embeds)
+
+                    return inputs_embeds
+
+            text_embedding = TextEmbeddingsModule(model)
+            text_embedding.config = model.language_model.config
+            return text_embedding
+
+        return super().get_model_for_behavior(model, behavior)
+
+    def patch_model_for_export(self, model: Union["PreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == Gemma3nConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+            return ModelPatcher(self, model, model_kwargs)
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return Gemma3nImageEmbeddingsModelPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+
+        if self._behavior == Gemma3nConfigBehavior.LANGUAGE:
+            inputs = super().inputs
+            return inputs
+        if self._behavior == Gemma3nConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+            return {
+                "input_ids": {0: "batch_size", 1: "sequence_length"},
+            }
+        return super().inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Gemma3nConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+            return {"text_embeds_per_layer": {}}
+        return super().outputs
 
 
 class DummyVisionPositionIdsInputGenerator(DummyVisionInputGenerator):
