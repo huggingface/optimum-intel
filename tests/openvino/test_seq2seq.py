@@ -560,7 +560,16 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         # remote code models differs after transformers v4.54
         SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"llava-qwen2", "phi3_v", "phi4mm"}
 
-    REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "minicpmo", "llava-qwen2", "phi3_v", "maira2", "phi4mm", "videochat_flash_qwen"]
+    REMOTE_CODE_MODELS = [
+        "internvl_chat",
+        "minicpmv",
+        "minicpmo",
+        "llava-qwen2",
+        "phi3_v",
+        "maira2",
+        "phi4mm",
+        "videochat_flash_qwen",
+    ]
     IMAGE = Image.open(
         requests.get(
             TEST_IMAGE_URL,
@@ -632,7 +641,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         if model_arch == "videochat_flash_qwen":
-            self.skipTest("Skipping comparison against Transformers because videochat_flash_qwen in OV does not support image input")
+            self.skipTest(
+                "Skipping comparison against Transformers because videochat_flash_qwen in OV does not support image input"
+            )
+
         def compare_outputs(inputs, ov_model, transformers_model, generation_config):
             transformers_inputs = copy.deepcopy(inputs)
             ov_outputs = ov_model.generate(**inputs, generation_config=generation_config)
@@ -964,9 +976,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             )
             preprocessors = {"processor": None, "tokenizer": tokenizer, "config": config}
         elif model_arch == "videochat_flash_qwen":
+
             class VideochatProcessorWrapper:
                 def __init__(self, model_id):
                     from transformers import AutoModel
+
                     hf_model = AutoModel.from_pretrained(model_id, trust_remote_code=True)
                     self.processor = hf_model.get_vision_tower().image_processor.preprocess
                     self.model_dtype = hf_model.dtype
@@ -974,6 +988,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
                 def __call__(self, images, return_tensors):
                     return self.processor(images, return_tensors="pt")["pixel_values"].to(dtype=self.model_dtype)
+
             processor = VideochatProcessorWrapper(model_id)
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS

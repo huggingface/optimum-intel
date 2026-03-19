@@ -5308,6 +5308,7 @@ class SiglipTextOpenVINOConfig(SiglipTextOnnxConfig):
 
 class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("hidden_states", "rotary_pos_emb")
+
     def __init__(
         self,
         task: str,
@@ -5344,7 +5345,9 @@ class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
         elif input_name == "rotary_pos_emb":
             grid_h, grid_w = self.height // self.patch_size, self.width // self.patch_size
             grid_t = self.num_frames
-            return self.random_float_tensor([1, 1 + grid_h * grid_t * grid_w, self.embed_dim], framework=framework, dtype=float_dtype)
+            return self.random_float_tensor(
+                [1, 1 + grid_h * grid_t * grid_w, self.embed_dim], framework=framework, dtype=float_dtype
+            )
 
 
 class DummyVideoChatFlashQwenProjectorInputGenerator(DummyInputGenerator):
@@ -5428,8 +5431,10 @@ class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if not self._behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
             return {}
-        return {"hidden_states": {0: "batch_size", 1: "num_channels", 2: "num_frames", 3: "height", 4: "width"},
-                "rotary_pos_emb": {0: "batch_size", 1: "num_tokens",2: "hidden_size"}}
+        return {
+            "hidden_states": {0: "batch_size", 1: "num_channels", 2: "num_frames", 3: "height", 4: "width"},
+            "rotary_pos_emb": {0: "batch_size", 1: "num_tokens", 2: "hidden_size"},
+        }
 
     def with_behavior(
         self,
@@ -5455,14 +5460,10 @@ class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
             return export_config
 
         if behavior == VideoChatFlashQwenConfigBehavior.TEXT_EMBEDDINGS:
-            return get_vlm_text_embeddings_config(
-                "qwen2", self._orig_config, self.int_dtype, self.float_dtype
-            )
+            return get_vlm_text_embeddings_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
 
         if behavior == VideoChatFlashQwenConfigBehavior.LANGUAGE:
-            return get_vlm_text_generation_config(
-                "qwen2", self._orig_config, self.int_dtype, self.float_dtype
-            )
+            return get_vlm_text_generation_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
 
         if behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
@@ -5502,6 +5503,8 @@ class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
             return VideochatFlashQwenVisionEmbeddingModelPatcher(self, model, model_kwargs)
 
         return super().patch_model_for_export(model, model_kwargs)
+
+
 @register_in_tasks_manager(
     "hunyuan_v1_dense",
     *[

@@ -4807,6 +4807,7 @@ class _OVLlama4ForCausalLM(OVModelForVisualCausalLM):
 
 class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
     from transformers import AutoModel
+
     auto_model_class = AutoModel
     additional_parts = ["vision_projection"]
     IMAGE_TOKEN_INDEX = -200
@@ -4831,9 +4832,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         grid = np.stack(grid, axis=0)
 
         grid = grid.reshape([2, 1, grid_size, grid_size])
-        pos_embed_spatial = _OVVideoChatFlashQwenForCausalLM.get_2d_sincos_pos_embed_from_grid(
-            embed_dim_spatial, grid
-        )
+        pos_embed_spatial = _OVVideoChatFlashQwenForCausalLM.get_2d_sincos_pos_embed_from_grid(embed_dim_spatial, grid)
 
         # temporal
         grid_t = np.arange(t_size, dtype=np.float32)
@@ -4843,21 +4842,15 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         # concate: [T, H, W] order
         pos_embed_temporal = pos_embed_temporal[:, np.newaxis, :]
-        pos_embed_temporal = np.repeat(
-            pos_embed_temporal, grid_size**2, axis=1
-        )  # [T, H*W, D // 4]
+        pos_embed_temporal = np.repeat(pos_embed_temporal, grid_size**2, axis=1)  # [T, H*W, D // 4]
         pos_embed_spatial = pos_embed_spatial[np.newaxis, :, :]
-        pos_embed_spatial = np.repeat(
-            pos_embed_spatial, t_size, axis=0
-        )  # [T, H*W, D // 4 * 3]
+        pos_embed_spatial = np.repeat(pos_embed_spatial, t_size, axis=0)  # [T, H*W, D // 4 * 3]
 
         pos_embed = np.concatenate([pos_embed_temporal, pos_embed_spatial], axis=-1)
         pos_embed = pos_embed.reshape([-1, embed_dim])  # [T*H*W, D]
 
         if cls_token:
-            pos_embed = np.concatenate(
-                [np.zeros([1, embed_dim]), pos_embed], axis=0
-            )
+            pos_embed = np.concatenate([np.zeros([1, embed_dim]), pos_embed], axis=0)
         return pos_embed
 
     # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L141
@@ -4874,7 +4867,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         emb = np.concatenate([emb_h, emb_w], axis=1)  # (H*W, D)
         return emb
-
 
     # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L156
     def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
@@ -4911,6 +4903,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         **kwargs,
     ):
         from torch import nn
+
         super().__init__(
             language_model=language_model,
             text_embeddings=text_embeddings,
@@ -4927,25 +4920,23 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         self.num_attention_heads = 16
         self.patch_size = 14
         self.image_size = 224
-        self.grid_size = (num_frames, self.image_size // self.patch_size, self.image_size // self.patch_size) # (T, H, W)
+        self.grid_size = (
+            num_frames,
+            self.image_size // self.patch_size,
+            self.image_size // self.patch_size,
+        )  # (T, H, W)
         self.num_patches = self.grid_size[0] * self.grid_size[1] * self.grid_size[2]
         self.num_img_patches = self.grid_size[1] * self.grid_size[2]
         self.embed_dim = getattr(config, "mm_hidden_size", 1408)
         self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches + 1, self.embed_dim))
         self.img_pos_embed = nn.Parameter(torch.zeros(1, self.num_img_patches + 1, self.embed_dim))
         pos_embed = _OVVideoChatFlashQwenForCausalLM.get_3d_sincos_pos_embed(
-            self.pos_embed.shape[-1],
-            self.grid_size[1], # height & weight
-            self.grid_size[0], # t_size
-            cls_token=True
+            self.pos_embed.shape[-1], self.grid_size[1], self.grid_size[0], cls_token=True
         )
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
         img_pos_embed = _OVVideoChatFlashQwenForCausalLM.get_3d_sincos_pos_embed(
-            self.pos_embed.shape[-1],
-            self.grid_size[1], # height & weight
-            1,
-            cls_token=True
+            self.pos_embed.shape[-1], self.grid_size[1], 1, cls_token=True
         )
         self.img_pos_embed.data.copy_(torch.from_numpy(img_pos_embed).float().unsqueeze(0))
 
@@ -4984,7 +4975,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             n, t1, c = src.shape
             unm = src.gather(dim=-2, index=unm_idx.expand(n, t1 - r, c))
             src = src.gather(dim=-2, index=src_idx.expand(n, r, c))
-            dst = dst.scatter_add(-2, dst_idx.expand(n, r, c), src) # , reduce=mode)
+            dst = dst.scatter_add(-2, dst_idx.expand(n, r, c), src)  # , reduce=mode)
 
             return torch.cat([unm, dst], dim=1)
 
@@ -5006,9 +4997,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         return merge, unmerge
 
     # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L62
-    def merge_wavg(
-        merge: Callable, x: torch.Tensor, size: torch.Tensor = None
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def merge_wavg(merge: Callable, x: torch.Tensor, size: torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Applies the merge function by taking a weighted average based on token size.
         Returns the merged tensor and the new token sizes.
@@ -5034,7 +5023,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                 pos_embeds = self.img_pos_embed.detach()
             else:
                 pos_embeds = self.pos_embed.detach()
-            image_embeds = self.vision_embeddings(images, rotary_pos_emb=pos_embeds, use_image=(T == 1)).last_hidden_state
+            image_embeds = self.vision_embeddings(
+                images, rotary_pos_emb=pos_embeds, use_image=(T == 1)
+            ).last_hidden_state
             image_embeds = image_embeds[:, 1:, :]
 
             videos_features = torch.from_numpy(image_embeds) if isinstance(image_embeds, np.ndarray) else image_embeds
@@ -5064,17 +5055,14 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         dim = c // head
         for r in r_merge_list:
-            metric = x.reshape(b, p, head, dim).mean(2) # [b, p, c//head]
-            merge, _ = _OVVideoChatFlashQwenForCausalLM.bipartite_soft_matching(
-                metric,
-                r
-            )
+            metric = x.reshape(b, p, head, dim).mean(2)  # [b, p, c//head]
+            merge, _ = _OVVideoChatFlashQwenForCausalLM.bipartite_soft_matching(metric, r)
             x, size = _OVVideoChatFlashQwenForCausalLM.merge_wavg(merge, x, size)
             _, p, _ = x.shape
 
         return x
 
-    def get_vision_projection(self, x, compress=False, local_num_frames=-1): # 单帧64
+    def get_vision_projection(self, x, compress=False, local_num_frames=-1):
         height = width = self.image_size // self.patch_size
         assert height * width == x.shape[1]
 
@@ -5143,9 +5131,13 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         prompt = f"<image>\n{text}" if (image is not None or video is not None) else text
         messages = [{"role": "user", "content": prompt}]
         text_prompt = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True,
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
         )
-        input_ids = _OVVideoChatFlashQwenForCausalLM.tokenizer_image_token(text_prompt, tokenizer, _OVVideoChatFlashQwenForCausalLM.IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0)
+        input_ids = _OVVideoChatFlashQwenForCausalLM.tokenizer_image_token(
+            text_prompt, tokenizer, _OVVideoChatFlashQwenForCausalLM.IMAGE_TOKEN_INDEX, return_tensors="pt"
+        ).unsqueeze(0)
         results["input_ids"] = input_ids
 
         # preprocess video
@@ -5190,15 +5182,30 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             image_split_sizes = [image.shape[0] for image in concat_images]
             concat_images = torch.cat([image.unsqueeze(1) for image in concat_images], dim=0)
             # print("input vit image.shape:", concat_images.shape)
-            images_features = self.get_vision_embeddings(concat_images) # B_i, N, D
+            images_features = self.get_vision_embeddings(concat_images)  # B_i, N, D
             images_features = torch.split(images_features, image_split_sizes)
 
         if has_video:
             video_split_sizes = [video.shape[0] // mm_local_num_frames for video in concat_videos]
-            concat_videos = torch.cat([video.reshape(video.shape[0] // mm_local_num_frames, mm_local_num_frames, video.shape[1], video.shape[2], video.shape[3]) for video in concat_videos], dim=0)
+            concat_videos = torch.cat(
+                [
+                    video.reshape(
+                        video.shape[0] // mm_local_num_frames,
+                        mm_local_num_frames,
+                        video.shape[1],
+                        video.shape[2],
+                        video.shape[3],
+                    )
+                    for video in concat_videos
+                ],
+                dim=0,
+            )
             # print("input vit video.shape:", concat_videos.shape)
-            videos_features = self.get_vision_embeddings(concat_videos) # B_v, N, D
-            videos_features = [v.reshape(-1, v.shape[-2] // mm_local_num_frames, v.shape[-1]) for v in torch.split(videos_features, video_split_sizes)]
+            videos_features = self.get_vision_embeddings(concat_videos)  # B_v, N, D
+            videos_features = [
+                v.reshape(-1, v.shape[-2] // mm_local_num_frames, v.shape[-1])
+                for v in torch.split(videos_features, video_split_sizes)
+            ]
 
         all_videos_or_images_features = []
         img_idx = 0
@@ -5206,7 +5213,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         for idx in range(bs):
             if idx in video_idx_in_batch:
-                feat = self.get_vision_projection(videos_features[vid_idx], compress=True, local_num_frames=mm_local_num_frames)
+                feat = self.get_vision_projection(
+                    videos_features[vid_idx], compress=True, local_num_frames=mm_local_num_frames
+                )
                 vid_idx += 1
             else:
                 feat = self.get_vision_projection(images_features[img_idx], compress=False)
@@ -5240,7 +5249,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         for width, height in possible_resolutions:
             if max_resolutions != None and (width * height != patch_size * patch_size):
-                if (width * height+patch_size*patch_size) > max_resolutions: # NOTE 要算一个global
+                if (width * height + patch_size * patch_size) > max_resolutions:  # NOTE 要算一个global
                     continue
             # Calculate the downscaled size to keep the aspect ratio
             scale = min(width / original_width, height / original_height)
@@ -5250,7 +5259,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             effective_resolution = min(downscaled_width * downscaled_height, original_width * original_height)
             wasted_resolution = (width * height) - effective_resolution
 
-            if effective_resolution > max_effective_resolution or (effective_resolution == max_effective_resolution and wasted_resolution < min_wasted_resolution):
+            if effective_resolution > max_effective_resolution or (
+                effective_resolution == max_effective_resolution and wasted_resolution < min_wasted_resolution
+            ):
                 max_effective_resolution = effective_resolution
                 min_wasted_resolution = wasted_resolution
                 best_fit = (width, height)
@@ -5279,14 +5290,20 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             range_start = tuple(map(int, matches[0]))
             range_end = tuple(map(int, matches[-1]))
             # Generate a matrix of tuples from (range_start[0], range_start[1]) to (range_end[0], range_end[1])
-            grid_pinpoints = [(i, j) for i in range(range_start[0], range_end[0] + 1) for j in range(range_start[1], range_end[1] + 1)]
+            grid_pinpoints = [
+                (i, j)
+                for i in range(range_start[0], range_end[0] + 1)
+                for j in range(range_start[1], range_end[1] + 1)
+            ]
             # Multiply all elements by patch_size
             grid_pinpoints = [[dim * patch_size for dim in pair] for pair in grid_pinpoints]
         if type(grid_pinpoints) is list:
             possible_resolutions = grid_pinpoints
         else:
             possible_resolutions = ast.literal_eval(grid_pinpoints)
-        width, height = _OVVideoChatFlashQwenForCausalLM.select_best_resolution(image_size, possible_resolutions, max_resolutions=max_resolutions, patch_size=patch_size)
+        width, height = _OVVideoChatFlashQwenForCausalLM.select_best_resolution(
+            image_size, possible_resolutions, max_resolutions=max_resolutions, patch_size=patch_size
+        )
 
         # print("get width/patch size", width, patch_size, flush=True)
 
@@ -5307,7 +5324,16 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         return text_embed
 
     # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/modeling_videochat_flash.py#L183
-    def get_multimodal_embeddings(self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, modalities=["image"], image_sizes=None, **kwargs):
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        modalities=["image"],
+        image_sizes=None,
+        **kwargs,
+    ):
         images = pixel_values
 
         if images is None:
@@ -5338,7 +5364,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         frame_aspect_ratio = getattr(self.config, "frame_aspect_ratio", "square")
         mm_newline_position = getattr(self.config, "mm_newline_position", "nothing")
 
-        if vision_encode_type == "video_image": # video backbone, process video with compress
+        if vision_encode_type == "video_image":  # video backbone, process video with compress
             image_features = self.encode_video_image(images_list, video_idx_in_batch=video_idx_in_batch)
         else:
             raise NotImplementedError(vision_encode_type)
@@ -5357,13 +5383,17 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                         frame_feature = image_feature
 
                     if "pad" in mm_patch_merge_type:
-                        if mm_newline_position == 'one_token':
+                        if mm_newline_position == "one_token":
                             frame_feature = frame_feature.flatten(0, 1)
                             if "unpad" in mm_patch_merge_type:
-                                frame_feature = torch.cat((frame_feature, self.model.image_newline[None].to(frame_feature.device)), dim=0)
+                                frame_feature = torch.cat(
+                                    (frame_feature, self.model.image_newline[None].to(frame_feature.device)), dim=0
+                                )
                             else:
-                                frame_feature = torch.cat((frame_feature, self.model.frame_newline[None].to(frame_feature.device)), dim=0)
-                        elif mm_newline_position == 'nothing':
+                                frame_feature = torch.cat(
+                                    (frame_feature, self.model.frame_newline[None].to(frame_feature.device)), dim=0
+                                )
+                        elif mm_newline_position == "nothing":
                             frame_feature = frame_feature.flatten(0, 1)
                         else:
                             raise NotImplementedError("add pad please!!")
@@ -5379,7 +5409,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                     origin_size = image_feature.shape
 
                     height = width = 8
-                    assert height * width == base_image_feature.shape[0], f"height:{height}, width: {width}, base_image_feature: {base_image_feature.shape}"
+                    assert (
+                        height * width == base_image_feature.shape[0]
+                    ), f"height:{height}, width: {width}, base_image_feature: {base_image_feature.shape}"
 
                     if "anyres_max" in image_aspect_ratio:
                         matched_anyres_max_num_patches = re.match(r"anyres_max_(\d+)", image_aspect_ratio)
@@ -5389,7 +5421,15 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                     if "anyres" in image_aspect_ratio:
                         vision_tower_image_size = 224
                         try:
-                            num_patch_width, num_patch_height = _OVVideoChatFlashQwenForCausalLM.get_anyres_image_grid_shape(image_sizes[image_idx], self.config.image_grid_pinpoints, vision_tower_image_size, max_resolutions=None)
+                            (
+                                num_patch_width,
+                                num_patch_height,
+                            ) = _OVVideoChatFlashQwenForCausalLM.get_anyres_image_grid_shape(
+                                image_sizes[image_idx],
+                                self.config.image_grid_pinpoints,
+                                vision_tower_image_size,
+                                max_resolutions=None,
+                            )
                         except Exception as e:
                             print(f"Error: {e}")
                             raise e
@@ -5402,7 +5442,11 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
                     if "maxpool2x2" in mm_patch_merge_type:
                         raise NotImplementedError
-                    elif "unpad" in mm_patch_merge_type and "anyres_max" in image_aspect_ratio and matched_anyres_max_num_patches:
+                    elif (
+                        "unpad" in mm_patch_merge_type
+                        and "anyres_max" in image_aspect_ratio
+                        and matched_anyres_max_num_patches
+                    ):
                         raise NotImplementedError
                     elif "unpad" in mm_patch_merge_type:
                         raise NotImplementedError
@@ -5415,7 +5459,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                         try:
                             image_feature = torch.cat((base_image_feature, image_feature), dim=0)
                         except Exception as e:
-                            raise ValueError(f"{num_patch_width} {num_patch_height} now: base_image_feature: {base_image_feature.shape}, {image_feature.shape}, image_sizes[image_idx]: {image_sizes[image_idx]}, origin_size: {origin_size}, {image_sizes[image_idx]}, {self.config.image_grid_pinpoints}, {vision_tower_image_size}")
+                            raise ValueError(
+                                f"{num_patch_width} {num_patch_height} now: base_image_feature: {base_image_feature.shape}, {image_feature.shape}, image_sizes[image_idx]: {image_sizes[image_idx]}, origin_size: {origin_size}, {image_sizes[image_idx]}, {self.config.image_grid_pinpoints}, {vision_tower_image_size}"
+                            )
                 else:  # single image operations
                     image_feature = image_feature[0]
                     if "unpad" in mm_patch_merge_type:
@@ -5444,7 +5490,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         if position_ids is None:
             position_ids = torch.arange(0, input_ids.shape[1], dtype=torch.long, device=input_ids.device)
 
-        input_ids = [cur_input_ids[cur_attention_mask] for cur_input_ids, cur_attention_mask in zip(input_ids, attention_mask)]
+        input_ids = [
+            cur_input_ids[cur_attention_mask] for cur_input_ids, cur_attention_mask in zip(input_ids, attention_mask)
+        ]
 
         new_input_embeds = []
         cur_image_idx = 0
@@ -5453,8 +5501,12 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         if mm_llm_compress:
             self.language_model.model.llm_compress_type = getattr(self.config, "llm_compress_type", "attention")
-            self.language_model.model.llm_compress_layer_list = getattr(self.config, "llm_compress_layer_list", [8, 16, 24])
-            self.language_model.model.llm_image_token_ratio_list = getattr(self.config, "llm_image_token_ratio_list", [1.0, 0.5, 0.25, 0.125])
+            self.language_model.model.llm_compress_layer_list = getattr(
+                self.config, "llm_compress_layer_list", [8, 16, 24]
+            )
+            self.language_model.model.llm_image_token_ratio_list = getattr(
+                self.config, "llm_image_token_ratio_list", [1.0, 0.5, 0.25, 0.125]
+            )
             first_image_token_position = []
             text_prompt_lens = []
         else:
@@ -5471,7 +5523,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             if mm_llm_compress:
                 ####### copy from pdrop, only support single image/video NOTE ##################
                 # record image position for further dropping
-                image_index = torch.where(cur_input_ids == _OVVideoChatFlashQwenForCausalLM.IMAGE_TOKEN_INDEX)[0].tolist()
+                image_index = torch.where(cur_input_ids == _OVVideoChatFlashQwenForCausalLM.IMAGE_TOKEN_INDEX)[
+                    0
+                ].tolist()
                 assert len(image_index) == 1, f"Only support singe/video: {image_index}"
                 if image_index == []:
                     first_image_token_position.append(-1)
@@ -5484,7 +5538,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                         assert num_images == 0, num_images
                     else:
                         assert num_images == 1, f"num_images={num_images}"
-                    text_prompt_lens.append(cur_input_ids.shape[0] - num_images)   # consider image place holder
+                    text_prompt_lens.append(cur_input_ids.shape[0] - num_images)  # consider image place holder
 
                 ###############################################
 
@@ -5497,7 +5551,11 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                 cur_image_idx += 1
                 continue
 
-            image_token_indices = [-1] + torch.where(cur_input_ids == _OVVideoChatFlashQwenForCausalLM.IMAGE_TOKEN_INDEX)[0].tolist() + [cur_input_ids.shape[0]]
+            image_token_indices = (
+                [-1]
+                + torch.where(cur_input_ids == _OVVideoChatFlashQwenForCausalLM.IMAGE_TOKEN_INDEX)[0].tolist()
+                + [cur_input_ids.shape[0]]
+            )
             cur_input_ids_noim = []
             for i in range(len(image_token_indices) - 1):
                 cur_input_ids_noim.append(cur_input_ids[image_token_indices[i] + 1 : image_token_indices[i + 1]])
@@ -5524,11 +5582,12 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
             new_input_embeds.append(cur_new_input_embeds)
 
-
         if mm_llm_compress:
             self.language_model.model.first_image_token_position = first_image_token_position
             self.language_model.model.text_prompt_lens = text_prompt_lens
-            self.language_model.model.num_image_token_lens = [image_feature.shape[0] for image_feature in image_features]
+            self.language_model.model.num_image_token_lens = [
+                image_feature.shape[0] for image_feature in image_features
+            ]
 
         # Truncate sequences to max length as image embeddings can make the sequence longer
         tokenizer_model_max_length = getattr(self.config, "tokenizer_model_max_length", None)
@@ -5548,15 +5607,43 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         for i, cur_new_embed in enumerate(new_input_embeds):
             cur_len = cur_new_embed.shape[0]
             if getattr(self.config, "tokenizer_padding_side", "right") == "left":
-                new_input_embeds_padded.append(torch.cat((torch.zeros((max_len - cur_len, cur_new_embed.shape[1]), dtype=cur_new_embed.dtype, device=cur_new_embed.device), cur_new_embed), dim=0))
+                new_input_embeds_padded.append(
+                    torch.cat(
+                        (
+                            torch.zeros(
+                                (max_len - cur_len, cur_new_embed.shape[1]),
+                                dtype=cur_new_embed.dtype,
+                                device=cur_new_embed.device,
+                            ),
+                            cur_new_embed,
+                        ),
+                        dim=0,
+                    )
+                )
                 if cur_len > 0:
                     attention_mask[i, -cur_len:] = True
-                    position_ids[i, -cur_len:] = torch.arange(0, cur_len, dtype=position_ids.dtype, device=position_ids.device)
+                    position_ids[i, -cur_len:] = torch.arange(
+                        0, cur_len, dtype=position_ids.dtype, device=position_ids.device
+                    )
             else:
-                new_input_embeds_padded.append(torch.cat((cur_new_embed, torch.zeros((max_len - cur_len, cur_new_embed.shape[1]), dtype=cur_new_embed.dtype, device=cur_new_embed.device)), dim=0))
+                new_input_embeds_padded.append(
+                    torch.cat(
+                        (
+                            cur_new_embed,
+                            torch.zeros(
+                                (max_len - cur_len, cur_new_embed.shape[1]),
+                                dtype=cur_new_embed.dtype,
+                                device=cur_new_embed.device,
+                            ),
+                        ),
+                        dim=0,
+                    )
+                )
                 if cur_len > 0:
                     attention_mask[i, :cur_len] = True
-                    position_ids[i, :cur_len] = torch.arange(0, cur_len, dtype=position_ids.dtype, device=position_ids.device)
+                    position_ids[i, :cur_len] = torch.arange(
+                        0, cur_len, dtype=position_ids.dtype, device=position_ids.device
+                    )
 
         new_input_embeds = torch.stack(new_input_embeds_padded, dim=0)
         # print("tokenizer padding")

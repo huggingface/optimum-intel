@@ -7669,7 +7669,11 @@ class VideochatFlashQwenVisionEmbeddingModelPatcher(ModelPatcher):
                         # (1, num_img_patches + 1, embed_dim)
                         cls_pos_embed = self.pos_embed[:, 0:1, :]
 
-                        img_pos_embed = self.pos_embed[:, 1:, :].view(1, self.num_frames, self.patch_embed.num_patches // self.num_frames, self.embed_dim).mean(dim=1)
+                        img_pos_embed = (
+                            self.pos_embed[:, 1:, :]
+                            .view(1, self.num_frames, self.patch_embed.num_patches // self.num_frames, self.embed_dim)
+                            .mean(dim=1)
+                        )
 
                         rotary_pos_emb = torch.cat([cls_pos_embed, img_pos_embed], dim=1)
                 else:
@@ -7768,6 +7772,7 @@ class VideochatFlashQwenLanguageModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
+
 
 # adopted from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/llama/modeling_llama.py#L197
 class LlamaEagle3Attention(LlamaAttention):
