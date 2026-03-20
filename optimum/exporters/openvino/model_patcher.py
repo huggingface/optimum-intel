@@ -54,7 +54,12 @@ from optimum.exporters.onnx.model_patcher import (
     override_arguments,
     sdpa_mask_without_vmap,
 )
-from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_version, is_transformers_version
+from optimum.intel.utils.import_utils import (
+    is_diffusers_version,
+    is_openvino_version,
+    is_torch_version,
+    is_transformers_version,
+)
 
 from ._ov_ops import convert_recurrent_attention_cell
 
@@ -3797,19 +3802,16 @@ class DeepseekPatcher(OVDecoderModelPatcher):
                     dim=0,
                 )
 
-                # Handle OpenVINO version check with proper version string parsing
+                # Handle OpenVINO version check
                 import re
                 import warnings
-
-                from packaging import version
 
                 import openvino as ov
 
                 ov_version_str = ov.__version__
                 version_match = re.match(r'(\d+\.\d+\.\d+)', ov_version_str)
                 if version_match:
-                    ov_version = version.parse(version_match.group(1))
-                    if ov_version <= version.parse("2026.0.0"):
+                    if is_openvino_version("<=", "2026.0.0"):
                         warnings.warn(
                             "This model works best with OpenVINO 2026.1 or later. "
                             "Earlier versions require float() conversion for MoE weights, "
