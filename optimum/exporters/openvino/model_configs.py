@@ -1738,7 +1738,7 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
         return dummy_inputs
 
 
-class InputEmbedOpenvVINOConfig(TextDecoderOnnxConfig):
+class InputEmbedOpenVINOConfig(TextDecoderOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = InputEmbeddingPatcher
 
@@ -1781,8 +1781,8 @@ def get_vlm_internal_text_generation_config(model_type, model_config, int_dtype,
 
 def get_vlm_text_embeddings_config(model_type, model_config, int_dtype, float_dtype):
     internal_export_config = get_vlm_internal_text_generation_config(model_type, model_config, int_dtype, float_dtype)
-    InputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
-    export_config = InputEmbedOpenvVINOConfig(
+    InputEmbedOpenVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
+    export_config = InputEmbedOpenVINOConfig(
         model_config,
         task="feature-extraction",
         int_dtype=int_dtype,
