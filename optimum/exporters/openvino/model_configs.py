@@ -3919,11 +3919,10 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
         model_kwargs = model_kwargs or {}
         if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return Qwen3VLVisionEmbMergerPatcher(self, model, model_kwargs)
-        if (
-            self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS
-            or self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS
-        ):
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
             return ModelPatcher(self, model, model_kwargs=model_kwargs)
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
+            return InputEmbeddingPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
 
     @property

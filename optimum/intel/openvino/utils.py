@@ -95,6 +95,7 @@ OV_TO_PT_TYPE = {
     "f16": torch.float16,
     "f32": torch.float32,
     "f64": torch.float64,
+    "bf16": torch.bfloat16,
 }
 
 if is_torch_version(">=", "2.4.0"):
