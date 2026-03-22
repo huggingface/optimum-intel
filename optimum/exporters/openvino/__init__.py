@@ -15,7 +15,7 @@
 import optimum.exporters.openvino.model_configs
 
 from .__main__ import main_export
-from .convert import export, export_from_model, export_models, export_pytorch_via_onnx
+from .convert import export, export_from_model, export_models, export_pytorch_via_onnx, _resolve_flux_text_encoder_model_type
 from .stateful import ensure_stateful_is_available, patch_stateful
 
 
