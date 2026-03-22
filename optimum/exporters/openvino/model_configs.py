@@ -2533,6 +2533,27 @@ class DcaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
         }
 
 
+def _get_flux_ids_dim(config) -> int:
+    for attr_name in ("axes_dims_rope", "axes_dim", "axes_dims"):
+        value = getattr(config, attr_name, None)
+        if value is not None:
+            if isinstance(value, (list, tuple)):
+                return len(value)
+            if isinstance(value, int):
+                return value
+
+    if hasattr(config, "get"):
+        for key in ("axes_dims_rope", "axes_dim", "axes_dims"):
+            value = config.get(key, None)
+            if value is not None:
+                if isinstance(value, (list, tuple)):
+                    return len(value)
+                if isinstance(value, int):
+                    return value
+
+    return 3
+
+
 class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = (
         "pixel_values",
@@ -2551,12 +2572,12 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
         num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
         width: int = DEFAULT_DUMMY_SHAPES["width"] // 4,
         height: int = DEFAULT_DUMMY_SHAPES["height"] // 4,
-        # Reduce img shape by 4 for FLUX to reduce memory usage on conversion
         **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
         if getattr(normalized_config, "in_channels", None):
             self.num_channels = normalized_config.in_channels // 4
+        self.ids_dim = _get_flux_ids_dim(normalized_config.config)
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name in ["hidden_states", "sample"]:
@@ -2567,9 +2588,9 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
             img_ids_width = self.width // 2
             return self.random_int_tensor(
                 (
-                    [self.batch_size, img_ids_height * img_ids_width, 3]
+                    [self.batch_size, img_ids_height * img_ids_width, self.ids_dim]
                     if is_diffusers_version("<", "0.31.0")
-                    else [img_ids_height * img_ids_width, 3]
+                    else [img_ids_height * img_ids_width, self.ids_dim]
                 ),
                 min_value=0,
                 max_value=min(img_ids_height, img_ids_width),
@@ -2589,14 +2610,35 @@ class DummyFluxTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
         "txt_ids",
     )
 
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+            **kwargs,
+        )
+        self.ids_dim = _get_flux_ids_dim(normalized_config.config)
+
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "txt_ids":
             import torch
 
             shape = (
-                [self.batch_size, self.sequence_length, 3]
+                [self.batch_size, self.sequence_length, self.ids_dim]
                 if is_diffusers_version("<", "0.31.0")
-                else [self.sequence_length, 3]
+                else [self.sequence_length, self.ids_dim]
             )
             dtype = DTYPE_MAPPER.pt(float_dtype)
             return torch.full(shape, 0, dtype=dtype)
@@ -2614,10 +2656,38 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
     )
     _MODEL_PATCHER = FluxTransfromerModelPatcher
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        config = self._normalized_config.config
+        pooled_projection_dim = getattr(config, "pooled_projection_dim", None)
+        if pooled_projection_dim is None and hasattr(config, "get"):
+            pooled_projection_dim = config.get("pooled_projection_dim", None)
+
+        self._use_pooled_projections = pooled_projection_dim is not None
+
+        if self._use_pooled_projections:
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (
+                DummyTransformerTimestpsInputGenerator,
+                DummyFluxTransformerInputGenerator,
+                DummyFluxTextInputGenerator,
+                PooledProjectionsDummyInputGenerator,
+            )
+        else:
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (
+                DummyTransformerTimestpsInputGenerator,
+                DummyFluxTransformerInputGenerator,
+                DummyFluxTextInputGenerator,
+            )
+
     @property
     def inputs(self):
         common_inputs = super().inputs
         common_inputs.pop("sample", None)
+
+        if not getattr(self, "_use_pooled_projections", True):
+            common_inputs.pop("pooled_projections", None)
+
         common_inputs["hidden_states"] = {0: "batch_size", 1: "packed_height_width"}
         common_inputs["txt_ids"] = (
             {0: "batch_size", 1: "sequence_length"} if is_diffusers_version("<", "0.31.0") else {0: "sequence_length"}
