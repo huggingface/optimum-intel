@@ -190,7 +190,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             if past_len:
                 position_ids = position_ids[:, -inputs_embeds.shape[1] :]
 
-            if (self.config.model_type in ["qwen2_vl", "qwen3_vl", "qwen3_5"]) and position_ids.ndim != 3:
+            if (self.config.model_type in ["qwen2_vl", "qwen3_vl", "qwen3_5", "qwen3_5_moe"]) and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
 
             inputs["position_ids"] = position_ids
@@ -3462,6 +3462,20 @@ else:
     class Qwen3_5VisionRotaryEmbedding:
         pass
 
+
+if is_transformers_version(">=", "5.2.0"):
+    from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
+        Qwen3_5MoeModel,
+        Qwen3_5MoeVisionModel,
+    )
+else:
+
+    class Qwen3_5MoeModel:
+        pass
+
+    class Qwen3_5MoeVisionModel:
+        pass
+
 # The inheritance from Qwen3VLModel is needed to get access to methods:
 # get_placeholder_mask(): https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1066
 # get_rope_index(): https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L916
@@ -5196,5 +5210,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_vl": _OVQwen3VLForCausalLM,
     "qwen3_5": _OVQwen3_5ForCausalLM,
     "qwen3_5_text": _OVQwen3_5ForCausalLM,
+    "qwen3_5_moe": _OVQwen3_5ForCausalLM,
+    "qwen3_5_moe_text": _OVQwen3_5ForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
 }

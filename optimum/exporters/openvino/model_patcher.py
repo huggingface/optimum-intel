@@ -8740,3 +8740,71 @@ class Qwen3_5VisionEmbMergerPatcher(ModelPatcher):
             block.forward = block._orig_forward
             block.attn.forward = block.attn._orig_forward
 
+
+def patched_qwen3_5_moe_sparse_moe_block(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    num_experts = self.experts.num_experts
+    batch_size, sequence_length, hidden_dim = hidden_states.shape
+    hidden_states = hidden_states.view(-1, hidden_dim)
+
+    # router returns (logits, scores, indices)
+    _, routing_weights, selected_experts = self.gate(hidden_states)
+
+    new_routing_weights = torch.zeros(batch_size * sequence_length, num_experts, dtype=routing_weights.dtype)
+    new_routing_weights.scatter_(dim=1, index=selected_experts, src=routing_weights)
+
+    shared_expert_output = self.shared_expert(hidden_states)
+    shared_expert_output = torch.sigmoid(self.shared_expert_gate(hidden_states)) * shared_expert_output
+
+    hidden_states = hidden_states.repeat(num_experts, 1)
+    hidden_states = hidden_states.view(num_experts, -1, hidden_dim)
+    act_fn = self.experts.act_fn
+
+    # compute experts outputs in a vectorized form using torch.bmm
+    gate = torch.bmm(hidden_states, self.gate_projs.transpose(1, 2))
+    up = torch.bmm(hidden_states, self.up_projs.transpose(1, 2))
+    gate_up = act_fn(gate) * up
+    next_states = torch.bmm(gate_up, self.down_projs.transpose(1, 2))
+    next_states = next_states.view(num_experts, batch_size, -1, hidden_dim)
+    next_states = next_states * new_routing_weights.transpose(0, 1).view(num_experts, batch_size, -1)[..., None]
+    next_states = next_states.sum(dim=0)
+
+    shared_expert_output = shared_expert_output.view(batch_size, -1, hidden_dim)
+    output = shared_expert_output + next_states
+    return output.view(batch_size, sequence_length, hidden_dim)
+
+
+class Qwen3_5MoeModelPatcher(Qwen3_5ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import Qwen3_5MoeSparseMoeBlock
+
+        super().__enter__()
+        for decoder_layer in self._text_model.layers:
+            if isinstance(decoder_layer.mlp, Qwen3_5MoeSparseMoeBlock):
+                sparse_moe_block = decoder_layer.mlp
+                intermediate_dim = sparse_moe_block.experts.intermediate_dim
+                sparse_moe_block._orig_forward = sparse_moe_block.forward
+                sparse_moe_block.forward = types.MethodType(patched_qwen3_5_moe_sparse_moe_block, sparse_moe_block)
+                # TODO: remove `float()` casting when CVS-181449 is fixed
+                # now it is needed to have MoE optimizations to be applied
+                sparse_moe_block.gate_projs = sparse_moe_block.experts.gate_up_proj[:, :intermediate_dim, :].float()
+                sparse_moe_block.up_projs = sparse_moe_block.experts.gate_up_proj[:, intermediate_dim:, :].float()
+                sparse_moe_block.down_projs = sparse_moe_block.experts.down_proj.data.float()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import Qwen3_5MoeSparseMoeBlock
+
+        super().__exit__(exc_type, exc_value, traceback)
+        for decoder_layer in self._text_model.layers:
+            if isinstance(decoder_layer.mlp, Qwen3_5MoeSparseMoeBlock):
+                sparse_moe_block = decoder_layer.mlp
+                sparse_moe_block.forward = sparse_moe_block._orig_forward
+                del sparse_moe_block.gate_projs, sparse_moe_block.up_projs, sparse_moe_block.down_projs
+
