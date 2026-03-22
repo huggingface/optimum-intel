@@ -20,7 +20,6 @@ import torch
 from parameterized import parameterized
 from sentence_transformers import SentenceTransformer, models
 from transformers import AutoConfig, AutoTokenizer, GenerationConfig
-from transformers.utils import FrozenDict
 from utils_tests import (
     MODEL_NAMES,
     OPENVINO_DEVICE,
@@ -343,8 +342,8 @@ class Flux2KleinSupportUnitTest(unittest.TestCase):
 
         self.assertEqual(_get_flux_ids_dim(Cfg()), 4)
 
-    def test_get_flux_ids_dim_from_frozendict_axes_dims_rope_list(self):
-        cfg = FrozenDict({"axes_dims_rope": [16, 56, 56, 8]})
+    def test_get_flux_ids_dim_from_dict_axes_dims_rope_list(self):
+        cfg = {"axes_dims_rope": [16, 56, 56, 8]}
         self.assertEqual(_get_flux_ids_dim(cfg), 4)
 
     def test_get_flux_ids_dim_default_fallback(self):
