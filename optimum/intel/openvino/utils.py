@@ -209,6 +209,11 @@ PREDEFINED_SPEECH_TO_TEXT_DATASETS = {
         "id": "speechcolab/aishell",
         "split": "validation",
         "streaming": True,
+    },
+    "aishell-1": {
+        "id": "speechcolab/aishell",
+        "split": "validation",
+        "streaming": True,
     }
 }
 
