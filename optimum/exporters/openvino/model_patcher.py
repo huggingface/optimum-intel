@@ -4140,9 +4140,7 @@ def deepseek_moe_infer(self, x, topk_ids, topk_weight):
 
 def deepseek_moe(self, hidden_states: torch.Tensor, topk_indices: torch.Tensor, topk_weights: torch.Tensor):
     """
-    Replacement for DeepseekV3MoE.moe (transformers >= 4.57).
-    The original skips experts with no tokens (data-dependent control flow that breaks tracing).
-    This version unconditionally runs all experts to produce a traceable static graph.
+    Vectorized MoE forward for DeepSeek-V3.
     """
     num_experts = len(self.experts)
     batch_tokens, hidden_dim = hidden_states.shape
