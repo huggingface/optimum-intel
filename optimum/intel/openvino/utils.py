@@ -317,9 +317,7 @@ def np_to_pt_generators(np_object, device):
 def ensure_numpy(x):
     if x is None:
         return None
-    if isinstance(x, np.ndarray):
-        return x
-    if isinstance(x, torch.Tensor):
+    if not isinstance(x, np.ndarray):
         return x.cpu().numpy()
     return x
 
