@@ -732,7 +732,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         transformers_model.config.eos_token_id = None
         ov_model.generation_config.do_sample = False
         # minicpmo diverges after 20 tokens
-        tokens_to_generate = 20 if model_arch in ["minicpmo", "mistral3"] else 30
+        tokens_to_generate = 20 if model_arch == "minicpmo" else 30
         gen_config = GenerationConfig(
             max_new_tokens=tokens_to_generate,
             min_new_tokens=tokens_to_generate,
