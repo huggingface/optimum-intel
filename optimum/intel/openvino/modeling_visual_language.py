@@ -5339,12 +5339,12 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         if images is None:
             inputs_embeds = self.get_text_embeddings(input_ids)
             return inputs_embeds, attention_mask, position_ids
-        else:
-            modalities = ["video"]
 
         # rank_print(modalities)
         if type(images) is list:
             images = [x.unsqueeze(0) if x.ndim == 3 else x for x in images]
+            if images[0].shape[0] > 1:
+                modalities = ["video"]
 
         video_idx_in_batch = []
         for _ in range(len(modalities)):
@@ -5374,9 +5374,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         elif mm_patch_merge_type.startswith("spatial"):
             new_image_features = []
             for image_idx, image_feature in enumerate(image_features):
-
                 if image_idx in video_idx_in_batch:  # video operations
-
                     if "anyres" in frame_aspect_ratio:
                         raise NotImplementedError
                     else:
