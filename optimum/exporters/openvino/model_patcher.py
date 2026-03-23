@@ -3807,7 +3807,7 @@ class DeepseekPatcher(OVDecoderModelPatcher):
 
                 if is_openvino_version("<", "2026.1.0"):
                     warnings.warn(
-                        "This model works best with OpenVINO 2026.1 or later. "
+                        "This model works best with OpenVINO 2026.0 or later. "
                         "Earlier versions require float() conversion for MoE weights, "
                         "which may affect performance. "
                         "OpenVINO 2026.1 includes a fix for torch.bmm dtype handling."
