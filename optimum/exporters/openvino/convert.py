@@ -1319,12 +1319,19 @@ def _resolve_flux_text_encoder_model_type(text_encoder, default_model_type: str,
         model_type in {"gemma", "gemma2", "gemma3", "gemma3_text"}
         or any("Gemma" in arch for arch in architectures)
         or "Gemma" in encoder_cls_name
-        or "CausalLM" in encoder_cls_name
         or "Gemma" in tokenizer_cls_name
     )
-
     if looks_like_gemma:
         return "gemma2-text-encoder"
+
+    looks_like_qwen = (
+        model_type in {"qwen", "qwen2", "qwen3"}
+        or any("Qwen" in arch for arch in architectures)
+        or "Qwen" in encoder_cls_name
+        or "Qwen" in tokenizer_cls_name
+    )
+    if looks_like_qwen:
+        return "qwen3-text-encoder"
 
     return default_model_type
 
@@ -1345,10 +1352,18 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
             getattr(pipeline, "tokenizer", None),
         )
 
+        text_encoder_library_name = "diffusers"
+        if text_encoder_model_type in {"qwen3", "qwen2", "qwen"}:
+            text_encoder_library_name = "transformers"
+
+        if hasattr(text_encoder_for_export, "config"):
+            text_encoder_for_export.config.output_hidden_states = True
+            text_encoder_for_export.config.return_dict = True
+
         text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
             model=text_encoder_for_export,
             exporter=exporter,
-            library_name="diffusers",
+            library_name=text_encoder_library_name,
             task="feature-extraction",
             model_type=text_encoder_model_type,
         )
@@ -1379,8 +1394,14 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     transformer_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["transformer"] = (transformer, transformer_export_config)
 
+    vae_scaling_factor = None
+    if hasattr(pipeline, "vae") and hasattr(pipeline.vae, "config"):
+        vae_scaling_factor = getattr(pipeline.vae.config, "scaling_factor", None)
+
     # VAE Encoder
     vae_encoder = copy.deepcopy(pipeline.vae)
+    if vae_scaling_factor is not None:
+        vae_encoder.register_to_config(scaling_factor=float(vae_scaling_factor))
     vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
     vae_config_constructor = TasksManager.get_exporter_config_constructor(
         model=vae_encoder,
@@ -1397,6 +1418,8 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
 
     # VAE Decoder
     vae_decoder = copy.deepcopy(pipeline.vae)
+    if vae_scaling_factor is not None:
+        vae_decoder.register_to_config(scaling_factor=float(vae_scaling_factor))
     if hasattr(vae_decoder, "bn") and hasattr(vae_decoder.bn, "running_mean") and hasattr(vae_decoder.bn, "running_var"):
         vae_decoder.register_to_config(
             **{

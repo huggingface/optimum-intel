@@ -1178,13 +1178,13 @@ class OVModelTextEncoder(OVPipelinePart):
         self.input_names = [inp.get_any_name() for inp in self.model.inputs]
 
     def forward(
-        self,
-        input_ids: Union[np.ndarray, torch.Tensor],
-        attention_mask: Optional[Union[np.ndarray, torch.Tensor]] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: bool = False,
-        **kwargs,
-    ):
+    self,
+    input_ids: Union[np.ndarray, torch.Tensor],
+    attention_mask: Optional[Union[np.ndarray, torch.Tensor]] = None,
+    output_hidden_states: Optional[bool] = None,
+    return_dict: bool = False,
+    **kwargs,
+):
         self.compile()
         model_inputs = {"input_ids": input_ids}
 
@@ -1195,30 +1195,34 @@ class OVModelTextEncoder(OVPipelinePart):
         main_out = ov_outputs[0]
         model_outputs = {}
         model_outputs[self.model.outputs[0].get_any_name()] = torch.from_numpy(main_out)
+
         if len(self.model.outputs) > 1 and "pooler_output" in self.model.outputs[1].get_any_name():
             model_outputs["pooler_output"] = torch.from_numpy(ov_outputs[1])
+
         request_hidden_states = bool(output_hidden_states) or bool(kwargs.get("output_hidden_states", False))
-        expected_hidden_states_count = getattr(self.config, "num_hidden_layers", None)
-        if expected_hidden_states_count is None:
-            expected_hidden_states_count = getattr(self.config, "n_layer", None)
-        if expected_hidden_states_count is None:
-            expected_hidden_states_count = 1
-        else:
-            expected_hidden_states_count = int(expected_hidden_states_count) + 1
 
         if self.hidden_states_output_names and "last_hidden_state" not in model_outputs:
             model_outputs["last_hidden_state"] = torch.from_numpy(ov_outputs[self.hidden_states_output_names[-1]])
 
-        if self.hidden_states_output_names:
-            hidden_states = [torch.from_numpy(ov_outputs[out_name]) for out_name in self.hidden_states_output_names]
-            target_len = max(expected_hidden_states_count, len(hidden_states))
-            if len(hidden_states) < target_len:
-                hidden_states.extend([hidden_states[-1]] * (target_len - len(hidden_states)))
+        if request_hidden_states or getattr(self.config, "output_hidden_states", False):
+            hidden_states = []
 
-            if request_hidden_states or getattr(self.config, "output_hidden_states", False):
+            if self.hidden_states_output_names:
+                hidden_states = [torch.from_numpy(ov_outputs[out_name]) for out_name in self.hidden_states_output_names]
+            else:
+                for i, out in enumerate(self.model.outputs):
+                    if i == 0:
+                        continue
+                    out_name = out.get_any_name()
+                    if "pooler_output" in out_name:
+                        continue
+                    hidden_states.append(torch.from_numpy(ov_outputs[i]))
+
+            if not hidden_states and "last_hidden_state" in model_outputs:
+                hidden_states = [model_outputs["last_hidden_state"]]
+
+            if hidden_states:
                 model_outputs["hidden_states"] = hidden_states
-        elif request_hidden_states and "last_hidden_state" in model_outputs:
-            model_outputs["hidden_states"] = [model_outputs["last_hidden_state"]] * expected_hidden_states_count
 
         if return_dict:
             return model_outputs
