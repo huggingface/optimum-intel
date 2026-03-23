@@ -3803,27 +3803,17 @@ class DeepseekPatcher(OVDecoderModelPatcher):
                 )
 
                 # Handle OpenVINO version check
-                import re
                 import warnings
 
-                import openvino as ov
-
-                ov_version_str = ov.__version__
-                version_match = re.match(r'(\d+\.\d+\.\d+)', ov_version_str)
-                if version_match:
-                    if is_openvino_version("<=", "2026.0.0"):
-                        warnings.warn(
-                            "This model works best with OpenVINO 2026.1 or later. "
-                            "Earlier versions require float() conversion for MoE weights, "
-                            "which may affect performance."
-                        )
-                        block.mlp.gate_projs = gate_projs.float()
-                        block.mlp.up_projs = up_projs.float()
-                        block.mlp.down_projs = down_projs.float()
-                    else:
-                        block.mlp.gate_projs = gate_projs
-                        block.mlp.up_projs = up_projs
-                        block.mlp.down_projs = down_projs
+                if is_openvino_version("<=", "2026.0.0"):
+                    warnings.warn(
+                        "This model works best with OpenVINO 2026.1 or later. "
+                        "Earlier versions require float() conversion for MoE weights, "
+                        "which may affect performance."
+                    )
+                    block.mlp.gate_projs = gate_projs.float()
+                    block.mlp.up_projs = up_projs.float()
+                    block.mlp.down_projs = down_projs.float()
                 else:
                     block.mlp.gate_projs = gate_projs
                     block.mlp.up_projs = up_projs
