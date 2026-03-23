@@ -2648,14 +2648,22 @@ class LTXVaeDummyInputGenerator(DummyVisionInputGenerator):
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
         self.num_frames = num_frames
+        self.sample_num_channels = getattr(normalized_config.config, "in_channels", self.num_channels)
+        self.latent_num_channels = getattr(normalized_config.config, "latent_channels", self.num_channels)
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name in ["sample", "latent_sample"]:
+        if input_name == "sample":
             return self.random_float_tensor(
-                [self.batch_size, self.num_channels, self.num_frames, self.height, self.width]
+                [self.batch_size, self.sample_num_channels, self.num_frames, self.height, self.width]
+            )
+        if input_name == "latent_sample":
+            return self.random_float_tensor(
+                [self.batch_size, self.latent_num_channels, self.num_frames, self.height, self.width]
             )
         if input_name == "timestep":
-            return self.random_int_tensor([1], max_value=20, min_value=1, framework=framework, dtype=int_dtype)
+            return self.random_int_tensor(
+                [self.batch_size], max_value=20, min_value=1, framework=framework, dtype=int_dtype
+            )
 
         return super().generate(input_name, framework, int_dtype, float_dtype)
 

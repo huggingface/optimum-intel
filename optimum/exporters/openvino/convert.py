@@ -1103,7 +1103,23 @@ def get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
         }
     )
 
-    vae_decoder.forward = lambda latent_sample, timestep=None: vae_decoder.decode(z=latent_sample, temb=timestep)
+    def ltx_vae_decoder_forward(latent_sample, timestep=None):
+        if timestep is not None:
+            if timestep.ndim == 0:
+                timestep = timestep.reshape(1)
+            elif timestep.ndim > 1:
+                timestep = timestep.reshape(-1)
+
+            batch_size = latent_sample.shape[0]
+            if timestep.shape[0] != batch_size:
+                if timestep.shape[0] == 1:
+                    timestep = timestep.expand(batch_size)
+                else:
+                    timestep = timestep[:1].expand(batch_size)
+
+        return vae_decoder.decode(z=latent_sample, temb=timestep)
+
+    vae_decoder.forward = ltx_vae_decoder_forward
 
     vae_config_constructor = TasksManager.get_exporter_config_constructor(
         model=vae_decoder,
