@@ -532,21 +532,43 @@ def export_models(
         output_name = output_names[i] if output_names is not None else Path(model_name + ".xml")
         output_path = output_dir / output_name
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        outputs.append(
-            export(
-                model=submodel,
-                config=sub_export_config,
-                output=output_path,
-                opset=opset,
-                device=device,
-                input_shapes=input_shapes,
-                model_kwargs=model_kwargs,
-                ov_config=ov_config,
-                stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
-                patch_16bit_model=patch_16bit_model,
-                library_name=library_name,
+        try:
+            outputs.append(
+                export(
+                    model=submodel,
+                    config=sub_export_config,
+                    output=output_path,
+                    opset=opset,
+                    device=device,
+                    input_shapes=input_shapes,
+                    model_kwargs=model_kwargs,
+                    ov_config=ov_config,
+                    stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
+                    patch_16bit_model=patch_16bit_model,
+                    library_name=library_name,
+                )
             )
-        )
+        except Exception as e:
+            if "prim::TupleConstruct" not in str(e):
+                raise
+
+            resolved_opset = opset or getattr(sub_export_config, "DEFAULT_ONNX_OPSET", 14)
+            logger.warning(
+                f"Falling back to ONNX export for submodel `{model_name}` due to PyTorch frontend limitation: {e}"
+            )
+            outputs.append(
+                export_pytorch_via_onnx(
+                    model=submodel,
+                    config=sub_export_config,
+                    opset=resolved_opset,
+                    output=output_path,
+                    device=device,
+                    input_shapes=input_shapes,
+                    model_kwargs=model_kwargs,
+                    ov_config=ov_config,
+                    library_name=library_name,
+                )
+            )
 
     outputs = list(map(list, zip(*outputs)))
     return outputs
@@ -1375,6 +1397,14 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
 
     # VAE Decoder
     vae_decoder = copy.deepcopy(pipeline.vae)
+    if hasattr(vae_decoder, "bn") and hasattr(vae_decoder.bn, "running_mean") and hasattr(vae_decoder.bn, "running_var"):
+        vae_decoder.register_to_config(
+            **{
+                "bn_running_mean_data": vae_decoder.bn.running_mean.detach().cpu().tolist(),
+                "bn_running_var_data": vae_decoder.bn.running_var.detach().cpu().tolist(),
+                "bn_eps": float(getattr(vae_decoder.bn, "eps", 1e-5)),
+            }
+        )
     vae_decoder.forward = lambda latent_sample: vae_decoder.decode(z=latent_sample)
     vae_config_constructor = TasksManager.get_exporter_config_constructor(
         model=vae_decoder,

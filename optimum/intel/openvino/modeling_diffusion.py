@@ -98,9 +98,14 @@ else:
 
 if is_diffusers_version(">=", "0.30.0"):
     from diffusers import FluxPipeline, StableDiffusion3InpaintPipeline
+    try:
+        from diffusers import Flux2KleinPipeline
+    except Exception:
+        Flux2KleinPipeline = object
 else:
     StableDiffusion3InpaintPipeline = object
     FluxPipeline = object
+    Flux2KleinPipeline = object
 
 
 if is_diffusers_version(">=", "0.31.0"):
@@ -799,13 +804,28 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             elif inputs.get_any_name() == "pooled_projections":
                 shapes[inputs] = [batch_size, self.transformer.config["pooled_projection_dim"]]
             elif inputs.get_any_name() == "img_ids":
+                ids_dim = inputs.get_partial_shape()[-1]
+                if hasattr(ids_dim, "is_dynamic") and ids_dim.is_dynamic:
+                    ids_dim = 3
+                else:
+                    ids_dim = int(ids_dim.get_length())
+
                 shapes[inputs] = (
-                    [batch_size, packed_height_width, 3]
+                    [batch_size, packed_height_width, ids_dim]
                     if is_diffusers_version("<", "0.31.0")
-                    else [packed_height_width, 3]
+                    else [packed_height_width, ids_dim]
                 )
             elif inputs.get_any_name() == "txt_ids":
-                shapes[inputs] = [batch_size, -1, 3] if is_diffusers_version("<", "0.31.0") else [-1, 3]
+                ids_dim = inputs.get_partial_shape()[-1]
+                if hasattr(ids_dim, "is_dynamic") and ids_dim.is_dynamic:
+                    ids_dim = 3
+                else:
+                    ids_dim = int(ids_dim.get_length())
+
+                shapes[inputs] = (
+                    [batch_size, -1, ids_dim] if is_diffusers_version("<", "0.31.0") else [-1, ids_dim]
+                )
+
             elif inputs.get_any_name() in ["height", "width", "num_frames", "rope_interpolation_scale"]:
                 shapes[inputs] = inputs.get_partial_shape()
             else:
@@ -1163,6 +1183,7 @@ class OVModelTextEncoder(OVPipelinePart):
         attention_mask: Optional[Union[np.ndarray, torch.Tensor]] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: bool = False,
+        **kwargs,
     ):
         self.compile()
         model_inputs = {"input_ids": input_ids}
@@ -1176,15 +1197,28 @@ class OVModelTextEncoder(OVPipelinePart):
         model_outputs[self.model.outputs[0].get_any_name()] = torch.from_numpy(main_out)
         if len(self.model.outputs) > 1 and "pooler_output" in self.model.outputs[1].get_any_name():
             model_outputs["pooler_output"] = torch.from_numpy(ov_outputs[1])
+        request_hidden_states = bool(output_hidden_states) or bool(kwargs.get("output_hidden_states", False))
+        expected_hidden_states_count = getattr(self.config, "num_hidden_layers", None)
+        if expected_hidden_states_count is None:
+            expected_hidden_states_count = getattr(self.config, "n_layer", None)
+        if expected_hidden_states_count is None:
+            expected_hidden_states_count = 1
+        else:
+            expected_hidden_states_count = int(expected_hidden_states_count) + 1
+
         if self.hidden_states_output_names and "last_hidden_state" not in model_outputs:
             model_outputs["last_hidden_state"] = torch.from_numpy(ov_outputs[self.hidden_states_output_names[-1]])
-        if (
-            self.hidden_states_output_names
-            and output_hidden_states
-            or getattr(self.config, "output_hidden_states", False)
-        ):
+
+        if self.hidden_states_output_names:
             hidden_states = [torch.from_numpy(ov_outputs[out_name]) for out_name in self.hidden_states_output_names]
-            model_outputs["hidden_states"] = hidden_states
+            target_len = max(expected_hidden_states_count, len(hidden_states))
+            if len(hidden_states) < target_len:
+                hidden_states.extend([hidden_states[-1]] * (target_len - len(hidden_states)))
+
+            if request_hidden_states or getattr(self.config, "output_hidden_states", False):
+                model_outputs["hidden_states"] = hidden_states
+        elif request_hidden_states and "last_hidden_state" in model_outputs:
+            model_outputs["hidden_states"] = [model_outputs["last_hidden_state"]] * expected_hidden_states_count
 
         if return_dict:
             return model_outputs
@@ -1277,8 +1311,27 @@ class OVModelTransformer(OVPipelinePart):
         if pooled_projections is not None:
             model_inputs["pooled_projections"] = pooled_projections
         if img_ids is not None:
+            for inp in self.model.inputs:
+                if inp.get_any_name() == "img_ids":
+                    expected_rank = inp.get_partial_shape().rank.get_length()
+                    actual_rank = len(img_ids.shape)
+                    if expected_rank == 2 and actual_rank == 3:
+                        img_ids = img_ids[0]
+                    elif expected_rank == 3 and actual_rank == 2:
+                        img_ids = img_ids.unsqueeze(0)
+                    break
             model_inputs["img_ids"] = img_ids
+
         if txt_ids is not None:
+            for inp in self.model.inputs:
+                if inp.get_any_name() == "txt_ids":
+                    expected_rank = inp.get_partial_shape().rank.get_length()
+                    actual_rank = len(txt_ids.shape)
+                    if expected_rank == 2 and actual_rank == 3:
+                        txt_ids = txt_ids[0]
+                    elif expected_rank == 3 and actual_rank == 2:
+                        txt_ids = txt_ids.unsqueeze(0)
+                    break
             model_inputs["txt_ids"] = txt_ids
         if guidance is not None:
             model_inputs["guidance"] = guidance
@@ -1403,6 +1456,18 @@ class OVModelVae(OVModelHostMixin):
             self.latents_mean = torch.tensor(self.decoder.config.latents_mean_data)
         if hasattr(self.decoder.config, "latents_std_data"):
             self.latents_std = torch.tensor(self.decoder.config.latents_std_data)
+        # Flux2Klein compatibility: pipeline expects self.vae.bn.running_mean/running_var/eps
+        self.bn = None
+        bn_mean = getattr(self.decoder.config, "bn_running_mean_data", None)
+        bn_var = getattr(self.decoder.config, "bn_running_var_data", None)
+        bn_eps = float(getattr(self.decoder.config, "bn_eps", 1e-5))
+
+        if bn_mean is not None and bn_var is not None:
+            bn_state = type("BNState", (), {})()
+            bn_state.running_mean = torch.tensor(bn_mean, dtype=torch.float32)
+            bn_state.running_var = torch.tensor(bn_var, dtype=torch.float32)
+            bn_state.eps = bn_eps
+            self.bn = bn_state
 
     @property
     def _component_names(self) -> List[str]:
@@ -1627,6 +1692,12 @@ class OVFluxPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, FluxPip
     auto_model_class = FluxPipeline
 
 
+class OVFlux2KleinPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, Flux2KleinPipeline):
+    main_input_name = "prompt"
+    export_feature = "text-to-image"
+    auto_model_class = Flux2KleinPipeline
+
+
 class OVFluxImg2ImgPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, FluxImg2ImgPipeline):
     main_input_name = "image"
     export_feature = "image-to-image"
@@ -1728,9 +1799,10 @@ if is_diffusers_version(">=", "0.29.0"):
     OV_IMAGE2IMAGE_PIPELINES_MAPPING["stable-diffusion-3"] = OVStableDiffusion3Img2ImgPipeline
 
 if is_diffusers_version(">=", "0.30.0"):
-    SUPPORTED_OV_PIPELINES.extend([OVStableDiffusion3InpaintPipeline, OVFluxPipeline])
+    SUPPORTED_OV_PIPELINES.extend([OVStableDiffusion3InpaintPipeline, OVFluxPipeline, OVFlux2KleinPipeline])
     OV_INPAINT_PIPELINES_MAPPING["stable-diffusion-3"] = OVStableDiffusion3InpaintPipeline
     OV_TEXT2IMAGE_PIPELINES_MAPPING["flux"] = OVFluxPipeline
+    OV_TEXT2IMAGE_PIPELINES_MAPPING["flux2-klein"] = OVFlux2KleinPipeline
 
 if is_diffusers_version(">=", "0.31.0"):
     SUPPORTED_OV_PIPELINES.extend([OVFluxImg2ImgPipeline, OVFluxInpaintPipeline])
