@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import openvino
-from openvino import CompiledModel, Core
+from openvino import CompiledModel, Core, Model
 import torch
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from transformers import AutoConfig, PretrainedConfig
