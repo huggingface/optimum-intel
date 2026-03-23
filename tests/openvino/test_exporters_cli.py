@@ -159,7 +159,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
-    if is_transformers_version(">=", "4.53.0"):
+    if is_transformers_version(">=", "4.46.0") and is_transformers_version("<=", "4.53.3"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "gigachat3"),

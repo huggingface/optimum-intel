@@ -98,7 +98,7 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.48.0"):
         SUPPORTED_ARCHITECTURES.update({"cohere2": OVModelForCausalLM})
 
-    if is_transformers_version(">=", "4.53.0"):
+    if is_transformers_version(">=", "4.46.0") and is_transformers_version("<=", "4.53.3"):
         SUPPORTED_ARCHITECTURES.update({"deepseek": OVModelForCausalLM, "gigachat3": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.49"):
