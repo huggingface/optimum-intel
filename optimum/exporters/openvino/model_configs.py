@@ -204,6 +204,13 @@ from .model_patcher import (
     Zamba2ModelPatcher,
 )
 
+# Import Paraformer plugin to register ASR support with TasksManager
+# This enables export of FunASR Paraformer models via optimum-cli
+try:
+    from . import paraformer_plugin  # noqa: F401
+except ImportError:
+    pass  # Paraformer dependencies not available
+
 
 COMMON_TEXT_TASKS = [
     "feature-extraction",
@@ -5451,3 +5458,26 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
                 )
 
         return dummy_inputs
+
+
+# ============================================================================
+# Paraformer ASR Model Support
+# ============================================================================
+# Registration for FunASR Paraformer models for automatic speech recognition
+# This allows export via: optimum-cli export openvino --model funasr/paraformer-zh
+
+try:
+    from .paraformer_plugin import ParaformerOnnxConfig, ParaformerConfig
+
+    @register_in_tasks_manager(
+        "paraformer",
+        "automatic-speech-recognition",
+        library_name="paraformer",
+    )
+    class ParaformerOpenVINOConfig(ParaformerOnnxConfig):
+        """OpenVINO export configuration for Paraformer ASR models."""
+        pass
+
+except ImportError:
+    # Paraformer dependencies not installed
+    pass
