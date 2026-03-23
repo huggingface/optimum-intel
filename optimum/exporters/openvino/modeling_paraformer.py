@@ -8,7 +8,24 @@ import math
 import os
 import json
 import copy
-from omegaconf import OmegaConf, DictConfig, ListConfig
+
+# Optional dependency: omegaconf is only required for loading FunASR-style configs
+try:
+    from omegaconf import OmegaConf, DictConfig, ListConfig
+    _OMEGACONF_AVAILABLE = True
+except ImportError:
+    OmegaConf = None
+    DictConfig = None
+    ListConfig = None
+    _OMEGACONF_AVAILABLE = False
+
+# Optional dependency: loralib for LoRA fine-tuning
+try:
+    import loralib as lora
+    _LORA_AVAILABLE = True
+except ImportError:
+    lora = None
+    _LORA_AVAILABLE = False
 
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/transformer/utils/repeat.py#L14 (Apache 2.0)
 class MultiSequential(torch.nn.Sequential):
@@ -73,15 +90,15 @@ class PositionwiseFeedForward(torch.nn.Module):
 class StreamSinusoidalPositionEncoder(torch.nn.Module):
     """ """
 
-    def __int__(self, d_model=80, dropout_rate=0.1):
-        pass
+    def __init__(self, d_model=80, dropout_rate=0.1):
+        super().__init__()
 
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/transformer/embedding.py#L383 (Apache 2.0)
 class SinusoidalPositionEncoder(torch.nn.Module):
     """ """
 
-    def __int__(self, d_model=80, dropout_rate=0.1):
-        pass
+    def __init__(self, d_model=80, dropout_rate=0.1):
+        super().__init__()
 
     def encode(
         self, positions: torch.Tensor = None, depth: int = None, dtype: torch.dtype = torch.float32
@@ -318,6 +335,11 @@ class MultiHeadedAttentionSANM(nn.Module):
         # self.linear_k = nn.Linear(n_feat, n_feat)
         # self.linear_v = nn.Linear(n_feat, n_feat)
         if lora_list is not None:
+            if not _LORA_AVAILABLE:
+                raise ImportError(
+                    "LoRA layers require the 'loralib' package. "
+                    "Please install it with: pip install loralib"
+                )
             if "o" in lora_list:
                 self.linear_out = lora.Linear(
                     n_feat, n_feat, r=lora_rank, lora_alpha=lora_alpha, lora_dropout=lora_dropout

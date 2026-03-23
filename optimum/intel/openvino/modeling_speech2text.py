@@ -26,11 +26,10 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import openvino
-from openvino import CompiledModel, Core, Model
+from openvino import CompiledModel, Core
 import torch
-from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
-from transformers import AutoConfig, PretrainedConfig, GenerationConfig
+from transformers import AutoConfig, PretrainedConfig
 from transformers.utils import ModelOutput
 
 from .utils import OV_DECODER_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME, OV_TO_PT_TYPE
@@ -254,10 +253,14 @@ class OVParaformerPredictor(OVParaformerModelPart):
             mask = (arange < encoder_out_lens[:, np.newaxis]).astype(np.float32)
             mask = mask[:, np.newaxis, :]
         
-        inputs = {
-            "encoder_out": self._prepare_input(encoder_out),
-            "encoder_out_lens": self._prepare_input(mask),
-        }
+        # Map encoder_out and mask to actual OV input names using discovered input_names
+        # to avoid mismatch with TorchScript arg names
+        input_names_list = list(self.input_names.keys())
+        inputs = {}
+        if len(input_names_list) > 0:
+            inputs[input_names_list[0]] = self._prepare_input(encoder_out)
+        if len(input_names_list) > 1:
+            inputs[input_names_list[1]] = self._prepare_input(mask)
         
         self.request.infer(inputs)
         

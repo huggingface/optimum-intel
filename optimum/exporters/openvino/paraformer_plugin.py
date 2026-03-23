@@ -349,6 +349,45 @@ def register_paraformer_with_tasks_manager():
     logger.debug("Registered Paraformer support with TasksManager")
 
 
+def patch_main_quantize():
+    """
+    Patch the _main_quantize function to skip Paraformer models
+    (since quantization is already handled in main_export).
+    """
+    try:
+        from optimum.exporters.openvino import __main__ as ov_main
+        
+        original_main_quantize = ov_main._main_quantize
+        
+        @wraps(original_main_quantize)
+        def patched_main_quantize(
+            model_name_or_path: str,
+            **kwargs
+        ):
+            # Debug logging
+            logger.info(f"patched_main_quantize called for model: {model_name_or_path}")
+            
+            # Check if this is a Paraformer model
+            cache_dir = kwargs.get("cache_dir")
+            is_paraformer = _is_paraformer_model(model_name_or_path, cache_dir=cache_dir)
+            logger.info(f"Is Paraformer model: {is_paraformer}")
+            
+            if is_paraformer:
+                logger.info("Skipping _main_quantize for Paraformer (already quantized in main_export)")
+                # For Paraformer, quantization is already done in main_export, so just return
+                return
+            
+            # Not a Paraformer model, use original quantization
+            return original_main_quantize(model_name_or_path, **kwargs)
+        
+        # Apply the patch
+        ov_main._main_quantize = patched_main_quantize
+        logger.debug("Patched _main_quantize to skip Paraformer models")
+        
+    except Exception as e:
+        logger.warning(f"Could not patch _main_quantize for Paraformer support: {e}")
+
+
 def patch_main_export():
     """
     Patch the main_export function to handle Paraformer models automatically.
@@ -411,4 +450,5 @@ def patch_main_export():
 # Auto-register when this module is imported
 register_paraformer_with_tasks_manager()
 patch_main_export()
+patch_main_quantize()
 
