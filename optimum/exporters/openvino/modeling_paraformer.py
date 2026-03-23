@@ -1,7 +1,8 @@
 import torch
 from torch import nn
 import logging
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple, Union
+from pathlib import Path
 import numpy as np
 import types
 import math
@@ -2147,3 +2148,168 @@ def export(model, kwargs, input=None, **cfg):
         export_dir, model_jit_scripts = export_utils(model=model, **kwargs)
 
     return export_dir, model_jit_scripts
+
+
+# ============================================================================
+# Transformers-compatible wrappers for Paraformer models
+# ============================================================================
+# These classes provide compatibility with the optimum-intel export pipeline
+
+try:
+    from transformers import PretrainedConfig, PreTrainedModel
+    _TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    _TRANSFORMERS_AVAILABLE = False
+    PretrainedConfig = object
+    PreTrainedModel = object
+
+
+class ParaformerConfig(PretrainedConfig):
+    """
+    Configuration class for Paraformer ASR models.
+    
+    This provides a transformers-compatible configuration for FunASR Paraformer models.
+    """
+    model_type = "paraformer"
+    
+    def __init__(
+        self,
+        vocab_size: int = 8404,
+        encoder_dim: int = 512,
+        attention_heads: int = 4,
+        encoder_layers: int = 50,
+        decoder_layers: int = 16,
+        max_seq_len: int = 512,
+        frontend_conf: Optional[Dict] = None,
+        **kwargs
+    ):
+        if _TRANSFORMERS_AVAILABLE:
+            super().__init__(**kwargs)
+        self.vocab_size = vocab_size
+        self.encoder_dim = encoder_dim
+        self.attention_heads = attention_heads
+        self.encoder_layers = encoder_layers
+        self.decoder_layers = decoder_layers
+        self.max_seq_len = max_seq_len
+        self.frontend_conf = frontend_conf or {}
+    
+    @classmethod
+    def from_funasr_config(cls, config_path: Union[str, Path]) -> "ParaformerConfig":
+        """Load configuration from FunASR config.yaml file."""
+        try:
+            if _OMEGACONF_AVAILABLE:
+                config = OmegaConf.load(config_path)
+                
+                return cls(
+                    vocab_size=config.get("vocab_size", 8404),
+                    encoder_dim=config.get("encoder_conf", {}).get("output_size", 512),
+                    attention_heads=config.get("encoder_conf", {}).get("attention_heads", 4),
+                    encoder_layers=config.get("encoder_conf", {}).get("num_blocks", 50),
+                    decoder_layers=config.get("decoder_conf", {}).get("num_blocks", 16),
+                    max_seq_len=config.get("max_seq_len", 512),
+                    frontend_conf=dict(config.get("frontend_conf", {})),
+                )
+        except Exception as e:
+            logging.warning(f"Could not load FunASR config: {e}, using defaults")
+        return cls()
+
+
+class ParaformerForASR(PreTrainedModel):
+    """
+    Transformers-compatible wrapper for Paraformer ASR models.
+    
+    This class wraps FunASR Paraformer models to make them compatible with
+    the optimum-intel export pipeline.
+    """
+    if _TRANSFORMERS_AVAILABLE:
+        config_class = ParaformerConfig
+    base_model_prefix = "paraformer"
+    main_input_name = "speech"
+    
+    def __init__(self, config: ParaformerConfig, funasr_model=None):
+        if _TRANSFORMERS_AVAILABLE:
+            super().__init__(config)
+        self.config = config
+        self.funasr_model = funasr_model
+        self._jit_model = None
+        self._model_path = None
+        self._model_kwargs = {}
+    
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_name_or_path: Union[str, Path],
+        *model_args,
+        cache_dir: Optional[str] = None,
+        **kwargs
+    ) -> "ParaformerForASR":
+        """
+        Load a Paraformer model from a FunASR model directory or HuggingFace Hub.
+        """
+        from huggingface_hub import snapshot_download
+        
+        model_path = Path(model_name_or_path)
+        
+        # Download from HuggingFace Hub if not a local path
+        if not model_path.exists():
+            logging.info(f"Downloading Paraformer model from HuggingFace Hub: {model_name_or_path}")
+            model_path = Path(snapshot_download(
+                repo_id=str(model_name_or_path),
+                cache_dir=cache_dir,
+                token=kwargs.get("token"),
+                revision=kwargs.get("revision", "main"),
+            ))
+        
+        # Load config
+        config_yaml_path = model_path / "config.yaml"
+        if config_yaml_path.exists():
+            config = ParaformerConfig.from_funasr_config(config_yaml_path)
+        else:
+            config = ParaformerConfig()
+        
+        # Load the FunASR model
+        device = kwargs.get("device", "cpu")
+        funasr_model, model_kwargs = build_model(model=str(model_path), device=device)
+        
+        instance = cls(config, funasr_model=funasr_model)
+        instance._model_path = model_path
+        instance._model_kwargs = model_kwargs
+        
+        return instance
+    
+    def get_jit_model(self) -> torch.jit.ScriptModule:
+        """Get or create the TorchScript model for export."""
+        if self._jit_model is None:
+            _, self._jit_model = export(
+                self.funasr_model,
+                self._model_kwargs,
+                type="torchscript",
+                quantize=False,
+                device=str(self._model_kwargs.get("device", "cpu"))
+            )
+        return self._jit_model
+    
+    def forward(self, speech: torch.Tensor, speech_lengths: torch.Tensor):
+        """Forward pass through the model."""
+        if self.funasr_model is not None:
+            return self.funasr_model(speech, speech_lengths)
+        raise ValueError("FunASR model not loaded")
+
+
+def _load_paraformer_model(
+    model_name_or_path: str,
+    subfolder: str = "",
+    revision: str = "main",
+    cache_dir: str = None,
+    token: Optional[str] = None,
+    trust_remote_code: bool = False,
+    **kwargs,
+):
+    """Load a Paraformer model for export (TasksManager compatible loader)."""
+    return ParaformerForASR.from_pretrained(
+        model_name_or_path,
+        cache_dir=cache_dir,
+        token=token,
+        revision=revision,
+        **kwargs,
+    )
