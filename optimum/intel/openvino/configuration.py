@@ -428,7 +428,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "weight_only": True,
         },
     },
-    "VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B": {
+    "OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B": {
         "quantization_configs": {
             "lm_model": {
                 "bits": 4,
