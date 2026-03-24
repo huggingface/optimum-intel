@@ -113,6 +113,9 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.57.0"):
         SUPPORTED_ARCHITECTURES.update({"hunyuan_v1_dense": OVModelForCausalLM, "qwen3_next": OVModelForCausalLM})
 
+    if is_transformers_version(">=", "4.57.1"):
+        SUPPORTED_ARCHITECTURES.update({"kimi_k25": OVModelForCausalLM})
+
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "stable-diffusion-3": {"text_encoder_3": "8.0"},

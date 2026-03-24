@@ -95,6 +95,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "exaone",
         "granite",
         "granitemoe",
+        "kimi_k25",
     )
 
     SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon_mamba")
@@ -161,6 +162,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version("<", "4.56.0"):
         SUPPORTED_ARCHITECTURES += ("qwen", "chatglm", "chatglm4")
+
+    if is_transformers_version(">=", "4.57.1"):
+        SUPPORTED_ARCHITECTURES += ("kimi_k25",)
 
     GENERATION_LENGTH = 100
 
