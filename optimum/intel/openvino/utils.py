@@ -314,16 +314,6 @@ def np_to_pt_generators(np_object, device):
         return np_object
 
 
-def ensure_numpy(x):
-    if x is None:
-        return None
-    if isinstance(x, np.ndarray):
-        return x
-    if isinstance(x, torch.Tensor):
-        return x.cpu().numpy()
-    return x
-
-
 def _raise_invalid_batch_size(
     expected_batch_size: int, batch_size: int, num_images_per_prompt: int, guidance_scale: float
 ):
