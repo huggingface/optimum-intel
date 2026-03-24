@@ -28,7 +28,8 @@ from utils_tests import (
 
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.onnx.model_configs import BertOnnxConfig
-from optimum.exporters.openvino import export_from_model, main_export, _resolve_flux_text_encoder_model_type
+from optimum.exporters.openvino import export_from_model, main_export
+from optimum.exporters.openvino.convert import _resolve_flux_text_encoder_model_type
 from optimum.exporters.openvino.model_configs import _get_flux_ids_dim
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (

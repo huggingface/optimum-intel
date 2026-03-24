@@ -98,15 +98,9 @@ else:
 
 if is_diffusers_version(">=", "0.30.0"):
     from diffusers import FluxPipeline, StableDiffusion3InpaintPipeline
-    try:
-        from diffusers import Flux2KleinPipeline
-    except Exception:
-        Flux2KleinPipeline = object
 else:
     StableDiffusion3InpaintPipeline = object
     FluxPipeline = object
-    Flux2KleinPipeline = object
-
 
 if is_diffusers_version(">=", "0.31.0"):
     from diffusers import FluxImg2ImgPipeline, FluxInpaintPipeline
@@ -125,11 +119,15 @@ if is_diffusers_version(">=", "0.33.0"):
 else:
     SanaSprintPipeline = object
 
-
 if is_diffusers_version(">=", "0.35.0"):
     from diffusers.models.cache_utils import CacheMixin
 else:
     CacheMixin = object
+
+if is_diffusers_version(">=", "0.37.0"):
+    from diffusers import Flux2KleinPipeline
+else:
+    Flux2KleinPipeline = object
 
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
 DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER = "text_encoder_3"
@@ -1803,10 +1801,10 @@ if is_diffusers_version(">=", "0.29.0"):
     OV_IMAGE2IMAGE_PIPELINES_MAPPING["stable-diffusion-3"] = OVStableDiffusion3Img2ImgPipeline
 
 if is_diffusers_version(">=", "0.30.0"):
-    SUPPORTED_OV_PIPELINES.extend([OVStableDiffusion3InpaintPipeline, OVFluxPipeline, OVFlux2KleinPipeline])
+    SUPPORTED_OV_PIPELINES.extend([OVStableDiffusion3InpaintPipeline, OVFluxPipeline])
     OV_INPAINT_PIPELINES_MAPPING["stable-diffusion-3"] = OVStableDiffusion3InpaintPipeline
     OV_TEXT2IMAGE_PIPELINES_MAPPING["flux"] = OVFluxPipeline
-    OV_TEXT2IMAGE_PIPELINES_MAPPING["flux2-klein"] = OVFlux2KleinPipeline
+
 
 if is_diffusers_version(">=", "0.31.0"):
     SUPPORTED_OV_PIPELINES.extend([OVFluxImg2ImgPipeline, OVFluxInpaintPipeline])
@@ -1819,10 +1817,13 @@ if is_diffusers_version(">=", "0.32.0"):
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana"] = OVSanaPipeline
     SUPPORTED_OV_PIPELINES.append(OVSanaPipeline)
 
-
 if is_diffusers_version(">=", "0.33.0"):
     SUPPORTED_OV_PIPELINES.append(OVSanaSprintPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana-sprint"] = OVSanaSprintPipeline
+
+if is_diffusers_version(">=", "0.37.0"):
+    SUPPORTED_OV_PIPELINES.append(OVFlux2KleinPipeline)
+    OV_TEXT2IMAGE_PIPELINES_MAPPING["flux2-klein"] = OVFlux2KleinPipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,

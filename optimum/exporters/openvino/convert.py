@@ -1353,9 +1353,6 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
         )
 
         text_encoder_library_name = "diffusers"
-        if text_encoder_model_type in {"qwen3", "qwen2", "qwen"}:
-            text_encoder_library_name = "transformers"
-
         if hasattr(text_encoder_for_export, "config"):
             text_encoder_for_export.config.output_hidden_states = True
             text_encoder_for_export.config.return_dict = True
