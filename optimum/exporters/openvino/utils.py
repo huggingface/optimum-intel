@@ -303,6 +303,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "phi4_multimodal",
     "llama4",
     "minicpmo",
+    "kimi_k25",
 ]
 
 SSM_MODELS = ["mamba", "falcon_mamba", "zamba2", "lfm2", "granitemoehybrid", "qwen3_next"]
@@ -329,6 +330,7 @@ ONNX_SUPPORTED_ARCHITECTURES = {
     "helium",
     "hiera",
     "imagegpt",
+    "kimi_k25",
     "layoutlm",
     "layoutlmv3",
     "lilt",

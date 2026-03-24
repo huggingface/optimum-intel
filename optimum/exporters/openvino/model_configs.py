@@ -287,6 +287,10 @@ def init_model_configs():
         "transformers",
         "AutoModelForImageTextToText",
     )
+    TasksManager._CUSTOM_CLASSES[("pt", "kimi_k25", "image-text-to-text")] = (
+        "transformers",
+        "AutoModelForImageTextToText",
+    )
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
@@ -4085,6 +4089,55 @@ class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.53.3"
     _MODEL_PATCHER = DeepseekPatcher
 
+@register_in_tasks_manager(
+    "kimi_k25",
+    *["image-text-to-text"],
+    library_name="transformers",
+)
+class KimiK25OpenVINOConfig(Qwen3VLOpenVINOConfig):
+
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior]
+    MIN_TRANSFORMERS_VERSION = "4.57.1"
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummyVisionInputGenerator,
+    )
+
+    def with_behavior(self, behavior):
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
+
+        if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "deepseek_v3",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+            )
+
+        if behavior == QwenVLConfigBehavior.LANGUAGE:
+            # We must use DeepseekPatcher because Kimi's text model is DeepseekV3
+            return get_vlm_text_generation_config(
+                "deepseek_v3",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=DeepseekPatcher,
+            )
+
+        if behavior in (
+                QwenVLConfigBehavior.VISION_EMBEDDINGS,
+                QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER,
+                QwenVLConfigBehavior.VISION_EMBEDDINGS_POS,
+        ):
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+        return super().with_behavior(behavior)
 
 @register_in_tasks_manager("got_ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")
 class GotOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
