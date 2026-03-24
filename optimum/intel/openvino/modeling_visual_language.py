@@ -5247,7 +5247,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         min_wasted_resolution = float("inf")
 
         for width, height in possible_resolutions:
-            if max_resolutions != None and (width * height != patch_size * patch_size):
+            if max_resolutions is not None and (width * height != patch_size * patch_size):
                 if (width * height + patch_size * patch_size) > max_resolutions:  # NOTE 要算一个global
                     continue
             # Calculate the downscaled size to keep the aspect ratio
@@ -5266,7 +5266,8 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                 best_fit = (width, height)
 
         # print(f"original_size={original_size}, possible_resolutions={possible_resolutions}, max_resolutions={max_resolutions}, best_fit={best_fit}")
-        assert best_fit is not None, f"Can't find suitable fit in {possible_resolutions} at max:{max_resolutions}"
+        if best_fit is None:
+            raise ValueError(f"Can't find suitable fit in {possible_resolutions} at max:{max_resolutions}")
         return best_fit
 
     # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_utils.py#L601-L631

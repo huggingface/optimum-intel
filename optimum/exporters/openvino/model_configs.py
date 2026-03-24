@@ -5321,13 +5321,12 @@ class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
         **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, visual_seq_length, **kwargs)
-        if hasattr(normalized_config, "config") and hasattr(normalized_config.config, "mm_local_num_frames"):
-            self.num_frames = normalized_config.config.mm_local_num_frames
+        self.num_frames = getattr(normalized_config.config, "mm_local_num_frames", 4)
+        self.embed_dim = getattr(normalized_config.config, "mm_hidden_size", 1408)
         self.height = 224
         self.width = 224
         self.image_size = (self.height, self.width)
         self.patch_size = 14
-        self.embed_dim = normalized_config.config.mm_hidden_size
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "hidden_states":
@@ -5363,7 +5362,7 @@ class DummyVideoChatFlashQwenProjectorInputGenerator(DummyInputGenerator):
     ):
         self.task = task
         self.batch_size = batch_size
-        self.hidden_size = normalized_config.mm_hidden_size
+        self.hidden_size = normalized_config.config.mm_hidden_size
         self.num_patches = 64
         self.normalized_config = normalized_config
 

@@ -360,12 +360,11 @@ def export_pytorch(
         model.eval()
 
         # Check if we need to override certain configuration item
-        if config.values_override is not None:
+        if config.values_override is not None and hasattr(model, "config"):
             logger.info(f"Overriding {len(config.values_override)} configuration item(s)")
             for override_config_key, override_config_value in config.values_override.items():
                 logger.info(f"\t- {override_config_key} -> {override_config_value}")
-                if hasattr(model, "config"):
-                    setattr(model.config, override_config_key, override_config_value)
+                setattr(model.config, override_config_key, override_config_value)
 
         if input_shapes is None:
             input_shapes = {}  # will use the defaults from DEFAULT_DUMMY_SHAPES

@@ -7751,9 +7751,7 @@ class VideochatFlashQwenLanguageModelPatcher(ModelPatcher):
             past_key_values=None,
             inputs_embeds=None,
         ):
-            from transformers.cache_utils import DynamicCache
-
-            outputs, labels = self.model(
+            outputs, _ = self.model(
                 input_ids=None,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
