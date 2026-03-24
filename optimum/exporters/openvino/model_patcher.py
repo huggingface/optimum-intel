@@ -3856,7 +3856,7 @@ def deepseek_v3_attn_forward(
     past_key_value=None,
     output_attentions: bool = False,
     use_cache: bool = False,
-    cache_position: Optional[torch.LongTensor] = None,  # ← ADD THIS
+    cache_position: Optional[torch.LongTensor] = None,
     **kwargs,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     # modified from https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L751
@@ -3876,7 +3876,7 @@ def deepseek_v3_attn_forward(
         k_embed = (k_fp32 * cos) + (rotate_half(k_fp32) * sin)
         return q_embed.to(dtype=orig_dtype), k_embed.to(dtype=orig_dtype)
 
-    if not hasattr(self, 'q_head_dim'):
+    if not hasattr(self, "q_head_dim"):
         self.q_head_dim = self.qk_nope_head_dim + self.qk_rope_head_dim
 
     if output_attentions:
@@ -3920,8 +3920,8 @@ def deepseek_v3_attn_forward(
             )
         kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
 
-    new_interface = False # Set to True if using new rotary embedding interface
-    if hasattr(self, 'rotary_emb'):
+    new_interface = False  # Set to True if using new rotary embedding interface
+    if hasattr(self, "rotary_emb"):
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
         q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids)
     else:
@@ -3930,7 +3930,6 @@ def deepseek_v3_attn_forward(
         cos, sin = position_embeddings
         q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin)
         new_interface = True
-
 
     q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids)
 
@@ -3977,6 +3976,8 @@ def deepseek_v3_attn_forward(
     attn_output = self.o_proj(attn_output)
 
     if new_interface:
+        # Some models (e.g. gigachat3) expect 2-tuple return (attn_output, attn_weights)
+        # Returning 3-tuple breaks tracing with "too many values to unpack"
         return attn_output, None
 
     return attn_output, None, past_key_value
@@ -4145,11 +4146,7 @@ def deepseek_moe(self, hidden_states: torch.Tensor, topk_indices: torch.Tensor, 
     num_experts = len(self.experts)
     batch_tokens, hidden_dim = hidden_states.shape
 
-    routing = torch.zeros(
-        batch_tokens, num_experts,
-        dtype=topk_weights.dtype,
-        device=hidden_states.device
-    )
+    routing = torch.zeros(batch_tokens, num_experts, dtype=topk_weights.dtype, device=hidden_states.device)
     routing.scatter_(1, topk_indices, topk_weights)
 
     hidden_states = hidden_states.repeat(num_experts, 1)

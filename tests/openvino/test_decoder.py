@@ -120,7 +120,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phimoe")
 
         if is_transformers_version("<", "4.54.0"):
-            SUPPORTED_ARCHITECTURES += ("deepseek", "gigachat3",)
+            SUPPORTED_ARCHITECTURES += (
+                "deepseek",
+                "gigachat3",
+            )
 
         # gptq and awq install disabled for windows test environment
         if platform.system() != "Windows" and is_transformers_version("<", "4.56.0"):
