@@ -57,6 +57,7 @@ from .modeling_base import OVBaseModel
 from .modeling_sam import OVSamModel
 from .utils import _is_timm_ov_dir, ensure_numpy
 
+
 logger = logging.getLogger(__name__)
 
 
