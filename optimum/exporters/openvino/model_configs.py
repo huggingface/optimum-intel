@@ -202,6 +202,7 @@ from .model_patcher import (
     PhiMoEModelPatcher,
     Qwen2_5_VLVisionEmbMergerPatcher,
     Qwen2MoEPatcher,
+    Qwen2VLEmbeddingPatcher,
     Qwen2VLLanguageModelPatcher,
     Qwen2VLVisionEmbMergerPatcher,
     Qwen3_5ModelPatcher,
@@ -262,7 +263,10 @@ if TYPE_CHECKING:
 def init_model_configs():
     if "open_clip" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
         TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["open_clip"] = {}
-
+    TasksManager._CUSTOM_CLASSES[("pt", "qwen2_vl", "image-text-to-embedding")] = (
+        "transformers",
+        "Qwen2VLForConditionalGeneration",
+    )
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "image-text-to-text")] = ("transformers", "AutoModelForCausalLM")
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "automatic-speech-recognition")] = (
         "transformers",
@@ -1871,6 +1875,51 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
                 0
             ].random_float_tensor(per_layer_inputs_shape)
         return dummy_inputs
+
+
+class LMEmbeddingConfigHelper(LMInputEmbedsConfigHelper):
+    def patch_model_for_export(
+        self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        model_kwargs = model_kwargs or {}
+        # No use_cache=True — embedding model is stateless, no KV-cache
+        if self.patcher_cls is not None:
+            return self.patcher_cls(self, model, model_kwargs=model_kwargs)
+        return self.orig_export_config.patch_model_for_export(model, model_kwargs=model_kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        # Strip past_key_values from inputs — embedding model has no KV-cache
+        return {k: v for k, v in super().inputs.items() if not k.startswith("past_key_values")}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        dummy_inputs = super().generate_dummy_inputs(framework, **kwargs)
+        dummy_inputs.pop("past_key_values", None)
+        return dummy_inputs
+
+
+def get_vlm_embedding_lm_config(
+    model_type,
+    model_config,
+    int_dtype,
+    float_dtype,
+    model_patcher=None,
+    dummy_input_generator=None,
+    inputs_update=None,
+):
+    internal_export_config = get_vlm_internal_text_generation_config(model_type, model_config, int_dtype, float_dtype)
+    export_config = LMEmbeddingConfigHelper(
+        internal_export_config,
+        patcher_cls=model_patcher,
+        dummy_input_generator=dummy_input_generator,
+        inputs_update=inputs_update,
+    )
+    export_config._normalized_config = internal_export_config._normalized_config
+    return export_config
 
 
 class InputEmbedOpenVINOConfig(TextDecoderOnnxConfig):
@@ -3809,7 +3858,7 @@ class QwenVLConfigBehavior(str, enum.Enum):
     VISION_EMBEDDINGS_POS = "vision_embeddings_pos"
 
 
-@register_in_tasks_manager("qwen2_vl", *["image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("qwen2_vl", *["image-text-to-text", "image-text-to-embedding"], library_name="transformers")
 class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [
         model_type.value for model_type in QwenVLConfigBehavior if model_type.value != "vision_embeddings_pos"
@@ -3894,6 +3943,16 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             )
 
         if behavior == QwenVLConfigBehavior.LANGUAGE:
+            if self.task == "image-text-to-embedding":
+                return get_vlm_embedding_lm_config(
+                    "qwen2",
+                    self._orig_config,
+                    self.int_dtype,
+                    self.float_dtype,
+                    model_patcher=Qwen2VLEmbeddingPatcher,
+                    dummy_input_generator=DummyQwen2VLLMInputGenerator,
+                    inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                )
             return get_vlm_text_generation_config(
                 "qwen2",
                 self._orig_config if is_transformers_version("<", "5") else self._orig_config.text_config,
