@@ -5128,12 +5128,15 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         # preprocess text
         prompt = f"<image>\n{text}" if (image is not None or video is not None) else text
-        messages = [{"role": "user", "content": prompt}]
-        text_prompt = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
+        if getattr(tokenizer, "chat_template", None) is not None:
+            messages = [{"role": "user", "content": prompt}]
+            text_prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        else:
+            text_prompt = prompt
         input_ids = _OVVideoChatFlashQwenForCausalLM.tokenizer_image_token(
             text_prompt, tokenizer, _OVVideoChatFlashQwenForCausalLM.IMAGE_TOKEN_INDEX, return_tensors="pt"
         ).unsqueeze(0)
