@@ -315,10 +315,10 @@ def np_to_pt_generators(np_object, device):
 
 
 def ensure_numpy(x):
-    if x is None:
-        return None
-    if not isinstance(x, np.ndarray):
+    if isinstance(x, torch.Tensor):
         return x.cpu().numpy()
+    if not isinstance(x, (np.ndarray, type(None))):
+        raise TypeError(f"`x` must be a np.ndarray or torch.Tensor, got {type(x)}")
     return x
 
 
