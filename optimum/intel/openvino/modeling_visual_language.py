@@ -1,12 +1,12 @@
+import ast
 import copy
 import enum
 import inspect
 import logging
 import math
 import os
-import warnings
-import ast
 import re
+import warnings
 from abc import abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -5011,7 +5011,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         return x, size
 
     def get_vision_embeddings(self, images):
-        if type(images) is list:
+        if isinstance(images, list):
             raise NotImplementedError
         else:
             # input: B T C H W
@@ -5297,7 +5297,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             ]
             # Multiply all elements by patch_size
             grid_pinpoints = [[dim * patch_size for dim in pair] for pair in grid_pinpoints]
-        if type(grid_pinpoints) is list:
+        if isinstance(grid_pinpoints, list):
             possible_resolutions = grid_pinpoints
         else:
             possible_resolutions = ast.literal_eval(grid_pinpoints)
@@ -5343,7 +5343,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             return inputs_embeds, attention_mask, position_ids
 
         # rank_print(modalities)
-        if type(images) is list:
+        if isinstance(images, list):
             images = [x.unsqueeze(0) if x.ndim == 3 else x for x in images]
             if images[0].shape[0] > 1:
                 modalities = ["video"]
@@ -5415,8 +5415,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
                     if "anyres_max" in image_aspect_ratio:
                         matched_anyres_max_num_patches = re.match(r"anyres_max_(\d+)", image_aspect_ratio)
-                        if matched_anyres_max_num_patches:
-                            max_num_patches = int(matched_anyres_max_num_patches.group(1))
 
                     if "anyres" in image_aspect_ratio:
                         vision_tower_image_size = 224
@@ -5458,7 +5456,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                     else:
                         try:
                             image_feature = torch.cat((base_image_feature, image_feature), dim=0)
-                        except Exception as e:
+                        except Exception:
                             raise ValueError(
                                 f"{num_patch_width} {num_patch_height} now: base_image_feature: {base_image_feature.shape}, {image_feature.shape}, image_sizes[image_idx]: {image_sizes[image_idx]}, origin_size: {origin_size}, {image_sizes[image_idx]}, {self.config.image_grid_pinpoints}, {vision_tower_image_size}"
                             )

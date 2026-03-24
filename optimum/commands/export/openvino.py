@@ -341,6 +341,8 @@ class OVExportCommand(BaseOptimumCLICommand):
         return parse_args_openvino(parser)
 
     def run(self):
+        import os
+
         from ...exporters.openvino.__main__ import _main_quantize, _merge_move, main_export
         from ...intel.openvino.configuration import (
             _DEFAULT_4BIT_WQ_CONFIG,
@@ -351,7 +353,6 @@ class OVExportCommand(BaseOptimumCLICommand):
         from ...intel.openvino.utils import TemporaryDirectory
         from ...intel.utils.import_utils import is_nncf_available, is_transformers_version
         from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
-        import os
 
         is_local = os.path.isdir(self.args.model)
         if (
