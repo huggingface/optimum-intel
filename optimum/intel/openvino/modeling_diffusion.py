@@ -1178,13 +1178,13 @@ class OVModelTextEncoder(OVPipelinePart):
         self.input_names = [inp.get_any_name() for inp in self.model.inputs]
 
     def forward(
-    self,
-    input_ids: Union[np.ndarray, torch.Tensor],
-    attention_mask: Optional[Union[np.ndarray, torch.Tensor]] = None,
-    output_hidden_states: Optional[bool] = None,
-    return_dict: bool = False,
-    **kwargs,
-):
+        self,
+        input_ids: Union[np.ndarray, torch.Tensor],
+        attention_mask: Optional[Union[np.ndarray, torch.Tensor]] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: bool = False,
+        **kwargs,
+    ):
         self.compile()
         model_inputs = {"input_ids": input_ids}
 
