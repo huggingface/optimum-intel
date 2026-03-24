@@ -5433,7 +5433,9 @@ class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
             return {}
         return {
             "hidden_states": {0: "batch_size", 1: "num_channels", 2: "num_frames", 3: "height", 4: "width"},
-            "rotary_pos_emb": {0: "batch_size", 1: "num_tokens", 2: "hidden_size"},
+            # rotary_pos_emb has a fixed leading dimension of 1 in the dummy generator,
+            # so we do not associate axis 0 with batch_size and keep only dynamic axes here.
+            "rotary_pos_emb": {1: "num_tokens", 2: "hidden_size"},
         }
 
     def with_behavior(

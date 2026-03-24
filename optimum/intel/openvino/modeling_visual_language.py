@@ -30,7 +30,6 @@ from transformers import (
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
 from transformers.utils import ModelOutput
-from transformers import StoppingCriteria
 
 from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
@@ -5154,7 +5153,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         if tokenizer.pad_token_id is None:
             if "qwen" in tokenizer.name_or_path.lower():
-                print("Setting pad token to bos token for qwen model.")
+                logger.info("Setting pad token to bos token for qwen model.")
                 tokenizer.pad_token_id = 151643
         attention_masks = input_ids.ne(tokenizer.pad_token_id).long()
         results["attention_mask"] = attention_masks
@@ -5330,12 +5329,14 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         pixel_values=None,
         attention_mask=None,
         position_ids=None,
-        modalities=["image"],
+        modalities=None,
         image_sizes=None,
         **kwargs,
     ):
         images = pixel_values
 
+        if modalities is None:
+            modalities = ["image"]
         if images is None:
             inputs_embeds = self.get_text_embeddings(input_ids)
             return inputs_embeds, attention_mask, position_ids
@@ -5428,9 +5429,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                                 vision_tower_image_size,
                                 max_resolutions=None,
                             )
-                        except Exception as e:
-                            print(f"Error: {e}")
-                            raise e
+                        except Exception:
+                            logger.exception("Error while computing anyres image grid shape")
+                            raise
                             # num_patch_width, num_patch_height = 2, 2
 
                         image_feature = image_feature.view(num_patch_height, num_patch_width, height, width, -1)
