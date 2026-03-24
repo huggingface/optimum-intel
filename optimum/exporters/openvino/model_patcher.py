@@ -4090,6 +4090,36 @@ class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
+class Qwen2VLEmbeddingPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def embedding_forward(
+            self,
+            attention_mask,
+            position_ids=None,
+            inputs_embeds=None,
+        ):
+            outputs = self.model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+            )
+            return {"last_hidden_state": outputs.last_hidden_state}
+
+        model.forward = types.MethodType(embedding_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
 class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
