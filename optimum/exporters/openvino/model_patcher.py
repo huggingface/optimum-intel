@@ -4964,6 +4964,115 @@ def gemma3n_lm_forward(
     return tuple([value if not isinstance(value, list) else tuple(value) for value in outputs_dict.values()])
 
 
+def gemma3n_eager_attention_forward_patched(
+    module: nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: Optional[torch.Tensor],
+    dropout: float = 0.0,
+    scaling: Optional[float] = None,
+    softcap: Optional[float] = None,
+    **kwargs,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if scaling is None:
+        scaling = module.head_dim**-0.5
+
+    key_states = repeat_kv(key, module.num_key_value_groups)
+    value_states = repeat_kv(value, module.num_key_value_groups)
+
+    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+
+    if softcap is not None:
+        attn_weights = attn_weights / softcap
+        attn_weights = torch.tanh(attn_weights)
+        attn_weights = attn_weights * softcap
+    if attention_mask is not None:  # no matter the length, we just slice it
+        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+        attn_weights = attn_weights + causal_mask
+    eps = 0.01
+    # upcast attention to fp32
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    attn_output = torch.matmul(attn_weights, value_states + eps)
+    attn_output = attn_output.transpose(1, 2).contiguous()
+    return attn_output, attn_weights
+
+
+def gemma3n_text_forward(
+    self,
+    hidden_states: torch.Tensor,
+    position_embeddings: torch.Tensor,
+    attention_mask: Optional[torch.Tensor],
+    past_key_values: Optional[Cache] = None,
+    cache_position: Optional[torch.LongTensor] = None,
+    **kwargs,
+) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
+    from collections.abc import Callable
+    from transformers.models.gemma3n.modeling_gemma3n import apply_rotary_pos_emb as apply_rotary_pos_emb_gemma3n
+    input_shape = hidden_states.shape[:-1]
+    hidden_shape = (*input_shape, -1, self.config.head_dim)
+
+    cos, sin = position_embeddings
+
+    query_states = self.q_proj(hidden_states).view(hidden_shape)
+    query_states = self.q_norm(query_states)
+    query_states = apply_rotary_pos_emb_gemma3n(query_states, cos, sin, unsqueeze_dim=2)
+    query_states = query_states.transpose(1, 2)
+
+    # For layers with shared KV (from kv sharing point onwards), we reuse the same keys/values states as the last non-sharing layer
+    if self.is_kv_shared_layer and past_key_values is not None:
+        key_states, value_states = past_key_values.shared_layers[self.kv_shared_layer_index]
+        # Device of past layer may be different from current one
+        key_states = key_states.to(query_states.device)
+        value_states = value_states.to(query_states.device)
+    else:
+        key_states = self.k_proj(hidden_states).view(hidden_shape)
+        key_states = self.k_norm(key_states)
+        key_states = apply_rotary_pos_emb_gemma3n(key_states, cos, sin, unsqueeze_dim=2)
+        key_states = key_states.transpose(1, 2)
+
+        value_states = self.v_proj(hidden_states).view(hidden_shape)
+        value_states = self.v_norm(value_states)
+        value_states = value_states.transpose(1, 2)
+
+    if past_key_values is not None:
+        # sin and cos are specific to RoPE models; cache_position needed for the static cache
+        cache_kwargs = {
+            "sin": sin,
+            "cos": cos,
+            "cache_position": cache_position,
+            "sliding_window": self.sliding_window,
+        }
+        if not self.is_kv_shared_layer:
+            key_states, value_states = past_key_values.update(
+                key_states, value_states, self.layer_idx, cache_kwargs
+            )
+        if self.store_full_length_kv:
+            if not hasattr(past_key_values, "shared_layers"):
+                past_key_values.shared_layers = {}
+            past_key_values.shared_layers[self.layer_idx] = key_states, value_states
+
+    attention_interface: Callable = gemma3n_eager_attention_forward_patched
+    # if self.config._attn_implementation != "eager":
+        #     attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+
+    attn_output, attn_weights = attention_interface(
+        self,
+        query_states,
+        key_states,
+        value_states,
+        attention_mask,
+        dropout=self.attention_dropout if self.training else 0.0,
+        scaling=1.0,
+        sliding_window=self.sliding_window,
+        **kwargs,
+    )
+
+    attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+    attn_output = self.o_proj(attn_output)
+    return attn_output, attn_weights
+
 
 class Gemma3nLMModelPatcher(Gemma3LMModelPatcher):
     def __init__(self, config, model, model_kwargs):
@@ -4991,6 +5100,8 @@ class Gemma3nLMModelPatcher(Gemma3LMModelPatcher):
         for decoder_layer in self._model.model.language_model.layers:
             decoder_layer.mlp._orig_gaussian_topk = decoder_layer.mlp._gaussian_topk
             decoder_layer.mlp._gaussian_topk = types.MethodType(_gaussian_topk, decoder_layer.mlp)
+            decoder_layer.self_attn.orig_forward = decoder_layer.self_attn.forward
+            decoder_layer.self_attn.forward = types.MethodType(gemma3n_text_forward, decoder_layer.self_attn)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -5000,6 +5111,7 @@ class Gemma3nLMModelPatcher(Gemma3LMModelPatcher):
 
         for decoder_layer in self._model.model.language_model.layers:
             decoder_layer.mlp._gaussian_topk = decoder_layer.mlp._orig_gaussian_topk
+            decoder_layer.self_attn.forward = decoder_layer.self_attn.orig_forward
 
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
         setattr(self._model.model, "forward", self.model_orig_language_model_forward)
