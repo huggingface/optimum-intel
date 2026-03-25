@@ -5122,8 +5122,8 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             raise ValueError("Audio input is not supported")
         if tokenizer is None:
             raise ValueError("Tokenizer is required.")
-        image_sizes = None
-        frames = None
+        image_sizes = []
+        frames = []
         results = {}
 
         # preprocess text
@@ -5146,11 +5146,27 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         if video is not None:
             if isinstance(video, list):
                 if isinstance(video[0], np.ndarray):
-                    image_sizes = [video[0].shape[:2]]
+                    image_size = video[0].shape[:2]
                 else:
                     width, height = video[0].size
-                    image_sizes = [(height, width)]
-            frames = [processor(images=video, return_tensors="pt")]
+                    image_size = (height, width)
+                image_sizes.append(image_size)
+            frames.append(processor(images=video, return_tensors="pt"))
+
+        # preprocess image
+        if image is not None:
+            from PIL.Image import Image as PILImage
+
+            if isinstance(image, PILImage):
+                width, height = image.size
+                image_size = (height, width)
+            else:
+                image_size = image.shape[:2]
+            image_frame = processor(images=image, return_tensors="pt")
+            frames.append(image_frame)
+            image_sizes.append(image_size)
+
+        if len(frames) >= 1:
             results["images"] = frames
             results["image_sizes"] = image_sizes
 
@@ -5339,8 +5355,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
     ):
         images = pixel_values
 
-        if modalities is None:
-            modalities = ["image"]
         if images is None:
             inputs_embeds = self.get_text_embeddings(input_ids)
             return inputs_embeds, attention_mask, position_ids
@@ -5348,8 +5362,16 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         # rank_print(modalities)
         if isinstance(images, list):
             images = [x.unsqueeze(0) if x.ndim == 3 else x for x in images]
-            if images[0].shape[0] > 1:
-                modalities = ["video"]
+            if modalities is None:
+                modalities = []
+                for image in images:
+                    if image.shape[0] > 1:
+                        modalities.append("video")
+                    else:
+                        modalities.append("image")
+
+        if modalities is None:
+            modalities = ["image"]
 
         video_idx_in_batch = []
         for _ in range(len(modalities)):

@@ -610,6 +610,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             from transformers import Qwen2VLForConditionalGeneration
 
             return Qwen2VLForConditionalGeneration
+        if model_arch == "videochat_flash_qwen":
+            from transformers import AutoModel
+
+            return AutoModel
         return AutoModelForCausalLM
 
     def _check_device_and_request(self, ov_model, expected_device, has_request):
@@ -640,16 +644,19 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
-        if model_arch == "videochat_flash_qwen":
-            self.skipTest(
-                "Skipping comparison against Transformers because videochat_flash_qwen in OV does not support image input"
-            )
-
-        def compare_outputs(inputs, ov_model, transformers_model, generation_config):
+        def compare_outputs(inputs, ov_model, transformers_model, generation_config, has_image=False, has_video=True):
             transformers_inputs = copy.deepcopy(inputs)
+            if model_arch == "videochat_flash_qwen":
+                input_ids = transformers_inputs.pop("input_ids")
+                transformers_inputs["inputs"] = input_ids
+                transformers_inputs["modalities"] = []
+                if has_video:
+                    transformers_inputs["modalities"].append("video")
+                if has_image:
+                    transformers_inputs["modalities"].append("image")
             ov_outputs = ov_model.generate(**inputs, generation_config=generation_config)
             # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-            if model_arch in ["minicpmv", "minicpmo", "internvl_chat"]:
+            if model_arch in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
                 ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
             with torch.no_grad():
                 transformers_outputs = transformers_model.generate(
@@ -714,6 +721,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             from transformers.cache_utils import DynamicCache
 
             transformers_inputs["past_key_values"] = DynamicCache()
+        if model_arch == "videochat_flash_qwen":
+            input_ids = transformers_inputs.pop("input_ids")
+            transformers_inputs["inputs"] = input_ids
+            transformers_inputs["modalities"] = ["image"]
 
         test_device = "AUTO"
         ov_model.to(test_device)
@@ -726,20 +737,23 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         self._check_device_and_request(ov_model, test_device, False)
 
         # pytorch minicpmv and internvl_chat are not designed to be used via forward
-        if model_arch not in ["minicpmv", "minicpmo", "internvl_chat"]:
+        if model_arch not in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
             set_seed(SEED)
             ov_outputs = ov_model(**inputs)
             set_seed(SEED)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**transformers_inputs)
+
             self.assertTrue(
                 torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=4e-3),
                 f"Max abs diff {(torch.abs(ov_outputs.logits - transformers_outputs.logits).max())}",
             )
 
         ov_model.generation_config.eos_token_id = None
-        transformers_model.generation_config.eos_token_id = None
-        transformers_model.generation_config.do_sample = False
+        # For videochat_flash_qwen, generation_config is None in transformers model, so we need to check it before setting eos_token_id
+        if transformers_model.generation_config is not None:
+            transformers_model.generation_config.eos_token_id = None
+            transformers_model.generation_config.do_sample = False
         ov_model.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
         ov_model.generation_config.do_sample = False
@@ -787,7 +801,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 transformers_outputs = transformers_outputs[1].sequences
 
         # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-        if model_arch in ["minicpmv", "minicpmo", "internvl_chat"]:
+        if model_arch in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
             ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
         self.assertTrue(
             torch.equal(ov_outputs, transformers_outputs),
@@ -807,14 +821,18 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 repo_type="dataset",
                 user_agent=http_user_agent(),
             )
-            input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
+            # videochat_flash_qwen needs frames to be multiple of 4
+            if model_arch == "videochat_flash_qwen":
+                input_video, _ = load_video(video_path, num_frames=4, backend="opencv")
+            else:
+                input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
             question = "Why is this video funny?"
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video)
             compare_outputs(inputs, ov_model, transformers_model, gen_config)
 
             # check video+image scenario
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video, image=image)
-            compare_outputs(inputs, ov_model, transformers_model, gen_config)
+            compare_outputs(inputs, ov_model, transformers_model, gen_config, has_image=True)
 
         if model_arch in self.SUPPORT_AUDIO:
             input_audio = self._generate_random_audio_data()
