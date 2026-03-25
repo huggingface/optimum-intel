@@ -36,7 +36,6 @@ from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_transformers_version
 
-
 if is_transformers_version(">=", "4.55"):
     from transformers import Mxfp4Config
 
@@ -502,10 +501,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 if is_transformers_version("<=", "4.46") and model_arch == "qwen"
                 # in older transformers versions, remote code tokenizers (and granite/granitemoe)
                 # were not loaded in pipelines because they were not registered in TOKENIZER_MAPPING
-                else model_id
-                if is_transformers_version("<=", "4.46")
-                and model_arch in REMOTE_CODE_MODELS + ("granite", "granitemoe")
-                else None
+                else (
+                    model_id
+                    if is_transformers_version("<=", "4.46")
+                    and model_arch in REMOTE_CODE_MODELS + ("granite", "granitemoe")
+                    else None
+                )
             ),
         )
         set_seed(SEED)
@@ -901,13 +902,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
 
-        gen_config = GenerationConfig(
-            max_new_tokens=10,
-            min_new_tokens=10,
-            num_beams=1,
-            do_sample=False,
-            eos_token_id=None,
-        )
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
         ov_model.config.eos_token_id = None
@@ -959,9 +953,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         self.assertTrue(
             torch.allclose(
-                ov_out.logits, 
-                tf_out.logits, 
-                atol=5e-2, # qwen3-next max diff is 0.04301672801375389
+                ov_out.logits,
+                tf_out.logits,
+                atol=5e-2,  # qwen3-next max diff is 0.04301672801375389
             ),
             f"Chunked prefill OV vs transformers mismatch:\n"
             f"  max diff: {(ov_out.logits - tf_out.logits).abs().max().item()}",
