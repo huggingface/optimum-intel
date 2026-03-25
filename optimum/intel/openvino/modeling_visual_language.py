@@ -5180,7 +5180,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         return results
 
     def encode_video_image(self, images_list, video_idx_in_batch):
-        # video encoder编码后按图像的connector处理
+        # process the video encoder output using image connector
         bs = len(images_list)
 
         concat_images = []
@@ -5267,7 +5267,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         for width, height in possible_resolutions:
             if max_resolutions is not None and (width * height != patch_size * patch_size):
-                if (width * height + patch_size * patch_size) > max_resolutions:  # NOTE 要算一个global
+                if (width * height + patch_size * patch_size) > max_resolutions:
                     continue
             # Calculate the downscaled size to keep the aspect ratio
             scale = min(width / original_width, height / original_height)

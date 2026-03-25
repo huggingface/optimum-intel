@@ -360,7 +360,7 @@ def export_pytorch(
         model.eval()
 
         # Check if we need to override certain configuration item
-        if config.values_override is not None and hasattr(model, "config"):
+        if config.values_override is not None:
             logger.info(f"Overriding {len(config.values_override)} configuration item(s)")
             for override_config_key, override_config_value in config.values_override.items():
                 logger.info(f"\t- {override_config_key} -> {override_config_value}")

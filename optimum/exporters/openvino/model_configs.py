@@ -5377,7 +5377,7 @@ class DummyVideoChatFlashQwenProjectorInputGenerator(DummyInputGenerator):
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
 
-class VideoChatFlashQWENProjectorOpenVINOConfig(OnnxConfig):
+class VideoChatFlashQwenProjectorOpenVINOConfig(OnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVideoChatFlashQwenProjectorInputGenerator,)
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
 
@@ -5452,7 +5452,7 @@ class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
             behavior = VideoChatFlashQwenConfigBehavior(behavior)
 
         if behavior == VideoChatFlashQwenConfigBehavior.VISION_PROJECTION:
-            export_config = VideoChatFlashQWENProjectorOpenVINOConfig(
+            export_config = VideoChatFlashQwenProjectorOpenVINOConfig(
                 self._orig_config,
                 task="feature-extraction",
                 int_dtype=self.int_dtype,
@@ -5481,10 +5481,14 @@ class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
             behavior = VideoChatFlashQwenConfigBehavior(behavior)
 
         if behavior == VideoChatFlashQwenConfigBehavior.VISION_PROJECTION:
-            return model.get_model().mm_projector.mlp
+            vision_projector = model.get_model().mm_projector.mlp
+            vision_projector.config = model.config
+            return vision_projector
 
         if behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
-            return model.get_vision_tower().vision_tower
+            vision_tower = model.get_vision_tower().vision_tower
+            vision_tower.config = model.config
+            return vision_tower
 
         if behavior == VideoChatFlashQwenConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = model.get_input_embeddings()
