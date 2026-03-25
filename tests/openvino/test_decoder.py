@@ -874,15 +874,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     HYBRID_ARCHITECTURES = []
-    if is_transformers_version(">=", "4.53.0"):
+    if is_transformers_version(">=", "4.53"):
         HYBRID_ARCHITECTURES.append("granitemoehybrid")
-    if is_transformers_version(">=", "4.54.0"):
+    if is_transformers_version(">=", "4.54"):
         HYBRID_ARCHITECTURES.append("lfm2")
-    if is_transformers_version(">=", "4.57.0"):
+    if is_transformers_version(">=", "4.57"):
         HYBRID_ARCHITECTURES.append("qwen3_next")
     # not including zamba2 - the Mamba mixer's torch_forward crashes on the second chunk
 
-    @parameterized.expand(HYBRID_ARCHITECTURES)
+    @parameterized.expand(HYBRID_ARCHITECTURES, skip_on_empty=True)
     @pytest.mark.run_slow
     @slow
     def test_hybrid_model_multi_step_generation(self, model_arch):
