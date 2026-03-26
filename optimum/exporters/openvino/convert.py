@@ -1117,6 +1117,9 @@ def get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
                 else:
                     timestep = timestep[:1].expand(batch_size)
 
+            # Keep dtype consistent with decoder latent path to avoid integer-only exported signatures.
+            timestep = timestep.to(dtype=latent_sample.dtype)
+
         return vae_decoder.decode(z=latent_sample, temb=timestep)
 
     vae_decoder.forward = ltx_vae_decoder_forward

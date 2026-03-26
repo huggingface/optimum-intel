@@ -2654,15 +2654,20 @@ class LTXVaeDummyInputGenerator(DummyVisionInputGenerator):
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "sample":
             return self.random_float_tensor(
-                [self.batch_size, self.sample_num_channels, self.num_frames, self.height, self.width]
+                [self.batch_size, self.sample_num_channels, self.num_frames, self.height, self.width],
+                framework=framework,
+                dtype=float_dtype,
             )
         if input_name == "latent_sample":
             return self.random_float_tensor(
-                [self.batch_size, self.latent_num_channels, self.num_frames, self.height, self.width]
+                [self.batch_size, self.latent_num_channels, self.num_frames, self.height, self.width],
+                framework=framework,
+                dtype=float_dtype,
             )
         if input_name == "timestep":
-            return self.random_int_tensor(
-                [self.batch_size], max_value=20, min_value=1, framework=framework, dtype=int_dtype
+            # Export timestep as float and keep batch-dynamic mapping in decoder config.
+            return self.random_float_tensor(
+                [self.batch_size], framework=framework, dtype=float_dtype
             )
 
         return super().generate(input_name, framework, int_dtype, float_dtype)
@@ -2695,7 +2700,7 @@ class LTXVaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
             "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"},
         }
         if self._normalized_config.config.timestep_conditioning:
-            base_input["timestep"] = {}
+            base_input["timestep"] = {0: "batch_size"}
         return base_input
 
     @property
