@@ -7198,7 +7198,19 @@ def lfm2_short_conv_forward_patched(
 
     seqlen = x.shape[1]
 
-    x = apply_mask_to_padding_states(x, attention_mask)
+
+   # x = apply_mask_to_padding_states(x, attention_mask)
+
+    is_decoding = torch.tensor(seqlen == 1).to(x.dtype)
+
+    x_prefill = apply_mask_to_padding_states(x, attention_mask) * (1.0 - is_decoding)
+    x_dec = x * is_decoding
+    x_dec = F.pad(x_dec, (0, 0, 0, x_prefill.shape[1] - seqlen))
+
+    x = x_prefill + x_dec
+    x = x[:, 0:seqlen, :]
+
+
     BCx = self.in_proj(x).transpose(-1, -2)
     B, C, x = BCx.chunk(3, dim=-2)
 
@@ -7216,6 +7228,83 @@ def lfm2_short_conv_forward_patched(
     y = y.transpose(-1, -2).contiguous()
     y = self.out_proj(y)
     return y
+
+
+def lf2_patched_forward(
+            self,
+            input_ids: torch.LongTensor | None = None,
+            attention_mask: torch.Tensor | None = None,
+            position_ids: torch.LongTensor | None = None,
+            past_key_values = None,
+            inputs_embeds: torch.FloatTensor | None = None,
+            use_cache: bool | None = None,
+            cache_position: torch.LongTensor | None = None,
+            **kwargs: Unpack[TransformersKwargs],
+    ) -> BaseModelOutputWithPast:
+    from transformers.models.lfm2.modeling_lfm2 import Lfm2HybridConvCache, BaseModelOutputWithPast
+    if (input_ids is None) ^ (inputs_embeds is not None):
+        raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+
+    if inputs_embeds is None:
+        inputs_embeds = self.embed_tokens(input_ids)
+
+    if use_cache and past_key_values is None:
+        batch_size = inputs_embeds.shape[0]
+        past_key_values = Lfm2HybridConvCache(
+            config=self.config, max_batch_size=batch_size, dtype=self.dtype, device=self.device
+        )
+
+    if cache_position is None:
+        past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+        cache_position = torch.arange(
+            past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
+        )
+
+    if position_ids is None:
+        position_ids = cache_position.unsqueeze(0)
+
+    causal_mask = create_causal_mask(
+        config=self.config,
+        input_embeds=inputs_embeds,
+        attention_mask=attention_mask,
+        cache_position=cache_position,
+        past_key_values=past_key_values,
+        position_ids=position_ids,
+    )
+    # Skip masking for decoding stage. We check shape here to be compile-friendly
+    linear_attention = attention_mask if inputs_embeds.shape[1] != 1 else None
+
+    hidden_states = inputs_embeds
+    position_embeddings = self.rotary_emb(hidden_states, position_ids=position_ids)
+
+    # decoder layers
+    for decoder_layer in self.layers[: self.config.num_hidden_layers]:
+        layer_mask = causal_mask if decoder_layer.is_attention_layer else linear_attention
+        # print("decoder_layer.is_attention_layer {}".format(decoder_layer.is_attention_layer))
+        # print("layer_mask {}".format(layer_mask))
+        # print("causal_mask {}".format(causal_mask))
+        # if not decoder_layer.is_attention_layer:
+        #     print()
+        # print()
+        # print()
+       # layer_mask = layer_mask.type(causal_mask.type())
+        # Workaround to fix accuracy issue
+        hidden_states = decoder_layer(
+            hidden_states,
+            attention_mask=causal_mask,
+            position_embeddings=position_embeddings,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            cache_position=cache_position,
+            **kwargs,
+        )
+
+    hidden_states = self.embedding_norm(hidden_states)
+
+    return BaseModelOutputWithPast(
+        last_hidden_state=hidden_states,
+        past_key_values=past_key_values,
+    )
 
 
 # This patcher class serves the following purposes:
@@ -7362,6 +7451,8 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
 
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
+       # setattr(self._model.model, "orig_forward", self._model.model.forward)
+        # self._model.model.forward = types.MethodType(lf2_patched_forward, self._model.model)
 
         for layer in self._model.model.layers:
             if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2ShortConv):
@@ -7376,6 +7467,7 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
 
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+       # setattr(self._model.model, "forward", self._model.model.orig_forward)
 
         for layer in self._model.model.layers:
             if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2ShortConv):
