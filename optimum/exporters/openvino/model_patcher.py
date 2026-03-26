@@ -4000,6 +4000,7 @@ def deepseek_v3_attn_forward(
         is_causal=self.is_causal and attention_mask is None and q_len > 1,
         scale=None if not new_interface else self.scaling,
     )
+
     attn_output = attn_output.transpose(1, 2).contiguous()
 
     attn_output = attn_output.reshape(bsz, q_len, self.num_heads * self.v_head_dim)
