@@ -1514,7 +1514,10 @@ class Gemma3nDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         # some layers do not produce their own KV-cache, they use the shared KV-cache
-        layer_types = self.layer_types[: -self.num_kv_shared_layers]
+        if self.num_kv_shared_layers > 0:
+            layer_types = self.layer_types[: -self.num_kv_shared_layers]
+        else:
+            layer_types = self.layer_types
         past_kv_values = []
         for layer_type in layer_types:
             if layer_type == "sliding_attention":
@@ -1569,7 +1572,10 @@ class Gemma3nTextOpenVINOConfig(Gemma3TextOpenVINOConfig):
             name = "present"
 
         num_kv_shared_layers = self._normalized_config.config.num_kv_shared_layers
-        layer_types = self._normalized_config.config.layer_types[:-num_kv_shared_layers]
+        if num_kv_shared_layers > 0:
+            layer_types = self._normalized_config.config.layer_types[:-num_kv_shared_layers]
+        else:
+            layer_types = self._normalized_config.config.layer_types
 
         for i, layer_type in enumerate(layer_types):
             if layer_type == "sliding_attention":
@@ -4325,7 +4331,7 @@ class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
                 self.int_dtype,
                 self.float_dtype,
                 model_patcher=Gemma3nLMModelPatcher,
-                inputs_update={"per_layer_inputs": {0: "batch_size", 1: "sequence_length"}},
+                inputs_update={"per_layer_inputs": {0: "batch_size", 1: "sequence_length", 2: "num_hidden_layers"}},
             )
         if behavior == Gemma3nConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
             config = self.__class__(
