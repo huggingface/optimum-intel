@@ -5125,6 +5125,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         image_sizes = []
         frames = []
         results = {}
+        local_num_frames = getattr(config, "mm_local_num_frames", 4)
 
         # preprocess text
         prompt = f"<image>\n{text}" if (image is not None or video is not None) else text
@@ -5144,13 +5145,27 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         # preprocess video
         if video is not None:
-            if isinstance(video, list):
+            if isinstance(video, np.ndarray):
+                num_frames = video.shape[0]
+                image_size = video.shape[1:3]
+                if num_frames % local_num_frames != 0:
+                    pad_frames = local_num_frames - (num_frames % local_num_frames)
+                    pad = np.repeat(video[-1:], pad_frames, axis=0)
+                    video = np.concatenate([video, pad], axis=0)
+            elif isinstance(video, list):
+                num_frames = len(video)
                 if isinstance(video[0], np.ndarray):
                     image_size = video[0].shape[:2]
                 else:
                     width, height = video[0].size
                     image_size = (height, width)
-                image_sizes.append(image_size)
+                if num_frames % local_num_frames != 0:
+                    pad_frames = local_num_frames - (num_frames % local_num_frames)
+                    video = video + [video[-1]] * pad_frames
+            else:
+                raise ValueError("Unsupported video type: {}".format(type(video)))
+
+            image_sizes.append(image_size)
             frames.append(processor(images=video, return_tensors="pt"))
 
         # preprocess image
