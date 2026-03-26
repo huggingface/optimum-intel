@@ -3869,16 +3869,17 @@ def deepseek_v3_attn_forward(
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     # modified from https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L751
     def rotate_half(x):
+        """Rotates half the hidden dims of the input."""
         x1 = x[..., : x.shape[-1] // 2]
         x2 = x[..., x.shape[-1] // 2 :]
         return torch.cat((-x2, x1), dim=-1)
 
     def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
         orig_dtype = k.dtype
-        cos = cos[position_ids].unsqueeze(unsqueeze_dim)
-        sin = sin[position_ids].unsqueeze(unsqueeze_dim)
-        q_fp32 = q.to(dtype=torch.float32)
-        k_fp32 = k.to(dtype=torch.float32)
+        cos = cos[position_ids].unsqueeze(unsqueeze_dim)  # [bs, 1, seq_len, dim]
+        sin = sin[position_ids].unsqueeze(unsqueeze_dim)  # [bs, 1, seq_len, dim]
+        q_fp32 = q.to(dtype=torch.float32, device=q.device)
+        k_fp32 = k.to(dtype=torch.float32, device=k.device)
         q_embed = (q_fp32 * cos) + (rotate_half(q_fp32) * sin)
         k_embed = (k_fp32 * cos) + (rotate_half(k_fp32) * sin)
         return q_embed.to(dtype=orig_dtype), k_embed.to(dtype=orig_dtype)
