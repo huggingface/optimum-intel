@@ -3931,6 +3931,8 @@ def deepseek_v3_attn_forward(
     if new_interface:
         from transformers.models.deepseek_v3.modeling_deepseek_v3 import (
             apply_rotary_pos_emb as deepseek_v3_apply_rotary_pos_emb,
+        )
+        from transformers.models.deepseek_v3.modeling_deepseek_v3 import (
             apply_rotary_pos_emb_interleave as deepseek_v3_apply_rotary_pos_emb_interleave,
         )
 
@@ -4179,14 +4181,15 @@ def deepseek_moe(self, hidden_states: torch.Tensor, topk_indices: torch.Tensor, 
     orig_dtype = hidden_states.dtype
     num_experts = len(self.experts)
     batch_tokens, _ = hidden_states.shape
-    routing = torch.zeros(batch_tokens, num_experts, dtype=topk_weights.dtype, device=hidden_states.device)
-    routing.scatter_(1, topk_indices, topk_weights)
-    expanded = hidden_states.unsqueeze(0).expand(num_experts, -1, -1)
+    compute_dtype = torch.promote_types(hidden_states.dtype, self.gate_projs.dtype)
+    routing = torch.zeros(batch_tokens, num_experts, dtype=compute_dtype, device=hidden_states.device)
+    routing.scatter_(1, topk_indices, topk_weights.to(dtype=compute_dtype))
+    expanded = hidden_states.to(dtype=compute_dtype).unsqueeze(0).expand(num_experts, -1, -1)
     act_fn = self.experts[0].act_fn
-    gate = torch.bmm(expanded, self.gate_projs.transpose(1, 2))
-    up = torch.bmm(expanded, self.up_projs.transpose(1, 2))
+    gate = torch.bmm(expanded, self.gate_projs.to(dtype=compute_dtype).transpose(1, 2))
+    up = torch.bmm(expanded, self.up_projs.to(dtype=compute_dtype).transpose(1, 2))
     gate_up = act_fn(gate) * up
-    next_states = torch.bmm(gate_up, self.down_projs.transpose(1, 2))
+    next_states = torch.bmm(gate_up, self.down_projs.to(dtype=compute_dtype).transpose(1, 2))
     routing = routing.transpose(0, 1).unsqueeze(-1)
     next_states = next_states * routing
     next_states = next_states.sum(dim=0)
