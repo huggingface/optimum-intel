@@ -28,6 +28,7 @@ from optimum.exporters.openvino.model_configs import (
     DeepseekOpenVINOConfig,
     LFM2OpenVINOConfig,
     Qwen3VLOpenVINOConfig,
+    Qwen3_5TextOpenVINOConfig,
 )
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
@@ -336,6 +337,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "exaone4",
                 "qwen3_next",
             }
+
+        # qwen3_5_text a part of qwen3_5 architecture and is tested in seq2seq group
+        if is_transformers_version(">=", str(Qwen3_5TextOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"qwen3_5_text"}
 
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
         untested_architectures = supported_architectures - tested_architectures
