@@ -1739,7 +1739,7 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
         return dummy_inputs
 
 
-class InputEmbedOpenvVINOConfig(TextDecoderOnnxConfig):
+class InputEmbedOpenVINOConfig(TextDecoderOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = InputEmbeddingPatcher
 
@@ -1782,8 +1782,8 @@ def get_vlm_internal_text_generation_config(model_type, model_config, int_dtype,
 
 def get_vlm_text_embeddings_config(model_type, model_config, int_dtype, float_dtype):
     internal_export_config = get_vlm_internal_text_generation_config(model_type, model_config, int_dtype, float_dtype)
-    InputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
-    export_config = InputEmbedOpenvVINOConfig(
+    InputEmbedOpenVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
+    export_config = InputEmbedOpenVINOConfig(
         model_config,
         task="feature-extraction",
         int_dtype=int_dtype,
@@ -3663,7 +3663,9 @@ class QwenVLConfigBehavior(str, enum.Enum):
 
 @register_in_tasks_manager("qwen2_vl", *["image-text-to-text"], library_name="transformers")
 class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
-    SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior]
+    SUPPORTED_BEHAVIORS = [
+        model_type.value for model_type in QwenVLConfigBehavior if model_type.value != "vision_embeddings_pos"
+    ]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLVisionEmbedInputGenerator,)
     MIN_TRANSFORMERS_VERSION = "4.45.0"
@@ -3914,11 +3916,10 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
         model_kwargs = model_kwargs or {}
         if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return Qwen3VLVisionEmbMergerPatcher(self, model, model_kwargs)
-        if (
-            self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS
-            or self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS
-        ):
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
             return ModelPatcher(self, model, model_kwargs=model_kwargs)
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
+            return InputEmbeddingPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
 
     @property

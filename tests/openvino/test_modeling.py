@@ -90,8 +90,10 @@ from optimum.intel.openvino.utils import (
     OV_LANGUAGE_MODEL_NAME,
     OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
     OV_TEXT_EMBEDDINGS_MODEL_NAME,
+    OV_TO_PT_TYPE,
     OV_VISION_EMBEDDINGS_MODEL_NAME,
     OV_VISION_ENCODER_MODEL_NAME,
+    STR_TO_OV_TYPE,
     TemporaryDirectory,
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
@@ -704,12 +706,18 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     def test_export_dtype(self):
         model_id = "optimum-intel-internal-testing/tiny-random-GemmaForCausalLM"
-        for dtype in [torch.float32, torch.bfloat16, torch.float16]:
-            with TemporaryDirectory() as tmpdirname:
-                model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype)
-                self.assertEqual(model.dtype, dtype)
-                model.save_pretrained(tmpdirname)
-                ov_model = OVModelForCausalLM.from_pretrained(tmpdirname, export=True)
+        for dtype in ["f32", "f16", "bf16"]:
+            torch_dtype = OV_TO_PT_TYPE[dtype]
+            ov_dtype = STR_TO_OV_TYPE[dtype]
+            with TemporaryDirectory() as tmp_dir:
+                model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype)
+                self.assertEqual(model.dtype, torch_dtype)
+                model.save_pretrained(tmp_dir)
+                del model
+                ov_model = OVModelForCausalLM.from_pretrained(tmp_dir, export=True)
+                dtypes = {op.get_element_type() for op in ov_model.model.get_ops() if op.get_type_name() == "Constant"}
+                self.assertIn(ov_dtype, dtypes, f"Expected {ov_dtype}, found {dtypes}")
+                del ov_model
 
 
 class PipelineTest(unittest.TestCase):
