@@ -530,9 +530,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "minicpmv",
         "phi3_v",
         "qwen2_vl",
-        "videochat_flash_qwen",
     ]
-    SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl", "videochat_flash_qwen"]
+    SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl"]
     SUPPORT_AUDIO = []
     OVMODEL_CLASS = OVModelForVisualCausalLM
     TASK = "image-text-to-text"
@@ -557,6 +556,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         SUPPORT_VIDEO += ["qwen3_vl"]
 
     if is_transformers_version(">=", "4.54.0"):
+        # the layers attribute of DynamicCache is used in videochat_flash_qwen model
+        SUPPORTED_ARCHITECTURES.append("videochat_flash_qwen")
+        SUPPORT_VIDEO.append("videochat_flash_qwen")
         # remote code models differs after transformers v4.54
         SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"llava-qwen2", "phi3_v", "phi4mm"}
 
