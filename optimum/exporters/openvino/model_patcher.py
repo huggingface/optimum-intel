@@ -7198,7 +7198,8 @@ def lfm2_short_conv_forward_patched(
 
     # only apply apply_mask_to_padding_states during the prefill phase
     # https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/lfm2/modeling_lfm2.py#L427
-    # in transformers < v5 attention_mask was never applied for conv layers, until https://github.com/huggingface/transformers/pull/41790/
+    # in transformers < v5 attention_mask was never applied in Lfm2ShortConv https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/lfm2/modeling_lfm2.py#L485
+    # until a fix was added in https://github.com/huggingface/transformers/pull/41790/
     dtype = x.dtype
     is_decoding = torch.tensor(seqlen == 1, dtype=dtype)
     x = (x * (attention_mask[:, :seqlen, None] * (1 - is_decoding) + is_decoding)).to(dtype)
