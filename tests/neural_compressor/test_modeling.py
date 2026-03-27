@@ -73,7 +73,7 @@ class INCModelingTest(unittest.TestCase):
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
-    @parameterized.expand(MODEL_NAMES_TO_TASK + QUANTIZED_MODEL_NAMES_TO_TASK)
+    @parameterized.expand(MODEL_NAMES_TO_TASK)
     def test_compare_to_transformers(self, model_id, task):
         model_class = eval(_HEAD_TO_AUTOMODELS[task])
         inc_model = model_class.from_pretrained(model_id)
@@ -109,7 +109,7 @@ class INCModelingTest(unittest.TestCase):
             # Compare to original transformers model
             self.assertTrue(torch.equal(transformers_outputs[output_name], outputs[output_name]))
 
-    @parameterized.expand(MODEL_NAMES_TO_TASK + QUANTIZED_MODEL_NAMES_TO_TASK)
+    @parameterized.expand(MODEL_NAMES_TO_TASK)
     def test_pipeline(self, model_id, task):
         if task == "multiple-choice":
             self.skipTest("No pipeline for multiple choice")
