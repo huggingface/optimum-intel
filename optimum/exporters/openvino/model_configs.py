@@ -175,6 +175,8 @@ from .model_patcher import (
     MiniCPMModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
+    Mistral3ImageEmbeddingModelPatcher,
+    Mistral3LanguageModelPatcher,
     MistralModelPatcher,
     MixtralModelPatcher,
     MPTModelPatcher,
@@ -287,6 +289,22 @@ def init_model_configs():
         "transformers",
         "AutoModelForImageTextToText",
     )
+
+    TasksManager._CUSTOM_CLASSES[("pt", "mistral3", "image-text-to-text")] = (
+        "transformers",
+        "Mistral3ForConditionalGeneration",
+    )
+
+    # Register "ministral3" text config type so Mistral3Config can instantiate its text sub-config
+    try:
+        from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+
+        if "ministral3" not in CONFIG_MAPPING:
+            from transformers.models.ministral.configuration_ministral import MinistralConfig
+
+            CONFIG_MAPPING.register("ministral3", MinistralConfig, exist_ok=True)
+    except Exception:
+        pass
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
@@ -4545,6 +4563,103 @@ class Llama4OpenVINOConfig(GotOCR2OpenVINOConfig):
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return Llama4ImageEmbeddingsModelPatcher(self, model, model_kwargs)
+
+
+@register_in_tasks_manager("mistral3", *["image-text-to-text"], library_name="transformers")
+class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.50.0"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VLMConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            model_type = self._orig_config.text_config.model_type
+            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
+                model_type = "mistral"
+            return get_vlm_text_embeddings_config(
+                model_type, self._orig_config.text_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            model_type = self._orig_config.text_config.model_type
+            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
+                model_type = "mistral"
+            return get_vlm_text_generation_config(
+                model_type, self._orig_config.text_config, self.int_dtype, self.float_dtype,
+                model_patcher=Mistral3LanguageModelPatcher,
+            )
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return model
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            if hasattr(model, "model") and hasattr(model.model, "language_model"):
+                text_embedding = model.model.language_model.get_input_embeddings()
+                text_embedding.config = model.model.language_model.config
+            else:
+                text_embedding = model.get_input_embeddings()
+                text_embedding.config = model.config.text_config
+            return text_embedding
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return Mistral3ImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "num_patches"}}
+        return super().outputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs) -> Dict:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            kwargs["batch_size"] = 1
+        return super().generate_dummy_inputs(framework, **kwargs)
 
 
 class MambaCacheDummyInputGenerator(DummyInputGenerator):
