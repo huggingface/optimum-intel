@@ -1472,6 +1472,12 @@ class OVQuantizer(OptimumQuantizer):
                 ov_model_name, pipeline_quantization_config.default_config
             )
             if config is None:
+                if immediate_save:
+                    # Unload skipped submodels early so their IR files are not held open on Windows.
+                    # This can avoid later _merge_move failures caused by locked .bin files.
+                    ov_model = self.model.ov_models[ov_model_name]
+                    if ov_model is not None:
+                        self.model._unload_ov_model(ov_model)
                 continue
             ov_model = self.model.ov_models[ov_model_name]
             nncf_dataset = calibration_dataset.get(ov_model_name, None) if calibration_dataset else None
