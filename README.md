@@ -4,9 +4,9 @@
 
 # Optimum Intel
 
-🤗 [Optimum Intel](https://huggingface.co/docs/optimum-intel/en/index) is the interface between the 🤗 Transformers and Diffusers libraries and the different tools and libraries provided by [OpenVINO](https://docs.openvino.ai) to accelerate end-to-end pipelines on Intel architectures.
+🤗 [Optimum Intel](https://huggingface.co/docs/optimum-intel/en/index) is the interface between the 🤗 Transformers, Diffusers, Sentence Transformers and timm libraries and the different tools and libraries provided by [OpenVINO](https://docs.openvino.ai) to accelerate end-to-end pipelines on Intel architectures.
 
-[OpenVINO](https://docs.openvino.ai) is an open-source toolkit that enables high performance inference capabilities for Intel CPUs, GPUs, and special DL inference accelerators ([see](https://docs.openvino.ai/2024/about-openvino/compatibility-and-support/supported-devices.html) the full list of supported devices). It is supplied with a set of tools to optimize your models with compression techniques such as quantization, pruning and knowledge distillation. Optimum Intel provides a simple interface to optimize your Transformers and Diffusers models, convert them to the OpenVINO Intermediate Representation (IR) format and run inference using OpenVINO Runtime.
+[OpenVINO](https://docs.openvino.ai) is an open-source toolkit that enables high performance inference capabilities for Intel CPUs, GPUs, and special DL inference accelerators ([see](https://docs.openvino.ai/2024/about-openvino/compatibility-and-support/supported-devices.html) the full list of supported devices). It is supplied with a set of tools to optimize your models with compression techniques such as quantization, pruning and knowledge distillation. Optimum Intel provides a simple interface to optimize your model, convert it to the OpenVINO Intermediate Representation (IR) format and run inference using OpenVINO Runtime.
 
 
 ## Installation
@@ -34,6 +34,8 @@ Below is an example of exporting [TinyLlama/TinyLlama_v1.1](https://huggingface.
 ```sh
 optimum-cli export openvino --model TinyLlama/TinyLlama_v1.1 ov_TinyLlama_v1_1
 ```
+
+To export a [model](https://huggingface.co/docs/optimum-intel/en/openvino/models) hosted on the Hub you can use our [space](https://huggingface.co/spaces/echarlaix/openvino-export). After conversion, a repository will be pushed under your namespace, this repository can be either public or private.
 
 Additional information on exporting models is available in the [documentation](https://huggingface.co/docs/optimum-intel/en/openvino/export).
 
