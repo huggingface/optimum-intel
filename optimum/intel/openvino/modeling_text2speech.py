@@ -161,18 +161,38 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
     export_feature = "text-to-audio"
 
     @classmethod
+    def from_pretrained(cls, model_id, **kwargs):
+        # For Kokoro models, load config via PretrainedConfig since AutoConfig
+        # does not recognize the "kokoro" model_type.
+        if kwargs.get("config") is None:
+            try:
+                config = PretrainedConfig.from_pretrained(
+                    model_id,
+                    cache_dir=kwargs.get("cache_dir", HUGGINGFACE_HUB_CACHE),
+                    token=kwargs.get("token"),
+                    revision=kwargs.get("revision"),
+                )
+                if getattr(config, "model_type", None) == "kokoro":
+                    kwargs["config"] = config
+            except Exception:
+                pass
+        return super().from_pretrained(model_id, **kwargs)
+
+    @classmethod
     def _from_pretrained(
         cls,
         model_id: Union[str, Path],
         config: "PretrainedConfig",
         **kwargs,
     ):
-        if "SpeechT5ForTextToSpeech" in config.architectures:
+        if getattr(config, "model_type", None) == "kokoro":
+            return _OVModelForKokoroTextToSpeech._from_pretrained(model_id, config, **kwargs)
+        elif getattr(config, "architectures", None) and "SpeechT5ForTextToSpeech" in config.architectures:
             return _OVModelForSpeechT5ForTextToSpeech._from_pretrained(model_id, config, **kwargs)
         else:
-            raise ValueError(f"{config.architectures} are not supported text-to-audio model using OpenVINO")
-
-            return super()._from_pretrained(model_id, config, **kwargs)
+            raise ValueError(
+                f"{getattr(config, 'architectures', None)} are not supported text-to-audio model using OpenVINO"
+            )
 
     def reshape(self, *args, **kwargs):
         logger.warning("Static shapes are not supported for this model.")
@@ -522,3 +542,184 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
                 )
                 outputs = (*outputs, cross_attentions)
         return outputs
+
+
+class _OVModelForKokoroTextToSpeech(OVBaseModel):
+    """
+    OpenVINO inference model for Kokoro TTS.
+
+    Kokoro is a single-model architecture with inputs (input_ids, ref_s, speed) and
+    outputs (waveform, phonemes). Voice embeddings are stored as .bin files in a voices/ subdirectory.
+    """
+
+    export_feature = "text-to-audio"
+    auto_model_class = AutoModelForTextToSpectrogram
+
+    def __init__(self, model: openvino.Model, config: PretrainedConfig = None, **kwargs):
+        # Kokoro model does not support dynamic shapes due to Squeeze op limitations,
+        # so we skip the automatic reshape to dynamic shapes.
+        kwargs.setdefault("dynamic_shapes", False)
+        super().__init__(model, config, **kwargs)
+        self._voices = {}
+        self._voices_dir = None
+
+    def _reshape(self, model, batch_size, sequence_length, height=None, width=None):
+        # Kokoro has inputs with different ranks (speed is 1D), so only reshape
+        # dimensions that exist in each input.
+        shapes = {}
+        for inp in model.inputs:
+            shape = inp.get_partial_shape()
+            if len(shape) >= 1:
+                shape[0] = batch_size
+            if len(shape) >= 2:
+                shape[1] = sequence_length
+            shapes[inp] = shape
+        model.reshape(shapes)
+        return model
+
+    @classmethod
+    def _from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        config: "PretrainedConfig",
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        local_files_only: bool = False,
+        load_in_8bit: bool = False,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        trust_remote_code: bool = False,
+        **kwargs,
+    ):
+        model = super()._from_pretrained(
+            model_id,
+            config=config,
+            token=token,
+            revision=revision,
+            force_download=force_download,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+            load_in_8bit=load_in_8bit,
+            quantization_config=quantization_config,
+            trust_remote_code=trust_remote_code,
+            **kwargs,
+        )
+        # Locate voices directory
+        if model.model_save_dir is not None:
+            voices_dir = Path(model.model_save_dir) / "voices"
+            if voices_dir.is_dir():
+                model._voices_dir = voices_dir
+        return model
+
+    def _load_voice(self, voice_name: str) -> np.ndarray:
+        """Load a voice embedding by name, caching results."""
+        if voice_name in self._voices:
+            return self._voices[voice_name]
+
+        if self._voices_dir is None:
+            raise FileNotFoundError("No voices directory found in model directory.")
+
+        voice_path = self._voices_dir / f"{voice_name}.bin"
+        if not voice_path.exists():
+            raise FileNotFoundError(
+                f"Voice '{voice_name}' not found at {voice_path}. "
+                f"Available voices: {[f.stem for f in self._voices_dir.glob('*.bin')]}"
+            )
+
+        voice_data = np.fromfile(voice_path, dtype=np.float32)
+        self._voices[voice_name] = voice_data
+        return voice_data
+
+    @property
+    def available_voices(self) -> List[str]:
+        """Returns list of available voice names."""
+        if self._voices_dir is None or not self._voices_dir.is_dir():
+            return []
+        return sorted(f.stem for f in self._voices_dir.glob("*.bin"))
+
+    def forward(
+        self,
+        input_ids: Union[torch.Tensor, np.ndarray],
+        ref_s: Union[torch.Tensor, np.ndarray],
+        speed: Union[torch.Tensor, np.ndarray, float],
+        **kwargs,
+    ) -> ModelOutput:
+        """
+        Run inference on the Kokoro model.
+
+        Args:
+            input_ids: Token IDs of shape [batch_size, sequence_length].
+            ref_s: Voice style embedding of shape [batch_size, style_dim].
+            speed: Speed factor, scalar or array.
+
+        Returns:
+            ModelOutput with `waveform` and `phonemes`.
+        """
+        self.compile()
+
+        if isinstance(input_ids, torch.Tensor):
+            input_ids = input_ids.numpy()
+        if isinstance(ref_s, torch.Tensor):
+            ref_s = ref_s.numpy()
+        if isinstance(speed, (int, float)):
+            speed = np.array([speed], dtype=np.float32)
+        elif isinstance(speed, torch.Tensor):
+            speed = speed.numpy()
+
+        inputs = {
+            "input_ids": input_ids,
+            "ref_s": ref_s,
+            "speed": speed,
+        }
+
+        outputs = self._inference(inputs)
+        waveform = torch.from_numpy(outputs[0])
+        phonemes = torch.from_numpy(outputs[1])
+        return ModelOutput(waveform=waveform, phonemes=phonemes)
+
+    def generate(
+        self,
+        input_ids: Union[torch.Tensor, np.ndarray],
+        voice: Optional[str] = None,
+        ref_s: Optional[Union[torch.Tensor, np.ndarray]] = None,
+        speed: float = 1.0,
+        **kwargs,
+    ) -> torch.FloatTensor:
+        """
+        Generate audio waveform from token IDs.
+
+        Args:
+            input_ids: Token IDs of shape [batch_size, sequence_length].
+            voice: Name of a voice preset (e.g., "af_heart"). Ignored if ref_s is provided.
+            ref_s: Voice style embedding. If None, loaded from voice preset.
+            speed: Speed factor (default 1.0).
+
+        Returns:
+            Audio waveform tensor.
+        """
+        if ref_s is None:
+            if voice is None:
+                voice = "af_heart"
+            voice_data = self._load_voice(voice)
+            ref_s = voice_data.reshape(1, -1)
+
+        if isinstance(input_ids, torch.Tensor):
+            if input_ids.dim() == 1:
+                input_ids = input_ids.unsqueeze(0)
+        elif isinstance(input_ids, np.ndarray):
+            if input_ids.ndim == 1:
+                input_ids = input_ids.reshape(1, -1)
+
+        if isinstance(ref_s, np.ndarray) and ref_s.ndim == 1:
+            ref_s = ref_s.reshape(1, -1)
+
+        result = self.forward(input_ids=input_ids, ref_s=ref_s, speed=speed)
+        return result.waveform
+
+    def reshape(self, *args, **kwargs):
+        logger.warning("Static shapes are not supported for Kokoro model.")
+        return self
+
+    def can_generate(self) -> bool:
+        return True

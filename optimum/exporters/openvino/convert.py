@@ -552,6 +552,68 @@ def export_models(
     return outputs
 
 
+def _save_kokoro_config_and_assets(model, output: Path):
+    """Save Kokoro model config.json and export voice embeddings."""
+    import json
+    import tempfile
+
+    import numpy as np
+    from huggingface_hub import hf_hub_download, list_repo_files
+
+    repo_id = getattr(model, "_kokoro_repo_id", None)
+
+    # Save config.json
+    config_dict = {}
+    for key in vars(model.config):
+        if not key.startswith("_"):
+            config_dict[key] = getattr(model.config, key)
+    config_path = output / "config.json"
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config_dict, f, indent=2)
+
+    if repo_id is None:
+        return
+
+    if True:
+        return
+
+    # Export voice embeddings to .bin format
+    voices_dir = output / "voices"
+    voices_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        repo_files = list_repo_files(repo_id=repo_id)
+    except Exception:
+        logger.warning(f"Could not list files for {repo_id}. Skipping voice export.")
+        return
+
+    voice_pt_files = sorted(path for path in repo_files if path.startswith("voices/") and path.endswith(".pt"))
+    if not voice_pt_files:
+        return
+
+    logger.info(f"Found {len(voice_pt_files)} voice files. Exporting to {voices_dir} ...")
+    with tempfile.TemporaryDirectory(prefix="kokoro_voice_pt_") as tmp_dir:
+        for remote_path in voice_pt_files:
+            local_pt = hf_hub_download(repo_id=repo_id, filename=remote_path, local_dir=tmp_dir)
+            voice_name = Path(remote_path).stem
+            out_bin = voices_dir / f"{voice_name}.bin"
+
+            import torch
+
+            voice_obj = torch.load(local_pt, map_location="cpu")
+            if torch.is_tensor(voice_obj):
+                voice_tensor = voice_obj
+            elif isinstance(voice_obj, dict):
+                voice_tensor = next(v for v in voice_obj.values() if torch.is_tensor(v))
+            else:
+                logger.warning(f"Unsupported voice format in {remote_path}, skipping.")
+                continue
+
+            voice_tensor = voice_tensor.detach().cpu().to(torch.float32).contiguous()
+            np.asarray(voice_tensor.numpy(), dtype=np.float32).tofile(out_bin)
+            logger.info(f"Exported {remote_path} -> {out_bin}")
+
+
 def export_from_model(
     model: Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"],
     output: Union[str, Path],
@@ -576,7 +638,7 @@ def export_from_model(
         )
 
     library_name = _infer_library_from_model_or_model_class(model)
-    if library_name != "open_clip":
+    if library_name not in ("open_clip", "kokoro"):
         TasksManager.standardize_model_attributes(model)
 
     if hasattr(model.config, "export_model_type") and model.config.export_model_type is not None:
@@ -594,12 +656,15 @@ def export_from_model(
     if task is not None and task != "auto":
         task = TasksManager.map_from_synonym(task)
     else:
-        try:
-            task = TasksManager._infer_task_from_model_or_model_class(model=model)
-        except (ValueError, KeyError) as e:
-            raise RuntimeError(
-                f"The model task could not be automatically inferred in `export_from_model`. Please provide the argument `task` with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
-            )
+        if library_name == "kokoro":
+            task = "text-to-audio"
+        else:
+            try:
+                task = TasksManager._infer_task_from_model_or_model_class(model=model)
+            except (ValueError, KeyError) as e:
+                raise RuntimeError(
+                    f"The model task could not be automatically inferred in `export_from_model`. Please provide the argument `task` with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+                )
 
         if (
             not custom_architecture
@@ -661,6 +726,20 @@ def export_from_model(
             model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
         )
 
+    if library_name == "kokoro":
+        custom_architecture = True
+        export_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=model, exporter="openvino", task=task, library_name="kokoro"
+        )
+        kokoro_export_config = export_config_constructor(model.config, task=task)
+        custom_export_configs = {"model": kokoro_export_config}
+
+        def _get_kokoro_submodels(model):
+            return {"model": model}
+
+        fn_get_submodels = _get_kokoro_submodels
+
+    #raise "Exception"
     if library_name == "diffusers":
         export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
         stateful_submodels = False
@@ -699,6 +778,9 @@ def export_from_model(
             if hasattr(preprocess, "save_pretrained"):
                 preprocess.save_pretrained(output)
 
+        files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
+    elif library_name == "kokoro":
+        _save_kokoro_config_and_assets(model, output)
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
     elif library_name != "diffusers":
         # some model configs may have issues with loading without parameters initialization

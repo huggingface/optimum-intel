@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import importlib.util
 import unittest
 from pathlib import Path
 
@@ -393,3 +394,22 @@ class CustomExportModelTest(unittest.TestCase):
         ov_outputs = ov_model(**tokens)
         self.assertTrue(torch.allclose(ov_outputs.token_embeddings, model_outputs.token_embeddings, atol=1e-4))
         self.assertTrue(torch.allclose(ov_outputs.sentence_embedding, model_outputs.sentence_embedding, atol=1e-4))
+
+
+@unittest.skipUnless(
+    importlib.util.find_spec("kokoro") is not None,
+    "kokoro package is not installed",
+)
+class KokoroExportModelTest(unittest.TestCase):
+    def test_kokoro_export(self):
+        model_id = MODEL_NAMES["kokoro"]
+        with TemporaryDirectory() as tmpdirname:
+            main_export(
+                model_name_or_path=model_id,
+                output=Path(tmpdirname),
+                task="text-to-audio",
+            )
+            output_path = Path(tmpdirname)
+            self.assertTrue((output_path / "openvino_model.xml").exists())
+            self.assertTrue((output_path / "openvino_model.bin").exists())
+            self.assertTrue((output_path / "config.json").exists())

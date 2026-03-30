@@ -8319,3 +8319,20 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
                 sparse_moe_block = decoder_layer.mlp
                 decoder_layer.mlp.forward = decoder_layer.mlp._orig_forward
                 del sparse_moe_block.down_projs, sparse_moe_block.gate_projs, sparse_moe_block.up_projs
+
+
+class KokoroModelPatcher(ModelPatcher):
+    """
+    Patches the Kokoro TTS model for OpenVINO export by redirecting forward
+    to forward_with_tokens, which takes (input_ids, ref_s, speed) and returns
+    (audio_waveform, phonemes).
+    """
+
+    def __enter__(self):
+        super().__enter__()
+        self._model._orig_forward = self._model.forward
+        self._model.forward = self._model.forward_with_tokens
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model._orig_forward

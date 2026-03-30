@@ -114,6 +114,7 @@ MODEL_NAMES = {
     "internlm2": "optimum-intel-internal-testing/tiny-random-internlm2",
     "internvl_chat": "optimum-intel-internal-testing/tiny-random-internvl2",
     "jais": "optimum-intel-internal-testing/tiny-random-jais",
+    "kokoro": "hexgrad/Kokoro-82M",
     "levit": "optimum-intel-internal-testing/tiny-random-LevitModel",
     "lfm2": "optimum-intel-internal-testing/tiny-random-lfm2",
     "longt5": "optimum-intel-internal-testing/tiny-random-longt5",
