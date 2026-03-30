@@ -7603,7 +7603,7 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             )
 
         for idx, layer in enumerate(self._model.model.layers):
-            if hasattr(layer, "block_sparse_moe"):
+            if getattr(layer, "block_sparse_moe", None) is not None:
                 patch_sparse_moe(layer.block_sparse_moe)
             if self.real_config._config.layers_block_type[idx] == "mamba":
                 mamba_layer = layer.mamba
@@ -7625,7 +7625,7 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
 
         for idx, layer in enumerate(self._model.model.layers):
-            if hasattr(layer, "block_sparse_moe"):
+            if getattr(layer, "block_sparse_moe", None) is not None:
                 unpatch_sparse_moe(layer.block_sparse_moe)
             if self.real_config._config.layers_block_type[idx] == "mamba":
                 mamba_layer = layer.mamba
