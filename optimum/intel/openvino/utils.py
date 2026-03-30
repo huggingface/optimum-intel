@@ -129,6 +129,7 @@ _HEAD_TO_AUTOMODELS = {
     "token-classification": "OVModelForTokenClassification",
     "question-answering": "OVModelForQuestionAnswering",
     "image-classification": "OVModelForImageClassification",
+    "image-to-image": "OVModelForImageToImage",
     "image-text-to-text": "OVModelForVisualCausalLM",
     "zero-shot-image-classification": "OVModelForZeroShotImageClassification",
     "audio-classification": "OVModelForAudioClassification",
