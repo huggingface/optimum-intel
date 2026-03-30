@@ -574,9 +574,6 @@ def _save_kokoro_config_and_assets(model, output: Path):
     if repo_id is None:
         return
 
-    if True:
-        return
-
     # Export voice embeddings to .bin format
     voices_dir = output / "voices"
     voices_dir.mkdir(parents=True, exist_ok=True)
@@ -586,6 +583,30 @@ def _save_kokoro_config_and_assets(model, output: Path):
     except Exception:
         logger.warning(f"Could not list files for {repo_id}. Skipping voice export.")
         return
+
+    # Save misaki data files from GitHub to data dir of output directory
+    try:
+        import urllib.request
+
+        MISAKI_DATA_URL = "https://raw.githubusercontent.com/hexgrad/misaki/main/misaki/data"
+        MISAKI_DATA_FILES = [
+            "gb_gold.json", "gb_silver.json",
+            "us_gold.json", "us_silver.json",
+            "vi_acronyms.json", "vi_symbols.json", "vi_teencode.json",
+            "ja_words.txt",
+        ]
+        data_out = output / "data"
+        data_out.mkdir(parents=True, exist_ok=True)
+        for fname in MISAKI_DATA_FILES:
+            url = f"{MISAKI_DATA_URL}/{fname}"
+            dest = data_out / fname
+            try:
+                urllib.request.urlretrieve(url, dest)
+                logger.info(f"Downloaded misaki data file: {fname}")
+            except Exception as e:
+                logger.warning(f"Failed to download {fname} from {url}: {e}")
+    except Exception as e:
+        logger.warning(f"Could not download misaki data files: {e}")
 
     voice_pt_files = sorted(path for path in repo_files if path.startswith("voices/") and path.endswith(".pt"))
     if not voice_pt_files:
@@ -739,7 +760,6 @@ def export_from_model(
 
         fn_get_submodels = _get_kokoro_submodels
 
-    #raise "Exception"
     if library_name == "diffusers":
         export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
         stateful_submodels = False
