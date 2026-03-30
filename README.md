@@ -35,7 +35,7 @@ Below is an example of exporting [TinyLlama/TinyLlama_v1.1](https://huggingface.
 optimum-cli export openvino --model TinyLlama/TinyLlama_v1.1 ov_TinyLlama_v1_1
 ```
 
-To export a [model](https://huggingface.co/docs/optimum-intel/en/openvino/models) hosted on the Hub you can use our [space](https://huggingface.co/spaces/echarlaix/openvino-export). After conversion, a repository will be pushed under your namespace, this repository can be either public or private.
+To export a [model](https://huggingface.co/docs/optimum-intel/en/openvino/models) hosted on the Hub you can use our [space](https://huggingface.co/spaces/openvino/export). After conversion, a repository will be pushed under your namespace, this repository can be either public or private.
 
 Additional information on exporting models is available in the [documentation](https://huggingface.co/docs/optimum-intel/en/openvino/export).
 
