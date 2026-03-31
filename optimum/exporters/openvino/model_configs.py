@@ -5399,7 +5399,8 @@ class VideoChatFlashQwenConfigBehavior(str, enum.Enum):
 
 @register_in_tasks_manager("videochat_flash_qwen", *["image-text-to-text"], library_name="transformers")
 class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = "4.42.0"
+    MIN_TRANSFORMERS_VERSION = "4.45.0"
+    MAX_TRANSFORMERS_VERSION = "4.57.99"
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in VideoChatFlashQwenConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVideoChatFlashQwenInputGenerator,)
 
