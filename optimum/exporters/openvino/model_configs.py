@@ -5414,6 +5414,15 @@ class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
         preprocessors: Optional[List[Any]] = None,
         **kwargs,
     ):
+        import os
+
+        if (
+            is_transformers_version(">=", "4.49.0")
+            and not os.path.isdir(config.name_or_path)
+            and config.name_or_path == "OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B"
+        ):
+            raise Exception("This model is not supported for transformers version >= 4.49.0")
+
         super().__init__(
             config=config,
             task=task,
