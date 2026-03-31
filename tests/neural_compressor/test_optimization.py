@@ -45,7 +45,7 @@ from transformers import (
     set_seed,
 )
 from utils_tests import MODEL_NAMES, SEED, INCTestMixin, _generate_dataset
-from optimum.intel.utils.import_utils import is_neural_compressor_version
+from optimum.intel.utils.import_utils import is_neural_compressor_version, is_datasets_version
 
 from optimum.intel import (
     INCConfig,
@@ -145,6 +145,7 @@ class QuantizationTest(INCTestMixin):
                 num_samples=num_samples,
             )
 
+    @unittest.skipIf(is_datasets_version("<", "4"), reason="needs datasets >= 4")
     def test_dynamic_accuracy_strategy_quantization(self):
         model_name = "distilbert-base-cased-distilled-squad"
         model = AutoModelForQuestionAnswering.from_pretrained(model_name)
