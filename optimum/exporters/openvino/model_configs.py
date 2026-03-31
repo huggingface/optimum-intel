@@ -176,6 +176,8 @@ from .model_patcher import (
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
     MistralModelPatcher,
+    Mistral3ImageEmbeddingModelPatcher,
+    Mistral3LanguageModelPatcher,
     MixtralModelPatcher,
     MPTModelPatcher,
     OVDecoderModelPatcher,
@@ -286,6 +288,10 @@ def init_model_configs():
     TasksManager._CUSTOM_CLASSES[("pt", "llama4", "image-text-to-text")] = (
         "transformers",
         "AutoModelForImageTextToText",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "mistral3", "image-text-to-text")] = (
+        "transformers",
+        "Mistral3ForConditionalGeneration",
     )
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
@@ -4170,6 +4176,101 @@ class Gemma3OpenVINOConfig(BaseVLMOpenVINOConfig):
             )
         return super().with_behavior(behavior)
 
+
+@register_in_tasks_manager("mistral3", *["image-text-to-text"], library_name="transformers")
+class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "5.4.0"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VLMConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            model_type = self._orig_config.text_config.model_type
+            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
+                model_type = "mistral"
+            return get_vlm_text_embeddings_config(
+                model_type, self._orig_config.text_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            model_type = self._orig_config.text_config.model_type
+            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
+                model_type = "mistral"
+            return get_vlm_text_generation_config(
+                model_type,
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Mistral3LanguageModelPatcher,
+            )
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return model  # full model needed for tied lm_head
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return model  # full model, patcher replaces forward
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.model.language_model.config
+            return text_embedding
+
+    def patch_model_for_export(self, model, model_kwargs=None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return Mistral3ImageEmbeddingModelPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def outputs(self):
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "num_patches"}}
+        return super().outputs
+
+    def generate_dummy_inputs(self, framework="pt", **kwargs):
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            kwargs["batch_size"] = 1
+        return super().generate_dummy_inputs(framework, **kwargs)
 
 class DummyVisionPositionIdsInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("patch_attention_mask", "patch_position_ids")
