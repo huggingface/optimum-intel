@@ -34,7 +34,7 @@ TENSOR_ALIAS_TO_TYPE = {"pt": torch.Tensor, "np": np.ndarray}
 OPENVINO_DEVICE = os.getenv("OPENVINO_TEST_DEVICE", "CPU")
 
 MODEL_NAMES = {
-    "afmoe": "optimum-intel-internal-testing/tiny-random-trinity",
+    "afmoe": "onnx-internal-testing/tiny-random-AfmoeForCausalLM",
     "albert": "optimum-intel-internal-testing/tiny-random-albert",
     "aquila": "optimum-intel-internal-testing/tiny-random-aquilachat",
     "aquila2": "optimum-intel-internal-testing/tiny-random-aquila2",
