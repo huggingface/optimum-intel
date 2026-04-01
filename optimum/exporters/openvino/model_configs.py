@@ -4441,10 +4441,10 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
     def inputs(self) -> Dict[str, Dict[int, str]]:
         common_inputs = {}
         if self._behavior is SpeechT5ConfigBehavior.ENCODER:
-            common_inputs["input_ids"] = {1: "encoder_sequence_length"}
+            common_inputs["input_ids"] = {0: "batch_size", 1: "encoder_sequence_length"}
         elif self._behavior is SpeechT5ConfigBehavior.DECODER:
             common_inputs["inputs_embeds"] = {0: "batch_size", 1: "decoder_sequence_length"}
-            common_inputs["speaker_embeddings"] = {}  # No dynamic shape here.
+            common_inputs["speaker_embeddings"] = {0: "batch_size"}
             common_inputs["encoder_hidden_states"] = {0: "batch_size", 1: "encoder_sequence_length"}
             common_inputs["encoder_attention_mask"] = {0: "batch_size", 1: "encoder_sequence_length"}
             if self.variant == "with-past" and self.use_past_in_inputs:
