@@ -34,7 +34,7 @@ TENSOR_ALIAS_TO_TYPE = {"pt": torch.Tensor, "np": np.ndarray}
 OPENVINO_DEVICE = os.getenv("OPENVINO_TEST_DEVICE", "CPU")
 
 MODEL_NAMES = {
-    "afmoe": "onnx-internal-testing/tiny-random-AfmoeForCausalLM",
+    "afmoe": "optimum-intel-internal-testing/tiny-random-trinity",
     "albert": "optimum-intel-internal-testing/tiny-random-albert",
     "aquila": "optimum-intel-internal-testing/tiny-random-aquilachat",
     "aquila2": "optimum-intel-internal-testing/tiny-random-aquila2",
@@ -377,7 +377,6 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
 
 REMOTE_CODE_MODELS = (
-    "afmoe",
     "chatglm",
     "minicpm",
     "baichuan2",
@@ -401,6 +400,8 @@ REMOTE_CODE_MODELS = (
     "qwen3_eagle3",
 )
 
+if is_transformers_version("<", "5"):
+    REMOTE_CODE_MODELS += ("afmoe",)
 
 def get_num_quantized_nodes(model):
     num_fake_nodes = 0
