@@ -7578,10 +7578,10 @@ def afmoe_moe_forward_patched(self, hidden_states):
     act_fn = self.experts[0].act_fn
 
     # compute experts outputs in a vectorized form
-    gate = torch.bmm(hidden_states, self.gate_projs)
-    up = torch.bmm(hidden_states, self.up_projs)
+    gate = torch.bmm(hidden_states, self.gate_projs.transpose(1, 2))
+    up = torch.bmm(hidden_states, self.up_projs.transpose(1, 2))
     gate_up = act_fn(gate) * up
-    next_states = torch.bmm(gate_up, self.down_projs)
+    next_states = torch.bmm(gate_up, self.down_projs.transpose(1, 2))
     next_states = next_states.view(num_experts, batch_size, -1, hidden_dim)
     next_states = next_states * new_routing_weights.transpose(0, 1).view(num_experts, batch_size, -1)[..., None]
     next_states = next_states.sum(dim=0)
@@ -7612,7 +7612,6 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                         tuple(afmoe_moe.experts[i].down_proj.weight.unsqueeze(0) for i in range(num_experts)),
                         dim=0,
                     )
-                    .transpose(1, 2)
                     .float()
                 )
                 afmoe_moe.gate_projs = (
@@ -7620,14 +7619,12 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                         tuple(afmoe_moe.experts[i].gate_proj.weight.unsqueeze(0) for i in range(num_experts)),
                         dim=0,
                     )
-                    .transpose(1, 2)
                     .float()
                 )
                 afmoe_moe.up_projs = (
                     torch.concat(
                         tuple(afmoe_moe.experts[i].up_proj.weight.unsqueeze(0) for i in range(num_experts)), dim=0
                     )
-                    .transpose(1, 2)
                     .float()
                 )
 
