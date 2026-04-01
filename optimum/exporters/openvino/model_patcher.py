@@ -5607,7 +5607,7 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             # Run the decoder layers on the last element of the prenet output.
             decoder_out = model.speecht5.decoder.wrapped_decoder(
                 hidden_states=decoder_hidden_states[:, -1:],
-                encoder_hidden_states=encoder_hidden_states[0],
+                encoder_hidden_states=encoder_hidden_states,
                 encoder_attention_mask=encoder_attention_mask,
                 past_key_values=past_key_values,
                 use_cache=True,
