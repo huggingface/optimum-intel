@@ -23,7 +23,6 @@ from utils_tests import (
 )
 
 from optimum.exporters.openvino.model_configs import (
-    AfmoeOpenVINOConfig,
     BitnetOpenVINOConfig,
     DeepseekOpenVINOConfig,
     LFM2OpenVINOConfig,
@@ -148,10 +147,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("minicpm", "minicpm3", "arctic")
 
     if is_transformers_version(">=", "4.55.0"):
-        SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")
-
-    if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "5.1.0"):
-        SUPPORTED_ARCHITECTURES += ("afmoe",)
+        SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4", "afmoe")
 
     if is_transformers_version(">=", "4.57.0"):
         SUPPORTED_ARCHITECTURES += ("hunyuan_v1_dense",)
@@ -313,8 +309,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 supported_architectures.remove("deepseek_v2")
             if "deepseek_v3" in supported_architectures:
                 supported_architectures.remove("deepseek_v3")
-        if is_transformers_version(">", str(AfmoeOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
-            supported_architectures -= {"afmoe"}
         if is_transformers_version("<", str(BitnetOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"bitnet"}
         if is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
