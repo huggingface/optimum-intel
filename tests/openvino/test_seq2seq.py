@@ -987,8 +987,10 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
     AUTOMODEL_CLASS = AutoModelForTextToSpectrogram
 
     def _generate_text(self):
-        return ["This text is converted to speech using OpenVINO backend",
-                "The sun was shining brightly as people walked through the quiet park."]
+        return [
+            "This text is converted to speech using OpenVINO backend",
+            "The sun was shining brightly as people walked through the quiet park.",
+        ]
 
     def _generate_speaker_embedding(self):
         np.random.seed(42)
