@@ -1473,7 +1473,7 @@ class OVQuantizer(OptimumQuantizer):
             )
             if config is None:
                 if immediate_save:
-                    # The submodels being quantized is unloaded after quantization, 
+                    # The submodels being quantized is unloaded after quantization,
                     # so the skipped submodels should also be unloaded to avoid keeping their IR files open on Windows.
                     # This can avoid later _merge_move failures caused by locked .bin files.
                     ov_model = self.model.ov_models[ov_model_name]
