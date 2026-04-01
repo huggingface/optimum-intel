@@ -403,6 +403,7 @@ REMOTE_CODE_MODELS = (
 if is_transformers_version("<", "5"):
     REMOTE_CODE_MODELS += ("afmoe",)
 
+
 def get_num_quantized_nodes(model):
     num_fake_nodes = 0
     types_map = {
