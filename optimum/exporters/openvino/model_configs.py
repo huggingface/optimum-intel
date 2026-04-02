@@ -2189,12 +2189,6 @@ class LlavaQwen2OpenVINOConfig(BaseVLMOpenVINOConfig):
         self._orig_config = config
         self._trust_remote_code = trust_remote_code
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "mm_vision_tower"):
-            if not self._trust_remote_code:
-                logger.warning(
-                    "This model may require executing custom code from its repository. "
-                    "For security reasons, this is disabled by default. "
-                    "Please review the source and rerun with `--trust-remote-code` if needed."
-                )
             config = AutoConfig.from_pretrained(config.mm_vision_tower, trust_remote_code=self._trust_remote_code)
             if hasattr(config, "vision_config"):
                 config = config.vision_config
@@ -3087,12 +3081,6 @@ class Phi3VisionOpenVINOConfig(BaseVLMOpenVINOConfig):
         self._orig_config = config
         self._trust_remote_code = trust_remote_code
         if self._behavior == Phi3VisionConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "img_processor"):
-            if not self._trust_remote_code:
-                logger.warning(
-                    "This model may require executing custom code from its repository. "
-                    "For security reasons, this is disabled by default. "
-                    "Please review the source and rerun with `--trust-remote-code` if needed."
-                )
             self._config = AutoConfig.from_pretrained(
                 config.img_processor["model_name"], trust_remote_code=self._trust_remote_code
             ).vision_config
