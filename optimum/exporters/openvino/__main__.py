@@ -128,6 +128,13 @@ def infer_task(
                 )
 
     if library_name == "transformers":
+
+        if not trust_remote_code:
+            logger.warning(
+                "This model may require executing custom code from its repository. "
+                "For security reasons, this is disabled by default. "
+                "Please review the source and rerun with `--trust-remote-code` if needed."
+            )
         try:
             config = AutoConfig.from_pretrained(
                 model_name_or_path,
@@ -157,6 +164,7 @@ def infer_task(
                     raise e
             else:
                 raise
+
         if hasattr(config, "export_model_type"):
             model_type = config.export_model_type
         else:
