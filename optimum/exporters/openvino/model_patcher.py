@@ -56,9 +56,9 @@ from optimum.exporters.onnx.model_patcher import (
 )
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
+    is_openvino_version,
     is_torch_version,
     is_transformers_version,
-    is_openvino_version,
 )
 
 from ._ov_ops import convert_recurrent_attention_cell
