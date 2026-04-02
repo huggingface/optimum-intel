@@ -54,7 +54,12 @@ from optimum.exporters.onnx.model_patcher import (
     override_arguments,
     sdpa_mask_without_vmap,
 )
-from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_version, is_transformers_version
+from optimum.intel.utils.import_utils import (
+    is_diffusers_version,
+    is_torch_version,
+    is_transformers_version,
+    is_openvino_version,
+)
 
 from ._ov_ops import convert_recurrent_attention_cell
 
@@ -7610,14 +7615,19 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                 afmoe_moe.down_projs = torch.concat(
                     tuple(afmoe_moe.experts[i].down_proj.weight.unsqueeze(0) for i in range(num_experts)),
                     dim=0,
-                ).float()
+                )
                 afmoe_moe.gate_projs = torch.concat(
                     tuple(afmoe_moe.experts[i].gate_proj.weight.unsqueeze(0) for i in range(num_experts)),
                     dim=0,
-                ).float()
+                )
                 afmoe_moe.up_projs = torch.concat(
                     tuple(afmoe_moe.experts[i].up_proj.weight.unsqueeze(0) for i in range(num_experts)), dim=0
-                ).float()
+                )
+
+                if is_openvino_version("<", "2026.1.0"):
+                    afmoe_moe.down_projs = afmoe_moe.down_projs.float()
+                    afmoe_moe.gate_projs = afmoe_moe.gate_projs.float()
+                    afmoe_moe.up_projs = afmoe_moe.up_projs.float()
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
