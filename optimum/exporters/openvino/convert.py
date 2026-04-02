@@ -791,6 +791,7 @@ def export_from_model(
             _variant="default",
             exporter="openvino",
             stateful=stateful,
+            trust_remote_code=trust_remote_code,
         )
         logging.disable(logging.NOTSET)
 
@@ -1025,6 +1026,7 @@ def _get_multi_modal_submodels_and_export_configs(
     preprocessors: Optional[List[Any]] = None,
     model_kwargs: Optional[Dict] = None,
     stateful: bool = True,
+    trust_remote_code: bool = False,
 ):
     models_for_export = {}
     stateful_parts = []
@@ -1059,7 +1061,7 @@ def _get_multi_modal_submodels_and_export_configs(
         model=model, task=task, exporter="openvino", library_name=library_name
     )
     main_config = main_config_cls(
-        model.config, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors
+        model.config, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors, trust_remote_code=trust_remote_code
     )
     for behavior in main_config.SUPPORTED_BEHAVIORS:
         model_id = f"{behavior}_model"
@@ -1085,6 +1087,7 @@ def _get_submodels_and_export_configs(
     model_kwargs: Optional[Dict] = None,
     exporter: str = "openvino",
     stateful: bool = False,
+    trust_remote_code: bool = False,
 ):
     if (
         not custom_architecture
@@ -1092,7 +1095,7 @@ def _get_submodels_and_export_configs(
         and model.config.model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
     ):
         return _get_multi_modal_submodels_and_export_configs(
-            model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful
+            model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful, trust_remote_code=trust_remote_code
         )
     elif not custom_architecture and library_name == "transformers" and model.config.model_type == "speecht5":
         return _get_speecht5_tss_model_for_export(
