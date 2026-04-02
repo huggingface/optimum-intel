@@ -52,6 +52,8 @@ from optimum.exporters.onnx.model_patcher import (
     ModelPatcher,
     gpt_oss_forward,
     override_arguments,
+)
+from optimum.exporters.onnx.model_patcher import (
     sdpa_mask_without_vmap as _orig_sdpa_mask_without_vmap,
 )
 from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_version, is_transformers_version
@@ -4946,7 +4948,6 @@ def gemma4_lm_forward(
     logits_to_keep: Union[int, torch.Tensor] = 0,
     **lm_kwargs,
 ):
-    from transformers.models.gemma4.modeling_gemma4 import Gemma4CausalLMOutputWithPast
     from optimum.exporters.onnx.model_patcher import preprocess_past_key_values
 
     output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -5078,9 +5079,7 @@ def gemma4_text_attention_forward(
             "sliding_window": self.sliding_window,
         }
         if not self.is_kv_shared_layer:
-            key_states, value_states = past_key_values.update(
-                key_states, value_states, self.layer_idx, cache_kwargs
-            )
+            key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
         if self.store_full_length_kv:
             if not hasattr(past_key_values, "shared_layers"):
                 past_key_values.shared_layers = {}

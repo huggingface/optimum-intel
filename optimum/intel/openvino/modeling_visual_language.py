@@ -3995,9 +3995,7 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
 
         return inputs_embeds, attention_mask, position_ids
 
-    def prepare_inputs_for_generation(
-        self, input_ids, mm_token_type_ids=None, image_position_ids=None, **kwargs
-    ):
+    def prepare_inputs_for_generation(self, input_ids, mm_token_type_ids=None, image_position_ids=None, **kwargs):
         model_inputs = super().prepare_inputs_for_generation(input_ids, **kwargs)
         model_inputs["mm_token_type_ids"] = mm_token_type_ids
         model_inputs["image_position_ids"] = image_position_ids

@@ -150,7 +150,6 @@ from .model_patcher import (
     Gemma3LMModelPatcher,
     Gemma4ImageEmbeddingsModelPatcher,
     Gemma4LMModelPatcher,
-    Gemma4PerLayerInputsGetterModelPatcher,
     GptJModelPatcher,
     GptNeoModelPatcher,
     GptNeoxModelPatcher,
@@ -4347,8 +4346,9 @@ class DummyGemma4VisionInputGenerator(DummyVisionInputGenerator):
                 dtype=float_dtype,
             )
         if input_name == "image_position_ids":
-            import torch
             import math
+
+            import torch
 
             # Create position ids as a grid. The patch count = h_patches * w_patches
             # where both are divisible by pooling_kernel_size for correct pooling.
@@ -4490,9 +4490,7 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
                         per_layer_inputs_tokens,
                         torch.zeros_like(per_layer_inputs_tokens),
                     )
-                    per_layer_inputs = self.language_model.get_per_layer_inputs(
-                        per_layer_inputs_tokens, None
-                    )
+                    per_layer_inputs = self.language_model.get_per_layer_inputs(per_layer_inputs_tokens, None)
                     return per_layer_inputs
 
             model = PerLayerInputsModule(
