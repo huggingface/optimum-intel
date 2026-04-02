@@ -2,7 +2,7 @@ import os
 import sys
 import unittest
 
-os.environ["OV_ENABLE_PROFILE_PASS"] = "1"
+
 
 # we are adding this , so the parent directory (tests/openvino/) is in the python search path for utils_test.py to be imported
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -61,7 +61,8 @@ def _capture_stderr_during(model_id, OPENVINO_DEVICE, trust_remote_code):
 
     result = subprocess.run(
         [sys.executable, "-c", code],
-        capture_output=True,
+        stdout=subprocess.PIPE, 
+       stderr=subprocess.STDOUT, 
         text=True,
     )
 
@@ -104,7 +105,7 @@ def check_failed_transformations(log: str, words: list[str]) -> dict:
     remaining = {normalize(w): w for w in words}
 
     for key in list(remaining.keys()):
-        if any(key in a for a in applied_norm):
+        if key in applied_norm:
             del remaining[key]
 
     hints = {}
