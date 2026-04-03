@@ -2184,6 +2184,7 @@ class LlavaQwen2OpenVINOConfig(BaseVLMOpenVINOConfig):
         preprocessors: Optional[List[Any]] = None,
         use_past: bool = False,
         trust_remote_code: bool = False,
+        **kwargs,
     ):
         self._behavior = behavior
         self._orig_config = config
@@ -3069,6 +3070,7 @@ class Phi3VisionOpenVINOConfig(BaseVLMOpenVINOConfig):
         behavior: Phi3VisionConfigBehavior = Phi3VisionConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
         trust_remote_code: bool = False,
+        **kwargs,
     ):
         super().__init__(
             config=config,
