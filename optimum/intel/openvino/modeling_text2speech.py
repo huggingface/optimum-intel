@@ -208,6 +208,22 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
         logger.warning("Static shapes are not supported for this model.")
         return self
 
+    def preprocess_input(self, text: str, **kwargs) -> dict:
+        """
+        Preprocess a text string into model inputs (input_ids and other required tensors).
+
+        Args:
+            text: The input text to synthesize.
+            **kwargs: Model-specific arguments (e.g., voice, speed, lang_code for Kokoro).
+
+        Returns:
+            Dictionary with model inputs ready for `generate()`.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement `preprocess_input`. "
+            "Use the appropriate model-specific subclass."
+        )
+
 
 class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
     """
@@ -733,3 +749,62 @@ class _OVModelForKokoroTextToSpeech(OVBaseModel):
 
     def can_generate(self) -> bool:
         return True
+
+    def preprocess_input(
+        self,
+        text: str,
+        voice: str = "af_heart",
+        speed: float = 1.0,
+        lang_code: str = "a",
+        **kwargs,
+    ) -> dict:
+        """
+        Preprocess a text string into model inputs for Kokoro TTS.
+
+        Uses the ``kokoro`` and ``misaki`` packages for grapheme-to-phoneme
+        conversion and phoneme tokenization.
+
+        Args:
+            text: The input text to synthesize.
+            voice: Name of a voice preset (e.g., ``"af_heart"``).
+            speed: Speed factor (default 1.0).
+            lang_code: Language code for G2P (default ``"a"`` for American English).
+
+        Returns:
+            Dictionary with ``input_ids``, ``ref_s``, and ``speed`` ready for
+            ``generate()`` or ``forward()``.
+        """
+        try:
+            from kokoro import KPipeline
+        except ImportError:
+            raise ImportError(
+                "The `kokoro` and `misaki` packages are required for text preprocessing. "
+                "Install them with: pip install kokoro misaki[en]"
+            )
+
+        vocab = getattr(self.config, "vocab", None)
+        if vocab is None:
+            raise ValueError("Model config does not contain 'vocab'. Cannot tokenize phonemes.")
+
+        pipeline = KPipeline(lang_code=lang_code, model=False)
+
+        # G2P: text -> phoneme tokens -> phoneme string
+        _, tokens = pipeline.g2p(text)
+        phonemes = KPipeline.tokens_to_ps(tokens)
+        if not phonemes:
+            raise ValueError(f"G2P produced no phonemes for input text: {text!r}")
+
+        # Tokenize: phoneme string -> token IDs (with BOS/EOS)
+        input_ids = [vocab.get(p) for p in phonemes]
+        input_ids = [i for i in input_ids if i is not None]
+        input_ids = torch.LongTensor([[0, *input_ids, 0]])
+
+        # Load voice embedding indexed by phoneme length
+        voice_pack = pipeline.load_voice(voice)
+        ref_s = voice_pack[len(phonemes) - 1]
+
+        return {
+            "input_ids": input_ids,
+            "ref_s": ref_s,
+            "speed": speed,
+        }
