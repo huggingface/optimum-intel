@@ -200,9 +200,8 @@ from .model_patcher import (
     Qwen3VLVisionEmbMergerPatcher,
     QwenModelPatcher,
     SanaTextEncoderModelPatcher,
-    VideochatFlashQwenLanguageModelPatcher,
-    VideochatFlashQwenVisionEmbeddingModelPatcher,
-    VideochatFlashQwenVisionProjectionModelPatcher,
+    VideoChatFlashQwenLanguageModelPatcher,
+    VideoChatFlashQwenVisionEmbeddingModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
 )
@@ -5323,6 +5322,7 @@ class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, visual_seq_length, **kwargs)
         self.num_frames = getattr(normalized_config.config, "mm_local_num_frames", 4)
         self.embed_dim = getattr(normalized_config.config, "mm_hidden_size", 1408)
+        # Then input image size and patch size for the vision encoder can not be got from the config, we set them to fixed values according to the original implementation.
         self.height = 224
         self.width = 224
         self.image_size = (self.height, self.width)
@@ -5350,7 +5350,7 @@ class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
 
 
 class DummyVideoChatFlashQwenProjectorInputGenerator(DummyInputGenerator):
-    SUPPORTED_INPUT_NAMES = ["hidden_states"]
+    SUPPORTED_INPUT_NAMES = ["input"]
 
     def __init__(
         self,
@@ -5363,6 +5363,7 @@ class DummyVideoChatFlashQwenProjectorInputGenerator(DummyInputGenerator):
         self.task = task
         self.batch_size = batch_size
         self.hidden_size = normalized_config.config.mm_hidden_size
+        # The original implementation with projector_type 'tome16_mlp_hd64' uses a fixed number of patches (64).
         self.num_patches = 64
         self.normalized_config = normalized_config
 
@@ -5383,12 +5384,7 @@ class VideoChatFlashQwenProjectorOpenVINOConfig(OnnxConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {"hidden_states": {0: "batch_size", 1: "num_patches", 2: "hidden_size"}}
-
-    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
-        model_kwargs = model_kwargs or {}
-        return VideochatFlashQwenVisionProjectionModelPatcher(self, model, model_kwargs)
-
+        return {"input": {0: "batch_size", 1: "num_patches", 2: "hidden_size"}}
 
 class VideoChatFlashQwenConfigBehavior(str, enum.Enum):
     LANGUAGE = "language"
@@ -5399,7 +5395,7 @@ class VideoChatFlashQwenConfigBehavior(str, enum.Enum):
 
 @register_in_tasks_manager("videochat_flash_qwen", *["image-text-to-text"], library_name="transformers")
 class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = "4.45.0"
+    MIN_TRANSFORMERS_VERSION = "4.49.0"
     MAX_TRANSFORMERS_VERSION = "4.57.99"
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in VideoChatFlashQwenConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVideoChatFlashQwenInputGenerator,)
@@ -5414,15 +5410,6 @@ class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
         preprocessors: Optional[List[Any]] = None,
         **kwargs,
     ):
-        import os
-
-        if (
-            is_transformers_version(">=", "4.49.0")
-            and not os.path.isdir(config.name_or_path)
-            and config.name_or_path == "OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B"
-        ):
-            raise Exception("This model is not supported for transformers version >= 4.49.0")
-
         super().__init__(
             config=config,
             task=task,
@@ -5441,7 +5428,7 @@ class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
         if not self._behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
             return {}
         return {
-            "hidden_states": {0: "batch_size", 1: "num_channels", 2: "num_frames", 3: "height", 4: "width"},
+            "hidden_states": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
             # rotary_pos_emb has a fixed leading dimension of 1 in the dummy generator,
             # so we do not associate axis 0 with batch_size and keep only dynamic axes here.
             "rotary_pos_emb": {1: "num_tokens", 2: "hidden_size"},
@@ -5512,10 +5499,10 @@ class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior == VideoChatFlashQwenConfigBehavior.LANGUAGE:
-            return VideochatFlashQwenLanguageModelPatcher(self, model, model_kwargs)
+            return VideoChatFlashQwenLanguageModelPatcher(self, model, model_kwargs)
 
         if self._behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
-            return VideochatFlashQwenVisionEmbeddingModelPatcher(self, model, model_kwargs)
+            return VideoChatFlashQwenVisionEmbeddingModelPatcher(self, model, model_kwargs)
 
         return super().patch_model_for_export(model, model_kwargs)
 

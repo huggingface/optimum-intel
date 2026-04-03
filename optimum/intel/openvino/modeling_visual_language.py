@@ -1,4 +1,3 @@
-import ast
 import copy
 import enum
 import inspect
@@ -4825,36 +4824,37 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         embed_dim_temporal = embed_dim // 4
 
         # spatial
-        grid_h = np.arange(grid_size, dtype=np.float32)
-        grid_w = np.arange(grid_size, dtype=np.float32)
-        grid = np.meshgrid(grid_w, grid_h)  # here w goes first
-        grid = np.stack(grid, axis=0)
+        grid_h = torch.arange(grid_size, dtype=torch.float32)
+        grid_w = torch.arange(grid_size, dtype=torch.float32)
+        grid = torch.meshgrid(grid_w, grid_h, indexing="xy")  # here w goes first
+        grid = torch.stack(grid, dim=0)
 
-        grid = grid.reshape([2, 1, grid_size, grid_size])
+        grid = grid.reshape(2, 1, grid_size, grid_size)
         pos_embed_spatial = _OVVideoChatFlashQwenForCausalLM.get_2d_sincos_pos_embed_from_grid(embed_dim_spatial, grid)
 
         # temporal
-        grid_t = np.arange(t_size, dtype=np.float32)
+        grid_t = torch.arange(t_size, dtype=torch.float32)
         pos_embed_temporal = _OVVideoChatFlashQwenForCausalLM.get_1d_sincos_pos_embed_from_grid(
             embed_dim_temporal, grid_t
         )
 
         # concate: [T, H, W] order
-        pos_embed_temporal = pos_embed_temporal[:, np.newaxis, :]
-        pos_embed_temporal = np.repeat(pos_embed_temporal, grid_size**2, axis=1)  # [T, H*W, D // 4]
-        pos_embed_spatial = pos_embed_spatial[np.newaxis, :, :]
-        pos_embed_spatial = np.repeat(pos_embed_spatial, t_size, axis=0)  # [T, H*W, D // 4 * 3]
+        pos_embed_temporal = pos_embed_temporal[:, None, :]
+        pos_embed_temporal = pos_embed_temporal.repeat(1, grid_size**2, 1)  # [T, H*W, D // 4]
+        pos_embed_spatial = pos_embed_spatial[None, :, :]
+        pos_embed_spatial = pos_embed_spatial.repeat(t_size, 1, 1)  # [T, H*W, D // 4 * 3]
 
-        pos_embed = np.concatenate([pos_embed_temporal, pos_embed_spatial], axis=-1)
-        pos_embed = pos_embed.reshape([-1, embed_dim])  # [T*H*W, D]
+        pos_embed = torch.cat([pos_embed_temporal, pos_embed_spatial], dim=-1)
+        pos_embed = pos_embed.reshape(-1, embed_dim)  # [T*H*W, D]
 
         if cls_token:
-            pos_embed = np.concatenate([np.zeros([1, embed_dim]), pos_embed], axis=0)
+            pos_embed = torch.cat([torch.zeros((1, embed_dim), dtype=pos_embed.dtype), pos_embed], dim=0)
         return pos_embed
 
     # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L141
     def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
         assert embed_dim % 2 == 0
+        grid = grid if isinstance(grid, torch.Tensor) else torch.as_tensor(grid, dtype=torch.float32)
 
         # use half of dimensions to encode grid_h
         emb_h = _OVVideoChatFlashQwenForCausalLM.get_1d_sincos_pos_embed_from_grid(
@@ -4864,7 +4864,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             embed_dim // 2, grid[1]
         )  # (H*W, D/2)
 
-        emb = np.concatenate([emb_h, emb_w], axis=1)  # (H*W, D)
+        emb = torch.cat([emb_h, emb_w], dim=1)  # (H*W, D)
         return emb
 
     # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L156
@@ -4875,17 +4875,18 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         out: (M, D)
         """
         assert embed_dim % 2 == 0
-        omega = np.arange(embed_dim // 2, dtype=np.float32)
+        omega = torch.arange(embed_dim // 2, dtype=torch.float32)
         omega /= embed_dim / 2.0
-        omega = 1.0 / 10000**omega  # (D/2,)
+        omega = 1.0 / (10000**omega)  # (D/2,)
 
-        pos = pos.reshape(-1)  # (M,)
-        out = np.einsum("m,d->md", pos, omega)  # (M, D/2), outer product
+        pos = pos if isinstance(pos, torch.Tensor) else torch.as_tensor(pos, dtype=torch.float32)
+        pos = pos.reshape(-1).to(dtype=torch.float32)  # (M,)
+        out = torch.einsum("m,d->md", pos, omega)  # (M, D/2), outer product
 
-        emb_sin = np.sin(out)  # (M, D/2)
-        emb_cos = np.cos(out)  # (M, D/2)
+        emb_sin = torch.sin(out)  # (M, D/2)
+        emb_cos = torch.cos(out)  # (M, D/2)
 
-        emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
+        emb = torch.cat([emb_sin, emb_cos], dim=1)  # (M, D)
         return emb
 
     def __init__(
@@ -4932,12 +4933,12 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         pos_embed = _OVVideoChatFlashQwenForCausalLM.get_3d_sincos_pos_embed(
             self.pos_embed.shape[-1], self.grid_size[1], self.grid_size[0], cls_token=True
         )
-        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+        self.pos_embed.data.copy_(pos_embed.to(dtype=self.pos_embed.dtype).unsqueeze(0))
 
         img_pos_embed = _OVVideoChatFlashQwenForCausalLM.get_3d_sincos_pos_embed(
             self.pos_embed.shape[-1], self.grid_size[1], 1, cls_token=True
         )
-        self.img_pos_embed.data.copy_(torch.from_numpy(img_pos_embed).float().unsqueeze(0))
+        self.img_pos_embed.data.copy_(img_pos_embed.to(dtype=self.img_pos_embed.dtype).unsqueeze(0))
 
     # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L6
     def bipartite_soft_matching(
@@ -4945,10 +4946,31 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         r: int,
     ) -> Tuple[Callable, Callable]:
         """
-        Applies ToMe with a balanced matching set (50%, 50%).
+        Build balanced ToMe token matching operators for vision token compression.
+        In this model's vision path, it is the core matching step used by
+        ``merge_tokens`` to progressively shrink visual token sequences before
+        ``vision_projection``. This reduces the token count passed into the
+        language-model side of the multimodal pipeline, improving memory/latency
+        while keeping high-similarity visual information aggregated.
 
-        Input size is [batch, tokens, channels].
-        r indicates the number of tokens to remove (max 50% of tokens).
+        This function splits tokens into two interleaved groups (even/odd positions),
+        computes pairwise similarity between the two groups, and selects the top-``r``
+        pairs to merge. It returns two closures:
+
+        - ``merge``: merges matched source tokens into destination tokens to reduce
+            sequence length while preserving information.
+        - ``unmerge``: restores merged tokens back to the original token layout,
+            which is useful for shape recovery or downstream alignment
+
+        Args:
+            metric (`torch.Tensor`): Token features with shape ``[batch, tokens, channels]``
+                    used to compute matching similarity.
+            r (`int`): Number of tokens to remove by merging. It is internally capped
+                    at half of available tokens.
+
+        Returns:
+            `Tuple[Callable, Callable]`: ``(merge, unmerge)`` operators for reversible
+            token reduction.
         """
         protected = 0
 
@@ -5011,23 +5033,22 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         return x, size
 
     def get_vision_embeddings(self, images):
-        if isinstance(images, list):
-            raise NotImplementedError
+        # Upstream preprocessing provides BTCHW, but the vision tower expects BCHWT,
+        # so we permute dimensions before running the visual encoder.
+        # We then keep patch tokens in [B, T*L, C] (dropping cls later) because
+        # downstream token merging/projection operates on a flattened token sequence.
+        T = images.shape[1]
+        images = images.permute(0, 2, 1, 3, 4)
+        if T == 1:
+            pos_embeds = self.img_pos_embed.detach()
         else:
-            # input: B T C H W
-            # output: B T*L C
-            T = images.shape[1]
-            images = images.permute(0, 2, 1, 3, 4)
-            if T == 1:
-                pos_embeds = self.img_pos_embed.detach()
-            else:
-                pos_embeds = self.pos_embed.detach()
-            image_embeds = self.vision_embeddings(
-                images, rotary_pos_emb=pos_embeds, use_image=(T == 1)
-            ).last_hidden_state
-            image_embeds = image_embeds[:, 1:, :]
+            pos_embeds = self.pos_embed.detach()
+        image_embeds = self.vision_embeddings(
+            images, rotary_pos_emb=pos_embeds, use_image=(T == 1)
+        ).last_hidden_state
+        image_embeds = image_embeds[:, 1:, :]
 
-            videos_features = torch.from_numpy(image_embeds) if isinstance(image_embeds, np.ndarray) else image_embeds
+        videos_features = torch.from_numpy(image_embeds) if isinstance(image_embeds, np.ndarray) else image_embeds
 
         return videos_features
 
@@ -5039,16 +5060,17 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         """
         size = None
         b, p, c = x.shape
-        tmp_p = p
+        current_num_tokens = p
+        # Number of tokens to merge at each iterative ToMe step until reaching target_num_token.
         r_merge_list = []
-        assert tmp_p > target_num_token, f"{tmp_p} should greater than {target_num_token}"
-        while tmp_p != target_num_token:
-            if tmp_p - target_num_token <= (tmp_p // 2):
-                r_merge_list.append(tmp_p - target_num_token)
+        assert current_num_tokens > target_num_token, f"{current_num_tokens} should greater than {target_num_token}"
+        while current_num_tokens != target_num_token:
+            if current_num_tokens - target_num_token <= (current_num_tokens // 2):
+                r_merge_list.append(current_num_tokens - target_num_token)
                 break
             else:
-                r_merge_list.append(tmp_p // 2)
-                tmp_p = tmp_p - (tmp_p // 2)
+                r_merge_list.append(current_num_tokens // 2)
+                current_num_tokens = current_num_tokens - (current_num_tokens // 2)
 
         head = self.num_attention_heads
 
@@ -5386,7 +5408,8 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         if isinstance(grid_pinpoints, list):
             possible_resolutions = grid_pinpoints
         else:
-            possible_resolutions = ast.literal_eval(grid_pinpoints)
+            pairs = re.findall(r"\(\s*(\d+)\s*,\s*(\d+)\s*\)", grid_pinpoints)
+            possible_resolutions = [(int(w), int(h)) for w, h in pairs]
         width, height = _OVVideoChatFlashQwenForCausalLM.select_best_resolution(
             image_size, possible_resolutions, max_resolutions=max_resolutions, patch_size=patch_size
         )
@@ -5510,25 +5533,19 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
                     if "anyres" in image_aspect_ratio:
                         vision_tower_image_size = 224
-                        try:
-                            (
-                                num_patch_width,
-                                num_patch_height,
-                            ) = _OVVideoChatFlashQwenForCausalLM.get_anyres_image_grid_shape(
-                                image_sizes[image_idx],
-                                self.config.image_grid_pinpoints,
-                                vision_tower_image_size,
-                                max_resolutions=None,
-                            )
-                        except Exception:
-                            logger.exception("Error while computing anyres image grid shape")
-                            raise
-                            # num_patch_width, num_patch_height = 2, 2
+                        (
+                            num_patch_width,
+                            num_patch_height,
+                        ) = _OVVideoChatFlashQwenForCausalLM.get_anyres_image_grid_shape(
+                            image_sizes[image_idx],
+                            self.config.image_grid_pinpoints,
+                            vision_tower_image_size,
+                            max_resolutions=None,
+                        )
 
                         image_feature = image_feature.view(num_patch_height, num_patch_width, height, width, -1)
                     else:
                         raise NotImplementedError(image_aspect_ratio)
-                        image_feature = image_feature.view(2, 2, height, width, -1)
 
                     if "maxpool2x2" in mm_patch_merge_type:
                         raise NotImplementedError
