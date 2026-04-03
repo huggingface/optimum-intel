@@ -172,11 +172,21 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
                     token=kwargs.get("token"),
                     revision=kwargs.get("revision"),
                 )
+                # Detect Kokoro models that lack model_type by checking for
+                # characteristic config keys (same heuristic used by CLI export).
+                if not getattr(config, "model_type", None):
+                    if hasattr(config, "istftnet") and hasattr(config, "plbert"):
+                        config.model_type = "kokoro"
+                        config.export_model_type = "kokoro"
                 if getattr(config, "model_type", None) == "kokoro":
                     kwargs["config"] = config
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Could not pre-load config for Kokoro detection: {e}")
         return super().from_pretrained(model_id, **kwargs)
+
+    @classmethod
+    def _export(cls, model_id, config, use_cache=False, **kwargs):
+        return super()._export(model_id, config, use_cache=use_cache, **kwargs)
 
     @classmethod
     def _from_pretrained(
