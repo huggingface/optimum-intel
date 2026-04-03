@@ -745,7 +745,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             set_seed(SEED)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**transformers_inputs)
-
             self.assertTrue(
                 torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=4e-3),
                 f"Max abs diff {(torch.abs(ov_outputs.logits - transformers_outputs.logits).max())}",
@@ -980,30 +979,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             preprocessors = {"processor": processor, "tokenizer": tokenizer, "config": config}
-        elif model_arch == "internvl_chat":
+        elif model_arch in ["internvl_chat", "videochat_flash_qwen"]:
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             preprocessors = {"processor": None, "tokenizer": tokenizer, "config": config}
-        elif model_arch == "videochat_flash_qwen":
-
-            class VideochatProcessorWrapper:
-                def __init__(self, model_id):
-                    from transformers import AutoModel
-
-                    hf_model = AutoModel.from_pretrained(model_id, trust_remote_code=True)
-                    self.processor = hf_model.get_vision_tower().image_processor.preprocess
-                    self.model_dtype = hf_model.dtype
-                    del hf_model
-
-                def __call__(self, images, return_tensors):
-                    return self.processor(images, return_tensors="pt")["pixel_values"].to(dtype=self.model_dtype)
-
-            processor = VideochatProcessorWrapper(model_id)
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
-            )
-            preprocessors = {"processor": processor, "tokenizer": tokenizer, "config": config}
         else:
             processor = AutoProcessor.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS

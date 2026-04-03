@@ -5043,9 +5043,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             pos_embeds = self.img_pos_embed.detach()
         else:
             pos_embeds = self.pos_embed.detach()
-        image_embeds = self.vision_embeddings(
-            images, rotary_pos_emb=pos_embeds, use_image=(T == 1)
-        ).last_hidden_state
+        image_embeds = self.vision_embeddings(images, rotary_pos_emb=pos_embeds).last_hidden_state
         image_embeds = image_embeds[:, 1:, :]
 
         videos_features = torch.from_numpy(image_embeds) if isinstance(image_embeds, np.ndarray) else image_embeds

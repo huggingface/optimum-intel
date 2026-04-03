@@ -5386,6 +5386,7 @@ class VideoChatFlashQwenProjectorOpenVINOConfig(OnnxConfig):
     def inputs(self) -> Dict[str, Dict[int, str]]:
         return {"input": {0: "batch_size", 1: "num_patches", 2: "hidden_size"}}
 
+
 class VideoChatFlashQwenConfigBehavior(str, enum.Enum):
     LANGUAGE = "language"
     VISION_EMBEDDINGS = "vision_embeddings"
