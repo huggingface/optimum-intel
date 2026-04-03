@@ -823,11 +823,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 repo_type="dataset",
                 user_agent=http_user_agent(),
             )
-            # videochat_flash_qwen needs frames to be multiple of 4
-            if model_arch == "videochat_flash_qwen":
-                input_video, _ = load_video(video_path, num_frames=4, backend="opencv")
-            else:
-                input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
+            input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
             question = "Why is this video funny?"
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video)
             compare_outputs(inputs, ov_model, transformers_model, gen_config)
@@ -912,14 +908,12 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
         preprocessors = self.get_preprocessors(model_arch)
 
-        # videochat_flash_qwen does not support image input
-        if model_arch != "videochat_flash_qwen":
-            question = "Describe image"
-            inputs = model.preprocess_inputs(**preprocessors, text=question, image=self.IMAGE.resize((600, 600)))
-            # General case
-            outputs = model.generate(**inputs, max_new_tokens=10)
-            outputs = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
-            self.assertIsInstance(outputs[0], str)
+        question = "Describe image"
+        inputs = model.preprocess_inputs(**preprocessors, text=question, image=self.IMAGE.resize((600, 600)))
+        # General case
+        outputs = model.generate(**inputs, max_new_tokens=10)
+        outputs = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
+        self.assertIsInstance(outputs[0], str)
 
         # GOT-OCR2 does not support text-only input
         if model_arch != "got_ocr2":
@@ -945,11 +939,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                     repo_type="dataset",
                     user_agent=http_user_agent(),
                 )
-                if model_arch == "videochat_flash_qwen":
-                    # videochat_flash_qwen need frame number to be multiple of 4
-                    input_video, _ = load_video(video_path, num_frames=8, backend="opencv")
-                else:
-                    input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
+                input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
                 question = "Why is this video funny?"
                 inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
                 outputs = model.generate(**inputs, max_new_tokens=10)
