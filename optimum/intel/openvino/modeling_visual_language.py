@@ -5105,6 +5105,50 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             raise ValueError(f"Unsupported tensor type: {return_tensors}")
         return input_ids
 
+        # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L681
+
+    def image_preprocess(images, return_tensors, target_size=None):
+        from functools import partial, reduce
+        from PIL.Image import Image as PILImage
+        from transformers.image_processing_utils import BatchFeature
+        from transformers.image_utils import ChannelDimension, PILImageResampling, to_numpy_array
+        from transformers.image_transforms import (
+            convert_to_rgb,
+            normalize,
+            rescale,
+            resize,
+            to_channel_dimension_format,
+        )
+
+        if isinstance(images, PILImage):
+            images = [images]
+        else:
+            # to adapt video data
+            images = [to_numpy_array(image) for image in images]
+            assert isinstance(images, list)
+
+        if target_size is None:
+            target_size = (224, 224)
+
+        data_format = ChannelDimension.FIRST
+        rescale_factor = 1 / 255
+        image_mean = (0.485, 0.456, 0.406)
+        image_std = (0.229, 0.224, 0.225)
+
+        transforms = [
+            convert_to_rgb,
+            to_numpy_array,
+            partial(resize, size=target_size, resample=PILImageResampling.BICUBIC, data_format=data_format),
+            partial(rescale, scale=rescale_factor, data_format=data_format),
+            partial(normalize, mean=image_mean, std=image_std, data_format=data_format),
+            partial(to_channel_dimension_format, channel_dim=data_format, input_channel_dim=data_format),
+        ]
+
+        images = reduce(lambda x, f: [*map(f, x)], transforms, images)
+        data = {"pixel_values": images}
+
+        return BatchFeature(data=data, tensor_type=return_tensors)
+
     @staticmethod
     def preprocess_inputs(
         text: str,
@@ -5115,9 +5159,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         video: Optional["VideoInput"] = None,
         audio: Optional[np.ndarray] = None,
     ):
-        # Note: The implementation of this function is not validated, it's only there to allow this subclass to be initialized.
-        if processor is None:
-            raise ValueError("Processor is required.")
         if audio is not None:
             raise ValueError("Audio input is not supported")
         if tokenizer is None:
@@ -5166,7 +5207,13 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                 raise ValueError("Unsupported video type: {}".format(type(video)))
 
             image_sizes.append(image_size)
-            frames.append(processor(images=video, return_tensors="pt"))
+            if processor is not None:
+                processed_images = processor(images=video, return_tensors="pt")
+            else:
+                processed_images = _OVVideoChatFlashQwenForCausalLM.image_preprocess(
+                    images=video, return_tensors="pt"
+                )["pixel_values"]
+            frames.append(processed_images)
 
         # preprocess image
         if image is not None:
@@ -5177,7 +5224,12 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                 image_size = (height, width)
             else:
                 image_size = image.shape[:2]
-            image_frame = processor(images=image, return_tensors="pt")
+            if processor is not None:
+                image_frame = processor(images=image, return_tensors="pt")
+            else:
+                image_frame = _OVVideoChatFlashQwenForCausalLM.image_preprocess(images=image, return_tensors="pt")[
+                    "pixel_values"
+                ]
             frames.append(image_frame)
             image_sizes.append(image_size)
 
