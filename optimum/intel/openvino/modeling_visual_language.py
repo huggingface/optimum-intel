@@ -5043,7 +5043,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             pos_embeds = self.img_pos_embed.detach()
         else:
             pos_embeds = self.pos_embed.detach()
-        image_embeds = self.vision_embeddings(images, rotary_pos_emb=pos_embeds).last_hidden_state
+        image_embeds = self.vision_embeddings(
+            images, rotary_pos_emb=pos_embeds
+        ).last_hidden_state
         image_embeds = image_embeds[:, 1:, :]
 
         videos_features = torch.from_numpy(image_embeds) if isinstance(image_embeds, np.ndarray) else image_embeds
@@ -5119,10 +5121,8 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         for x in insert_separator(prompt_chunks, [image_token_index] * (offset + 1)):
             input_ids.extend(x[offset:])
 
-        if return_tensors is not None:
-            if return_tensors == "pt":
-                return torch.tensor(input_ids, dtype=torch.long)
-            raise ValueError(f"Unsupported tensor type: {return_tensors}")
+        if return_tensors == "pt":
+            return torch.tensor(input_ids, dtype=torch.long)
         return input_ids
 
         # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L681
@@ -5412,8 +5412,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             image_size, possible_resolutions, max_resolutions=max_resolutions, patch_size=patch_size
         )
 
-        # print("get width/patch size", width, patch_size, flush=True)
-
         return width // patch_size, height // patch_size
 
     def get_text_embeddings(self, input_ids):
@@ -5479,10 +5477,8 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         frame_aspect_ratio = getattr(self.config, "frame_aspect_ratio", "square")
         mm_newline_position = getattr(self.config, "mm_newline_position", "nothing")
 
-        if vision_encode_type == "video_image":  # video backbone, process video with compress
-            image_features = self.encode_video_image(images_list, video_idx_in_batch=video_idx_in_batch)
-        else:
-            raise NotImplementedError(vision_encode_type)
+        # video backbone, process video with compress
+        image_features = self.encode_video_image(images_list, video_idx_in_batch=video_idx_in_batch)
 
         if mm_patch_merge_type == "flat":
             image_features = [x.flatten(0, 1) for x in image_features]
@@ -5490,10 +5486,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             new_image_features = []
             for image_idx, image_feature in enumerate(image_features):
                 if image_idx in video_idx_in_batch:  # video operations
-                    if "anyres" in frame_aspect_ratio:
-                        raise NotImplementedError
-                    else:
-                        frame_feature = image_feature
+                    frame_feature = image_feature
 
                     if "pad" in mm_patch_merge_type:
                         if mm_newline_position == "one_token":
@@ -5508,8 +5501,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                                 )
                         elif mm_newline_position == "nothing":
                             frame_feature = frame_feature.flatten(0, 1)
-                        else:
-                            raise NotImplementedError("add pad please!!")
                     else:
                         frame_feature = frame_feature.flatten(0, 1)
 
@@ -5542,45 +5533,23 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                         )
 
                         image_feature = image_feature.view(num_patch_height, num_patch_width, height, width, -1)
-                    else:
-                        raise NotImplementedError(image_aspect_ratio)
 
-                    if "maxpool2x2" in mm_patch_merge_type:
-                        raise NotImplementedError
-                    elif (
-                        "unpad" in mm_patch_merge_type
-                        and "anyres_max" in image_aspect_ratio
-                        and matched_anyres_max_num_patches
-                    ):
-                        raise NotImplementedError
-                    elif "unpad" in mm_patch_merge_type:
-                        raise NotImplementedError
-                    else:
-                        image_feature = image_feature.permute(0, 2, 1, 3, 4).contiguous()
-                        image_feature = image_feature.flatten(0, 3)
+                    image_feature = image_feature.permute(0, 2, 1, 3, 4).contiguous()
+                    image_feature = image_feature.flatten(0, 3)
                     if "nobase" in mm_patch_merge_type:
                         pass
                     else:
-                        try:
-                            image_feature = torch.cat((base_image_feature, image_feature), dim=0)
-                        except Exception:
-                            raise ValueError(
-                                f"{num_patch_width} {num_patch_height} now: base_image_feature: {base_image_feature.shape}, {image_feature.shape}, image_sizes[image_idx]: {image_sizes[image_idx]}, origin_size: {origin_size}, {image_sizes[image_idx]}, {self.config.image_grid_pinpoints}, {vision_tower_image_size}"
-                            )
+                        image_feature = torch.cat((base_image_feature, image_feature), dim=0)
+
                 else:  # single image operations
                     image_feature = image_feature[0]
                     if "unpad" in mm_patch_merge_type:
                         image_feature = torch.cat((image_feature, self.model.image_newline[None]), dim=0)
 
-                # print(f"image/video_feature.shape: {image_feature.shape}")
                 new_image_features.append(image_feature)
             image_features = new_image_features
         else:
             raise ValueError(f"Unexpected mm_patch_merge_type: {self.config.mm_patch_merge_type}")
-
-        # TODO: image start / end is not implemented here to support pretraining.
-        if getattr(self.config, "tune_mm_mlp_adapter", False) and getattr(self.config, "mm_use_im_start_end", False):
-            raise NotImplementedError
 
         # Let's just add dummy tensors if they do not exist,
         # it is a headache to deal with None all the time.
@@ -5751,7 +5720,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                     )
 
         new_input_embeds = torch.stack(new_input_embeds_padded, dim=0)
-        # print("tokenizer padding")
 
         if _attention_mask is None:
             attention_mask = None
