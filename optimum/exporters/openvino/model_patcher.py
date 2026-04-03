@@ -54,12 +54,7 @@ from optimum.exporters.onnx.model_patcher import (
     override_arguments,
     sdpa_mask_without_vmap,
 )
-from optimum.intel.utils.import_utils import (
-    is_diffusers_version,
-    is_openvino_version,
-    is_torch_version,
-    is_transformers_version,
-)
+from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_version, is_transformers_version
 
 from ._ov_ops import convert_recurrent_attention_cell
 
@@ -232,6 +227,15 @@ def patch_cos_sin_cached_fp32(model):
 def eager_mask_without_vmap(*args, **kwargs) -> Optional[torch.Tensor]:
     kwargs.pop("allow_is_causal_skip", None)
     dtype = kwargs.get("dtype", torch.float32)
+    if "cache_position" not in kwargs and "q_length" in kwargs:
+        q_length = kwargs.pop("q_length")
+        q_offset = kwargs.pop("q_offset", 0)
+        device = kwargs.get("device", "cpu")
+        if isinstance(q_offset, torch.Tensor):
+            cache_position = torch.arange(q_length, device=device) + q_offset
+        else:
+            cache_position = torch.arange(q_offset, q_offset + q_length, device=device)
+        kwargs["cache_position"] = cache_position
     mask = sdpa_mask_without_vmap(*args, allow_is_causal_skip=False, **kwargs)
     # we use torch.finfo(torch.float16).min instead torch.finfo(dtype).min to avoid an overflow but not
     # sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
@@ -4752,6 +4756,137 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
             del self._model.model._orig_update_causual_mask
 
 
+class Gemma4ImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        def get_image_features(self, pixel_values, image_position_ids=None):
+            return self.model.get_image_features(
+                pixel_values=pixel_values,
+                image_position_ids=image_position_ids,
+                return_dict=True,
+            ).pooler_output
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(get_image_features, model)
+
+        vision_tower = model.model.vision_tower
+        vision_tower.__orig_attn_implementation = getattr(vision_tower.config, "_attn_implementation", None)
+        vision_tower.config._attn_implementation = "eager"
+
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "4.53.0"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if is_transformers_version(">=", "4.53"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
+            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        vision_tower = self._model.model.vision_tower
+        vision_tower.config._attn_implementation = vision_tower.__orig_attn_implementation
+        del vision_tower.__orig_attn_implementation
+
+
+def _gemma4_legacy_cache_to_dynamic(past_key_values, text_config):
+    cache = DynamicCache(config=text_config)
+    cache.shared_layers = {}
+    if past_key_values is None:
+        return cache
+    if isinstance(past_key_values, Cache):
+        return past_key_values
+
+    if len(past_key_values) > 0 and isinstance(past_key_values[0], torch.Tensor):
+        past_key_values = list(zip(past_key_values[0::2], past_key_values[1::2]))
+
+    cache_layer_types = list(getattr(text_config, "layer_types", []))
+    num_kv_shared_layers = getattr(text_config, "num_kv_shared_layers", 0)
+    if num_kv_shared_layers:
+        cache_layer_types = cache_layer_types[:-num_kv_shared_layers]
+
+    last_cache_layer_per_type = {}
+    for layer_idx, (key_states, value_states) in enumerate(past_key_values):
+        cache.update(key_states, value_states, layer_idx)
+        if layer_idx < len(cache_layer_types):
+            last_cache_layer_per_type[cache_layer_types[layer_idx]] = layer_idx
+
+    for layer_idx in last_cache_layer_per_type.values():
+        layer = cache.layers[layer_idx]
+        cache.shared_layers[layer_idx] = (layer.keys, layer.values)
+
+    return cache
+
+
+def _gemma4_dynamic_cache_to_legacy(past_key_values):
+    if past_key_values is None:
+        return None
+    return tuple((layer.keys, layer.values) for layer in past_key_values.layers)
+
+
+class Gemma4LMModelPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        def lm_forward(
+            self,
+            attention_mask,
+            position_ids,
+            past_key_values,
+            inputs_embeds,
+            per_layer_inputs=None,
+            use_cache=True,
+        ):
+            text_model = self.model.language_model
+            text_config = text_model.config
+            pkv = _gemma4_legacy_cache_to_dynamic(past_key_values, text_config)
+            outputs = text_model(
+                input_ids=None,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=pkv,
+                inputs_embeds=inputs_embeds,
+                per_layer_inputs=per_layer_inputs,
+                use_cache=use_cache,
+                return_dict=True,
+            )
+            logits = self.lm_head(outputs.last_hidden_state)
+            if (final_logit_softcapping := getattr(text_config, "final_logit_softcapping", None)) is not None:
+                logits = logits / final_logit_softcapping
+                logits = torch.tanh(logits)
+                logits = logits * final_logit_softcapping
+            return logits, _gemma4_dynamic_cache_to_legacy(outputs.past_key_values)
+
+        def get_per_layer_inputs(self, input_ids, inputs_embeds):
+            return None
+
+        language_model = model.model.language_model
+        language_model.__orig_get_per_layer_inputs = language_model.get_per_layer_inputs
+        language_model.get_per_layer_inputs = types.MethodType(get_per_layer_inputs, language_model)
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(lm_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        language_model = self._model.model.language_model
+        language_model.get_per_layer_inputs = language_model.__orig_get_per_layer_inputs
+        del language_model.__orig_get_per_layer_inputs
+
+
 class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
     def __init__(
         self,
@@ -7583,10 +7718,10 @@ def afmoe_moe_forward_patched(self, hidden_states):
     act_fn = self.experts[0].act_fn
 
     # compute experts outputs in a vectorized form
-    gate = torch.bmm(hidden_states, self.gate_projs.transpose(1, 2))
-    up = torch.bmm(hidden_states, self.up_projs.transpose(1, 2))
+    gate = torch.bmm(hidden_states, self.gate_projs)
+    up = torch.bmm(hidden_states, self.up_projs)
     gate_up = act_fn(gate) * up
-    next_states = torch.bmm(gate_up, self.down_projs.transpose(1, 2))
+    next_states = torch.bmm(gate_up, self.down_projs)
     next_states = next_states.view(num_experts, batch_size, -1, hidden_dim)
     next_states = next_states * new_routing_weights.transpose(0, 1).view(num_experts, batch_size, -1)[..., None]
     next_states = next_states.sum(dim=0)
@@ -7612,22 +7747,29 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                 # with bf16 weights that leads to operands types mismatch in torch.bmm during TorchScript tracing
                 # Now we align with hidden_states (that will be always fp32 due to patching
                 # above for embedding layer during tracing)
-                afmoe_moe.down_projs = torch.concat(
-                    tuple(afmoe_moe.experts[i].down_proj.weight.unsqueeze(0) for i in range(num_experts)),
-                    dim=0,
+                afmoe_moe.down_projs = (
+                    torch.concat(
+                        tuple(afmoe_moe.experts[i].down_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                        dim=0,
+                    )
+                    .transpose(1, 2)
+                    .float()
                 )
-                afmoe_moe.gate_projs = torch.concat(
-                    tuple(afmoe_moe.experts[i].gate_proj.weight.unsqueeze(0) for i in range(num_experts)),
-                    dim=0,
+                afmoe_moe.gate_projs = (
+                    torch.concat(
+                        tuple(afmoe_moe.experts[i].gate_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                        dim=0,
+                    )
+                    .transpose(1, 2)
+                    .float()
                 )
-                afmoe_moe.up_projs = torch.concat(
-                    tuple(afmoe_moe.experts[i].up_proj.weight.unsqueeze(0) for i in range(num_experts)), dim=0
+                afmoe_moe.up_projs = (
+                    torch.concat(
+                        tuple(afmoe_moe.experts[i].up_proj.weight.unsqueeze(0) for i in range(num_experts)), dim=0
+                    )
+                    .transpose(1, 2)
+                    .float()
                 )
-
-                if is_openvino_version("<", "2026.1.0"):
-                    afmoe_moe.down_projs = afmoe_moe.down_projs.float()
-                    afmoe_moe.gate_projs = afmoe_moe.gate_projs.float()
-                    afmoe_moe.up_projs = afmoe_moe.up_projs.float()
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)

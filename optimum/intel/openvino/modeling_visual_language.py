@@ -214,6 +214,9 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
                 token_type_ids = np.zeros(inputs_embeds.shape[:2], dtype=int)
             inputs["token_type_ids"] = token_type_ids
 
+        if "per_layer_inputs" in self.input_names and kwargs.get("per_layer_inputs") is not None:
+            inputs["per_layer_inputs"] = kwargs["per_layer_inputs"]
+
         if "beam_idx" in self.input_names:
             inputs["beam_idx"] = (
                 self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=int)
@@ -344,6 +347,14 @@ class OVAudioEncoder(OVModelPart):
         return self.request({"audio_feature": audio_feature, "audio_mask": audio_mask})[0]
 
 
+class OVPerLayerEmbeddings(OVModelPart):
+    _model_name = "per_layer_embeddings"
+
+    def forward(self, input_ids):
+        self.compile()
+        return self.request(input_ids, share_inputs=True)[0]
+
+
 MODEL_PARTS_CLS_MAPPING = {
     "resampler": OVResampler,
     "language_model": OVModelWithEmbedForCausalLM,
@@ -356,6 +367,7 @@ MODEL_PARTS_CLS_MAPPING = {
     "audio_embeddings": OVAudioEmbeddings,
     "audio_forward_embeddings": OVAudioEmbeddings,
     "audio_encoder": OVAudioEncoder,
+    "per_layer_embeddings": OVPerLayerEmbeddings,
     "audio_vision_projection": OVAudioEmbeddings,
     "audio_speech_projection": OVAudioEmbeddings,
 }
@@ -3937,6 +3949,149 @@ class _OVGemma3ForCausalLM(OVModelForVisualCausalLM):
         return model_kwargs
 
 
+class _OVGemma4ForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = ["per_layer_embeddings"]
+
+    def forward(self, *args, image_position_ids=None, mm_token_type_ids=None, **kwargs):
+        if kwargs.get("per_layer_inputs") is None:
+            input_ids = kwargs.get("input_ids", args[0] if args else None)
+            if input_ids is not None and input_ids.shape[1] > 0:
+                kwargs["per_layer_inputs"] = self.get_per_layer_inputs(
+                    self._clean_input_ids_for_per_layer_inputs(input_ids, mm_token_type_ids)
+                )
+        return super().forward(*args, image_position_ids=image_position_ids, mm_token_type_ids=mm_token_type_ids, **kwargs)
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        image_sizes=None,
+        attention_mask=None,
+        image_position_ids=None,
+        mm_token_type_ids=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            image_sizes=image_sizes,
+            attention_mask=attention_mask,
+            image_position_ids=image_position_ids,
+            mm_token_type_ids=mm_token_type_ids,
+            **kwargs,
+        )
+
+        current_input_ids = model_inputs.get("input_ids")
+        if mm_token_type_ids is not None and current_input_ids is not None and mm_token_type_ids.shape[1] != current_input_ids.shape[1]:
+            mm_token_type_ids = mm_token_type_ids[:, -current_input_ids.shape[1] :]
+
+        model_inputs["image_position_ids"] = image_position_ids
+        model_inputs["mm_token_type_ids"] = mm_token_type_ids
+        if mm_token_type_ids is not None and model_inputs.get("token_type_ids") is None:
+            model_inputs["token_type_ids"] = mm_token_type_ids
+        return model_inputs
+
+    def get_per_layer_inputs(self, input_ids):
+        return self.per_layer_embeddings(input_ids)
+
+    def _clean_input_ids_for_per_layer_inputs(self, input_ids, mm_token_type_ids=None):
+        if isinstance(input_ids, np.ndarray):
+            input_ids = torch.from_numpy(input_ids)
+        cleaned_input_ids = input_ids.clone()
+        text_config = self.config.get_text_config() if hasattr(self.config, "get_text_config") else self.config.text_config
+        pad_token_id = text_config.pad_token_id
+
+        if mm_token_type_ids is not None:
+            if isinstance(mm_token_type_ids, np.ndarray):
+                mm_token_type_ids = torch.from_numpy(mm_token_type_ids)
+            if mm_token_type_ids.shape[1] != cleaned_input_ids.shape[1]:
+                mm_token_type_ids = mm_token_type_ids[:, -cleaned_input_ids.shape[1] :]
+            cleaned_input_ids[mm_token_type_ids != InputMode.LANGUAGE.value] = pad_token_id
+            return cleaned_input_ids
+
+        for token_name in (
+            "image_token_id",
+            "image_token_index",
+            "video_token_id",
+            "video_token_index",
+            "audio_token_id",
+            "audio_token_index",
+        ):
+            token_id = getattr(self.config, token_name, None)
+            if token_id is not None:
+                cleaned_input_ids[cleaned_input_ids == token_id] = pad_token_id
+        return cleaned_input_ids
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        image_position_ids = kwargs.get("image_position_ids")
+        if pixel_values is not None and pixel_values.dtype != torch.float32:
+            pixel_values = pixel_values.to(torch.float32)
+        vision_inputs = {"pixel_values": pixel_values}
+        if image_position_ids is not None:
+            vision_inputs["image_position_ids"] = image_position_ids
+        return self.vision_embeddings(**vision_inputs).last_hidden_state
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        if input_ids is None:
+            return inputs_embeds, attention_mask, position_ids
+
+        image_token_id = getattr(self.config, "image_token_id", 258880)
+        special_image_mask = (input_ids == image_token_id).unsqueeze(-1).expand_as(inputs_embeds)
+        image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
+        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+
+        orig_add_bos_token = processor.tokenizer.add_bos_token
+        if "bos_token" in processor.tokenizer.chat_template:
+            processor.tokenizer.add_bos_token = False
+
+        inputs = processor(images=image, text=text_prompt, return_tensors="pt")
+        inputs.pop("mm_token_type_ids", None)
+
+        processor.tokenizer.add_bos_token = orig_add_bos_token
+        return inputs
+
+
 class _OVGotOCR2ForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1 and kwargs.get("past_key_values") is not None:
@@ -4817,6 +4972,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen2_5_vl_text": _OVQwen2_5_VLForCausalLM,
     "got_ocr2": _OVGotOCR2ForCausalLM,
     "gemma3": _OVGemma3ForCausalLM,
+    "gemma4": _OVGemma4ForCausalLM,
     "idefics3": _OVIdefics3ForCausalLM,
     "smolvlm": _OVSmolVLForCasualLM,
     "phi4mm": _OVPhi4MMForCausalLM,

@@ -23,7 +23,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Type, Union
 
 import torch
-from huggingface_hub import HfApi, HfFolder, hf_hub_download
+try:
+    from huggingface_hub import HfApi, HfFolder, hf_hub_download
+except ImportError:
+    from huggingface_hub import HfApi, get_token, hf_hub_download
+
+    HfFolder = None
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.hf_api import file_exists
 from transformers import CLIPConfig, PretrainedConfig, PreTrainedModel
@@ -115,7 +120,7 @@ def _find_files_matching_pattern(
     model_path = Path(model_name_or_path) if not isinstance(model_name_or_path, Path) else model_name_or_path
 
     if isinstance(use_auth_token, bool):
-        token = HfFolder().get_token()
+        token = HfFolder().get_token() if HfFolder is not None else get_token()
     else:
         token = use_auth_token
 

@@ -335,6 +335,8 @@ def main_export(
             patch_qwenvl_configs()
 
         model_type = config.model_type
+        if task == "any-to-any" and model_type in MULTI_MODAL_TEXT_GENERATION_MODELS:
+            task = "image-text-to-text"
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             if custom_export_configs is None:
                 raise ValueError(
@@ -651,7 +653,7 @@ def _main_quantize(
             trust_remote_code=trust_remote_code,
         )
         model_type = config.model_type
-        if model_type in ["phi4mm", "phi4_multimodal"]:
+        if model_type in ["phi4mm", "phi4_multimodal", "gemma4"]:
             task = "image-text-to-text"
 
     # Step 1. Obtain the correct OpenVINO model class

@@ -31,7 +31,11 @@ from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
 from transformers.generation.utils import GenerateOutput, GenerationMode
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
-from transformers.models.mamba.modeling_mamba import MambaCache
+try:
+    from transformers.models.mamba.modeling_mamba import MambaCache
+except ImportError:
+    class MambaCache:  # transformers>=5.5 removed this symbol
+        pass
 from transformers.utils.hub import PushToHubMixin
 
 from optimum.utils.normalized_config import NormalizedConfigManager

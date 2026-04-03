@@ -148,6 +148,8 @@ from .model_patcher import (
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
     Gemma3LMModelPatcher,
+    Gemma4ImageEmbeddingModelPatcher,
+    Gemma4LMModelPatcher,
     GptJModelPatcher,
     GptNeoModelPatcher,
     GptNeoxModelPatcher,
@@ -261,6 +263,10 @@ def init_model_configs():
     TasksManager._CUSTOM_CLASSES[("pt", "gemma3", "image-text-to-text")] = (
         "transformers",
         "Gemma3ForConditionalGeneration",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "gemma4", "image-text-to-text")] = (
+        "transformers",
+        "Gemma4ForConditionalGeneration",
     )
     TasksManager._CUSTOM_CLASSES[("pt", "idefics3", "image-text-to-text")] = (
         "transformers",
@@ -1481,6 +1487,89 @@ class Gemma3TextOpenVINOConfig(Gemma2OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
 
 
+class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+        )
+        config = normalized_config.config
+        self.num_key_value_heads = config.num_key_value_heads
+        cache_layer_types = list(getattr(config, "layer_types", []))
+        num_kv_shared_layers = getattr(config, "num_kv_shared_layers", 0)
+        if num_kv_shared_layers:
+            cache_layer_types = cache_layer_types[:-num_kv_shared_layers]
+        self.head_dims_per_layer = [
+            config.global_head_dim
+            if layer_type == "full_attention" and getattr(config, "global_head_dim", None) is not None
+            else config.head_dim
+            for layer_type in cache_layer_types
+        ]
+        self.num_layers = len(self.head_dims_per_layer) if self.head_dims_per_layer else self.num_layers
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        past_key_values = []
+        for head_dim in self.head_dims_per_layer:
+            shape = (self.batch_size, self.num_key_value_heads, self.sequence_length, head_dim)
+            past_key_values.append(
+                (
+                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                )
+            )
+        return past_key_values
+
+
+@register_in_tasks_manager(
+    "gemma4_text",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class Gemma4TextOpenVINOConfig(Gemma2OpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "5.0.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Gemma4DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Gemma4DummyPastKeyValuesGenerator
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        inputs = dict(super().inputs)
+        num_cache_layers = self._config.num_hidden_layers - getattr(self._config, "num_kv_shared_layers", 0)
+        return {
+            name: axes
+            for name, axes in inputs.items()
+            if not name.startswith("past_key_values.") or int(name.split(".")[1]) < num_cache_layers
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        outputs = dict(super().outputs)
+        num_cache_layers = self._config.num_hidden_layers - getattr(self._config, "num_kv_shared_layers", 0)
+        return {
+            name: axes
+            for name, axes in outputs.items()
+            if not name.startswith("present.") or int(name.split(".")[1]) < num_cache_layers
+        }
+
+
 class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
         self,
@@ -1725,6 +1814,27 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
         return dummy_inputs
 
 
+class Gemma4LMInputEmbedsConfigHelper(LMInputEmbedsConfigHelper):
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        inputs = dict(super().inputs)
+        inputs["per_layer_inputs"] = {0: "batch_size", 1: "sequence_length"}
+        return inputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        dummy_inputs = super().generate_dummy_inputs(framework, **kwargs)
+        inputs_embeds = dummy_inputs["inputs_embeds"]
+        dummy_inputs["per_layer_inputs"] = self.orig_export_config.DUMMY_INPUT_GENERATOR_CLASSES[0].random_float_tensor(
+            (
+                inputs_embeds.shape[0],
+                inputs_embeds.shape[1],
+                self._config.num_hidden_layers,
+                self._config.hidden_size_per_layer_input,
+            )
+        )
+        return dummy_inputs
+
+
 class InputEmbedOpenvVINOConfig(TextDecoderOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = InputEmbeddingPatcher
@@ -1741,6 +1851,12 @@ class InputEmbedOpenvVINOConfig(TextDecoderOnnxConfig):
         model_inputs = {}
         model_inputs["input"] = inputs["input_ids"]
         return model_inputs
+
+
+class Gemma4PerLayerInputEmbedOpenvVINOConfig(InputEmbedOpenvVINOConfig):
+    @property
+    def outputs(self):
+        return {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
 
 
 def get_vlm_internal_text_generation_config(model_type, model_config, int_dtype, float_dtype):
@@ -1776,6 +1892,19 @@ def get_vlm_text_embeddings_config(model_type, model_config, int_dtype, float_dt
         float_dtype=float_dtype,
     )
     return export_config
+
+
+def get_gemma4_per_layer_embeddings_config(model_config, int_dtype, float_dtype):
+    internal_export_config = get_vlm_internal_text_generation_config(
+        model_config.model_type, model_config, int_dtype, float_dtype
+    )
+    Gemma4PerLayerInputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
+    return Gemma4PerLayerInputEmbedOpenvVINOConfig(
+        model_config,
+        task="feature-extraction",
+        int_dtype=int_dtype,
+        float_dtype=float_dtype,
+    )
 
 
 def get_vlm_text_generation_config(
@@ -4169,6 +4298,191 @@ class Gemma3OpenVINOConfig(BaseVLMOpenVINOConfig):
                 inputs_update={"token_type_ids": {0: "batch_size", 1: "sequence_length"}},
             )
         return super().with_behavior(behavior)
+
+
+class Gemma4ConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    PER_LAYER_EMBEDDINGS = "per_layer_embeddings"
+    TEXT_EMBEDDINGS = "text_embeddings"
+    VISION_EMBEDDINGS = "vision_embeddings"
+
+
+class Gemma4DummyVisionInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "image_position_ids")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        self.hidden_size = normalized_config.config.hidden_size
+        # Match the default Gemma4 processor layout: 2520 patch slots with 2340 valid patches and 180 padding slots.
+        self.num_patches_h = 39
+        self.num_patches_w = 60
+        self.num_patches = 2520
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            return self.random_float_tensor(
+                [self.batch_size, self.num_patches, self.hidden_size], framework=framework, dtype=float_dtype
+            )
+        if input_name == "image_position_ids":
+            import torch
+
+            x_coords = torch.arange(self.num_patches_w, dtype=DTYPE_MAPPER.pt(int_dtype))
+            y_coords = torch.arange(self.num_patches_h, dtype=DTYPE_MAPPER.pt(int_dtype))
+            grid_y, grid_x = torch.meshgrid(y_coords, x_coords, indexing="ij")
+            valid_position_ids = torch.stack((grid_x.reshape(-1), grid_y.reshape(-1)), dim=-1)
+            padding = torch.full(
+                (self.num_patches - valid_position_ids.shape[0], 2),
+                -1,
+                dtype=DTYPE_MAPPER.pt(int_dtype),
+            )
+            position_ids = torch.cat((valid_position_ids, padding), dim=0)
+            return position_ids.unsqueeze(0).repeat(self.batch_size, 1, 1)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+@register_in_tasks_manager("gemma4", *["image-text-to-text"], library_name="transformers")
+class Gemma4OpenVINOConfig(BaseVLMOpenVINOConfig):
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in Gemma4ConfigBehavior]
+    DUMMY_INPUT_GENERATOR_CLASSES = (Gemma4DummyVisionInputGenerator,)
+    MIN_TRANSFORMERS_VERSION = "5.0.0"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: Gemma4ConfigBehavior = Gemma4ConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == Gemma4ConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != Gemma4ConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {
+            "pixel_values": {0: "batch_size"},
+            "image_position_ids": {0: "batch_size"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != Gemma4ConfigBehavior.VISION_EMBEDDINGS:
+            return super().outputs
+        return {"last_hidden_state": {}}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, Gemma4ConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, Gemma4ConfigBehavior):
+            behavior = Gemma4ConfigBehavior(behavior)
+
+        if behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                self._orig_config.text_config.model_type,
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+            )
+
+        if behavior == Gemma4ConfigBehavior.LANGUAGE:
+            internal_export_config = get_vlm_internal_text_generation_config(
+                self._orig_config.text_config.model_type,
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+            )
+            export_config = Gemma4LMInputEmbedsConfigHelper(
+                internal_export_config,
+                patcher_cls=Gemma4LMModelPatcher,
+            )
+            export_config._normalized_config = internal_export_config._normalized_config
+            return export_config
+
+        if behavior == Gemma4ConfigBehavior.PER_LAYER_EMBEDDINGS:
+            return get_gemma4_per_layer_embeddings_config(
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+            )
+
+        return self.__class__(
+            self._orig_config,
+            task=self.task,
+            int_dtype=self.int_dtype,
+            float_dtype=self.float_dtype,
+            behavior=behavior,
+            preprocessors=self._preprocessors,
+        )
+
+    def get_model_for_behavior(self, model, behavior: Union[str, Gemma4ConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Gemma4ConfigBehavior):
+            behavior = Gemma4ConfigBehavior(behavior)
+
+        if behavior == Gemma4ConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == Gemma4ConfigBehavior.VISION_EMBEDDINGS:
+            return model
+
+        if behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.model.language_model.get_input_embeddings()
+            text_embedding.config = model.model.language_model.config
+            return text_embedding
+
+        if behavior == Gemma4ConfigBehavior.PER_LAYER_EMBEDDINGS:
+            import torch
+
+            class Gemma4PerLayerEmbeddingsModel(torch.nn.Module):
+                def __init__(self, language_model):
+                    super().__init__()
+                    self.embed_tokens_per_layer = language_model.embed_tokens_per_layer
+                    self.num_hidden_layers = language_model.config.num_hidden_layers
+                    self.hidden_size_per_layer_input = language_model.config.hidden_size_per_layer_input
+                    self.config = language_model.config
+
+                def forward(self, input_ids):
+                    return self.embed_tokens_per_layer(input_ids).reshape(
+                        *input_ids.shape,
+                        self.num_hidden_layers,
+                        self.hidden_size_per_layer_input,
+                    )
+
+            return Gemma4PerLayerEmbeddingsModel(model.model.language_model)
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != Gemma4ConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return Gemma4ImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        if self._behavior == Gemma4ConfigBehavior.VISION_EMBEDDINGS:
+            kwargs["batch_size"] = 1
+        return super().generate_dummy_inputs(framework, **kwargs)
 
 
 class DummyVisionPositionIdsInputGenerator(DummyVisionInputGenerator):

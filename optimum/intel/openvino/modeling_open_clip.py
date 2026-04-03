@@ -31,7 +31,10 @@ from transformers import (
 from transformers.file_utils import add_start_docstrings
 from transformers.modeling_outputs import ModelOutput
 from transformers.models.clip.modeling_clip import CLIPOutput
-from transformers.utils import is_offline_mode
+try:
+    from transformers.utils import is_offline_mode
+except ImportError:
+    from transformers.utils.hub import is_offline_mode
 
 from optimum.exporters.tasks import TasksManager
 
