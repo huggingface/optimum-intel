@@ -5127,9 +5127,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
     def image_preprocess(images, return_tensors, target_size=None):
         from functools import partial, reduce
+
         from PIL.Image import Image as PILImage
         from transformers.image_processing_utils import BatchFeature
-        from transformers.image_utils import ChannelDimension, PILImageResampling, to_numpy_array
         from transformers.image_transforms import (
             convert_to_rgb,
             normalize,
@@ -5137,6 +5137,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             resize,
             to_channel_dimension_format,
         )
+        from transformers.image_utils import ChannelDimension, PILImageResampling, to_numpy_array
 
         if isinstance(images, PILImage):
             images = [images]
@@ -5469,10 +5470,8 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             else:
                 images_list.append(image.unsqueeze(0))
 
-        vision_encode_type = getattr(self.config, "vision_encode_type", "image")
         mm_patch_merge_type = getattr(self.config, "mm_patch_merge_type", "flat")
         image_aspect_ratio = getattr(self.config, "image_aspect_ratio", "square")
-        frame_aspect_ratio = getattr(self.config, "frame_aspect_ratio", "square")
         mm_newline_position = getattr(self.config, "mm_newline_position", "nothing")
 
         # video backbone, process video with compress
@@ -5508,15 +5507,11 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                 elif image_feature.shape[0] > 1:  # multi patches and multi images operations
                     base_image_feature = image_feature[0]
                     image_feature = image_feature[1:]
-                    origin_size = image_feature.shape
 
                     height = width = 8
                     assert (
                         height * width == base_image_feature.shape[0]
                     ), f"height:{height}, width: {width}, base_image_feature: {base_image_feature.shape}"
-
-                    if "anyres_max" in image_aspect_ratio:
-                        matched_anyres_max_num_patches = re.match(r"anyres_max_(\d+)", image_aspect_ratio)
 
                     if "anyres" in image_aspect_ratio:
                         vision_tower_image_size = 224
