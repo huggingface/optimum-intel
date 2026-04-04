@@ -99,7 +99,9 @@ class ExportModelTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.update({"cohere2": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.49"):
-        SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM, "videochat_flash_qwen": OVModelForVisualCausalLM})
+        SUPPORTED_ARCHITECTURES.update(
+            {"zamba2": OVModelForCausalLM, "videochat_flash_qwen": OVModelForVisualCausalLM}
+        )
 
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES.update({"granitemoehybrid": OVModelForCausalLM})
