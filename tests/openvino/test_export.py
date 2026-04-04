@@ -93,14 +93,13 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-3": OVStableDiffusion3Pipeline,
         "flux": OVFluxPipeline,
         "ltx-video": OVLTXPipeline,
-        "videochat_flash_qwen": OVModelForVisualCausalLM,
     }
 
     if is_transformers_version(">=", "4.48.0"):
         SUPPORTED_ARCHITECTURES.update({"cohere2": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.49"):
-        SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
+        SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM, "videochat_flash_qwen": OVModelForVisualCausalLM})
 
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES.update({"granitemoehybrid": OVModelForCausalLM})
