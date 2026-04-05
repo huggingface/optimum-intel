@@ -577,7 +577,7 @@ def export_from_model(
 
     library_name = _infer_library_from_model_or_model_class(model)
     if library_name != "open_clip":
-        TasksManager.standardize_model_attributes(model)
+        TasksManager.standardize_model_attributes(model, library_name=library_name)
 
     if hasattr(model.config, "export_model_type") and model.config.export_model_type is not None:
         model_type = model.config.export_model_type
@@ -613,6 +613,16 @@ def export_from_model(
         logger.info(f"Automatic task detection to: {task}.")
 
     is_encoder_decoder = getattr(getattr(model, "config", {}), "is_encoder_decoder", False)
+
+    # Qwen3-ASR is structurally encoder-decoder (audio_tower + text LM) but config says is_encoder_decoder=False
+    if model_type == "qwen3_asr" and not is_encoder_decoder:
+        is_encoder_decoder = True
+        model.config.is_encoder_decoder = True
+        if not hasattr(model, "get_encoder"):
+            model.get_encoder = lambda: model.thinker.audio_tower
+        # Set decoder_start_token_id so the saved config enables encoder-decoder generation
+        if model.config.decoder_start_token_id is None:
+            model.config.decoder_start_token_id = 0
     stateful = stateful and (
         ensure_export_task_support_stateful(task) or ensure_model_type_support_stateful(model_type)
     )

@@ -277,7 +277,18 @@ def _infer_library_from_model_or_model_class(
         # for wrapped models like timm in optimum.intel.openvino.modeling_timm
         library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
     else:
-        library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+        try:
+            library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+        except ValueError:
+            # Custom trust_remote_code models (e.g. qwen_asr) have modules outside
+            # of transformers/diffusers but still inherit from PreTrainedModel.
+            from transformers import PreTrainedModel
+
+            model_cls = model if isinstance(model, type) else type(model)
+            if issubclass(model_cls, PreTrainedModel):
+                library_name = "transformers"
+            else:
+                raise
 
     return library_name
 
