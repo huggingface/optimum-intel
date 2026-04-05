@@ -5124,49 +5124,40 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         return input_ids
 
         # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L681
+    def image_preprocess(images, target_size=None):
+        from PIL import Image
+        from torchvision.transforms.functional import InterpolationMode, normalize, pil_to_tensor, resize
 
-    def image_preprocess(images, return_tensors, target_size=None):
-        from functools import partial, reduce
-
-        from PIL.Image import Image as PILImage
-        from transformers.image_processing_utils import BatchFeature
-        from transformers.image_transforms import (
-            convert_to_rgb,
-            normalize,
-            rescale,
-            resize,
-            to_channel_dimension_format,
-        )
-        from transformers.image_utils import ChannelDimension, PILImageResampling, to_numpy_array
-
-        if isinstance(images, PILImage):
+        if isinstance(images, Image.Image):
             images = [images]
-        else:
-            # to adapt video data
-            images = [to_numpy_array(image) for image in images]
-            assert isinstance(images, list)
+        elif isinstance(images, np.ndarray):
+            images = list(images)
 
         if target_size is None:
             target_size = (224, 224)
 
-        data_format = ChannelDimension.FIRST
-        rescale_factor = 1 / 255
         image_mean = (0.485, 0.456, 0.406)
         image_std = (0.229, 0.224, 0.225)
 
-        transforms = [
-            convert_to_rgb,
-            to_numpy_array,
-            partial(resize, size=target_size, resample=PILImageResampling.BICUBIC, data_format=data_format),
-            partial(rescale, scale=rescale_factor, data_format=data_format),
-            partial(normalize, mean=image_mean, std=image_std, data_format=data_format),
-            partial(to_channel_dimension_format, channel_dim=data_format, input_channel_dim=data_format),
-        ]
+        processed_images = []
+        for image in images:
+            if isinstance(image, Image.Image):
+                pil_image = image.convert("RGB")
+            else:
+                # Keep compatibility with list[np.ndarray] video frames.
+                pil_image = Image.fromarray(np.asarray(image)).convert("RGB")
 
-        images = reduce(lambda x, f: [*map(f, x)], transforms, images)
-        data = {"pixel_values": images}
+            image_tensor = pil_to_tensor(pil_image).to(dtype=torch.float32).div_(255.0)
+            image_tensor = resize(
+                image_tensor,
+                list(target_size),
+                interpolation=InterpolationMode.BICUBIC,
+                antialias=True,
+            )
+            image_tensor = normalize(image_tensor, mean=image_mean, std=image_std)
+            processed_images.append(image_tensor)
 
-        return BatchFeature(data=data, tensor_type=return_tensors)
+        return torch.stack(processed_images, dim=0)
 
     @staticmethod
     def preprocess_inputs(
@@ -5229,9 +5220,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             if processor is not None:
                 processed_images = processor(images=video, return_tensors="pt")
             else:
-                processed_images = _OVVideoChatFlashQwenForCausalLM.image_preprocess(
-                    images=video, return_tensors="pt"
-                )["pixel_values"]
+                processed_images = _OVVideoChatFlashQwenForCausalLM.image_preprocess(images=video)
             frames.append(processed_images)
 
         # preprocess image
@@ -5246,9 +5235,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             if processor is not None:
                 image_frame = processor(images=image, return_tensors="pt")
             else:
-                image_frame = _OVVideoChatFlashQwenForCausalLM.image_preprocess(images=image, return_tensors="pt")[
-                    "pixel_values"
-                ]
+                image_frame = _OVVideoChatFlashQwenForCausalLM.image_preprocess(images=image)
             frames.append(image_frame)
             image_sizes.append(image_size)
 
