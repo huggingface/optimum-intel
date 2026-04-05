@@ -5123,7 +5123,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             return torch.tensor(input_ids, dtype=torch.long)
         return input_ids
 
-        # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L681
+    # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L681
     def image_preprocess(images, target_size=None):
         from PIL import Image
         from torchvision.transforms.functional import InterpolationMode, normalize, pil_to_tensor, resize
