@@ -159,7 +159,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
-    if is_transformers_version(">=", "4.57.0"):
+    if is_transformers_version(">=", "4.57.0.dev0"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "hunyuan_v1_dense"),
@@ -182,9 +182,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         "stable-diffusion-3": 6,
         "flux": 4,
         "flux-fill": 4,
-        "lfm2": 2
-        if is_openvino_version(">=", "2026.0")
-        else 0,  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
+        "lfm2": (
+            2 if is_openvino_version(">=", "2026.0") else 0
+        ),  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
         "llava": 2,
         "sana": 2,
         "ltx-video": 2,
@@ -286,9 +286,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 14, "decoder": 22, "decoder_with_past": 22}
-            if is_transformers_version("<=", "4.45")
-            else {"encoder": 14, "decoder": 22, "decoder_with_past": 25},
+            (
+                {"encoder": 14, "decoder": 22, "decoder_with_past": 22}
+                if is_transformers_version("<=", "4.45")
+                else {"encoder": 14, "decoder": 22, "decoder_with_past": 25}
+            ),
             (
                 {"encoder": {"int8": 14}, "decoder": {"int8": 22}, "decoder_with_past": {"int8": 17}}
                 if is_transformers_version("<=", "4.45")
@@ -300,9 +302,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 16, "decoder": 26, "decoder_with_past": 23}
-            if is_transformers_version("<=", "4.45")
-            else {"encoder": 16, "decoder": 26, "decoder_with_past": 25},
+            (
+                {"encoder": 16, "decoder": 26, "decoder_with_past": 23}
+                if is_transformers_version("<=", "4.45")
+                else {"encoder": 16, "decoder": 26, "decoder_with_past": 25}
+            ),
             (
                 {"encoder": {"f8e4m3": 14}, "decoder": {"f8e4m3": 22}, "decoder_with_past": {"f8e4m3": 17}}
                 if is_transformers_version("<=", "4.45")
@@ -478,12 +482,14 @@ class OVCLIExportTestCase(unittest.TestCase):
             "t5",
             "int8",
             "--dataset c4:seq_len=64 --num-samples 1",
-            {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
-            if is_transformers_version("<=", "4.45")
-            else {
-                "encoder": 30,
-                "decoder": 52,
-            },
+            (
+                {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
+                if is_transformers_version("<=", "4.45")
+                else {
+                    "encoder": 30,
+                    "decoder": 52,
+                }
+            ),
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
                 if is_transformers_version("<=", "4.45")
@@ -755,9 +761,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
             "--dataset contextual --num-samples 1 --trust-remote-code",
             {
-                "lm_model": {"int8": 10, "int4": 20}
-                if is_transformers_version(">=", "4.54")
-                else {"int8": 6, "int4": 24},
+                "lm_model": (
+                    {"int8": 10, "int4": 20} if is_transformers_version(">=", "4.54") else {"int8": 6, "int4": 24}
+                ),
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 1},
                 "vision_embeddings_merger_model": {"int8": 12},
