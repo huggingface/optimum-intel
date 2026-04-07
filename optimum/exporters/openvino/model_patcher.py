@@ -4487,9 +4487,11 @@ class Qwen3OmniAudioEncoderPatcher(ModelPatcher):
                 .to(padded_embed.dtype)
             )
             padded_embed = padded_embed + positional_embedding
-            # TODO: Boolean indexing produces data-dependent shapes that get baked in during export
-            # tracing. A proper fix requires restructuring to use padded computation throughout.
-            hidden_states = padded_embed[padded_mask_after_cnn]
+
+            # Flatten padded representation instead of boolean indexing (which bakes data-dependent shapes).
+            # Encoder layers use eager attention during OV export, so cu_seqlens don't affect computation.
+            b, t, d = padded_embed.shape
+            hidden_states = padded_embed.reshape(b * t, d)
 
             for encoder_layer in self.layers:
                 layer_outputs = encoder_layer(hidden_states, cu_seqlens)
@@ -4499,6 +4501,10 @@ class Qwen3OmniAudioEncoderPatcher(ModelPatcher):
             hidden_states = self.proj1(hidden_states)
             hidden_states = self.act(hidden_states)
             hidden_states = self.proj2(hidden_states)
+
+            # Reshape back and zero out padded positions
+            hidden_states = hidden_states.reshape(b, t, -1)
+            hidden_states = hidden_states * padded_mask_after_cnn.to(hidden_states.dtype).unsqueeze(-1)
             return hidden_states
 
         model.forward = types.MethodType(audio_forward, model)

@@ -4411,7 +4411,7 @@ class Qwen3OmniOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == Qwen3OmniConfigBehavior.TEXT_EMBEDDINGS:
             return {"inputs_embeds": {0: "batch_size", 1: "sequence_length"}}
         if self._behavior == Qwen3OmniConfigBehavior.AUDIO_ENCODER:
-            return {"audio_features": {0: "total_tokens"}}
+            return {"audio_features": {0: "batch_size", 1: "aftercnn_time"}}
         if self._behavior == Qwen3OmniConfigBehavior.CODE2WAV:
             return {"waveform": {0: "batch_size", 2: "audio_length"}}
         if self._behavior == Qwen3OmniConfigBehavior.TALKER_TEXT_EMBEDDINGS:

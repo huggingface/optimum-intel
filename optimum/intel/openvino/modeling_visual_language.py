@@ -4,6 +4,7 @@ import inspect
 import logging
 import math
 import os
+import threading
 import warnings
 from abc import abstractmethod
 from dataclasses import dataclass
@@ -4060,9 +4061,9 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
             **kwargs,
         )
         self.rope_deltas = None
-        # Not thread-safe: concurrent generate() calls share these collection buffers
         self._collecting_hidden_states = False
         self._collected_hidden_states = []
+        self._hs_lock = threading.Lock()
         self.num_grid_per_side = None
         self.spatial_merge_size = None
         self.rotary_pos_emb = None
@@ -4435,7 +4436,16 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
             aftercnn_lens=aftercnn_lens,
             cu_seqlens=cu_seqlens,
         )
-        audio_features = torch.from_numpy(audio_out) if not isinstance(audio_out, torch.Tensor) else audio_out
+        audio_out = torch.from_numpy(audio_out) if not isinstance(audio_out, torch.Tensor) else audio_out
+
+        # Audio encoder returns padded [batch, aftercnn_time, dim]; extract valid tokens per chunk
+        if audio_out.ndim == 3:
+            valid_tokens = []
+            for i, length in enumerate(aftercnn_lens):
+                valid_tokens.append(audio_out[i, : length.item()])
+            audio_features = torch.cat(valid_tokens, dim=0)
+        else:
+            audio_features = audio_out
         return audio_features, aftercnn_lens
 
     @property
@@ -4724,28 +4734,30 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
         for k, v in thinker_kwargs.items():
             kwargs[k] = v
 
-        # Enable hidden state collection during thinker generation
-        self._collecting_hidden_states = True
-        self.language_model._collecting_hidden_states = True
-        self._collected_hidden_states = []
-        try:
-            thinker_result = super().generate(*args, **kwargs)
-        finally:
-            self._collecting_hidden_states = False
-            self.language_model._collecting_hidden_states = False
-
-        # Build thinker_embed and thinker_hidden from collected states
-        if not self._collected_hidden_states or self._collected_hidden_states[0][0] is None:
-            logger.warning("No hidden states collected during thinker generation, cannot produce audio.")
+        # Lock ensures concurrent generate(return_audio=True) calls don't corrupt shared collection buffers
+        with self._hs_lock:
+            self._collecting_hidden_states = True
+            self.language_model._collecting_hidden_states = True
             self._collected_hidden_states = []
-            return thinker_result, None
+            try:
+                thinker_result = super().generate(*args, **kwargs)
+            finally:
+                self._collecting_hidden_states = False
+                self.language_model._collecting_hidden_states = False
 
-        # thinker_hidden uses the final-layer hidden states (for multimodal projection)
-        if self._collected_hidden_states[0][1] is not None:
-            thinker_hidden = torch.cat([hs[1] for hs in self._collected_hidden_states], dim=1)
-        else:
-            thinker_hidden = torch.cat([hs[0] for hs in self._collected_hidden_states], dim=1)
-        self._collected_hidden_states = []
+            # Build thinker_embed and thinker_hidden from collected states
+            if not self._collected_hidden_states or self._collected_hidden_states[0][0] is None:
+                logger.warning("No hidden states collected during thinker generation, cannot produce audio.")
+                self._collected_hidden_states = []
+                return thinker_result, None
+
+            # thinker_hidden prefers intermediate hidden states from accept_hidden_layer for talker projection.
+            # Falls back to final-layer hidden states when intermediate states are unavailable.
+            if self._collected_hidden_states[0][1] is not None:
+                thinker_hidden = torch.cat([hs[1] for hs in self._collected_hidden_states], dim=1)
+            else:
+                thinker_hidden = torch.cat([hs[0] for hs in self._collected_hidden_states], dim=1)
+            self._collected_hidden_states = []
 
         # thinker_embed uses word embeddings (layer 0), not final-layer hidden states
         sequences = thinker_result.sequences if hasattr(thinker_result, "sequences") else thinker_result
