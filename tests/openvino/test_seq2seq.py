@@ -52,6 +52,7 @@ from optimum.exporters.openvino.stateful import model_has_state
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
+    OVModelForImageTextToEmbedding,
     OVModelForSeq2SeqLM,
     OVModelForSpeechSeq2Seq,
     OVModelForTextToSpeechSeq2Seq,
@@ -979,6 +980,69 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 device=OPENVINO_DEVICE,
             )
             self.assertIsInstance(ov_restored_model, type(ov_model))
+
+
+class OVModelForImageTextToEmbeddingIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ["qwen2_vl"]
+    TASK = "image-text-to-embedding"
+
+    IMAGE = Image.open(
+        requests.get(
+            TEST_IMAGE_URL,
+            stream=True,
+        ).raw
+    )
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        from transformers import Qwen2VLForConditionalGeneration
+
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+
+        transformers_model = Qwen2VLForConditionalGeneration.from_pretrained(
+            model_id, torch_dtype=torch.float32
+        )
+        transformers_model.eval()
+
+        set_seed(SEED)
+        ov_model = OVModelForImageTextToEmbedding.from_pretrained(
+            model_id,
+            export=True,
+            compile=False,
+            device=OPENVINO_DEVICE,
+        )
+        ov_model.compile()
+
+        processor = AutoProcessor.from_pretrained(model_id)
+        processor.tokenizer.padding_side = "right"
+
+        prompt = "What is shown in this image?"
+        image = self.IMAGE
+        messages = [
+            [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": prompt}]}],
+            [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+        ]
+        texts = [processor.apply_chat_template(m, tokenize=False, add_generation_prompt=True) for m in messages]
+        images = [image, None]
+        inputs = processor(text=texts, images=[image], padding=True, return_tensors="pt")
+
+        set_seed(SEED)
+        ov_outputs = ov_model(**inputs)
+        set_seed(SEED)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs, output_hidden_states=True, use_cache=False)
+
+        self.assertIn("last_hidden_state", ov_outputs)
+        self.assertEqual(ov_outputs.last_hidden_state.shape, transformers_outputs.hidden_states[-1].shape)
+        self.assertTrue(
+            torch.allclose(ov_outputs.last_hidden_state, transformers_outputs.hidden_states[-1], atol=1e-3),
+            f"Max abs diff {torch.abs(ov_outputs.last_hidden_state - transformers_outputs.hidden_states[-1]).max()}",
+        )
+
+        del transformers_model
+        del ov_model
+        gc.collect()
 
 
 class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
