@@ -7344,8 +7344,6 @@ def granite_moe_hybrid_update_causal_mask(
         causal_mask = torch.full(
             (sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=cache_position.device
         )
-        if sequence_length != 1:
-            causal_mask = torch.triu(causal_mask, diagonal=1)
         causal_mask *= torch.arange(target_length, device=cache_position.device) > cache_position.reshape(-1, 1)
         causal_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1)
 
