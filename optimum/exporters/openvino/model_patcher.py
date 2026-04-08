@@ -8317,3 +8317,240 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
                 sparse_moe_block = decoder_layer.mlp
                 decoder_layer.mlp.forward = decoder_layer.mlp._orig_forward
                 del sparse_moe_block.down_projs, sparse_moe_block.gate_projs, sparse_moe_block.up_projs
+
+
+class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
+    """
+    Model patcher for Qwen3-ASR encoder-decoder export.
+
+    For encoder: patches the audio tower forward to use standard attention (no cu_seqlens/chunking).
+    For decoder: patches forward to accept encoder_outputs/decoder_input_ids and map them to the thinker's interface.
+    """
+
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+
+        if self.real_config._behavior == "encoder":
+            self._patch_audio_encoder()
+        elif self.real_config._behavior == "decoder":
+            self._patch_decoder()
+
+    def _patch_audio_encoder(self):
+        """
+        Patch audio encoder forward for OV-compatible tracing.
+        Removes dynamic chunking and cu_seqlens-based attention.
+        Patches attention layers to work with batched 3D inputs.
+        """
+        encoder = self._model
+        # Force eager attention to avoid cu_seqlens dependency
+        encoder.config._attn_implementation = "eager"
+        for layer in encoder.layers:
+            layer.self_attn.config._attn_implementation = "eager"
+
+        # Patch each attention layer to accept 3D batched input (batch, seq, dim)
+        for layer in encoder.layers:
+            attn = layer.self_attn
+            attn._orig_forward = attn.forward
+
+            def make_patched_attn_forward(attn_module):
+                def patched_attn_forward(hidden_states, cu_seqlens=None, attention_mask=None, **kwargs):
+                    # hidden_states: (batch, seq_len, dim) - standard 3D batched
+                    bsz, seq_length, _ = hidden_states.size()
+
+                    query_states = attn_module.q_proj(hidden_states).reshape(bsz, seq_length, attn_module.num_heads, -1).transpose(1, 2)
+                    key_states = attn_module.k_proj(hidden_states).reshape(bsz, seq_length, attn_module.num_heads, -1).transpose(1, 2)
+                    value_states = attn_module.v_proj(hidden_states).reshape(bsz, seq_length, attn_module.num_heads, -1).transpose(1, 2)
+
+                    attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) * attn_module.scaling
+                    attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+
+                    attn_output = torch.matmul(attn_weights, value_states)
+                    attn_output = attn_output.transpose(1, 2).contiguous().reshape(bsz, seq_length, -1)
+                    attn_output = attn_module.out_proj(attn_output)
+                    return attn_output
+
+                return patched_attn_forward
+
+            attn.forward = make_patched_attn_forward(attn)
+
+        # Patch each encoder layer to accept 3D input and skip cu_seqlens
+        for layer in encoder.layers:
+            layer._orig_forward = layer.forward
+
+            def make_patched_layer_forward(enc_layer):
+                def patched_layer_forward(hidden_states, cu_seqlens=None, attention_mask=None, **kwargs):
+                    residual = hidden_states
+                    hidden_states = enc_layer.self_attn_layer_norm(hidden_states)
+                    hidden_states = enc_layer.self_attn(hidden_states=hidden_states, attention_mask=attention_mask)
+                    hidden_states = residual + hidden_states
+                    residual = hidden_states
+                    hidden_states = enc_layer.final_layer_norm(hidden_states)
+                    hidden_states = enc_layer.fc1(hidden_states)
+                    hidden_states = enc_layer.activation_fn(hidden_states)
+                    hidden_states = enc_layer.fc2(hidden_states)
+                    hidden_states = residual + hidden_states
+                    return (hidden_states,)
+
+                return patched_layer_forward
+
+            layer.forward = make_patched_layer_forward(layer)
+
+        # Save original forward
+        encoder._orig_forward = encoder.forward
+
+        def patched_audio_forward(input_features, feature_lens=None, aftercnn_lens=None, **kwargs):
+            """
+            Simplified audio encoder forward for OV export.
+            Processes audio input without dynamic chunking.
+
+            input_features: (batch_size, num_mel_bins, seq_len) or (num_mel_bins, seq_len)
+            """
+            # Ensure input is batched: (batch, num_mel, seq_len)
+            if input_features.dim() == 2:
+                input_features = input_features.unsqueeze(0)
+
+            # Apply convolutions: conv2d expects (batch, 1, num_mel, seq_len)
+            x = input_features.unsqueeze(1)  # (batch, 1, num_mel, seq_len)
+            x = F.gelu(encoder.conv2d1(x))
+            x = F.gelu(encoder.conv2d2(x))
+            x = F.gelu(encoder.conv2d3(x))
+
+            b, c, f, t = x.size()
+            x = encoder.conv_out(x.permute(0, 3, 1, 2).contiguous().view(b, t, c * f))
+
+            # Add positional embeddings
+            pos_emb = encoder.positional_embedding.positional_embedding[:t, :].unsqueeze(0).to(x.dtype)
+            hidden_states = x + pos_emb  # (batch, t, hidden_dim)
+
+            # Process through patched encoder layers with standard 3D batched attention
+            for encoder_layer in encoder.layers:
+                layer_outputs = encoder_layer(hidden_states)
+                hidden_states = layer_outputs[0]
+
+            hidden_states = encoder.ln_post(hidden_states)
+            hidden_states = encoder.proj1(hidden_states)
+            hidden_states = encoder.act(hidden_states)
+            hidden_states = encoder.proj2(hidden_states)
+
+            return BaseModelOutput(last_hidden_state=hidden_states)
+
+        encoder.forward = patched_audio_forward
+
+    def _patch_decoder(self):
+        """
+        Patch full model forward for decoder export.
+        Maps seq2seq inputs (encoder_outputs, decoder_input_ids) to the thinker's interface.
+        """
+        model = self._model
+        thinker = model.thinker
+
+        # Force eager attention for text model
+        thinker.config.text_config._attn_implementation = "eager"
+
+        # Save original forward
+        model._orig_forward = model.forward
+
+        def patched_decoder_forward(
+            encoder_outputs=None,
+            decoder_input_ids=None,
+            attention_mask=None,
+            past_key_values=None,
+            cache_position=None,
+            **kwargs,
+        ):
+            """
+            Decoder forward that accepts seq2seq-style inputs.
+            encoder_outputs: pre-computed audio features from encoder (batch, enc_seq_len, hidden_dim)
+            decoder_input_ids: text token ids (batch, dec_seq_len)
+            """
+            # Convert past_key_values from legacy list format to DynamicCache
+            if past_key_values is not None and isinstance(past_key_values, (list, tuple)):
+                cache = DynamicCache()
+                for layer_past in past_key_values:
+                    if len(layer_past) >= 2:
+                        cache.update(layer_past[0], layer_past[1], len(cache))
+                past_key_values = cache
+
+            input_ids = decoder_input_ids
+            inputs_embeds = thinker.get_input_embeddings()(input_ids)
+
+            # Merge audio features from encoder into embeddings at audio placeholder positions
+            if encoder_outputs is not None:
+                if isinstance(encoder_outputs, (tuple, list)):
+                    encoder_hidden_states = encoder_outputs[0]
+                else:
+                    encoder_hidden_states = encoder_outputs
+                # Flatten encoder outputs: (total_audio_tokens, hidden_dim)
+                audio_features = encoder_hidden_states.reshape(-1, encoder_hidden_states.shape[-1])
+                audio_features = audio_features.to(inputs_embeds.device, inputs_embeds.dtype)
+
+                # Use cumsum-based indexing + torch.where for OV-friendly dynamic shapes
+                special_audio_mask = (input_ids == thinker.config.audio_token_id)  # [batch, seq]
+                # cumsum gives 1-based index of audio tokens; subtract 1 for 0-based
+                audio_cumsum = special_audio_mask.long().cumsum(dim=-1) - 1  # [batch, seq]
+                # Clamp to valid range for gather (non-audio positions will be masked out anyway)
+                audio_cumsum = audio_cumsum.clamp(min=0)
+                # Pad audio_features to at least max possible index + 1
+                # Expand to [batch, seq, hidden] by gathering from audio_features
+                gather_indices = audio_cumsum.unsqueeze(-1).expand(-1, -1, inputs_embeds.shape[-1])  # [batch, seq, hidden]
+                # audio_features is [total_audio_tokens, hidden], expand for batch gather
+                audio_features_expanded = audio_features.unsqueeze(0).expand(inputs_embeds.shape[0], -1, -1)  # [batch, total, hidden]
+                gathered_audio = torch.gather(audio_features_expanded, 1, gather_indices)  # [batch, seq, hidden]
+                # Use where to select: audio feature at audio positions, original embed elsewhere
+                mask_3d = special_audio_mask.unsqueeze(-1)  # [batch, seq, 1]
+                inputs_embeds = torch.where(mask_3d, gathered_audio, inputs_embeds)
+
+            # Compute position_ids
+            position_ids = None
+            if attention_mask is not None:
+                if (
+                    cache_position is None
+                    or (cache_position is not None and cache_position[0] == 0)
+                    or thinker.rope_deltas is None
+                ):
+                    delta0 = (1 - attention_mask).sum(dim=-1).unsqueeze(1)
+                    position_ids, rope_deltas = thinker.get_rope_index(attention_mask)
+                    rope_deltas = rope_deltas - delta0
+                    thinker.rope_deltas = rope_deltas
+                else:
+                    batch_size, seq_length = input_ids.shape
+                    delta = cache_position[0] + thinker.rope_deltas
+                    position_ids = torch.arange(seq_length, device=input_ids.device)
+                    position_ids = position_ids.view(1, -1).expand(batch_size, -1)
+                    position_ids = position_ids.add(delta)
+                    position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+
+            outputs = thinker.model(
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                use_cache=True,
+                cache_position=cache_position,
+            )
+
+            logits = thinker.lm_head(outputs[0])
+
+            past_kv = outputs.past_key_values
+            # Convert DynamicCache to legacy tuple format for TorchScript tracing
+            if isinstance(past_kv, DynamicCache):
+                past_kv = past_kv.to_legacy_cache()
+
+            return (logits, past_kv)
+
+        model.forward = patched_decoder_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        if hasattr(self._model, "_orig_forward"):
+            self._model.forward = self._model._orig_forward
+            del self._model._orig_forward
