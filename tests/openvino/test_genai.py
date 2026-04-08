@@ -243,6 +243,7 @@ class VLMPipelineTestCase(unittest.TestCase):
             "llava",
             "llava_next",
             "llava_next_mistral",
+            "mistral3",
             "qwen2_vl",
             "qwen2_5_vl",
             "gemma3",

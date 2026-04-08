@@ -3314,6 +3314,67 @@ class LlavaNextVideoImageEmbeddingModelPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
+# Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L223-L248
+# Mistral3Model.get_image_features() with only projector.norm() applied instead of full projector forward,
+# as the patch_merger cycle block (unfold loop) cannot be traced to OpenVINO IR.
+def mistral3_vision_embed_forward(self, pixel_values):
+    image_features = self.vision_tower(pixel_values, output_hidden_states=True)
+    vision_feature_layer = self.config.vision_feature_layer
+    if isinstance(vision_feature_layer, int):
+        selected_image_feature = image_features.hidden_states[vision_feature_layer]
+    else:
+        hs_pool = [image_features.hidden_states[layer_idx] for layer_idx in vision_feature_layer]
+        selected_image_feature = torch.cat(hs_pool, dim=-1)
+    image_features = self.multi_modal_projector.norm(selected_image_feature.squeeze(0))
+    return image_features
+
+
+# Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L76-L94
+# and https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L118-L124
+# Mistral3MultiModalProjector.forward() and Mistral3PatchMerger.forward() with norm and cycle block excluded.
+# norm is moved to vision_embed_forward, cycle block runs in PyTorch at runtime.
+def mistral3_multi_modal_projector_forward(self, image_features):
+    hidden_states = self.patch_merger.merging_layer(image_features)
+    hidden_states = self.linear_1(hidden_states)
+    hidden_states = self.act(hidden_states)
+    hidden_states = self.linear_2(hidden_states)
+    return hidden_states
+
+
+class Mistral3ImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(mistral3_vision_embed_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Mistral3MultiModalProjectorPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(mistral3_multi_modal_projector_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
 def _embednb_forward(self, ids: torch.Tensor) -> torch.Tensor:
     def rope(pos: torch.Tensor, dim: int, theta: int) -> torch.Tensor:
         assert dim % 2 == 0, "The dimension must be even."

@@ -101,6 +101,9 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
 
+    if is_transformers_version(">=", "4.50.0"):
+        SUPPORTED_ARCHITECTURES.update({"mistral3": OVModelForVisualCausalLM})
+
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES.update({"granitemoehybrid": OVModelForCausalLM})
 
