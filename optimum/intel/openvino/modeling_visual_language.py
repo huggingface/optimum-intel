@@ -479,21 +479,51 @@ class OVCode2Wav(OVModelPart):
         return torch.from_numpy(result[0]).clone()
 
 
-class OVTalkerProjection(OVModelPart):
-    """Simple MLP projection wrapper (text_projection / hidden_projection)."""
+class OVTalkerProjections(OVModelPart):
+    """Dual-output projection wrapper: computes both text and hidden projections in one call."""
 
-    _model_name = "talker_text_projection"
+    _model_name = "talker_projections"
 
     def __init__(self, model: ov.Model, parent_model: OVBaseModel) -> None:
         super().__init__(model, parent_model, model_name=self._model_name)
 
-    def forward(self, hidden_state: torch.Tensor) -> torch.Tensor:
+    def forward(self, hidden_state: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         self.compile()
-        return torch.from_numpy(self.request({"hidden_state": hidden_state})[0]).clone()
+        result = self.request({"hidden_state": hidden_state})
+        return torch.from_numpy(result[0]).clone(), torch.from_numpy(result[1]).clone()
+
+    def text_projection(self, hidden_state: torch.Tensor) -> torch.Tensor:
+        return self.forward(hidden_state)[0]
+
+    def hidden_projection(self, hidden_state: torch.Tensor) -> torch.Tensor:
+        return self.forward(hidden_state)[1]
 
 
-class OVTalkerHiddenProjection(OVTalkerProjection):
-    _model_name = "talker_hidden_projection"
+class OVQwen3OmniVisionEmbeddings(OVModelPart):
+    """Merged vision model: patch_embed + transformer blocks + merger."""
+
+    _model_name = "vision_embeddings"
+
+    def __init__(self, model: ov.Model, parent_model: OVBaseModel) -> None:
+        super().__init__(model, parent_model, model_name=self._model_name)
+
+    def forward(
+        self,
+        hidden_states,
+        pos_embeds,
+        attention_mask,
+        rotary_pos_emb,
+    ):
+        self.compile()
+        result = self.request(
+            {
+                "hidden_states": hidden_states,
+                "pos_embeds": pos_embeds,
+                "attention_mask": attention_mask,
+                "rotary_pos_emb": rotary_pos_emb,
+            }
+        )
+        return result[0], result[1]
 
 
 MODEL_PARTS_CLS_MAPPING = {
@@ -512,8 +542,7 @@ MODEL_PARTS_CLS_MAPPING = {
     "audio_speech_projection": OVAudioEmbeddings,
     "talker": OVTalkerDecoder,
     "talker_text_embeddings": OVVisionProjection,
-    "talker_text_projection": OVTalkerProjection,
-    "talker_hidden_projection": OVTalkerHiddenProjection,
+    "talker_projections": OVTalkerProjections,
     "code_predictor": OVCodePredictorDecoder,
     "code2wav": OVCode2Wav,
 }
@@ -4013,13 +4042,11 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM, Qwen3VLModel, Qwen3VLVisio
 
 class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
     additional_parts = [
-        "vision_embeddings_merger",
         "vision_embeddings_pos",
         "audio_encoder",
         "talker",
         "talker_text_embeddings",
-        "talker_text_projection",
-        "talker_hidden_projection",
+        "talker_projections",
         "code_predictor",
         "code2wav",
     ]
@@ -4060,6 +4087,8 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
             quantization_config=quantization_config,
             **kwargs,
         )
+        # Replace base class's OVVisionEmbedding with merged vision model wrapper
+        self.vision_embeddings = OVQwen3OmniVisionEmbeddings(self.vision_embeddings.model, self)
         self.rope_deltas = None
         self._collecting_hidden_states = False
         self._collected_hidden_states = []
@@ -4184,27 +4213,24 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, grid_thw, **kwargs):
         if self.rotary_pos_emb is None:
             raise ValueError("Vision components not available — model was loaded without vision_config.")
-        hidden_states = torch.from_numpy(self.vision_embeddings(pixel_values)[0])
-        pos_embeds = self.fast_pos_embed_interpolate(grid_thw)
-        hidden_states = hidden_states + pos_embeds
 
+        pos_embeds = self.fast_pos_embed_interpolate(grid_thw)
         rotary_pos_emb = self.rot_pos_emb(grid_thw)
-        seq_len, _ = hidden_states.size()
-        hidden_states = hidden_states.reshape(seq_len, -1)
+
+        seq_len = pos_embeds.shape[0]
         rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
+
         cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
             dim=0, dtype=torch.int32
         )
         cu_seqlens = torch.nn.functional.pad(cu_seqlens, (1, 0), value=0)
-        attention_mask = torch.zeros((1, hidden_states.shape[0], hidden_states.shape[0]), dtype=torch.bool)
+        attention_mask = torch.zeros((1, seq_len, seq_len), dtype=torch.bool)
         causal_mask = torch.zeros_like(attention_mask, dtype=torch.float32)
         for i in range(1, len(cu_seqlens)):
             attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = True
         causal_mask.masked_fill_(torch.logical_not(attention_mask), float("-inf"))
 
-        res = self.vision_embeddings_merger(
-            pixel_values=hidden_states, attention_mask=causal_mask, rotary_pos_emb=rotary_pos_emb
-        )
+        res = self.vision_embeddings(pixel_values, pos_embeds, causal_mask, rotary_pos_emb)
         return np.array(res[0]), np.array(res[1])
 
     def get_multimodal_embeddings(
@@ -4438,10 +4464,10 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
         )
         audio_out = torch.from_numpy(audio_out) if not isinstance(audio_out, torch.Tensor) else audio_out
 
-        # Audio encoder returns padded [batch, aftercnn_time, dim]; extract valid tokens per chunk
+        # Audio encoder returns padded [N_chunks, aftercnn_time, dim]; extract valid tokens per chunk
         if audio_out.ndim == 3:
             valid_tokens = []
-            for i, length in enumerate(aftercnn_lens):
+            for i, length in enumerate(feature_lens_after_cnn):
                 valid_tokens.append(audio_out[i, : length.item()])
             audio_features = torch.cat(valid_tokens, dim=0)
         else:
@@ -4473,9 +4499,7 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
             user_thinker_hidden_mm = thinker_hidden[:, im_start_index:segment_end_index][user_mm_mask]
             if user_thinker_hidden_mm.ndim == 2:
                 user_thinker_hidden_mm = user_thinker_hidden_mm.unsqueeze(0)
-            mm_hidden = self.talker_hidden_projection(user_thinker_hidden_mm)
-            if isinstance(mm_hidden, np.ndarray):
-                mm_hidden = torch.from_numpy(mm_hidden)
+            mm_hidden = self.talker_projections.hidden_projection(user_thinker_hidden_mm)
             mm_hidden = mm_hidden.squeeze(0) if mm_hidden.ndim == 3 else mm_hidden
             user_talker_part[user_mm_mask] = mm_hidden.float()
 
@@ -4483,9 +4507,7 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
         # Ensure 3D shape for projection model (add batch dim if needed)
         if user_thinker_embed.ndim == 2:
             user_thinker_embed = user_thinker_embed.unsqueeze(0)
-        user_text_hidden = self.talker_text_projection(user_thinker_embed)
-        if isinstance(user_text_hidden, np.ndarray):
-            user_text_hidden = torch.from_numpy(user_text_hidden)
+        user_text_hidden = self.talker_projections.text_projection(user_thinker_embed)
         user_text_hidden = user_text_hidden.squeeze(0) if user_text_hidden.ndim == 3 else user_text_hidden
         user_talker_part[~user_mm_mask] = user_text_hidden.float()
         return user_talker_part
@@ -4508,9 +4530,9 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
             raise ValueError("talker_config.text_config not found in model configuration.")
         hidden_size = text_config.hidden_size
 
-        assistant_hidden = self.talker_text_projection(thinker_embed[:, im_start_index:segment_end_index])
-        if isinstance(assistant_hidden, np.ndarray):
-            assistant_hidden = torch.from_numpy(assistant_hidden).float()
+        assistant_hidden = self.talker_projections.text_projection(
+            thinker_embed[:, im_start_index:segment_end_index]
+        ).float()
 
         assistant_text_hidden = torch.cat(
             (
@@ -4826,9 +4848,7 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
         )
         # Get thinker text embeddings for these special tokens
         tts_special_embeds = self.language_model.embed_tokens(tts_special_tokens)
-        tts_special_projected = self.talker_text_projection(tts_special_embeds)
-        if isinstance(tts_special_projected, np.ndarray):
-            tts_special_projected = torch.from_numpy(tts_special_projected).float()
+        tts_special_projected = self.talker_projections.text_projection(tts_special_embeds).float()
         tts_bos_embed, tts_eos_embed, tts_pad_embed = tts_special_projected.chunk(3, dim=1)
 
         # Build talker input from chatml segments

@@ -4432,8 +4432,14 @@ class Qwen3OmniVisionMergerPatcher(ModelPatcher):
         model.__orig_forward = model.forward
 
         def image_embed_forward(
-            self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, rotary_pos_emb: torch.Tensor
+            self,
+            hidden_states: torch.Tensor,
+            pos_embeds: torch.Tensor,
+            attention_mask: torch.Tensor,
+            rotary_pos_emb: torch.Tensor,
         ) -> torch.Tensor:
+            hidden_states = self.patch_embed(hidden_states)
+            hidden_states = hidden_states + pos_embeds
             deepstack_feature_lists = []
             for layer_num, blk in enumerate(self.blocks):
                 hidden_states = blk(hidden_states, attention_mask=attention_mask, rotary_pos_emb=rotary_pos_emb)
