@@ -54,6 +54,7 @@ from optimum.intel import (  # noqa
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
     OVModelForTextToSpeechSeq2Seq,
+    OVParaformerForSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
     OVModelForZeroShotImageClassification,
@@ -113,6 +114,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-video", "ltx-video"),
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
+        ("automatic-speech-recognition", "paraformer"),
         ("zero-shot-image-classification", "clip"),
     ]
 

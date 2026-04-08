@@ -80,6 +80,7 @@ if is_openvino_available():
         OVModelForVision2Seq,
         OVModelForVisualCausalLM,
         OVModelForZeroShotImageClassification,
+        OVParaformerForSpeechSeq2Seq,
     )
     from ..openvino.modeling_base import OVBaseModel
 
@@ -87,7 +88,7 @@ if is_openvino_available():
         "audio-classification": (OVModelForAudioClassification,),
         "audio-frame-classification": (OVModelForAudioFrameClassification,),
         "audio-xvector": (OVModelForAudioXVector,),
-        "automatic-speech-recognition": (OVModelForCTC, OVModelForSpeechSeq2Seq),
+        "automatic-speech-recognition": (OVModelForCTC, OVModelForSpeechSeq2Seq, OVParaformerForSpeechSeq2Seq),
         "feature-extraction": (OVModelForFeatureExtraction,),
         "fill-mask": (OVModelForMaskedLM,),
         "image-classification": (OVModelForImageClassification,),
@@ -128,6 +129,12 @@ def get_openvino_model_class(
             config = AutoConfig.from_pretrained(model_id, **hub_kwargs)
         if any(arch.endswith("ForCTC") for arch in config.architectures):
             ov_model_class = OV_TASKS_MAPPING[task][0]
+        # Check for Paraformer models - detected by model_type or architecture
+        elif (
+            getattr(config, "model_type", "").lower() == "paraformer"
+            or any("Paraformer" in arch for arch in getattr(config, "architectures", []))
+        ):
+            ov_model_class = OV_TASKS_MAPPING[task][2]  # OVParaformerForSpeechSeq2Seq
         else:
             ov_model_class = OV_TASKS_MAPPING[task][1]
     else:
