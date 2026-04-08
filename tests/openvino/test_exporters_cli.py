@@ -48,6 +48,7 @@ from optimum.intel import (  # noqa
     OVModelForCausalLM,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
+    OVModelForImageToImage,
     OVModelForMaskedLM,
     OVModelForQuestionAnswering,
     OVModelForSeq2SeqLM,
@@ -166,6 +167,10 @@ class OVCLIExportTestCase(unittest.TestCase):
                 ("text-generation-with-past", "qwen3_next"),
             ]
         )
+
+    def test_transformers_image_to_image_head_mapping(self):
+        self.assertEqual(_HEAD_TO_AUTOMODELS["image-to-image"], "OVModelForImageToImage")
+        self.assertEqual(OVModelForImageToImage.export_feature, "image-to-image")
 
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,

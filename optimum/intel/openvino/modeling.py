@@ -979,6 +979,44 @@ class OVModelForCustomTasks(OVModel):
         return ModelOutput(**model_outputs)
 
 
+IMAGE_TO_IMAGE_EXAMPLE = r"""
+    Example of image-to-image using `transformers.pipelines`:
+    ```python
+    >>> from PIL import Image
+    >>> import requests
+    >>> from transformers import {processor_class}, pipeline
+    >>> from optimum.intel import {model_class}
+    >>> processor = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
+    >>> pipe = pipeline("image-to-image", model=model, image_processor=processor)
+    >>> url = "https://huggingface.co/datasets/hf-internal-testing/dummy_image/resolve/main/colorful_cat.png"
+    >>> image = Image.open(requests.get(url, stream=True).raw)
+    >>> outputs = pipe(image)
+    ```
+"""
+
+
+@add_start_docstrings(
+    """
+    OpenVINO Model for image-to-image tasks.
+    """,
+    MODEL_START_DOCSTRING,
+)
+class OVModelForImageToImage(OVModelForCustomTasks):
+    export_feature = "image-to-image"
+
+    @add_start_docstrings_to_model_forward(
+        IMAGE_INPUTS_DOCSTRING
+        + IMAGE_TO_IMAGE_EXAMPLE.format(
+            processor_class=_FEATURE_EXTRACTOR_FOR_DOC,
+            model_class="OVModelForImageToImage",
+            checkpoint="caidas/swin2SR-classical-sr-x2-64",
+        )
+    )
+    def forward(self, pixel_values: Union[torch.Tensor, np.ndarray], **kwargs):
+        return super().forward(pixel_values=pixel_values, **kwargs)
+
+
 class OVModelForZeroShotImageClassification(OVModel):
     auto_model_class = AutoModelForZeroShotImageClassification
     export_feature = "zero-shot-image-classification"

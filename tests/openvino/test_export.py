@@ -39,6 +39,7 @@ from optimum.intel import (
     OVModelForCustomTasks,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
+    OVModelForImageToImage,
     OVModelForMaskedLM,
     OVModelForPix2Struct,
     OVModelForQuestionAnswering,
@@ -57,6 +58,7 @@ from optimum.intel import (
 )
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
+from optimum.intel.pipelines.accelerator_utils import get_openvino_model_class
 from optimum.intel.openvino.utils import TemporaryDirectory
 from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version
 from optimum.utils import logging
@@ -393,3 +395,12 @@ class CustomExportModelTest(unittest.TestCase):
         ov_outputs = ov_model(**tokens)
         self.assertTrue(torch.allclose(ov_outputs.token_embeddings, model_outputs.token_embeddings, atol=1e-4))
         self.assertTrue(torch.allclose(ov_outputs.sentence_embedding, model_outputs.sentence_embedding, atol=1e-4))
+
+
+class ImageToImageSupportTest(unittest.TestCase):
+    def test_image_to_image_model_class_uses_custom_tasks_base(self):
+        self.assertTrue(issubclass(OVModelForImageToImage, OVModelForCustomTasks))
+        self.assertEqual(OVModelForImageToImage.export_feature, "image-to-image")
+
+    def test_pipeline_dispatch_maps_image_to_image_to_openvino_model(self):
+        self.assertIs(get_openvino_model_class("image-to-image"), OVModelForImageToImage)

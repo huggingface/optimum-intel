@@ -72,6 +72,7 @@ from .modeling import (
     OVModelForCustomTasks,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
+    OVModelForImageToImage,
     OVModelForMaskedLM,
     OVModelForQuestionAnswering,
     OVModelForSequenceClassification,
