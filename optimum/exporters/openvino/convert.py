@@ -532,21 +532,43 @@ def export_models(
         output_name = output_names[i] if output_names is not None else Path(model_name + ".xml")
         output_path = output_dir / output_name
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        outputs.append(
-            export(
-                model=submodel,
-                config=sub_export_config,
-                output=output_path,
-                opset=opset,
-                device=device,
-                input_shapes=input_shapes,
-                model_kwargs=model_kwargs,
-                ov_config=ov_config,
-                stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
-                patch_16bit_model=patch_16bit_model,
-                library_name=library_name,
+        try:
+            outputs.append(
+                export(
+                    model=submodel,
+                    config=sub_export_config,
+                    output=output_path,
+                    opset=opset,
+                    device=device,
+                    input_shapes=input_shapes,
+                    model_kwargs=model_kwargs,
+                    ov_config=ov_config,
+                    stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
+                    patch_16bit_model=patch_16bit_model,
+                    library_name=library_name,
+                )
             )
-        )
+        except Exception as e:
+            if "prim::TupleConstruct" not in str(e):
+                raise
+
+            resolved_opset = opset or getattr(sub_export_config, "DEFAULT_ONNX_OPSET", 14)
+            logger.warning(
+                f"Falling back to ONNX export for submodel `{model_name}` due to PyTorch frontend limitation: {e}"
+            )
+            outputs.append(
+                export_pytorch_via_onnx(
+                    model=submodel,
+                    config=sub_export_config,
+                    opset=resolved_opset,
+                    output=output_path,
+                    device=device,
+                    input_shapes=input_shapes,
+                    model_kwargs=model_kwargs,
+                    ov_config=ov_config,
+                    library_name=library_name,
+                )
+            )
 
     outputs = list(map(list, zip(*outputs)))
     return outputs
@@ -1286,28 +1308,76 @@ def get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     return models_for_export
 
 
+def _resolve_flux_text_encoder_model_type(text_encoder, default_model_type: str, tokenizer=None) -> str:
+    config = getattr(text_encoder, "config", None)
+    model_type = str(getattr(config, "model_type", "") or "").lower()
+    architectures = [str(x) for x in (getattr(config, "architectures", []) or [])]
+    encoder_cls_name = text_encoder.__class__.__name__
+    tokenizer_cls_name = tokenizer.__class__.__name__ if tokenizer is not None else ""
+
+    looks_like_gemma = (
+        model_type in {"gemma", "gemma2", "gemma3", "gemma3_text"}
+        or any("Gemma" in arch for arch in architectures)
+        or "Gemma" in encoder_cls_name
+        or "Gemma" in tokenizer_cls_name
+    )
+    if looks_like_gemma:
+        return "gemma2-text-encoder"
+
+    looks_like_qwen = (
+        model_type in {"qwen", "qwen2", "qwen3"}
+        or any("Qwen" in arch for arch in architectures)
+        or "Qwen" in encoder_cls_name
+        or "Qwen" in tokenizer_cls_name
+    )
+    if looks_like_qwen:
+        return "qwen3-text-encoder"
+
+    return default_model_type
+
+
 def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     models_for_export = {}
 
     # Text encoder
     text_encoder = getattr(pipeline, "text_encoder", None)
     if text_encoder is not None:
+        text_encoder_for_export = text_encoder
+        if "CausalLM" in text_encoder.__class__.__name__ and hasattr(text_encoder, "model"):
+            text_encoder_for_export = text_encoder.model
+
+        text_encoder_model_type = _resolve_flux_text_encoder_model_type(
+            text_encoder,
+            "clip-text",
+            getattr(pipeline, "tokenizer", None),
+        )
+
+        text_encoder_library_name = "diffusers"
+        if hasattr(text_encoder_for_export, "config"):
+            text_encoder_for_export.config.output_hidden_states = True
+            text_encoder_for_export.config.return_dict = True
+
         text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
-            model=text_encoder,
+            model=text_encoder_for_export,
             exporter=exporter,
-            library_name="diffusers",
+            library_name=text_encoder_library_name,
             task="feature-extraction",
-            model_type="clip-text",
+            model_type=text_encoder_model_type,
         )
         text_encoder_export_config = text_encoder_config_constructor(
-            pipeline.text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+            text_encoder_for_export.config, int_dtype=int_dtype, float_dtype=float_dtype
         )
-        models_for_export["text_encoder"] = (text_encoder, text_encoder_export_config)
+        models_for_export["text_encoder"] = (text_encoder_for_export, text_encoder_export_config)
 
     transformer = pipeline.transformer
     transformer.config.text_encoder_projection_dim = transformer.config.joint_attention_dim
     transformer.config.requires_aesthetics_score = getattr(pipeline.config, "requires_aesthetics_score", False)
     transformer.config.time_cond_proj_dim = None
+
+    transformer_forward_inputs = inspect.signature(transformer.forward).parameters
+    if "pooled_projections" in transformer_forward_inputs and not hasattr(transformer.config, "pooled_projection_dim"):
+        transformer.config.pooled_projection_dim = transformer.config.joint_attention_dim
+
     export_config_constructor = TasksManager.get_exporter_config_constructor(
         model=transformer,
         exporter=exporter,
@@ -1321,8 +1391,14 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     transformer_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["transformer"] = (transformer, transformer_export_config)
 
-    # VAE Encoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L565
+    vae_scaling_factor = None
+    if hasattr(pipeline, "vae") and hasattr(pipeline.vae, "config"):
+        vae_scaling_factor = getattr(pipeline.vae.config, "scaling_factor", None)
+
+    # VAE Encoder
     vae_encoder = copy.deepcopy(pipeline.vae)
+    if vae_scaling_factor is not None:
+        vae_encoder.register_to_config(scaling_factor=float(vae_scaling_factor))
     vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
     vae_config_constructor = TasksManager.get_exporter_config_constructor(
         model=vae_encoder,
@@ -1337,8 +1413,18 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     vae_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
 
-    # VAE Decoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L600
+    # VAE Decoder
     vae_decoder = copy.deepcopy(pipeline.vae)
+    if vae_scaling_factor is not None:
+        vae_decoder.register_to_config(scaling_factor=float(vae_scaling_factor))
+    if hasattr(vae_decoder, "bn") and hasattr(vae_decoder.bn, "running_mean") and hasattr(vae_decoder.bn, "running_var"):
+        vae_decoder.register_to_config(
+            **{
+                "bn_running_mean_data": vae_decoder.bn.running_mean.detach().cpu().tolist(),
+                "bn_running_var_data": vae_decoder.bn.running_var.detach().cpu().tolist(),
+                "bn_eps": float(getattr(vae_decoder.bn, "eps", 1e-5)),
+            }
+        )
     vae_decoder.forward = lambda latent_sample: vae_decoder.decode(z=latent_sample)
     vae_config_constructor = TasksManager.get_exporter_config_constructor(
         model=vae_decoder,
@@ -1355,23 +1441,32 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
 
     text_encoder_2 = getattr(pipeline, "text_encoder_2", None)
     if text_encoder_2 is not None:
+        text_encoder_2_for_export = text_encoder_2
+        if "CausalLM" in text_encoder_2.__class__.__name__ and hasattr(text_encoder_2, "model"):
+            text_encoder_2_for_export = text_encoder_2.model
+
+        text_encoder_2_model_type = _resolve_flux_text_encoder_model_type(
+            text_encoder_2,
+            "t5-encoder-model",
+            getattr(pipeline, "tokenizer_2", None),
+        )
+
         export_config_constructor = TasksManager.get_exporter_config_constructor(
-            model=text_encoder_2,
+            model=text_encoder_2_for_export,
             exporter=exporter,
             library_name="diffusers",
             task="feature-extraction",
-            model_type="t5-encoder-model",
+            model_type=text_encoder_2_model_type,
         )
         export_config = export_config_constructor(
-            text_encoder_2.config,
+            text_encoder_2_for_export.config,
             int_dtype=int_dtype,
             float_dtype=float_dtype,
         )
         export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
-        models_for_export["text_encoder_2"] = (text_encoder_2, export_config)
+        models_for_export["text_encoder_2"] = (text_encoder_2_for_export, export_config)
 
     return models_for_export
-
 
 def _get_encoder_decoder_stateful_models_for_export(
     model: "PreTrainedModel",
