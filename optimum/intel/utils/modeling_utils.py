@@ -257,6 +257,8 @@ def _infer_library_from_model_name_or_path(
     )
     if "open_clip_config.json" in all_files or "open_clip_pytorch_model.bin" in all_files:
         library_name = "open_clip"
+    elif "am.mvn" in all_files:
+        library_name = "paraformer"
     else:
         library_name = TasksManager._infer_library_from_model_name_or_path(
             model_name_or_path=model_name_or_path, cache_dir=cache_dir
