@@ -1098,8 +1098,6 @@ class Phi3OpenVINOConfig(PhiOnnxConfig):
 )
 class PhiMoEOpenVINOConfig(Phi3OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.46.0"
-    # TODO (@echarlaix): add v5 support
-    MAX_TRANSFORMERS_VERSION = "4.57.6"
     _MODEL_PATCHER = PhiMoEModelPatcher
 
 
