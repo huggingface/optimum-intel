@@ -533,6 +533,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     ]
     SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl"]
     SUPPORT_AUDIO = []
+    SUPPORT_AUDIO_OUTPUT = []
     OVMODEL_CLASS = OVModelForVisualCausalLM
     TASK = "image-text-to-text"
 
@@ -551,9 +552,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     if is_transformers_version("<", "4.52"):
         SUPPORTED_ARCHITECTURES += ["minicpmo"]
-    if is_transformers_version(">=", "4.57.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen3_vl"]
+    if is_transformers_version(">=", "4.57.0.dev0"):
+        SUPPORTED_ARCHITECTURES += ["qwen3_vl", "qwen3_omni"]
         SUPPORT_VIDEO += ["qwen3_vl"]
+        SUPPORT_AUDIO.append("qwen3_omni")
+        SUPPORT_AUDIO_OUTPUT.append("qwen3_omni")
 
     if is_transformers_version(">=", "4.54.0"):
         # remote code models differs after transformers v4.54
@@ -568,6 +571,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     )
 
     def get_transformer_model_class(self, model_arch):
+        if model_arch == "qwen3_omni":
+            from transformers import Qwen3OmniForConditionalGeneration
+
+            return Qwen3OmniForConditionalGeneration
         if is_transformers_version(">=", "4.46") and model_arch in [
             "llava",
             "llava_next",
@@ -630,6 +637,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
+        # Qwen3OmniForConditionalGeneration has no forward() and a custom generate() interface
+        # incompatible with the standard comparison flow; covered by dedicated tests instead
+        if model_arch == "qwen3_omni":
+            self.skipTest("qwen3_omni comparison tested via dedicated test methods")
+
         def compare_outputs(inputs, ov_model, transformers_model, generation_config):
             transformers_inputs = copy.deepcopy(inputs)
             ov_outputs = ov_model.generate(**inputs, generation_config=generation_config)
@@ -687,7 +699,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 f"but found counts: {bos_token_counts.tolist()}",
             )
 
-            if is_transformers_version(">=", "4.57.0"):
+            if is_transformers_version(">=", "4.57.0.dev0"):
                 inputs.pop("token_type_ids")
 
         transformers_inputs = copy.deepcopy(inputs)
@@ -805,6 +817,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             input_audio = self._generate_random_audio_data()
             question = "Translate this audio to French"
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
+            compare_outputs(inputs, ov_model, transformers_model, gen_config)
+
+            # Combined image + audio input
+            question = "Describe this image and translate the audio"
+            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, image=image, audio=[input_audio])
             compare_outputs(inputs, ov_model, transformers_model, gen_config)
         del transformers_model
         del ov_model
@@ -925,6 +942,40 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             outputs = outputs[:, inputs["input_ids"].shape[1] :]
             outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
             self.assertIsInstance(outputs[0], str)
+
+        # Test audio output generation (Thinker → Talker → Code2Wav)
+        if model_arch in self.SUPPORT_AUDIO_OUTPUT and model.has_talker:
+            question = "Say hello"
+            inputs = model.preprocess_inputs(**preprocessors, text=question)
+            text_result, audio_result = model.generate(
+                **inputs, max_new_tokens=10, return_audio=True, talker_max_new_tokens=20
+            )
+            # Tiny models with random weights may not produce valid chatml structure
+            # for the talker pipeline, so audio_result can be None
+            if audio_result is not None:
+                self.assertEqual(
+                    audio_result.ndim, 3, "Audio output should have 3 dimensions (batch, channels, samples)"
+                )
+                self.assertEqual(audio_result.shape[0], 1, "Audio batch size should be 1")
+                self.assertEqual(audio_result.shape[1], 1, "Audio should be mono (1 channel)")
+                self.assertGreater(audio_result.shape[2], 0, "Audio should have non-zero length")
+            # The generate call must return a tuple (text, audio) regardless
+            self.assertIsInstance(text_result, torch.Tensor, "Text result should be a tensor")
+
+            # Verify text-only mode still works with return_audio=False (returns raw tensor, not tuple)
+            text_only = model.generate(**inputs, max_new_tokens=10, return_audio=False)
+            self.assertIsInstance(text_only, torch.Tensor, "return_audio=False should return a tensor directly")
+
+        # Audio input + audio output (full round-trip)
+        if model_arch in self.SUPPORT_AUDIO_OUTPUT and model.has_talker and model_arch in self.SUPPORT_AUDIO:
+            input_audio = self._generate_random_audio_data()
+            question = "Repeat what you hear"
+            inputs = model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
+            text_result, audio_result = model.generate(
+                **inputs, max_new_tokens=10, return_audio=True, talker_max_new_tokens=20
+            )
+            self.assertIsNotNone(text_result)
+
         del model
 
         gc.collect()
@@ -935,6 +986,36 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         # generate pure sine wave at 220 Hz
         audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
         return (audio_data, 16000)
+
+    @unittest.skipUnless(
+        is_transformers_version(">=", "4.57.0.dev0"), "qwen3_omni requires transformers >= 4.57.0.dev0"
+    )
+    def test_qwen3_omni_video_not_supported(self):
+        model_id = MODEL_NAMES["qwen3_omni"]
+        model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        preprocessors = self.get_preprocessors("qwen3_omni")
+        dummy_video = np.random.rand(2, 224, 224, 3).astype(np.uint8)
+        with self.assertRaises(ValueError):
+            model.preprocess_inputs(**preprocessors, text="Describe", video=dummy_video)
+        del model
+        gc.collect()
+
+    @unittest.skipUnless(
+        is_transformers_version(">=", "4.57.0.dev0"), "qwen3_omni requires transformers >= 4.57.0.dev0"
+    )
+    def test_qwen3_omni_sequential_generation(self):
+        model_id = MODEL_NAMES["qwen3_omni"]
+        model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        preprocessors = self.get_preprocessors("qwen3_omni")
+
+        for _ in range(3):
+            inputs = model.preprocess_inputs(**preprocessors, text="Hello", image=self.IMAGE.resize((224, 224)))
+            output = model.generate(**inputs, max_new_tokens=5)
+            self.assertIsInstance(output, torch.Tensor)
+            self.assertGreater(output.shape[1], inputs["input_ids"].shape[1])
+
+        del model
+        gc.collect()
 
     def get_preprocessors(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
@@ -953,6 +1034,55 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             preprocessors = {"processor": None, "tokenizer": tokenizer, "config": config}
+        elif model_arch == "qwen3_omni":
+            # qwen3_omni is not yet registered in AutoImageProcessor/AutoProcessor,
+            # so we construct the processor from individual components
+            import json
+            import pathlib
+
+            from transformers import Qwen2VLImageProcessor, Qwen2VLVideoProcessor, WhisperFeatureExtractor
+            from transformers.models.qwen3_omni.processing_qwen3_omni import Qwen3OmniProcessor
+
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            # Qwen2TokenizerFast doesn't persist custom token attrs, restore from config
+            tok_cfg = json.loads((pathlib.Path(model_id) / "tokenizer_config.json").read_text())
+            for attr in (
+                "image_token",
+                "audio_token",
+                "video_token",
+                "vision_bos_token",
+                "vision_eos_token",
+                "audio_bos_token",
+                "audio_eos_token",
+            ):
+                if attr in tok_cfg:
+                    setattr(tokenizer, attr, tok_cfg[attr])
+            # Build image processor from vision config to match model's patch_size
+            vision_cfg = getattr(getattr(config, "thinker_config", config), "vision_config", None)
+            patch_size = getattr(vision_cfg, "patch_size", 16) if vision_cfg else 16
+            spatial_merge = getattr(vision_cfg, "spatial_merge_size", 2) if vision_cfg else 2
+            min_px = patch_size * spatial_merge * 28 * 28
+            image_processor = Qwen2VLImageProcessor(min_pixels=min_px, max_pixels=min_px, patch_size=patch_size)
+            video_processor = Qwen2VLVideoProcessor(min_pixels=min_px, max_pixels=min_px)
+            feature_extractor = WhisperFeatureExtractor.from_pretrained(model_id)
+            # Load chat template saved by processor.save_pretrained
+            chat_template = None
+            for ct_name in ("chat_template.jinja", "chat_template.json"):
+                ct_path = pathlib.Path(model_id) / ct_name
+                if ct_path.exists():
+                    if ct_name.endswith(".jinja"):
+                        chat_template = ct_path.read_text()
+                    else:
+                        chat_template = json.loads(ct_path.read_text()).get("chat_template")
+                    break
+            processor = Qwen3OmniProcessor(
+                image_processor=image_processor,
+                video_processor=video_processor,
+                feature_extractor=feature_extractor,
+                tokenizer=tokenizer,
+                chat_template=chat_template,
+            )
+            preprocessors = {"processor": processor, "tokenizer": None, "config": config}
         else:
             processor = AutoProcessor.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS

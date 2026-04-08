@@ -287,6 +287,10 @@ def init_model_configs():
         "transformers",
         "AutoModelForImageTextToText",
     )
+    TasksManager._CUSTOM_CLASSES[("pt", "qwen3_omni", "image-text-to-text")] = (
+        "transformers",
+        "Qwen3OmniForConditionalGeneration",
+    )
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
@@ -460,7 +464,7 @@ class DummyQwen3VLLMInputGenerator(DummyTextInputGenerator):
     library_name="transformers",
 )
 class Qwen3VLTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    MIN_TRANSFORMERS_VERSION = "4.57.0.dev0"
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLLMInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
@@ -473,6 +477,37 @@ class Qwen3VLTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         common_inputs["visual_pos_masks"] = {0: "batch_size", 1: "sequence_length"}
         common_inputs["deepstack_visual_embeds"] = {0: "num_layers", 1: "visual_seqlen"}
         return common_inputs
+
+
+@register_in_tasks_manager(
+    "qwen3_omni_text",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class Qwen3OmniTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLLMInputGenerator, GemmaDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = OVDecoderModelPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = super().inputs
+        common_inputs["visual_pos_masks"] = {0: "batch_size", 1: "sequence_length"}
+        common_inputs["deepstack_visual_embeds"] = {0: "num_layers", 1: "visual_seqlen"}
+        return common_inputs
+
+
+@register_in_tasks_manager(
+    "qwen3_omni_talker_text",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class Qwen3OmniTalkerTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager(
@@ -3801,7 +3836,7 @@ class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
 class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
-    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    MIN_TRANSFORMERS_VERSION = "4.57.0.dev0"
 
     def __init__(
         self,
@@ -3905,7 +3940,7 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
         if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
             return super().outputs
         if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
-            return {"last_hidden_state": {0: "seq_len"}, "deepstack_feature_lists": {0: "seq_len"}}
+            return {"last_hidden_state": {0: "seq_len"}, "deepstack_feature_lists": {1: "seq_len"}}
         if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
             return {"last_hidden_state": {0: "seq_len", 1: "seq_len"}}
         if self._behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
@@ -3915,6 +3950,512 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
                 "qwen3_vl_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
             ).outputs
         raise Exception("Unknown Qwen3VL behavior type.")
+
+
+class Qwen3OmniConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    TEXT_EMBEDDINGS = "text_embeddings"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    VISION_EMBEDDINGS_POS = "vision_embeddings_pos"
+    AUDIO_ENCODER = "audio_encoder"
+    TALKER = "talker"
+    TALKER_TEXT_EMBEDDINGS = "talker_text_embeddings"
+    TALKER_PROJECTIONS = "talker_projections"
+    CODE_PREDICTOR = "code_predictor"
+    CODE2WAV = "code2wav"
+
+
+class Qwen3OmniLMConfigHelper(LMInputEmbedsConfigHelper):
+    def __init__(
+        self, export_config, patcher_cls=None, dummy_input_generator=None, inputs_update=None, model_config=None
+    ):
+        super().__init__(export_config, patcher_cls, dummy_input_generator, inputs_update)
+        self._model_config = model_config
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        base_outputs = self.orig_export_config.outputs
+        # Check if Talker needs intermediate hidden states from a specific thinker layer
+        has_talker = False
+        if self._model_config is not None:
+            talker_config = getattr(self._model_config, "talker_config", None)
+            has_talker = talker_config is not None and getattr(talker_config, "accept_hidden_layer", None) is not None
+        result = {}
+        for key, value in base_outputs.items():
+            result[key] = value
+            if key == "logits":
+                result["hidden_states"] = {0: "batch_size", 1: "sequence_length"}
+                # Must be right after hidden_states to match the patcher return tuple order
+                if has_talker:
+                    result["intermediate_hidden_states"] = {0: "batch_size", 1: "sequence_length"}
+        return result
+
+
+class DummyQwen3OmniLMInputGenerator(DummyQwen3VLLMInputGenerator):
+    def generate(
+        self,
+        input_name: str,
+        framework: str = "pt",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        bool_dtype: str = "bool",
+    ):
+        if input_name == "position_ids":
+            base = DummyTextInputGenerator.generate(self, input_name, framework, int_dtype, float_dtype)
+            return base.unsqueeze(0).expand(4, -1, -1)
+        return super().generate(input_name, framework, int_dtype, float_dtype, bool_dtype)
+
+
+class Qwen3OmniTalkerLMConfigHelper(LMInputEmbedsConfigHelper):
+    """Config helper for the Talker decoder — adds hidden_states to outputs."""
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        base_outputs = self.orig_export_config.outputs
+        result = {}
+        for key, value in base_outputs.items():
+            result[key] = value
+            if key == "logits":
+                result["hidden_states"] = {0: "batch_size", 1: "sequence_length"}
+        return result
+
+
+class Qwen3OmniCodePredictorLMConfigHelper(LMInputEmbedsConfigHelper):
+    """Config helper for CodePredictor — adds generation_steps input and hidden_states output."""
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        orig_inputs = super().inputs
+        # Add generation_steps as a scalar integer input for dynamic embedding/head selection
+        orig_inputs["generation_steps"] = {}
+        return orig_inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        base_outputs = self.orig_export_config.outputs
+        result = {}
+        for key, value in base_outputs.items():
+            result[key] = value
+            if key == "logits":
+                result["hidden_states"] = {0: "batch_size", 1: "sequence_length"}
+        return result
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        dummy_inputs = super().generate_dummy_inputs(framework, **kwargs)
+        import torch
+
+        dummy_inputs["generation_steps"] = torch.tensor(0, dtype=torch.int64)
+        return dummy_inputs
+
+
+class DummyQwen3OmniAudioInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("padded_feature", "padded_mask_after_cnn", "aftercnn_lens", "cu_seqlens")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 3,
+        **kwargs,
+    ):
+        self.batch_size = batch_size
+        audio_config = normalized_config.config
+        self.num_mels = getattr(audio_config, "num_mel_bins", 128)
+        self.time_in = 200
+        self.aftercnn_time = self.time_in // 8
+        # Pre-compute cu_seqlens for the dummy input (all chunks have identical aftercnn_time)
+        n_window = getattr(audio_config, "n_window", 100)
+        n_window_infer = getattr(audio_config, "n_window_infer", 400)
+        window_aftercnn = self.aftercnn_time * (n_window_infer // (n_window * 2))
+        num_full = self.aftercnn_time // window_aftercnn
+        single_batch_chunks = [window_aftercnn] * num_full
+        remainder = self.aftercnn_time % window_aftercnn
+        if remainder != 0:
+            single_batch_chunks.append(remainder)
+        cu_chunk_lens = single_batch_chunks * self.batch_size
+        cumsum = [0]
+        for length in cu_chunk_lens:
+            cumsum.append(cumsum[-1] + length)
+        self._cu_seqlens = cumsum
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "padded_feature":
+            return self.random_float_tensor([self.batch_size, self.num_mels, self.time_in], framework=framework)
+        if input_name == "padded_mask_after_cnn":
+            return self.constant_tensor(
+                [self.batch_size, self.aftercnn_time], framework=framework, value=1, dtype=DTYPE_MAPPER.pt("bool")
+            )
+        if input_name == "aftercnn_lens":
+            return self.constant_tensor(
+                [self.batch_size], framework=framework, value=self.aftercnn_time, dtype=DTYPE_MAPPER.pt(int_dtype)
+            )
+        if input_name == "cu_seqlens":
+            import torch
+
+            return torch.tensor(self._cu_seqlens, dtype=torch.int32)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyQwen3OmniCode2WavInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("codes",)
+
+    def __init__(self, task: str, normalized_config: NormalizedVisionConfig, batch_size: int = 1, **kwargs):
+        self.batch_size = batch_size
+        code2wav_config = normalized_config.config
+        self.num_quantizers = getattr(code2wav_config, "num_quantizers", 16)
+        self.codebook_size = getattr(code2wav_config, "codebook_size", 2048)
+        self.seq_len = 10
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "codes":
+            return self.random_int_tensor(
+                [self.batch_size, self.num_quantizers, self.seq_len],
+                min_value=0,
+                max_value=self.codebook_size,
+                framework=framework,
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyQwen3OmniProjectionInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("hidden_state",)
+
+    def __init__(self, task: str, normalized_config: NormalizedVisionConfig, batch_size: int = 1, **kwargs):
+        self.batch_size = batch_size
+        config = normalized_config.config
+        text_config = getattr(config, "text_config", config)
+        self.hidden_size = getattr(text_config, "hidden_size", 2560)
+        self.seq_len = 10
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "hidden_state":
+            return self.random_float_tensor([self.batch_size, self.seq_len, self.hidden_size], framework=framework)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+def _make_qwen3_omni_projections_wrapper(text_proj, hidden_proj, config):
+    import torch
+
+    class _Qwen3OmniProjectionsWrapper(torch.nn.Module):
+        """Wraps text_projection and hidden_projection into a single module for combined export."""
+
+        def __init__(self, text_proj, hidden_proj, config):
+            super().__init__()
+            self.text_projection = text_proj
+            self.hidden_projection = hidden_proj
+            self.config = config
+
+        def forward(self, hidden_state):
+            return self.text_projection(hidden_state), self.hidden_projection(hidden_state)
+
+    return _Qwen3OmniProjectionsWrapper(text_proj, hidden_proj, config)
+
+
+class DummyQwen3OmniVisionInputGenerator(DummyQwen3VLVisionEmbedInputGenerator):
+    """Generates dummy inputs for the merged vision model (patch_embed + blocks + merger)."""
+
+    SUPPORTED_INPUT_NAMES = ("hidden_states", "pos_embeds", "attention_mask", "rotary_pos_emb", "input")
+
+    def __init__(self, task, normalized_config, batch_size=1, **kwargs):
+        super().__init__(task, normalized_config, batch_size=batch_size, **kwargs)
+        self.patch_channels = (
+            normalized_config.config.in_channels
+            * normalized_config.config.temporal_patch_size
+            * normalized_config.config.patch_size
+            * normalized_config.config.patch_size
+        )
+
+    def generate(self, input_name, framework="pt", int_dtype="int64", float_dtype="fp32"):
+        grid_h, grid_w = self.height // self.patch_size, self.width // self.patch_size
+        seq_len = self.batch_size * grid_h * grid_w
+
+        if input_name == "hidden_states":
+            return self.random_float_tensor([seq_len, self.patch_channels], framework=framework, dtype=float_dtype)
+
+        if input_name == "pos_embeds":
+            return self.random_float_tensor([seq_len, self.embed_dim], framework=framework, dtype=float_dtype)
+
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+@register_in_tasks_manager("qwen3_omni", *["image-text-to-text"], library_name="transformers")
+class Qwen3OmniOpenVINOConfig(BaseVLMOpenVINOConfig):
+    SUPPORTED_BEHAVIORS = [b.value for b in Qwen3OmniConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: Qwen3OmniConfigBehavior = Qwen3OmniConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        thinker_config = getattr(config, "thinker_config", config)
+        vision_config = getattr(thinker_config, "vision_config", None)
+        audio_config = getattr(thinker_config, "audio_config", None)
+
+        # Only include talker/code2wav behaviors if model has those components
+        talker_config = getattr(config, "talker_config", None)
+        code2wav_config = getattr(config, "code2wav_config", None)
+        talker_behaviors = {
+            Qwen3OmniConfigBehavior.TALKER.value,
+            Qwen3OmniConfigBehavior.TALKER_TEXT_EMBEDDINGS.value,
+            Qwen3OmniConfigBehavior.TALKER_PROJECTIONS.value,
+            Qwen3OmniConfigBehavior.CODE_PREDICTOR.value,
+            Qwen3OmniConfigBehavior.CODE2WAV.value,
+        }
+        if talker_config is None or code2wav_config is None:
+            self.SUPPORTED_BEHAVIORS = [b for b in self.SUPPORTED_BEHAVIORS if b not in talker_behaviors]
+
+        if (
+            self._behavior
+            in (Qwen3OmniConfigBehavior.VISION_EMBEDDINGS, Qwen3OmniConfigBehavior.VISION_EMBEDDINGS_POS)
+            and vision_config is not None
+        ):
+            self._config = vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+            self._normalized_config.use_embed_dim = True
+
+        if self._behavior == Qwen3OmniConfigBehavior.VISION_EMBEDDINGS:
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3OmniVisionInputGenerator,)
+
+        if self._behavior == Qwen3OmniConfigBehavior.AUDIO_ENCODER and audio_config is not None:
+            self._config = audio_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3OmniAudioInputGenerator,)
+
+        if self._behavior == Qwen3OmniConfigBehavior.CODE2WAV:
+            self._config = code2wav_config or config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3OmniCode2WavInputGenerator,)
+
+        if self._behavior == Qwen3OmniConfigBehavior.TALKER_PROJECTIONS:
+            self._config = thinker_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3OmniProjectionInputGenerator,)
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, "Qwen3OmniConfigBehavior"]):
+        if isinstance(behavior, str) and not isinstance(behavior, Qwen3OmniConfigBehavior):
+            behavior = Qwen3OmniConfigBehavior(behavior)
+
+        if behavior == Qwen3OmniConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == Qwen3OmniConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.thinker.model.get_input_embeddings()
+            text_embedding.config = model.config
+            return text_embedding
+
+        if behavior == Qwen3OmniConfigBehavior.VISION_EMBEDDINGS:
+            thinker_config = getattr(model.config, "thinker_config", model.config)
+            vision_model = model.thinker.visual
+            vision_model.config = getattr(thinker_config, "vision_config", thinker_config)
+            return vision_model
+
+        if behavior == Qwen3OmniConfigBehavior.VISION_EMBEDDINGS_POS:
+            thinker_config = getattr(model.config, "thinker_config", model.config)
+            vision_pos = model.thinker.visual.pos_embed
+            vision_pos.config = getattr(thinker_config, "vision_config", thinker_config)
+            return vision_pos
+
+        if behavior == Qwen3OmniConfigBehavior.AUDIO_ENCODER:
+            thinker_config = getattr(model.config, "thinker_config", model.config)
+            audio_encoder = model.thinker.audio_tower
+            audio_encoder.config = getattr(thinker_config, "audio_config", thinker_config)
+            return audio_encoder
+
+        if behavior == Qwen3OmniConfigBehavior.TALKER:
+            return model
+
+        if behavior == Qwen3OmniConfigBehavior.TALKER_TEXT_EMBEDDINGS:
+            text_embedding = model.talker.model.get_input_embeddings()
+            text_embedding.config = model.config
+            return text_embedding
+
+        if behavior == Qwen3OmniConfigBehavior.TALKER_PROJECTIONS:
+            return _make_qwen3_omni_projections_wrapper(
+                model.talker.text_projection, model.talker.hidden_projection, model.config
+            )
+
+        if behavior == Qwen3OmniConfigBehavior.CODE_PREDICTOR:
+            return model
+
+        if behavior == Qwen3OmniConfigBehavior.CODE2WAV:
+            model.code2wav.config = getattr(model.config, "code2wav_config", model.config)
+            return model.code2wav
+
+        raise ValueError(f"Unsupported Qwen3-Omni behavior: {behavior}")
+
+    def with_behavior(self, behavior: Union[str, "Qwen3OmniConfigBehavior"]):
+        if isinstance(behavior, str) and not isinstance(behavior, Qwen3OmniConfigBehavior):
+            behavior = Qwen3OmniConfigBehavior(behavior)
+
+        thinker_config = getattr(self._orig_config, "thinker_config", self._orig_config)
+
+        if behavior == Qwen3OmniConfigBehavior.TEXT_EMBEDDINGS:
+            text_config = getattr(thinker_config, "text_config", thinker_config)
+            return get_vlm_text_embeddings_config("qwen3_omni_text", text_config, self.int_dtype, self.float_dtype)
+
+        if behavior == Qwen3OmniConfigBehavior.LANGUAGE:
+            from .model_patcher import Qwen3OmniLanguageModelPatcher
+
+            text_config = getattr(thinker_config, "text_config", thinker_config)
+            internal_config = get_vlm_internal_text_generation_config(
+                "qwen3_omni_text", text_config, self.int_dtype, self.float_dtype
+            )
+            config = Qwen3OmniLMConfigHelper(
+                internal_config,
+                patcher_cls=Qwen3OmniLanguageModelPatcher,
+                dummy_input_generator=DummyQwen3OmniLMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                model_config=self._orig_config,
+            )
+            config._normalized_config = internal_config._normalized_config
+            vision_config = getattr(thinker_config, "vision_config", None)
+            if vision_config is not None:
+                config._normalized_config.deepstack_visual_indexes = vision_config.deepstack_visual_indexes
+            return config
+
+        if behavior == Qwen3OmniConfigBehavior.TALKER_TEXT_EMBEDDINGS:
+            talker_config = getattr(self._orig_config, "talker_config", self._orig_config)
+            talker_text_config = getattr(talker_config, "text_config", talker_config)
+            return get_vlm_text_embeddings_config(
+                "qwen3_omni_talker_text", talker_text_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == Qwen3OmniConfigBehavior.TALKER:
+            from .model_patcher import Qwen3OmniTalkerLanguageModelPatcher
+
+            talker_config = getattr(self._orig_config, "talker_config", self._orig_config)
+            talker_text_config = getattr(talker_config, "text_config", talker_config)
+            internal_config = get_vlm_internal_text_generation_config(
+                "qwen3_omni_talker_text", talker_text_config, self.int_dtype, self.float_dtype
+            )
+            config = Qwen3OmniTalkerLMConfigHelper(
+                internal_config,
+                patcher_cls=Qwen3OmniTalkerLanguageModelPatcher,
+            )
+            config._normalized_config = internal_config._normalized_config
+            return config
+
+        if behavior == Qwen3OmniConfigBehavior.CODE_PREDICTOR:
+            from .model_patcher import Qwen3OmniCodePredictorPatcher
+
+            talker_config = getattr(self._orig_config, "talker_config", self._orig_config)
+            cp_config = getattr(talker_config, "code_predictor_config", talker_config)
+            internal_config = get_vlm_internal_text_generation_config(
+                "qwen3_omni_talker_text", cp_config, self.int_dtype, self.float_dtype
+            )
+            config = Qwen3OmniCodePredictorLMConfigHelper(
+                internal_config,
+                patcher_cls=Qwen3OmniCodePredictorPatcher,
+            )
+            config._normalized_config = internal_config._normalized_config
+            return config
+
+        return self.__class__(
+            self._orig_config,
+            task=self.task,
+            int_dtype=self.int_dtype,
+            float_dtype=self.float_dtype,
+            behavior=behavior,
+            preprocessors=self._preprocessors,
+        )
+
+    def patch_model_for_export(self, model: Union["PreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == Qwen3OmniConfigBehavior.VISION_EMBEDDINGS:
+            from .model_patcher import Qwen3OmniVisionMergerPatcher
+
+            return Qwen3OmniVisionMergerPatcher(self, model, model_kwargs)
+        if self._behavior == Qwen3OmniConfigBehavior.AUDIO_ENCODER:
+            from .model_patcher import Qwen3OmniAudioEncoderPatcher
+
+            return Qwen3OmniAudioEncoderPatcher(self, model, model_kwargs)
+        if self._behavior == Qwen3OmniConfigBehavior.VISION_EMBEDDINGS_POS:
+            return InputEmbeddingPatcher(self, model, model_kwargs=model_kwargs)
+        if self._behavior == Qwen3OmniConfigBehavior.CODE2WAV:
+            from .model_patcher import Qwen3OmniCode2WavPatcher
+
+            return Qwen3OmniCode2WavPatcher(self, model, model_kwargs)
+        if self._behavior == Qwen3OmniConfigBehavior.TALKER_PROJECTIONS:
+            return ModelPatcher(self, model, model_kwargs=model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Qwen3OmniConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "hidden_states": {0: "total_patches"},
+                "pos_embeds": {0: "total_patches"},
+                "attention_mask": {1: "total_patches", 2: "total_patches"},
+                "rotary_pos_emb": {0: "total_patches"},
+            }
+        if self._behavior == Qwen3OmniConfigBehavior.VISION_EMBEDDINGS_POS:
+            return {"input": {1: "sequence_length"}}
+        if self._behavior == Qwen3OmniConfigBehavior.AUDIO_ENCODER:
+            return {
+                "padded_feature": {0: "batch_size", 2: "time"},
+                "padded_mask_after_cnn": {0: "batch_size", 1: "aftercnn_time"},
+                "aftercnn_lens": {0: "batch_size"},
+                "cu_seqlens": {0: "num_windows"},
+            }
+        if self._behavior == Qwen3OmniConfigBehavior.CODE2WAV:
+            return {"codes": {0: "batch_size", 2: "code_sequence_length"}}
+        if self._behavior == Qwen3OmniConfigBehavior.TALKER_PROJECTIONS:
+            return {"hidden_state": {0: "batch_size", 1: "sequence_length"}}
+        raise Exception("Unknown Qwen3Omni behavior type.")
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Qwen3OmniConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "seq_len"}, "deepstack_feature_lists": {1: "seq_len"}}
+        if self._behavior == Qwen3OmniConfigBehavior.VISION_EMBEDDINGS_POS:
+            return {"last_hidden_state": {0: "seq_len", 1: "seq_len"}}
+        if self._behavior == Qwen3OmniConfigBehavior.TEXT_EMBEDDINGS:
+            return {"inputs_embeds": {0: "batch_size", 1: "sequence_length"}}
+        if self._behavior == Qwen3OmniConfigBehavior.AUDIO_ENCODER:
+            return {"audio_features": {0: "batch_size", 1: "aftercnn_time"}}
+        if self._behavior == Qwen3OmniConfigBehavior.CODE2WAV:
+            return {"waveform": {0: "batch_size", 2: "audio_length"}}
+        if self._behavior == Qwen3OmniConfigBehavior.TALKER_TEXT_EMBEDDINGS:
+            return {"inputs_embeds": {0: "batch_size", 1: "sequence_length"}}
+        if self._behavior == Qwen3OmniConfigBehavior.TALKER_PROJECTIONS:
+            return {
+                "text_projection": {0: "batch_size", 1: "sequence_length"},
+                "hidden_projection": {0: "batch_size", 1: "sequence_length"},
+            }
+        if self._behavior == Qwen3OmniConfigBehavior.LANGUAGE:
+            text_config = getattr(
+                getattr(self._orig_config, "thinker_config", self._orig_config), "text_config", self._orig_config
+            )
+            base_outputs = get_vlm_internal_text_generation_config(
+                "qwen3_omni_text", text_config, self.int_dtype, self.float_dtype
+            ).outputs
+            talker_config = getattr(self._orig_config, "talker_config", None)
+            has_talker = talker_config is not None and getattr(talker_config, "accept_hidden_layer", None) is not None
+            result = {}
+            for key, value in base_outputs.items():
+                result[key] = value
+                if key == "logits":
+                    result["hidden_states"] = {0: "batch_size", 1: "sequence_length"}
+                    if has_talker:
+                        result["intermediate_hidden_states"] = {0: "batch_size", 1: "sequence_length"}
+            return result
+        raise Exception("Unknown Qwen3Omni behavior type.")
 
 
 @register_in_tasks_manager(
@@ -5312,7 +5853,7 @@ class SiglipTextOpenVINOConfig(SiglipTextOnnxConfig):
     library_name="transformers",
 )
 class HunyuanV1DenseOpenVINOConfig(LlamaOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    MIN_TRANSFORMERS_VERSION = "4.57.0.dev0"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
 
@@ -5388,7 +5929,7 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Qwen3NextDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Qwen3NextDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    MIN_TRANSFORMERS_VERSION = "4.57.0.dev0"
     _MODEL_PATCHER = Qwen3NextModelPatcher
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):

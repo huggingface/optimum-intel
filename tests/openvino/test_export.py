@@ -110,8 +110,14 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "4.58.0"):
         SUPPORTED_ARCHITECTURES.update({"afmoe": OVModelForCausalLM})
 
-    if is_transformers_version(">=", "4.57.0"):
-        SUPPORTED_ARCHITECTURES.update({"hunyuan_v1_dense": OVModelForCausalLM, "qwen3_next": OVModelForCausalLM})
+    if is_transformers_version(">=", "4.57.0.dev0"):
+        SUPPORTED_ARCHITECTURES.update(
+            {
+                "hunyuan_v1_dense": OVModelForCausalLM,
+                "qwen3_next": OVModelForCausalLM,
+                "qwen3_omni": OVModelForVisualCausalLM,
+            }
+        )
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
@@ -150,6 +156,10 @@ class ExportModelTest(unittest.TestCase):
             model = MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
                 model_name, **loading_kwargs
             )
+        elif model_type == "qwen3_omni":
+            from transformers import Qwen3OmniForConditionalGeneration
+
+            model = Qwen3OmniForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
         else:
             model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
 

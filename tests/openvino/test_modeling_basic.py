@@ -29,7 +29,6 @@ from optimum.intel import (
     OVStableDiffusionPipeline,
 )
 
-
 # Make sure that common architectures are used in combination with common tasks
 MODEL_NAMES = {
     "hf-internal-testing/tiny-random-bert": "OVModelForMaskedLM",

@@ -108,7 +108,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.54.0"):
         SUPPORTED_SSM_ARCHITECTURES += ("lfm2",)
 
-    if is_transformers_version(">=", "4.57.0"):
+    if is_transformers_version(">=", "4.57.0.dev0"):
         SUPPORTED_SSM_ARCHITECTURES += ("qwen3_next",)
 
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
@@ -156,7 +156,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "4.58.0"):
         SUPPORTED_ARCHITECTURES += ("afmoe",)
 
-    if is_transformers_version(">=", "4.57.0"):
+    if is_transformers_version(">=", "4.57.0.dev0"):
         SUPPORTED_ARCHITECTURES += ("hunyuan_v1_dense",)
 
     if is_transformers_version("<", "4.56.0"):
@@ -303,6 +303,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # qwen3_vl_text a part of qwen3_vl architecture and is tested in seq2seq group
         if is_transformers_version(">=", str(Qwen3VLOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"qwen3_vl_text"}
+
+        # qwen3_omni_text and qwen3_omni_talker_text are parts of qwen3_omni architecture, tested in seq2seq group
+        supported_architectures -= {"qwen3_omni_text", "qwen3_omni_talker_text"}
 
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
         untested_architectures = supported_architectures - tested_architectures
@@ -502,10 +505,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 if is_transformers_version("<=", "4.46") and model_arch == "qwen"
                 # in older transformers versions, remote code tokenizers (and granite/granitemoe)
                 # were not loaded in pipelines because they were not registered in TOKENIZER_MAPPING
-                else model_id
-                if is_transformers_version("<=", "4.46")
-                and model_arch in REMOTE_CODE_MODELS + ("granite", "granitemoe")
-                else None
+                else (
+                    model_id
+                    if is_transformers_version("<=", "4.46")
+                    and model_arch in REMOTE_CODE_MODELS + ("granite", "granitemoe")
+                    else None
+                )
             ),
         )
         set_seed(SEED)
@@ -720,7 +725,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             # group_beam_search_gen_config,
             # constrained_beam_search_gen_config,
         ]
-        if is_transformers_version("<", "4.57.0"):
+        if is_transformers_version("<", "4.57.0.dev0"):
             # currently broken in transformers == 4.57.*
             gen_configs.extend([group_beam_search_gen_config, constrained_beam_search_gen_config])
 
