@@ -684,6 +684,7 @@ def export_from_model(
             _variant="default",
             exporter="openvino",
             stateful=stateful,
+            trust_remote_code=trust_remote_code,
         )
         logging.disable(logging.NOTSET)
 
@@ -916,27 +917,29 @@ def _get_multi_modal_submodels_and_export_configs(
     preprocessors: Optional[List[Any]] = None,
     model_kwargs: Optional[Dict] = None,
     stateful: bool = True,
+    trust_remote_code: bool = False,
 ):
     models_for_export = {}
     stateful_parts = []
 
-    model_type = model.config.model_type
+    base_model_type = model.config.model_type
+    export_model_type = getattr(model.config, "export_model_type", None) or base_model_type
 
-    if model_type == "internvl_chat" and preprocessors is not None:
+    if base_model_type == "internvl_chat" and preprocessors is not None:
         model.config.img_context_token_id = preprocessors[0].convert_tokens_to_ids("<IMG_CONTEXT>")
 
-    if model_type == "phi3_v":
+    if base_model_type == "phi3_v":
         model.config.glb_GN = model.model.vision_embed_tokens.glb_GN.tolist()
         model.config.sub_GN = model.model.vision_embed_tokens.sub_GN.tolist()
 
-    if model_type == "phi4mm":
+    if base_model_type == "phi4mm":
         model.config.glb_GN = model.model.embed_tokens_extend.image_embed.glb_GN.tolist()
         model.config.sub_GN = model.model.embed_tokens_extend.image_embed.sub_GN.tolist()
         model.config.num_img_tokens = model.model.embed_tokens_extend.image_embed.num_img_tokens
         model.config.hd_transform_order = model.model.embed_tokens_extend.image_embed.hd_transform_order
         if model.config.img_processor is None:
             model.config.img_processor = model.model.embed_tokens_extend.image_embed.img_processor.config.to_dict()
-    if model_type == "phi4_multimodal":
+    if base_model_type == "phi4_multimodal":
         model.config.glb_GN = model.model.embed_tokens_extend.image_embed.global_img_feature_extensor.tolist()
         model.config.sub_GN = model.model.embed_tokens_extend.image_embed.sub_img_feature_extensor.tolist()
         model.config.num_img_tokens = model.model.embed_tokens_extend.image_embed.num_img_tokens
@@ -949,8 +952,19 @@ def _get_multi_modal_submodels_and_export_configs(
     main_config_cls = TasksManager.get_exporter_config_constructor(
         model=model, task=task, exporter="openvino", library_name=library_name
     )
+
+    config_kwargs = {
+        "int_dtype": int_dtype,
+        "float_dtype": float_dtype,
+        "preprocessors": preprocessors,
+    }
+
+    if export_model_type in {"llava-qwen2", "phi3_v"}:
+        config_kwargs["trust_remote_code"] = trust_remote_code
+
     main_config = main_config_cls(
-        model.config, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors
+        model.config,
+        **config_kwargs,
     )
     for behavior in main_config.SUPPORTED_BEHAVIORS:
         model_id = f"{behavior}_model"
@@ -976,6 +990,7 @@ def _get_submodels_and_export_configs(
     model_kwargs: Optional[Dict] = None,
     exporter: str = "openvino",
     stateful: bool = False,
+    trust_remote_code: bool = False,
 ):
     if (
         not custom_architecture
@@ -983,7 +998,7 @@ def _get_submodels_and_export_configs(
         and model.config.model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
     ):
         return _get_multi_modal_submodels_and_export_configs(
-            model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful
+            model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful, trust_remote_code=trust_remote_code
         )
     elif not custom_architecture and library_name == "transformers" and model.config.model_type == "speecht5":
         return _get_speecht5_tss_model_for_export(
