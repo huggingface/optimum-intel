@@ -367,6 +367,18 @@ def main_export(
                 config.audio_processor["config"]["activation_checkpointing"] = ""
             config._attn_implementation = "sdpa"
             loading_kwargs["config"] = config
+
+        # Handle FP8 quantized models (e.g. Ministral-3B FP8) by dequantizing to BF16
+        quant_cfg = getattr(config, "quantization_config", None)
+        if quant_cfg is not None and getattr(quant_cfg, "quant_method", None) == "fp8":
+            try:
+                from transformers import FineGrainedFP8Config
+
+                loading_kwargs["quantization_config"] = FineGrainedFP8Config(dequantize=True)
+            except (ImportError, Exception):
+                # If FineGrainedFP8Config not available, strip quantization to avoid errors
+                config.quantization_config = None
+                loading_kwargs["config"] = config
         # there are some difference between remote and in library representation of past key values for some models,
         # for avoiding confusion we disable remote code for them
         if (
