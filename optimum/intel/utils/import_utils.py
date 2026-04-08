@@ -119,6 +119,8 @@ if _open_clip_available:
         pass
 
 
+_kokoro_available = importlib.util.find_spec("kokoro") is not None
+
 _safetensors_version = "N/A"
 _safetensors_available = importlib.util.find_spec("safetensors") is not None
 if _safetensors_available:
@@ -306,6 +308,10 @@ def is_diffusers_available():
 
 def is_open_clip_available():
     return _open_clip_available
+
+
+def is_kokoro_available():
+    return _kokoro_available
 
 
 def is_safetensors_available():

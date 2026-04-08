@@ -132,6 +132,7 @@ from ...intel.utils.import_utils import is_diffusers_available, is_diffusers_ver
 from .model_patcher import (
     AfmoeModelPatcher,
     AquilaModelPatcher,
+    KokoroModelPatcher,
     ArcticModelPatcher,
     BaichuanModelPatcher,
     BigBirdPegasusModelPatcher,
@@ -238,6 +239,8 @@ if TYPE_CHECKING:
 def init_model_configs():
     if "open_clip" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
         TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["open_clip"] = {}
+    if "kokoro" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
+        TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["kokoro"] = {}
     TasksManager._CUSTOM_CLASSES[("pt", "llava", "image-text-to-text")] = (
         "transformers",
         "LlavaForConditionalGeneration",
@@ -5451,3 +5454,83 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
                 )
 
         return dummy_inputs
+
+
+class DummyKokoroInputGenerator(DummyInputGenerator):
+    """Generates dummy inputs for the Kokoro TTS model."""
+
+    SUPPORTED_INPUT_NAMES = ("input_ids", "ref_s", "speed")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = 1
+        self.sequence_length = sequence_length
+        self.style_dim = getattr(normalized_config, "style_dim", 128)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "input_ids":
+            shape = [self.batch_size, self.sequence_length]
+            input_ids_value = self.random_int_tensor(shape=shape, min_value=0, max_value=178, framework=framework, dtype=int_dtype)
+            input_ids_value[:, 0] = 0
+            input_ids_value[:, -1] = 0
+            return input_ids_value
+        elif input_name == "ref_s":
+            shape = [self.batch_size, self.style_dim * 2]
+            return self.random_float_tensor(
+                shape=shape, min_value=-1, max_value=1, framework=framework, dtype=float_dtype
+            )
+        elif input_name == "speed":
+            return self.random_int_tensor(
+                shape=[1], min_value=1, max_value=10, framework=framework, dtype=float_dtype
+            )
+        else:
+            raise ValueError(f"Unsupported input {input_name} for DummyKokoroInputGenerator")
+
+
+@register_in_tasks_manager(
+    "kokoro",
+    *["text-to-audio"],
+    library_name="kokoro",
+)
+class KokoroOpenVINOConfig(OnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyKokoroInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig
+    _MODEL_PATCHER = KokoroModelPatcher
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "text-to-audio",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {1: ("sequence_length", 2, -1)},
+            "ref_s": {1: "style_dim"},
+            "speed": {},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "waveform": {0: "batch_size", 1: "audio_length"},
+            "phonemes": {0: "batch_size", 1: "phoneme_length"},
+        }

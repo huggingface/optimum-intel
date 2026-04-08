@@ -108,12 +108,18 @@ def _get_input_info(
         if name in inputs:
             named_dims = inputs[name]
             for idx, dim_name in named_dims.items():
+                orig_dim_name = dim_name
+                if isinstance(orig_dim_name, tuple):
+                    dim_name, min_value, max_value = dim_name
                 if dim_name in name_to_symbol:
                     symbol = name_to_symbol[dim_name]
                 else:
                     symbol = Symbol()
                     name_to_symbol[dim_name] = symbol
-                dim = Dimension(-1)
+                if isinstance(orig_dim_name, tuple):
+                    dim = Dimension(min_value, max_value)
+                else:
+                    dim = Dimension(-1)
                 dim.set_symbol(symbol)
                 shape[idx] = dim
         info = InputInfo(name=name, shape=shape, type=type, example=example)
