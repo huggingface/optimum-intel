@@ -539,7 +539,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "text-generation-with-past",
             "opt125m",
             "mxfp4",
-            {"model": {"int8": 4, "f4e2m1": 72, "f8e8m0": 72}},
+            {"model": {"int8": 0, "f4e2m1": 72, "f8e4m3": 2, "f8e8m0": 74}},
         ),
         (
             "text-generation-with-past",

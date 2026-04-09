@@ -162,7 +162,9 @@ def parse_args_openvino(parser: "ArgumentParser"):
         default=None,
         help=(
             "Defines a backup precision for mixed-precision weight compression. Only valid for 4-bit weight formats. "
-            "If not provided, backup precision is int8_asym. 'none' stands for original floating-point precision of "
+            "If not provided, the default backup precision depends on the primary compression mode: mxfp8 is used for "
+            "mxfp4 and mxfp8 modes with group_size=32; fp8 is used for fp4 and fp8 modes with the same group_size as the "
+            "primary precision; for all other compression modes, int8_asym is used with group_size=-1. 'none' stands for original floating-point precision of "
             "the model weights, in this case weights are retained in their original precision without any "
             "quantization. 'int8_sym' stands for 8-bit integer symmetric quantization without zero point. 'int8_asym' "
             "stands for 8-bit integer asymmetric quantization with zero points per each quantization group."
