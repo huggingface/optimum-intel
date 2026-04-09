@@ -53,7 +53,7 @@ TESTS_REQUIRE = [
     "transformers_stream_generator",
     "einops",
     "tiktoken",
-    "sentence-transformers",
+    "sentence-transformers<5.4.0",
     "open_clip_torch>=2.26.1",
     "peft",
     "datasets>=1.4.0,<4.0.0",
