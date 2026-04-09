@@ -163,6 +163,7 @@ from .model_patcher import (
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
     Lfm2ModelPatcher,
+    Lfm2MoeModelPatcher,
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
     LlavaImageEmbeddingModelPatcher,
@@ -5496,3 +5497,16 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
                 )
 
         return dummy_inputs
+
+
+@register_in_tasks_manager(
+    "lfm2_moe",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class LFM2MoeOpenVINOConfig(LFM2OpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "5.1"
+    _MODEL_PATCHER = Lfm2MoeModelPatcher
