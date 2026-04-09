@@ -52,7 +52,9 @@ from optimum.exporters.onnx.model_patcher import (
     ModelPatcher,
     gpt_oss_forward,
     override_arguments,
-    sdpa_mask_without_vmap,
+)
+from optimum.exporters.onnx.model_patcher import (
+    sdpa_mask_without_vmap as _orig_sdpa_mask_without_vmap,
 )
 from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_version, is_transformers_version
 
@@ -82,6 +84,28 @@ else:
 
 
 logger = logging.getLogger(__name__)
+
+
+# Compatibility wrapper for sdpa_mask_without_vmap from optimum.
+# The installed optimum version expects (batch_size, cache_position: Tensor, kv_length, ...),
+# but transformers >= 5.5 passes (batch_size, q_length: int, kv_length: int, q_offset: int, ...).
+def sdpa_mask_without_vmap(batch_size, q_length=None, kv_length=None, q_offset=0, kv_offset=0, **kwargs):
+    import inspect
+
+    sig = inspect.signature(_orig_sdpa_mask_without_vmap)
+    if "cache_position" in sig.parameters:
+        # Old optimum signature: (batch_size, cache_position, kv_length, kv_offset, ...)
+        cache_position = torch.arange(q_length, dtype=torch.long) + q_offset
+        kwargs.pop("q_offset", None)
+        kwargs.pop("allow_is_bidirectional_skip", None)
+        kwargs.pop("allow_torch_fix", None)
+        kwargs.pop("use_vmap", None)
+        kwargs.pop("device", None)
+        return _orig_sdpa_mask_without_vmap(batch_size, cache_position, kv_length, kv_offset=kv_offset, **kwargs)
+    else:
+        return _orig_sdpa_mask_without_vmap(
+            batch_size, q_length=q_length, kv_length=kv_length, q_offset=q_offset, kv_offset=kv_offset, **kwargs
+        )
 
 
 def postprocess_past_key_values(past_key_values):
@@ -4895,6 +4919,346 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
             del self._model.model._orig_update_causual_mask
 
 
+def _gemma4_project_per_layer_inputs(
+    self,
+    inputs_embeds: torch.Tensor,
+    per_layer_inputs: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    per_layer_projection = self.per_layer_model_projection(inputs_embeds) * self.per_layer_model_projection_scale
+    per_layer_projection = per_layer_projection.reshape(
+        *inputs_embeds.shape[:-1],
+        self.config.num_hidden_layers,
+        self.hidden_size_per_layer_input,
+    )
+    per_layer_projection = self.per_layer_projection_norm(per_layer_projection)
+
+    if per_layer_inputs is None:
+        return per_layer_projection
+
+    if per_layer_projection.shape != per_layer_inputs.shape:
+        per_layer_inputs = per_layer_inputs[..., : self.config.num_hidden_layers, :]
+
+    return (per_layer_projection + per_layer_inputs) * self.per_layer_input_scale
+
+
+def gemma4_language_model_forward(
+    self,
+    input_ids: Optional[torch.LongTensor] = None,
+    pixel_values: Optional[torch.FloatTensor] = None,
+    pixel_values_videos: Optional[torch.FloatTensor] = None,
+    input_features: Optional[torch.FloatTensor] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    input_features_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    past_key_values: Optional[Cache] = None,
+    mm_token_type_ids: Optional[torch.LongTensor] = None,
+    cache_position: Optional[torch.LongTensor] = None,
+    inputs_embeds: Optional[torch.FloatTensor] = None,
+    labels: Optional[torch.LongTensor] = None,
+    use_cache: Optional[bool] = None,
+    output_attentions: Optional[bool] = None,
+    output_hidden_states: Optional[bool] = None,
+    per_layer_inputs=None,
+    **lm_kwargs,
+):
+    from transformers.models.gemma4.modeling_gemma4 import Gemma4ModelOutputWithPast
+
+    if (input_ids is None) ^ (inputs_embeds is not None):
+        raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+
+    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+    output_hidden_states = (
+        output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+    )
+
+    # Merge text and images
+    if pixel_values is not None:
+        image_features = self.get_image_features(pixel_values)
+        if hasattr(image_features, "pooler_output"):
+            image_features = image_features.pooler_output
+        image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
+        _, special_image_mask, _, _ = self.model.get_placeholder_mask(mm_token_type_ids, input_ids, inputs_embeds)
+        special_image_mask_expanded = special_image_mask.unsqueeze(-1).expand_as(inputs_embeds)
+        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask_expanded, image_features)
+
+    outputs = self.model.language_model(
+        input_ids=None,
+        per_layer_inputs=per_layer_inputs,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+        past_key_values=past_key_values,
+        inputs_embeds=inputs_embeds,
+        use_cache=use_cache,
+        output_attentions=output_attentions,
+        output_hidden_states=output_hidden_states,
+        cache_position=cache_position,
+        **lm_kwargs,
+    )
+
+    return Gemma4ModelOutputWithPast(
+        last_hidden_state=outputs.last_hidden_state,
+        past_key_values=outputs.past_key_values if use_cache else None,
+        hidden_states=outputs.hidden_states,
+        attentions=outputs.attentions,
+        image_hidden_states=image_features if pixel_values is not None else None,
+    )
+
+
+def gemma4_lm_forward(
+    self,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    past_key_values: Optional[Cache] = None,
+    inputs_embeds: Optional[torch.FloatTensor] = None,
+    per_layer_inputs=None,
+    input_ids: Optional[torch.LongTensor] = None,
+    pixel_values: Optional[torch.FloatTensor] = None,
+    pixel_values_videos: Optional[torch.FloatTensor] = None,
+    input_features: Optional[torch.FloatTensor] = None,
+    input_features_mask: Optional[torch.Tensor] = None,
+    mm_token_type_ids: Optional[torch.LongTensor] = None,
+    cache_position: Optional[torch.LongTensor] = None,
+    labels: Optional[torch.LongTensor] = None,
+    use_cache: Optional[bool] = None,
+    output_attentions: Optional[bool] = None,
+    output_hidden_states: Optional[bool] = None,
+    logits_to_keep: Union[int, torch.Tensor] = 0,
+    **lm_kwargs,
+):
+    from optimum.exporters.onnx.model_patcher import preprocess_past_key_values
+
+    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+    output_hidden_states = (
+        output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+    )
+    use_cache = False
+
+    if past_key_values is not None:
+        use_cache = True
+        past_key_values = preprocess_past_key_values(past_key_values)
+
+    outputs = self.model(
+        input_ids=input_ids,
+        pixel_values=pixel_values,
+        pixel_values_videos=pixel_values_videos,
+        input_features=input_features,
+        attention_mask=attention_mask,
+        input_features_mask=input_features_mask,
+        position_ids=position_ids,
+        past_key_values=past_key_values,
+        mm_token_type_ids=mm_token_type_ids,
+        cache_position=cache_position,
+        inputs_embeds=inputs_embeds,
+        labels=labels,
+        use_cache=use_cache,
+        output_attentions=output_attentions,
+        output_hidden_states=output_hidden_states,
+        return_dict=True,
+        per_layer_inputs=per_layer_inputs,
+        **lm_kwargs,
+    )
+
+    hidden_states = outputs.last_hidden_state
+    slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+    tmp_logits = self.lm_head(hidden_states[:, slice_indices, :])
+    if (final_logit_softcapping := self.config.get_text_config().final_logit_softcapping) is not None:
+        tmp_logits = tmp_logits / final_logit_softcapping
+        tmp_logits = torch.tanh(tmp_logits)
+        tmp_logits = tmp_logits * final_logit_softcapping
+
+    outputs_dict = {
+        "logits": tmp_logits,
+    }
+
+    if use_cache:
+        key_values = outputs.past_key_values
+        present_key_values = postprocess_past_key_values(key_values)
+        outputs_dict["past_key_values"] = present_key_values
+    return tuple([value if not isinstance(value, list) else tuple(value) for value in outputs_dict.values()])
+
+
+def gemma4_eager_attention_forward_patched(
+    module: nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: Optional[torch.Tensor],
+    dropout: float = 0.0,
+    scaling: Optional[float] = None,
+    softcap: Optional[float] = None,
+    **kwargs,
+) -> tuple:
+    if scaling is None:
+        scaling = module.head_dim**-0.5
+
+    key_states = repeat_kv(key, module.num_key_value_groups)
+    value_states = repeat_kv(value, module.num_key_value_groups)
+
+    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+
+    if softcap is not None:
+        attn_weights = attn_weights / softcap
+        attn_weights = torch.tanh(attn_weights)
+        attn_weights = attn_weights * softcap
+    if attention_mask is not None:
+        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+        attn_weights = attn_weights + causal_mask
+    eps = 0.0000001
+
+    attn_weights = nn.functional.softmax(attn_weights + eps, dim=-1, dtype=torch.float32).to(query.dtype)
+    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    attn_output = torch.matmul(attn_weights, value_states)
+    attn_output = attn_output.transpose(1, 2).contiguous()
+    return attn_output, attn_weights
+
+
+def gemma4_text_attention_forward(
+    self,
+    hidden_states: torch.Tensor,
+    position_embeddings: torch.Tensor,
+    attention_mask: Optional[torch.Tensor],
+    past_key_values: Optional[Cache] = None,
+    cache_position: Optional[torch.LongTensor] = None,
+    **kwargs,
+) -> tuple:
+    from transformers.models.gemma4.modeling_gemma4 import apply_rotary_pos_emb as apply_rotary_pos_emb_gemma4
+
+    input_shape = hidden_states.shape[:-1]
+    hidden_shape = (*input_shape, -1, self.head_dim)
+
+    cos, sin = position_embeddings
+
+    query_states = self.q_proj(hidden_states).view(hidden_shape)
+    query_states = self.q_norm(query_states)
+    query_states = apply_rotary_pos_emb_gemma4(query_states, cos, sin, unsqueeze_dim=2)
+    query_states = query_states.transpose(1, 2)
+
+    if self.is_kv_shared_layer and past_key_values is not None:
+        key_states, value_states = past_key_values.shared_layers[self.kv_shared_layer_index]
+        key_states = key_states.to(query_states.device)
+        value_states = value_states.to(query_states.device)
+    else:
+        key_states = self.k_proj(hidden_states).view(hidden_shape)
+        value_states = self.v_proj(hidden_states).view(hidden_shape) if self.v_proj is not None else key_states
+
+        key_states = self.k_norm(key_states)
+        key_states = apply_rotary_pos_emb_gemma4(key_states, cos, sin, unsqueeze_dim=2)
+        key_states = key_states.transpose(1, 2)
+
+        value_states = self.v_norm(value_states)
+        value_states = value_states.transpose(1, 2)
+
+    if past_key_values is not None:
+        cache_kwargs = {
+            "sin": sin,
+            "cos": cos,
+            "cache_position": cache_position,
+            "sliding_window": self.sliding_window,
+        }
+        if not self.is_kv_shared_layer:
+            key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
+        if self.store_full_length_kv:
+            if not hasattr(past_key_values, "shared_layers"):
+                past_key_values.shared_layers = {}
+            past_key_values.shared_layers[self.layer_idx] = key_states, value_states
+
+    attention_interface = gemma4_eager_attention_forward_patched
+
+    attn_output, attn_weights = attention_interface(
+        self,
+        query_states,
+        key_states,
+        value_states,
+        attention_mask,
+        dropout=self.attention_dropout if self.training else 0.0,
+        scaling=1.0,
+        sliding_window=self.sliding_window,
+        **kwargs,
+    )
+
+    attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+    attn_output = self.o_proj(attn_output)
+    return attn_output, attn_weights
+
+
+def _gemma4_moe_block_forward(self, hidden_states, top_k_index, top_k_weights):
+    # hidden_states: [B*S, hidden_dim]
+    # top_k_index: [B*S, K], top_k_weights: [B*S, K]
+    num_tokens = hidden_states.shape[0]
+    dtype = hidden_states.dtype
+
+    # Compute all expert outputs via batched matmul
+    # expanded: [E, B*S, hidden_dim]
+    expanded_hidden = hidden_states.unsqueeze(0).expand(self.num_experts, -1, -1)
+
+    # gate_up_proj: [E, 2*inter, hidden] -> transpose to [E, hidden, 2*inter]
+    gate_up = torch.bmm(expanded_hidden, self.gate_up_proj.to(dtype).transpose(1, 2))
+    gate, up = gate_up.chunk(2, dim=-1)
+    intermediate = self.act_fn(gate) * up
+
+    # down_proj: [E, hidden, inter] -> transpose to [E, inter, hidden]
+    expert_outputs = torch.bmm(intermediate, self.down_proj.to(dtype).transpose(1, 2))
+    # expert_outputs: [E, B*S, hidden_dim]
+
+    # Apply per-expert scale: [E] -> [E, 1, 1]
+    expert_outputs = expert_outputs * self.per_expert_scale.to(dtype).unsqueeze(-1).unsqueeze(-1)
+
+    # Build full routing weight matrix [B*S, E] from sparse top-k
+    full_weights = torch.zeros(num_tokens, self.num_experts, dtype=dtype, device=hidden_states.device)
+    full_weights.scatter_add_(1, top_k_index, top_k_weights.to(dtype))
+
+    # Weighted sum over experts: [B*S, 1, E] @ [B*S, E, hidden_dim] -> [B*S, hidden_dim]
+    expert_outputs = expert_outputs.permute(1, 0, 2)  # [B*S, E, hidden_dim]
+    final_hidden_states = torch.bmm(full_weights.unsqueeze(1), expert_outputs).squeeze(1)
+
+    return final_hidden_states
+
+
+class Gemma4LMModelPatcher(Gemma3LMModelPatcher):
+    def __init__(self, config, model, model_kwargs):
+        super().__init__(config, model, model_kwargs)
+
+        self.patched_forward = gemma4_lm_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = gemma4_lm_forward
+
+        self.model_orig_language_model_forward = self._model.model.forward
+
+    def __enter__(self):
+        super().__enter__()
+
+        setattr(self._model, self.orig_forward_name, types.MethodType(gemma4_lm_forward, self._model))
+        setattr(self._model.model, "forward", types.MethodType(gemma4_language_model_forward, self._model))
+
+        self._model.model.language_model._orig_project_per_layer_inputs = (
+            self._model.model.language_model.project_per_layer_inputs
+        )
+        self._model.model.language_model.project_per_layer_inputs = types.MethodType(
+            _gemma4_project_per_layer_inputs, self._model.model.language_model
+        )
+
+        for decoder_layer in self._model.model.language_model.layers:
+            decoder_layer.self_attn.orig_forward = decoder_layer.self_attn.forward
+            decoder_layer.self_attn.forward = types.MethodType(gemma4_text_attention_forward, decoder_layer.self_attn)
+            if hasattr(decoder_layer, "moe"):
+                decoder_layer.moe._orig_forward = decoder_layer.moe.forward
+                decoder_layer.moe.forward = types.MethodType(_gemma4_moe_block_forward, decoder_layer.moe)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.model.language_model.project_per_layer_inputs = (
+            self._model.model.language_model._orig_project_per_layer_inputs
+        )
+
+        for decoder_layer in self._model.model.language_model.layers:
+            decoder_layer.self_attn.forward = decoder_layer.self_attn.orig_forward
+            if hasattr(decoder_layer, "moe") and hasattr(decoder_layer.moe, "_orig_forward"):
+                decoder_layer.moe.forward = decoder_layer.moe._orig_forward
+
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+        setattr(self._model.model, "forward", self.model_orig_language_model_forward)
+
+
 class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
     def __init__(
         self,
@@ -6605,7 +6969,10 @@ class MambaPatcher(ModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers.models.mamba.modeling_mamba import MambaCache
+        try:
+            from transformers.models.mamba.modeling_mamba import MambaCache
+        except ImportError:
+            MambaCache = object
 
         super().__init__(config, model, model_kwargs)
 
@@ -8500,3 +8867,79 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
                 sparse_moe_block = decoder_layer.mlp
                 decoder_layer.mlp.forward = decoder_layer.mlp._orig_forward
                 del sparse_moe_block.down_projs, sparse_moe_block.gate_projs, sparse_moe_block.up_projs
+
+
+class Gemma4PerLayerInputsGetterModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def per_layer_inputs_forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+            per_layer_inputs_mask = torch.logical_and(input_ids >= 0, input_ids < self.vocab_size_per_layer_input)
+            per_layer_inputs_tokens = torch.where(per_layer_inputs_mask, input_ids, torch.zeros_like(input_ids))
+            per_layer_inputs = self.language_model.get_per_layer_inputs(per_layer_inputs_tokens, None)
+            return per_layer_inputs
+
+        model.forward = types.MethodType(per_layer_inputs_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
+    def __init__(self, config, model, model_kwargs):
+        super().__init__(config, model, model_kwargs)
+        # Get the vision encoder - it's at model.model.vision_tower.encoder
+        vision_model = model.model.vision_tower if is_transformers_version(">=", "5") else model.vision_tower
+        self._vision_encoder = vision_model.encoder
+
+        # Patch the vision encoder forward to bypass create_bidirectional_mask,
+        # which is not compatible with torch.jit.trace due to dynamic masking logic.
+        # Instead, we construct a simple 4D bidirectional attention mask from the
+        # 2D padding mask to properly mask out padding patches.
+        orig_encoder_forward = self._vision_encoder.forward
+
+        def patched_encoder_forward(inputs_embeds, attention_mask=None, pixel_position_ids=None, **kwargs):
+            hidden_states = inputs_embeds
+            position_embeddings = self._vision_encoder.rotary_emb(hidden_states, pixel_position_ids)
+
+            # Build a 4D bidirectional attention mask from the 2D boolean mask.
+            # attention_mask is [batch, seq_len] with True=valid, False=padding.
+            # Decoder layers expect a 4D mask [batch, 1, seq_len, seq_len] where
+            # 0 = attend and large negative = masked.
+            attn_mask_4d = None
+            if attention_mask is not None:
+                min_dtype = torch.finfo(hidden_states.dtype).min
+                # [batch, 1, 1, seq_len] key mask
+                key_mask = attention_mask[:, None, None, :].to(hidden_states.dtype)
+                # Convert: 1.0 for valid tokens, min_dtype for padding
+                attn_mask_4d = (1.0 - key_mask) * min_dtype
+
+            for decoder_layer in self._vision_encoder.layers[: self._vision_encoder.config.num_hidden_layers]:
+                hidden_states = decoder_layer(
+                    hidden_states,
+                    attention_mask=attn_mask_4d,
+                    position_embeddings=position_embeddings,
+                    position_ids=pixel_position_ids,
+                    **kwargs,
+                )
+
+            from transformers.modeling_outputs import BaseModelOutputWithPast
+
+            return BaseModelOutputWithPast(last_hidden_state=hidden_states)
+
+        self._orig_encoder_forward = orig_encoder_forward
+        self._vision_encoder.forward = patched_encoder_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self._vision_encoder.forward = self._orig_encoder_forward
+        super().__exit__(exc_type, exc_value, traceback)

@@ -148,6 +148,8 @@ from .model_patcher import (
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
     Gemma3LMModelPatcher,
+    Gemma4ImageEmbeddingsModelPatcher,
+    Gemma4LMModelPatcher,
     GptJModelPatcher,
     GptNeoModelPatcher,
     GptNeoxModelPatcher,
@@ -277,6 +279,10 @@ def init_model_configs():
             "transformers",
             "Gemma3ForConditionalGeneration",
         )
+    TasksManager._CUSTOM_CLASSES[("pt", "gemma4", "image-text-to-text")] = (
+        "transformers",
+        "Gemma4ForConditionalGeneration",
+    )
 
     # since transformers v4.52, model can be loaded using default AutoModelForImageTextToText
     # https://github.com/huggingface/transformers/blob/v4.52.0/src/transformers/models/auto/modeling_auto.py#L899
@@ -1491,6 +1497,102 @@ class Gemma3TextOpenVINOConfig(Gemma2OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
 
 
+class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+        )
+        self.num_key_value_heads = normalized_config.num_key_value_heads
+        self.head_dim = normalized_config.head_dim
+        self.global_head_dim = getattr(normalized_config.config, "global_head_dim", self.head_dim)
+        self.layer_types = normalized_config.config.layer_types
+        self.num_kv_shared_layers = normalized_config.config.num_kv_shared_layers
+        self.sliding_window = normalized_config.config.sliding_window
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        # some layers do not produce their own KV-cache, they use the shared KV-cache
+        if self.num_kv_shared_layers > 0:
+            layer_types = self.layer_types[: -self.num_kv_shared_layers]
+        else:
+            layer_types = self.layer_types
+        past_kv_values = []
+        for layer_type in layer_types:
+            if layer_type == "sliding_attention":
+                shape = (
+                    self.batch_size,
+                    self.num_key_value_heads,
+                    self.sliding_window,
+                    self.head_dim,
+                )
+            else:
+                shape = (
+                    self.batch_size,
+                    self.num_key_value_heads,
+                    self.sequence_length,
+                    self.global_head_dim,
+                )
+            past_kv_value = (
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+            )
+            past_kv_values.append(past_kv_value)
+
+        return past_kv_values
+
+
+@register_in_tasks_manager(
+    "gemma4_text",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class Gemma4TextOpenVINOConfig(Gemma3TextOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Gemma4DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Gemma4DummyPastKeyValuesGenerator
+    MIN_TRANSFORMERS_VERSION = "4.50.0"
+
+    def add_past_key_values(self, inputs_or_outputs: dict[str, dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            name = "past_key_values"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            name = "present"
+
+        num_kv_shared_layers = self._normalized_config.config.num_kv_shared_layers
+        if num_kv_shared_layers > 0:
+            layer_types = self._normalized_config.config.layer_types[:-num_kv_shared_layers]
+        else:
+            layer_types = self._normalized_config.config.layer_types
+
+        for i, layer_type in enumerate(layer_types):
+            inputs_or_outputs[f"{name}.{i}.key"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{name}.{i}.value"] = {0: "batch_size", 2: decoder_sequence_name}
+
+
 class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
         self,
@@ -1733,6 +1835,16 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
             dummy_inputs["token_type_ids"] = self.orig_export_config.DUMMY_INPUT_GENERATOR_CLASSES[
                 0
             ].random_int_tensor(token_type_ids_shape, min_value=0, max_value=2)
+        if "per_layer_inputs" in self.inputs:
+            per_layer_inputs_shape = (
+                input_ids.shape[0],
+                input_ids.shape[1],
+                self._normalized_config.config.num_hidden_layers,
+                self._normalized_config.config.hidden_size_per_layer_input,
+            )
+            dummy_inputs["per_layer_inputs"] = self.orig_export_config.DUMMY_INPUT_GENERATOR_CLASSES[
+                0
+            ].random_float_tensor(per_layer_inputs_shape)
         return dummy_inputs
 
 
@@ -4199,6 +4311,238 @@ class Gemma3OpenVINOConfig(BaseVLMOpenVINOConfig):
                 inputs_update={"token_type_ids": {0: "batch_size", 1: "sequence_length"}},
             )
         return super().with_behavior(behavior)
+
+
+class Gemma4ConfigBehavior(str, enum.Enum):
+    VISION_EMBEDDINGS = "vision_embeddings"
+    TEXT_EMBEDDINGS = "text_embeddings"
+    LANGUAGE = "language"
+    TEXT_EMBEDDINGS_PER_LAYER = "text_embeddings_per_layer"
+
+
+class DummyGemma4VisionInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "image_position_ids")
+
+    def __init__(self, task, normalized_config, batch_size=DEFAULT_DUMMY_SHAPES["batch_size"], **kwargs):
+        super().__init__(task, normalized_config, batch_size, **kwargs)
+        self.patch_size = getattr(normalized_config, "patch_size", 16)
+        self.pooling_kernel_size = getattr(normalized_config, "pooling_kernel_size", 3)
+        # Gemma4 processor always pads pixel_values to max_soft_tokens * pooling_kernel_size^2 patches.
+        # The vision model's pooling uses shape-dependent Python operations that get baked in during tracing,
+        # so the dummy input must match the actual inference shapes.
+        max_soft_tokens = getattr(normalized_config, "image_seq_length", None)
+        if max_soft_tokens is None:
+            max_soft_tokens = getattr(normalized_config, "max_soft_tokens", 280)
+        self.num_patches = max_soft_tokens * self.pooling_kernel_size**2
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            # Gemma4 expects pre-patchified pixel_values: [batch, num_patches, 3 * patch_size^2]
+            return self.random_float_tensor(
+                shape=[self.batch_size, self.num_patches, 3 * self.patch_size**2],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "image_position_ids":
+            import math
+
+            import torch
+
+            # Create position ids as a grid. The patch count = h_patches * w_patches
+            # where both are divisible by pooling_kernel_size for correct pooling.
+            k = self.pooling_kernel_size
+            total_pooled = self.num_patches // (k * k)
+            # Find roughly square grid for pooled side
+            pooled_side = int(math.sqrt(total_pooled))
+            if pooled_side * pooled_side < total_pooled:
+                pooled_h = pooled_side
+                pooled_w = total_pooled // pooled_h
+            else:
+                pooled_h = pooled_w = pooled_side
+            h_patches = pooled_h * k
+            w_patches = pooled_w * k
+            pos_ids = torch.stack(
+                torch.meshgrid(torch.arange(h_patches), torch.arange(w_patches), indexing="ij"), dim=-1
+            ).reshape(1, -1, 2)
+            # Pad to num_patches with -1 (padding position)
+            if pos_ids.shape[1] < self.num_patches:
+                pad = torch.full((1, self.num_patches - pos_ids.shape[1], 2), -1, dtype=pos_ids.dtype)
+                pos_ids = torch.cat([pos_ids, pad], dim=1)
+            return pos_ids.expand(self.batch_size, -1, -1).clone()
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+@register_in_tasks_manager("gemma4", *["image-text-to-text"], library_name="transformers")
+class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in Gemma4ConfigBehavior]
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyTextInputGenerator)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: Gemma4ConfigBehavior = Gemma4ConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+            behavior=behavior,
+        )
+        self._behavior = behavior
+        if self._behavior == Gemma4ConfigBehavior.VISION_EMBEDDINGS:
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4VisionInputGenerator,)
+            # Attach image_seq_length from preprocessor to normalized config so
+            # the dummy input generator can compute the correct number of patches.
+            # The vision model's pooling uses shape-dependent Python operations baked in
+            # during tracing, so the dummy input must match actual inference shapes.
+            image_seq_length = None
+            if preprocessors is not None:
+                for p in preprocessors:
+                    if hasattr(p, "image_processor") and hasattr(p.image_processor, "image_seq_length"):
+                        image_seq_length = p.image_processor.image_seq_length
+                        break
+                    if hasattr(p, "image_processor") and hasattr(p.image_processor, "max_soft_tokens"):
+                        image_seq_length = p.image_processor.max_soft_tokens
+                        break
+                if image_seq_length is None:
+                    for p in preprocessors:
+                        if hasattr(p, "max_soft_tokens"):
+                            image_seq_length = p.max_soft_tokens
+                            break
+                        if hasattr(p, "image_seq_length"):
+                            image_seq_length = p.image_seq_length
+                            break
+            if image_seq_length is not None:
+                self._normalized_config.image_seq_length = image_seq_length
+        elif self._behavior in (
+            Gemma4ConfigBehavior.TEXT_EMBEDDINGS,
+            Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER,
+        ):
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator,)
+            self._config = config.text_config
+            self._normalized_config = NormalizedTextConfig(self._config)
+
+    def with_behavior(self, behavior: Union[str, Gemma4ConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Gemma4ConfigBehavior):
+            behavior = Gemma4ConfigBehavior(behavior)
+
+        if behavior == Gemma4ConfigBehavior.LANGUAGE:
+            model_type = "gemma4_text"
+            return get_vlm_text_generation_config(
+                model_type,
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Gemma4LMModelPatcher,
+                inputs_update={"per_layer_inputs": {0: "batch_size", 1: "sequence_length", 2: "num_hidden_layers"}},
+            )
+        if behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+            config = self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+            return config
+        return super().with_behavior(behavior)
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+            import torch
+
+            class PerLayerInputsModule(torch.nn.Module):
+                def __init__(self, language_model, vocab_size_per_layer_input: int, config):
+                    super().__init__()
+                    self.language_model = language_model
+                    self.vocab_size_per_layer_input = vocab_size_per_layer_input
+                    self.config = config
+
+                def forward(self, input_ids: torch.Tensor):
+                    # Replace multimodal token IDs with pad_token_id to match
+                    # HF Gemma4Model.forward which uses llm_input_ids where
+                    # image/video/audio positions are set to pad_token_id
+                    pad_token_id = self.config.text_config.pad_token_id
+                    per_layer_inputs_tokens = input_ids.clone()
+                    for token_id_attr in ("image_token_id", "video_token_id", "audio_token_id"):
+                        token_id = getattr(self.config, token_id_attr, None)
+                        if token_id is not None:
+                            per_layer_inputs_tokens = torch.where(
+                                per_layer_inputs_tokens == token_id,
+                                torch.full_like(per_layer_inputs_tokens, pad_token_id),
+                                per_layer_inputs_tokens,
+                            )
+                    per_layer_inputs_mask = torch.logical_and(
+                        per_layer_inputs_tokens >= 0,
+                        per_layer_inputs_tokens < self.vocab_size_per_layer_input,
+                    )
+                    per_layer_inputs_tokens = torch.where(
+                        per_layer_inputs_mask,
+                        per_layer_inputs_tokens,
+                        torch.zeros_like(per_layer_inputs_tokens),
+                    )
+                    per_layer_inputs = self.language_model.get_per_layer_inputs(per_layer_inputs_tokens, None)
+                    return per_layer_inputs
+
+            model = PerLayerInputsModule(
+                model.model.language_model, model.config.text_config.vocab_size_per_layer_input, model.config
+            )
+            return model
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return model
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            import torch
+
+            class TextEmbeddingsModule(torch.nn.Module):
+                def __init__(self, model):
+                    super().__init__()
+                    self.model = model
+
+                def forward(self, input_ids: torch.Tensor):
+                    inputs_embeds = self.model.get_input_embeddings()(input_ids)
+                    return inputs_embeds
+
+            text_embedding = TextEmbeddingsModule(model)
+            text_embedding.config = model.model.language_model.config
+            return text_embedding
+
+        return super().get_model_for_behavior(model, behavior)
+
+    def patch_model_for_export(self, model, model_kwargs=None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+            return ModelPatcher(self, model, model_kwargs)
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return Gemma4ImageEmbeddingsModelPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Gemma4ConfigBehavior.LANGUAGE:
+            return super().inputs
+        if self._behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+            return {
+                "input_ids": {0: "batch_size", 1: "sequence_length"},
+            }
+        if self._behavior == Gemma4ConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {0: "batch_size", 1: "num_patches"},
+                "image_position_ids": {0: "batch_size", 1: "num_patches"},
+            }
+        return super().inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+            return {"text_embeds_per_layer": {}}
+        return super().outputs
 
 
 class DummyVisionPositionIdsInputGenerator(DummyVisionInputGenerator):
