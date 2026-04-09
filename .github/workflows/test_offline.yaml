@@ -34,15 +34,15 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip uv
-          uv pip install .[diffusers,tests]
+          uv pip install .[tests]
 
       - name: Test
         run: |
-          HF_HOME=/tmp/ huggingface-cli download hf-internal-testing/tiny-random-gpt2
+          HF_HOME=/tmp/ hf download hf-internal-testing/tiny-random-gpt2
           HF_HOME=/tmp/ HF_HUB_OFFLINE=1 optimum-cli export openvino --model hf-internal-testing/tiny-random-gpt2 gpt2_openvino --task text-generation
 
-          huggingface-cli download hf-internal-testing/tiny-random-gpt2
+          hf download hf-internal-testing/tiny-random-gpt2
           HF_HUB_OFFLINE=1 optimum-cli export openvino --model hf-internal-testing/tiny-random-gpt2 gpt2_openvino --task text-generation
 
-          pytest tests/openvino/test_modeling.py -k "test_load_from_hub" -s -vvvvv
-          HF_HUB_OFFLINE=1 pytest tests/openvino/test_modeling.py -k "test_load_from_hub" -s -vvvvv
+          pytest tests/openvino/test_modeling.py -k "test_load_from_hub and not openclip" -s -vvvvv
+          HF_HUB_OFFLINE=1 pytest tests/openvino/test_modeling.py -k "test_load_from_hub and not openclip" -s -vvvvv

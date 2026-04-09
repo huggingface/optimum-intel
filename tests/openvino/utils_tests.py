@@ -214,7 +214,7 @@ MODEL_NAMES = {
     "wav2vec2-conformer": "optimum-intel-internal-testing/tiny-random-wav2vec2-conformer",
     "whisper": "optimum-intel-internal-testing/tiny-random-whisper",
     "xlm": "optimum-intel-internal-testing/tiny-random-xlm",
-    "xlm-roberta": "optimum-intel-internal-testing/tiny-xlm-roberta",
+    "xlm-roberta": "optimum-intel-internal-testing/tiny-random-xlm-roberta",
     "xglm": "optimum-intel-internal-testing/tiny-random-XGLMForCausalLM",
     "xverse": "optimum-intel-internal-testing/tiny-random-xverse",
     "glm4": "optimum-intel-internal-testing/tiny-random-glm4",
@@ -234,11 +234,11 @@ EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "afmoe": {"model": 16},
-    "bert": {"model": 68},
+    "bert": {"model": 68 if is_transformers_version("<", "5") else 70},
     "roberta": {"model": 68},
     "albert": {"model": 84},
     "vit": {"model": 64},
-    "blenderbot": {"model": 70},
+    "blenderbot": {"model": 70 if is_transformers_version("<", "5") else 72},
     "cohere2": {"model": 30},
     "gpt2": {"model": 44},
     "granitemoehybrid": {"model": 118},
@@ -246,8 +246,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "distilbert": {"model": 66},
     "t5": {
         "encoder": 64,
-        "decoder": 104,
-        "decoder_with_past": 84,
+        "decoder": 104 if is_transformers_version("<", "5") else 106,
+        "decoder_with_past": 84 if is_transformers_version("<", "5") else 86,
     },
     "stable-diffusion": {
         "unet": 242,
@@ -358,8 +358,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vocoder": 80,
     },
     "clip": {"model": 130},
-    "mamba": {"model": 322},
-    "falcon_mamba": {"model": 162},
+    "mamba": {"model": 324 if is_transformers_version("==", "5.0") else 322},
+    "falcon_mamba": {"model": 164 if is_transformers_version("==", "5.0") else 162},
     "minicpmo": {
         "lm_model": 16,
         "text_embeddings_model": 1,
@@ -368,7 +368,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     },
     "zamba2": {"model": 44},
     "exaone4": {"model": 16},
-    "lfm2": {"model": 52},
+    "lfm2": {"model": 52 if is_transformers_version("<", "5") else 54},
     "hunyuan_v1_dense": {"model": 32},
     "qwen3_eagle3": {"model": 20},
     "qwen3_next": {"model": 100},
@@ -377,7 +377,6 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
 
 REMOTE_CODE_MODELS = (
-    "afmoe",
     "chatglm",
     "minicpm",
     "baichuan2",
@@ -400,6 +399,9 @@ REMOTE_CODE_MODELS = (
     "deepseek",
     "qwen3_eagle3",
 )
+
+if is_transformers_version("<", "5"):
+    REMOTE_CODE_MODELS += ("afmoe",)
 
 
 def get_num_quantized_nodes(model):
