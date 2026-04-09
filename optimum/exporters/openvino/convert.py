@@ -128,7 +128,23 @@ def _save_model(
     library_name: Optional[str] = None,
     config: "OnnxConfig" = None,
 ):
-    compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
+    compress_to_fp16 = False
+    
+    if ov_config is not None:
+        if ov_config.dtype == "fp16":
+            compress_to_fp16 = True
+        elif ov_config.dtype == "bf16":
+            model.set_rt_info("bf16", ["runtime_options", "INFERENCE_PRECISION_HINT"])
+
+            from openvino.runtime.passes import Manager, ConvertPrecision
+            from openvino.runtime import Type
+
+            manager = Manager()
+            manager.register_pass(
+                ConvertPrecision(Type.f32, Type.bf16)
+            )
+            manager.run_passes(model)
+
     model = _add_version_info_to_model(model, library_name)
 
     runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}
