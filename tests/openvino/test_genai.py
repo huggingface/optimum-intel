@@ -177,9 +177,12 @@ class LLMPipelineTestCase(unittest.TestCase):
 
     # max versions
     if is_transformers_version("<", "4.54.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("minicpm", "minicpm3", "arctic", "deepseek")
+        ALL_SUPPORTED_ARCHITECTURES += ("minicpm", "minicpm3", "arctic")
+        if is_transformers_version(">=", "4.46.0"):
+            ALL_SUPPORTED_ARCHITECTURES += ("deepseek",)
     if is_transformers_version("<", "4.56.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("chatglm", "chatglm4", "qwen")
+        if is_transformers_version(">=", "4.46.0"):
+            ALL_SUPPORTED_ARCHITECTURES += ("chatglm", "chatglm4", "qwen")
 
     # for now we do not test NPU with old transformers versions
     SUPPORTED_ARCHITECTURES = NPU_SUPPORTED_ARCHITECTURES if OPENVINO_DEVICE == "NPU" else ALL_SUPPORTED_ARCHITECTURES
