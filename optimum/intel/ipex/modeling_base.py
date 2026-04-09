@@ -322,15 +322,14 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 
         model_type = self.config.model_type
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(self.config)
-
         self.config.is_decoder = True
         self.config.is_encoder_decoder = False
-
         self.generation_config = GenerationConfig.from_model_config(self.config)
         try:
             # Use model_save_dir if available, otherwise use config's name_or_path
             pretrained_model_name_or_path = model_save_dir or getattr(self.config, "_name_or_path", None)
-            if pretrained_model_name_or_path is not None and hasattr(self.config, "auto_map"):
+            trust_remote_code = kwargs.get("trust_remote_code", False)
+            if pretrained_model_name_or_path is not None and hasattr(self.config, "auto_map") and trust_remote_code:
                 self.model_cls = get_class_from_dynamic_module(
                     self.config.auto_map["AutoModelForCausalLM"], pretrained_model_name_or_path
                 )
@@ -515,15 +514,14 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
 
         model_type = self.config.model_type
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(self.config)
-
         self.config.is_decoder = False
         self.config.is_encoder_decoder = True
-
         self.generation_config = GenerationConfig.from_model_config(self.config)
         try:
             # Use model_save_dir if available, otherwise use config's name_or_path
             pretrained_model_name_or_path = model_save_dir or getattr(self.config, "_name_or_path", None)
-            if pretrained_model_name_or_path is not None and hasattr(self.config, "auto_map"):
+            trust_remote_code = kwargs.get("trust_remote_code", False)
+            if pretrained_model_name_or_path is not None and hasattr(self.config, "auto_map") and trust_remote_code:
                 self.model_cls = get_class_from_dynamic_module(
                     self.config.auto_map["AutoModelForSeq2SeqLM"], pretrained_model_name_or_path
                 )

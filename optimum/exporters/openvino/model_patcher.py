@@ -54,7 +54,12 @@ from optimum.exporters.onnx.model_patcher import (
     override_arguments,
     sdpa_mask_without_vmap,
 )
-from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_version, is_transformers_version
+from optimum.intel.utils.import_utils import (
+    is_diffusers_version,
+    is_openvino_version,
+    is_torch_version,
+    is_transformers_version,
+)
 
 from ._ov_ops import convert_recurrent_attention_cell
 
@@ -5607,7 +5612,7 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             # Run the decoder layers on the last element of the prenet output.
             decoder_out = model.speecht5.decoder.wrapped_decoder(
                 hidden_states=decoder_hidden_states[:, -1:],
-                encoder_hidden_states=encoder_hidden_states[0],
+                encoder_hidden_states=encoder_hidden_states,
                 encoder_attention_mask=encoder_attention_mask,
                 past_key_values=past_key_values,
                 use_cache=True,
@@ -7578,10 +7583,10 @@ def afmoe_moe_forward_patched(self, hidden_states):
     act_fn = self.experts[0].act_fn
 
     # compute experts outputs in a vectorized form
-    gate = torch.bmm(hidden_states, self.gate_projs)
-    up = torch.bmm(hidden_states, self.up_projs)
+    gate = torch.bmm(hidden_states, self.gate_projs.transpose(1, 2))
+    up = torch.bmm(hidden_states, self.up_projs.transpose(1, 2))
     gate_up = act_fn(gate) * up
-    next_states = torch.bmm(gate_up, self.down_projs)
+    next_states = torch.bmm(gate_up, self.down_projs.transpose(1, 2))
     next_states = next_states.view(num_experts, batch_size, -1, hidden_dim)
     next_states = next_states * new_routing_weights.transpose(0, 1).view(num_experts, batch_size, -1)[..., None]
     next_states = next_states.sum(dim=0)
@@ -7607,29 +7612,22 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                 # with bf16 weights that leads to operands types mismatch in torch.bmm during TorchScript tracing
                 # Now we align with hidden_states (that will be always fp32 due to patching
                 # above for embedding layer during tracing)
-                afmoe_moe.down_projs = (
-                    torch.concat(
-                        tuple(afmoe_moe.experts[i].down_proj.weight.unsqueeze(0) for i in range(num_experts)),
-                        dim=0,
-                    )
-                    .transpose(1, 2)
-                    .float()
+                afmoe_moe.down_projs = torch.concat(
+                    tuple(afmoe_moe.experts[i].down_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                    dim=0,
                 )
-                afmoe_moe.gate_projs = (
-                    torch.concat(
-                        tuple(afmoe_moe.experts[i].gate_proj.weight.unsqueeze(0) for i in range(num_experts)),
-                        dim=0,
-                    )
-                    .transpose(1, 2)
-                    .float()
+                afmoe_moe.gate_projs = torch.concat(
+                    tuple(afmoe_moe.experts[i].gate_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                    dim=0,
                 )
-                afmoe_moe.up_projs = (
-                    torch.concat(
-                        tuple(afmoe_moe.experts[i].up_proj.weight.unsqueeze(0) for i in range(num_experts)), dim=0
-                    )
-                    .transpose(1, 2)
-                    .float()
+                afmoe_moe.up_projs = torch.concat(
+                    tuple(afmoe_moe.experts[i].up_proj.weight.unsqueeze(0) for i in range(num_experts)), dim=0
                 )
+
+                if is_openvino_version("<", "2026.1.0"):
+                    afmoe_moe.down_projs = afmoe_moe.down_projs.float()
+                    afmoe_moe.gate_projs = afmoe_moe.gate_projs.float()
+                    afmoe_moe.up_projs = afmoe_moe.up_projs.float()
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
