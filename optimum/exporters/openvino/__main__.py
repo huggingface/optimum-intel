@@ -416,7 +416,7 @@ def main_export(
 
                 def post_init_model(self, model):
                     # optimum 2.1 / transformers v5 auto_gptq support dropped
-                    from gptqmodel import exllama_set_max_input_length
+                    from gptqmodel import BACKEND, exllama_set_max_input_length
                     from gptqmodel.utils.model import hf_convert_gptq_v1_to_v2_format
 
                     class StoreAttr(object):
