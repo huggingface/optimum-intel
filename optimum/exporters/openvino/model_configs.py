@@ -200,7 +200,6 @@ from .model_patcher import (
     Qwen3VLVisionEmbMergerPatcher,
     QwenModelPatcher,
     SanaTextEncoderModelPatcher,
-    VideoChatFlashQwenLanguageModelPatcher,
     VideoChatFlashQwenVisionEmbeddingModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
@@ -5495,12 +5494,10 @@ class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
 
         if behavior == VideoChatFlashQwenConfigBehavior.LANGUAGE:
             model.model.llm_compress_layer_list = []
-            return model.language_model if not hasattr(model, "lm_head") else model
+            return model
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
-        if self._behavior == VideoChatFlashQwenConfigBehavior.LANGUAGE:
-            return VideoChatFlashQwenLanguageModelPatcher(self, model, model_kwargs)
 
         if self._behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
             return VideoChatFlashQwenVisionEmbeddingModelPatcher(self, model, model_kwargs)
