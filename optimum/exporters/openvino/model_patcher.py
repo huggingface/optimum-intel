@@ -7901,6 +7901,42 @@ class LlamaEagle3ForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         )
 
 
+if is_transformers_version(">=", "4.57"):
+    from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLTextRotaryEmbedding
+
+    class QwenVLEagle3Model(LlamaEagle3Model):
+        """
+        Eagle-3 draft model with Qwen3-VL MRoPE for VLM speculative decoding.
+
+        Extends LlamaEagle3Model by replacing the standard rotary embedding with
+        Qwen3VLTextRotaryEmbedding, which supports interleaved multimodal RoPE
+        (MRoPE). This allows the draft model to handle position IDs compatible
+        with Qwen3-VL target models. Standard 2D position_ids are accepted and
+        expanded internally to 3D (T/H/W) by the rotary embedding.
+        """
+
+        def __init__(self, config: LlamaConfig):
+            super().__init__(config)
+            # Replace standard rotary embedding with VLM-aware MRoPE embedding.
+            # Qwen3VLTextRotaryEmbedding.forward accepts both 2D [bs, seq] and
+            # 3D [3, bs, seq] position_ids and produces standard [bs, seq, head_dim]
+            # cos/sin outputs that are compatible with apply_rotary_pos_emb.
+            self.rotary_emb = Qwen3VLTextRotaryEmbedding(config=config)
+
+    class QwenVLEagle3ForCausalLM(LlamaEagle3ForCausalLM):
+        """
+        Eagle-3 causal LM with Qwen3-VL MRoPE for VLM speculative decoding.
+
+        Uses QwenVLEagle3Model as the underlying model, enabling speculative
+        decoding with Qwen3-VL target models via the AngelSlim Eagle3 architecture
+        (Eagle3LlamaForCausalLM).
+        """
+
+        def __init__(self, config):
+            super().__init__(config)
+            self.model = QwenVLEagle3Model(config)
+
+
 # Patched implementation of the gated delta rule in recurrent form.
 # Adapted from:
 # https://github.com/huggingface/transformers/blob/v4.57-release/src/transformers/models/qwen3_next/modeling_qwen3_next.py#L522

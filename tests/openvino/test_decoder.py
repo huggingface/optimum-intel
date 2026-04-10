@@ -12,6 +12,7 @@ from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
 from utils_tests import (
     EAGLE3_MODELS,
+    EAGLE3_VLM_MODELS,
     F32_CONFIG,
     MODEL_NAMES,
     OPENVINO_DEVICE,
@@ -852,6 +853,30 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(EAGLE3_MODELS.items())
     @pytest.mark.skipif(is_transformers_version("<", "4.54"), reason="Eagle3 requires transformers >= 4.54")
     def test_load_and_infer_with_eagle3_model(self, model_arch, model_pair):
+        draft_model_id, target_model_id = model_pair
+
+        ov_model = OVModelForCausalLM.from_pretrained(draft_model_id, export=True, trust_remote_code=True)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        self.assertTrue(ov_model.use_cache)
+
+        tokenizer = AutoTokenizer.from_pretrained(target_model_id)
+        tokens = tokenizer("This is a sample output", return_tensors="pt")
+
+        ov_outputs = ov_model(**tokens)
+        self.assertTrue("logits" in ov_outputs)
+        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+
+        self.assertTrue("past_key_values" in ov_outputs)
+        self.assertIsInstance(ov_outputs.past_key_values, tuple)
+        self.assertEqual(ov_model.stateful, True)
+        self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+
+        del ov_model
+        gc.collect()
+
+    @parameterized.expand(EAGLE3_VLM_MODELS.items())
+    @pytest.mark.skipif(is_transformers_version("<", "4.57"), reason="Qwen3-VL Eagle3 requires transformers >= 4.57")
+    def test_load_and_infer_with_vlm_eagle3_model(self, model_arch, model_pair):
         draft_model_id, target_model_id = model_pair
 
         ov_model = OVModelForCausalLM.from_pretrained(draft_model_id, export=True, trust_remote_code=True)
