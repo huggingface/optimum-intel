@@ -99,7 +99,12 @@ def infer_task(
             except KeyError as e:
                 try:
                     config = AutoConfig.from_pretrained(model_name_or_path)
-                    with_past_arch_list = ["MistralForCausalLM", "Zamba2ForCausalLM"]
+                    with_past_arch_list = [
+                        "MistralForCausalLM",
+                        "Zamba2ForCausalLM",
+                        "LlamaForCausalLMEagle3",
+                        "Eagle3LlamaForCausalLM",
+                    ]
                     if any(arch in config.architectures for arch in with_past_arch_list):
                         task = "text-generation-with-past"
                 except Exception:
