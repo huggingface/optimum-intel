@@ -5419,9 +5419,6 @@ class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
             preprocessors=preprocessors,
         )
         self._orig_config = config
-        if self._behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
-            self._config = config.vision_config
-            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:

@@ -4930,11 +4930,14 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         self.embed_dim = getattr(config, "mm_hidden_size", 1408)
         self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches + 1, self.embed_dim))
         self.img_pos_embed = nn.Parameter(torch.zeros(1, self.num_img_patches + 1, self.embed_dim))
+        # Adopted fromhttps://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L559
+        # pos_embed for video
         pos_embed = _OVVideoChatFlashQwenForCausalLM.get_3d_sincos_pos_embed(
             self.pos_embed.shape[-1], self.grid_size[1], self.grid_size[0], cls_token=True
         )
         self.pos_embed.data.copy_(pos_embed.to(dtype=self.pos_embed.dtype).unsqueeze(0))
 
+        # pos_embed for image
         img_pos_embed = _OVVideoChatFlashQwenForCausalLM.get_3d_sincos_pos_embed(
             self.pos_embed.shape[-1], self.grid_size[1], 1, cls_token=True
         )
@@ -5053,13 +5056,21 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
     # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L96
     def merge_tokens(self, x, target_num_token):
         r"""
-        x = torch.randn(10, 2560, c)
-        x = merge_tokens(x, r_merge_list=[1280])
+        Iteratively applies ToMe merging until visual tokens reach ``target_num_token``.
+
+        Args:
+            x (`torch.Tensor`): Visual tokens with shape ``[batch, num_tokens, channels]``.
+            target_num_token (`int`): Final token count after iterative merging.
+
+        Returns:
+            `torch.Tensor`: Merged tokens with shape ``[batch, target_num_token, channels]``.
         """
         size = None
         b, p, c = x.shape
         current_num_tokens = p
         # Number of tokens to merge at each iterative ToMe step until reaching target_num_token.
+        # We merge as much as possible at each step (up to half of current tokens),
+        # and use a smaller last step to hit the exact target.
         r_merge_list = []
         assert current_num_tokens > target_num_token, f"{current_num_tokens} should greater than {target_num_token}"
         while current_num_tokens != target_num_token:
@@ -5074,13 +5085,16 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         dim = c // head
         for r in r_merge_list:
+            # Build matching metric in [B, P, C_per_head] by averaging over heads.
             metric = x.reshape(b, p, head, dim).mean(2)  # [b, p, c//head]
             merge, _ = _OVVideoChatFlashQwenForCausalLM.bipartite_soft_matching(metric, r)
+            # merge_wavg maintains token-size-aware averaging across iterative merges.
             x, size = _OVVideoChatFlashQwenForCausalLM.merge_wavg(merge, x, size)
             _, p, _ = x.shape
 
         return x
 
+    # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L131
     def get_vision_projection(self, x, compress=False, local_num_frames=-1):
         height = width = self.image_size // self.patch_size
         assert height * width == x.shape[1]
@@ -5414,7 +5428,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         text_embed = torch.from_numpy(text_embed) if isinstance(text_embed, np.ndarray) else text_embed
         return text_embed
 
-    # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/modeling_videochat_flash.py#L183
+    # Modified from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/modeling_videochat_flash.py#L183
+    # When only input_ids are provided, call text_embeddings to convert input_ids to text embeddings and return. Do not output input_ids.
+    # Removed unused labels.
     def get_multimodal_embeddings(
         self,
         input_ids,
@@ -5725,10 +5741,12 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             num_new_tokens=num_new_tokens,
         )
 
+        # Vision inputs are only needed at the first step; later decoding uses cached states.
         model_kwargs.pop("images", None)
         model_kwargs.pop("image_sizes", None)
         past_len = self.language_model._past_length
         attn = model_kwargs.get("attention_mask")
+        # Keep mask length aligned with cached sequence length during incremental decoding.
         if attn is not None and attn.shape[1] < past_len + 1:
             model_kwargs["attention_mask"] = torch.ones(
                 (attn.shape[0], past_len + 1),
