@@ -99,7 +99,12 @@ def infer_task(
             except KeyError as e:
                 try:
                     config = AutoConfig.from_pretrained(model_name_or_path)
-                    with_past_arch_list = ["MistralForCausalLM", "Zamba2ForCausalLM"]
+                    with_past_arch_list = [
+                        "MistralForCausalLM",
+                        "Zamba2ForCausalLM",
+                        "LlamaForCausalLMEagle3",
+                        "Eagle3LlamaForCausalLM",
+                    ]
                     if any(arch in config.architectures for arch in with_past_arch_list):
                         task = "text-generation-with-past"
                 except Exception:
@@ -144,9 +149,20 @@ def update_config_for_eagle3(config):
     spec = importlib.util.find_spec(moduler_name)
     if spec and spec.origin:
         moduler_path = os.path.dirname(spec.origin)
+        # Use VLM-aware Eagle3 classes for models targeting VLM architectures
+        # (e.g. AngelSlim/Qwen3-VL-4B-Instruct_eagle3 with Eagle3LlamaForCausalLM).
+        is_vlm_eagle3 = getattr(config, "modal_type", "") == "VLM" or getattr(
+            config, "target_model_type", ""
+        ) in {"qwen2_vl", "qwen3_vl"}
+        if is_vlm_eagle3:
+            model_cls = "QwenVLEagle3Model"
+            causal_lm_cls = "QwenVLEagle3ForCausalLM"
+        else:
+            model_cls = "LlamaEagle3Model"
+            causal_lm_cls = "LlamaEagle3ForCausalLM"
         config.auto_map = {
-            "AutoModel": moduler_path + "--model_patcher.LlamaEagle3Model",
-            "AutoModelForCausalLM": moduler_path + "--model_patcher.LlamaEagle3ForCausalLM",
+            "AutoModel": moduler_path + f"--model_patcher.{model_cls}",
+            "AutoModelForCausalLM": moduler_path + f"--model_patcher.{causal_lm_cls}",
         }
     config.tie_word_embeddings = False
     return config
@@ -316,9 +332,10 @@ def main_export(
         quantization_config = getattr(config, "quantization_config", None)
         quant_method = quantization_config.get("quant_method", None) if quantization_config else None
 
-        # update config to load eagle3 models
+        # update config to load eagle3 models (both text-only and VLM variants)
         archs = getattr(config, "architectures", None)
-        if isinstance(archs, list) and len(archs) > 0 and archs[0] == "LlamaForCausalLMEagle3":
+        _eagle3_archs = {"LlamaForCausalLMEagle3", "Eagle3LlamaForCausalLM"}
+        if isinstance(archs, list) and len(archs) > 0 and archs[0] in _eagle3_archs:
             loading_kwargs["config"] = update_config_for_eagle3(config)
 
         # mxfp4 quantized model will be dequantized to bf16
