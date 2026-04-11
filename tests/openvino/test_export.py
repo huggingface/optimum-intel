@@ -99,7 +99,9 @@ class ExportModelTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.update({"cohere2": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.49"):
-        SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
+        SUPPORTED_ARCHITECTURES.update(
+            {"zamba2": OVModelForCausalLM, "videochat_flash_qwen": OVModelForVisualCausalLM}
+        )
 
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES.update({"granitemoehybrid": OVModelForCausalLM})
@@ -146,7 +148,7 @@ class ExportModelTest(unittest.TestCase):
             model_class = TasksManager.get_model_class_for_task(task, library=library_name)
             model = model_class(f"hf_hub:{model_name}", pretrained=True, exportable=True)
             TasksManager.standardize_model_attributes(model_name, model, library_name=library_name)
-        elif model_type == "llava":
+        elif model_type in ["llava", "videochat_flash_qwen"]:
             model = MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
                 model_name, **loading_kwargs
             )

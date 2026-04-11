@@ -7638,6 +7638,44 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                 del afmoe_moe.down_projs, afmoe_moe.gate_projs, afmoe_moe.up_projs
 
 
+class VideoChatFlashQwenVisionEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        # Modified from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L618
+        # Export keeps only one traced branch, while this model needs both image and video paths.
+        # We expose rotary_pos_emb as an input (instead of internal pos_embed/image_pos_embed) so the caller
+        # decides which positional embedding to pass for image vs video.
+        # This also simplifies internal logic that is not needed for the export path (like residual is always None and x_vis_only is always True in original model).
+        def forward_wrap(self, hidden_states, rotary_pos_emb):
+            hidden_states = self.patch_embed(hidden_states.type(self.dtype))
+            B, T, L, C = hidden_states.shape  # T: temporal; L: spatial
+            hidden_states = hidden_states.view([B, T * L, C])
+
+            # append cls token
+            cls_tokens = self.cls_token.expand(B, -1, -1)
+            hidden_states = torch.cat((cls_tokens, hidden_states), dim=1)
+            hidden_states = hidden_states + rotary_pos_emb
+            hidden_states = hidden_states.reshape(B, -1, C)
+
+            for idx, blk in enumerate(self.blocks):
+                hidden_states = blk(hidden_states, residual=None)
+
+            return hidden_states
+
+        model.forward = types.MethodType(forward_wrap, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
 # adopted from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/llama/modeling_llama.py#L197
 class LlamaEagle3Attention(LlamaAttention):
     """

@@ -63,6 +63,9 @@ TESTS_REQUIRE = [
     "vocos",
     "vector_quantize_pytorch",
     "openvino-genai",
+    "av",
+    "decord",
+    "imageio",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]

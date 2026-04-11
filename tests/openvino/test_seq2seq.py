@@ -556,10 +556,22 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         SUPPORT_VIDEO += ["qwen3_vl"]
 
     if is_transformers_version(">=", "4.54.0"):
+        # the layers attribute of DynamicCache is used in videochat_flash_qwen model
+        SUPPORTED_ARCHITECTURES.append("videochat_flash_qwen")
+        SUPPORT_VIDEO.append("videochat_flash_qwen")
         # remote code models differs after transformers v4.54
         SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"llava-qwen2", "phi3_v", "phi4mm"}
 
-    REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "minicpmo", "llava-qwen2", "phi3_v", "maira2", "phi4mm"]
+    REMOTE_CODE_MODELS = [
+        "internvl_chat",
+        "minicpmv",
+        "minicpmo",
+        "llava-qwen2",
+        "phi3_v",
+        "maira2",
+        "phi4mm",
+        "videochat_flash_qwen",
+    ]
     IMAGE = Image.open(
         requests.get(
             TEST_IMAGE_URL,
@@ -600,6 +612,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             from transformers import Qwen2VLForConditionalGeneration
 
             return Qwen2VLForConditionalGeneration
+        if model_arch == "videochat_flash_qwen":
+            from transformers import AutoModel
+
+            return AutoModel
         return AutoModelForCausalLM
 
     def _check_device_and_request(self, ov_model, expected_device, has_request):
@@ -630,11 +646,19 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
-        def compare_outputs(inputs, ov_model, transformers_model, generation_config):
+        def compare_outputs(inputs, ov_model, transformers_model, generation_config, has_image=False, has_video=True):
             transformers_inputs = copy.deepcopy(inputs)
+            if model_arch == "videochat_flash_qwen":
+                input_ids = transformers_inputs.pop("input_ids")
+                transformers_inputs["inputs"] = input_ids
+                transformers_inputs["modalities"] = []
+                if has_video:
+                    transformers_inputs["modalities"].append("video")
+                if has_image:
+                    transformers_inputs["modalities"].append("image")
             ov_outputs = ov_model.generate(**inputs, generation_config=generation_config)
             # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-            if model_arch in ["minicpmv", "minicpmo", "internvl_chat"]:
+            if model_arch in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
                 ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
             with torch.no_grad():
                 transformers_outputs = transformers_model.generate(
@@ -699,6 +723,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             from transformers.cache_utils import DynamicCache
 
             transformers_inputs["past_key_values"] = DynamicCache()
+        if model_arch == "videochat_flash_qwen":
+            input_ids = transformers_inputs.pop("input_ids")
+            transformers_inputs["inputs"] = input_ids
+            transformers_inputs["modalities"] = ["image"]
 
         test_device = "AUTO"
         ov_model.to(test_device)
@@ -711,7 +739,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         self._check_device_and_request(ov_model, test_device, False)
 
         # pytorch minicpmv and internvl_chat are not designed to be used via forward
-        if model_arch not in ["minicpmv", "minicpmo", "internvl_chat"]:
+        if model_arch not in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
             set_seed(SEED)
             ov_outputs = ov_model(**inputs)
             set_seed(SEED)
@@ -723,8 +751,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             )
 
         ov_model.generation_config.eos_token_id = None
-        transformers_model.generation_config.eos_token_id = None
-        transformers_model.generation_config.do_sample = False
+        # For videochat_flash_qwen, generation_config is None in transformers model, so we need to check it before setting eos_token_id
+        if transformers_model.generation_config is not None:
+            transformers_model.generation_config.eos_token_id = None
+            transformers_model.generation_config.do_sample = False
         ov_model.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
         ov_model.generation_config.do_sample = False
@@ -772,7 +802,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 transformers_outputs = transformers_outputs[1].sequences
 
         # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-        if model_arch in ["minicpmv", "minicpmo", "internvl_chat"]:
+        if model_arch in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
             ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
         self.assertTrue(
             torch.equal(ov_outputs, transformers_outputs),
@@ -799,7 +829,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
             # check video+image scenario
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video, image=image)
-            compare_outputs(inputs, ov_model, transformers_model, gen_config)
+            compare_outputs(inputs, ov_model, transformers_model, gen_config, has_image=True)
 
         if model_arch in self.SUPPORT_AUDIO:
             input_audio = self._generate_random_audio_data()
@@ -875,8 +905,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             model_id, export=True, trust_remote_code=trust_remote_code, device=OPENVINO_DEVICE
         )
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
-        question = "Describe image"
         preprocessors = self.get_preprocessors(model_arch)
+
+        question = "Describe image"
         inputs = model.preprocess_inputs(**preprocessors, text=question, image=self.IMAGE.resize((600, 600)))
         # General case
         outputs = model.generate(**inputs, max_new_tokens=10)
@@ -948,7 +979,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             preprocessors = {"processor": processor, "tokenizer": tokenizer, "config": config}
-        elif model_arch == "internvl_chat":
+        elif model_arch in ["internvl_chat", "videochat_flash_qwen"]:
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
