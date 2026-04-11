@@ -21,6 +21,7 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import (
     AutoConfig,
     AutoImageProcessor,
+    AutoModel,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
@@ -4804,14 +4805,15 @@ class _OVLlama4ForCausalLM(OVModelForVisualCausalLM):
 
 
 class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
-    from transformers import AutoModel
-
     auto_model_class = AutoModel
     additional_parts = ["vision_projection"]
+    # Copied from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/constants.py#L8
     IMAGE_TOKEN_INDEX = -200
+    # Copied from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/constants.py#L7
     IGNORE_INDEX = -100
 
-    # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L181
+    # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L181-L226
+    # Use torch instead of numpy to align with the other models.
     def get_3d_sincos_pos_embed(embed_dim, grid_size, t_size, cls_token=False):
         """
         grid_size: int of the grid height and width
@@ -4851,7 +4853,8 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             pos_embed = torch.cat([torch.zeros((1, embed_dim), dtype=pos_embed.dtype), pos_embed], dim=0)
         return pos_embed
 
-    # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L141
+    # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L141-L153
+    # Use torch instead of numpy to align with the other models.
     def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
         assert embed_dim % 2 == 0
         grid = grid if isinstance(grid, torch.Tensor) else torch.as_tensor(grid, dtype=torch.float32)
@@ -4867,7 +4870,8 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         emb = torch.cat([emb_h, emb_w], dim=1)  # (H*W, D)
         return emb
 
-    # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L156
+    # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L156-L174
+    # Use torch instead of numpy to align with the other models.
     def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
         """
         embed_dim: output dimension for each position
@@ -4917,7 +4921,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             **kwargs,
         )
         num_frames = getattr(config, "mm_local_num_frames", 8)
-        self.num_attention_heads = 16
+        # Here mm_num_attention_heads refers to the vision embedding model config. It is not set in config and uses the default value.
+        # It comes from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L728
+        self.mm_num_attention_heads = 16
         self.patch_size = 14
         self.image_size = 224
         self.grid_size = (
@@ -4943,7 +4949,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         )
         self.img_pos_embed.data.copy_(img_pos_embed.to(dtype=self.img_pos_embed.dtype).unsqueeze(0))
 
-    # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L6
+    # Copied from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L6
     def bipartite_soft_matching(
         metric: torch.Tensor,
         r: int,
@@ -5020,7 +5026,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         return merge, unmerge
 
-    # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L62
+    # Copied from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L62
     def merge_wavg(merge: Callable, x: torch.Tensor, size: torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Applies the merge function by taking a weighted average based on token size.
@@ -5053,7 +5059,8 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         return videos_features
 
-    # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L96
+    # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L96-L127
+    # Modified some variable names for better readability and added comments.
     def merge_tokens(self, x, target_num_token):
         r"""
         Iteratively applies ToMe merging until visual tokens reach ``target_num_token``.
@@ -5081,7 +5088,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                 r_merge_list.append(current_num_tokens // 2)
                 current_num_tokens = current_num_tokens - (current_num_tokens // 2)
 
-        head = self.num_attention_heads
+        head = self.mm_num_attention_heads
 
         dim = c // head
         for r in r_merge_list:
@@ -5094,7 +5101,8 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         return x
 
-    # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L131
+    # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L131-L150
+    # Replace self.mlp to self.vision_projection and modify the code accordingly.
     def get_vision_projection(self, x, compress=False, local_num_frames=-1):
         height = width = self.image_size // self.patch_size
         assert height * width == x.shape[1]
@@ -5117,7 +5125,8 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         x = torch.from_numpy(x) if isinstance(x, np.ndarray) else x
         return x
 
-    # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_utils.py#L797
+    # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_utils.py#L797
+    # Removed the unsupported error check.
     def tokenizer_image_token(prompt, tokenizer, image_token_index=IMAGE_TOKEN_INDEX, return_tensors=None):
         prompt_chunks = [tokenizer(chunk).input_ids for chunk in prompt.split("<image>")]
 
@@ -5137,7 +5146,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             return torch.tensor(input_ids, dtype=torch.long)
         return input_ids
 
-    # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L681
+    # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L681-L717
+    # Use torchvision instead of transformers.image_transforms for image processing, to align with other models.
+    # Simplify the output to be a single tensor instead of BatchFeature.
     def image_preprocess(images, target_size=None):
         from PIL import Image
         from torchvision.transforms.functional import InterpolationMode, normalize, pil_to_tensor, resize
@@ -5266,6 +5277,8 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         return results
 
+    # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/modeling_videochat_flash.py#L126-L179.
+    # Replace the vision embedding and vision projector submodels in the original model with the corresponding OV models.
     def encode_video_image(self, images_list, video_idx_in_batch):
         # process the video encoder output using image connector
         bs = len(images_list)
@@ -5335,7 +5348,8 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         return all_videos_or_images_features
 
-    # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_utils.py#L502-L537
+    # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_utils.py#L502-L537
+    # Use raise ValueError instead of assert.
     def select_best_resolution(original_size, possible_resolutions, max_resolutions, patch_size):
         """
         Selects the best resolution from a list of possible resolutions based on the original size.
@@ -5376,7 +5390,8 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             raise ValueError(f"Can't find suitable fit in {possible_resolutions} at max:{max_resolutions}")
         return best_fit
 
-    # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_utils.py#L601-L631
+    # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_utils.py#L601-L631
+    # Follow the coding convention by using isinstance for type checks, and replace the ast.literal_eval with regex for parsing the grid pinpoints string.
     def get_anyres_image_grid_shape(image_size, grid_pinpoints, patch_size, max_resolutions=None):
         """
         Calculate the shape of the image patch grid after the preprocessing for images of any resolution.
@@ -5428,7 +5443,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         text_embed = torch.from_numpy(text_embed) if isinstance(text_embed, np.ndarray) else text_embed
         return text_embed
 
-    # Modified from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/modeling_videochat_flash.py#L183
+    # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/modeling_videochat_flash.py#L183-L487
     # When only input_ids are provided, call text_embeddings to convert input_ids to text embeddings and return. Do not output input_ids.
     # Removed unused labels.
     def get_multimodal_embeddings(

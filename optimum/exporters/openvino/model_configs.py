@@ -5319,12 +5319,14 @@ class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
         **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, visual_seq_length, **kwargs)
-        self.num_frames = getattr(normalized_config.config, "mm_local_num_frames", 4)
-        self.embed_dim = getattr(normalized_config.config, "mm_hidden_size", 1408)
+        self.num_frames = normalized_config.config.mm_local_num_frames
+        self.embed_dim = normalized_config.config.mm_hidden_size
         # Then input image size and patch size for the vision encoder can not be got from the config, we set them to fixed values according to the original implementation.
+        # image_size is not set in config and uses the default value from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L786
         self.height = 224
         self.width = 224
         self.image_size = (self.height, self.width)
+        # patch size is not set in config and uses the default value from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L731
         self.patch_size = 14
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
@@ -5343,6 +5345,9 @@ class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
         elif input_name == "rotary_pos_emb":
             grid_h, grid_w = self.height // self.patch_size, self.width // self.patch_size
             grid_t = self.num_frames
+            # Source: https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L523
+            # The first dimension of rotary_pos_emb is fixed to 1 in the original model.
+            # And the second dimension is the total number of tokens for all frames, which is calculated as grid_h * grid_w * grid_t plus 1 for the cls token.
             return self.random_float_tensor(
                 [1, 1 + grid_h * grid_t * grid_w, self.embed_dim], framework=framework, dtype=float_dtype
             )
@@ -5362,7 +5367,8 @@ class DummyVideoChatFlashQwenProjectorInputGenerator(DummyInputGenerator):
         self.task = task
         self.batch_size = batch_size
         self.hidden_size = normalized_config.config.mm_hidden_size
-        # The original implementation with projector_type 'tome16_mlp_hd64' uses a fixed number of patches (64).
+        # num_patches=64 comes from the upstream projector_type "tome16_mlp_hd64", which uses a fixed 64-token output.
+        # Source: https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L135-L146
         self.num_patches = 64
         self.normalized_config = normalized_config
 
@@ -5396,7 +5402,7 @@ class VideoChatFlashQwenConfigBehavior(str, enum.Enum):
 @register_in_tasks_manager("videochat_flash_qwen", *["image-text-to-text"], library_name="transformers")
 class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.49.0"
-    MAX_TRANSFORMERS_VERSION = "4.57.99"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in VideoChatFlashQwenConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVideoChatFlashQwenInputGenerator,)
 
