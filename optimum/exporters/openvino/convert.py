@@ -78,7 +78,6 @@ from .utils import (
     set_simplified_chat_template,
 )
 
-
 logger = logging.getLogger(__name__)
 
 if is_torch_available():
@@ -998,7 +997,15 @@ def _get_submodels_and_export_configs(
         and model.config.model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
     ):
         return _get_multi_modal_submodels_and_export_configs(
-            model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful, trust_remote_code=trust_remote_code
+            model,
+            task,
+            library_name,
+            int_dtype,
+            float_dtype,
+            preprocessors,
+            model_kwargs,
+            stateful,
+            trust_remote_code=trust_remote_code,
         )
     elif not custom_architecture and library_name == "transformers" and model.config.model_type == "speecht5":
         return _get_speecht5_tss_model_for_export(
