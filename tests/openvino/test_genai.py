@@ -223,11 +223,6 @@ class LLMPipelineTestCase(unittest.TestCase):
         "decilm",
         "minicpm3",
         "deepseek",
-        "xglm",
-        "granitemoe",
-        "granite",
-        "llama4",
-        "zamba2",
     )
     NO_CACHE_MODELS = (  # mostly remote that are broken with past key values
         "aquila",
