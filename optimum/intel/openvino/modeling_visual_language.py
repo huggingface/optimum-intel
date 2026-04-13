@@ -4920,7 +4920,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             quantization_config=quantization_config,
             **kwargs,
         )
-        num_frames = getattr(config, "mm_local_num_frames", 8)
+        num_frames = config.mm_local_num_frames
         # Here mm_num_attention_heads refers to the vision embedding model config. It is not set in config and uses the default value.
         # It comes from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L728
         self.mm_num_attention_heads = 16
@@ -4933,7 +4933,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         )  # (T, H, W)
         self.num_patches = self.grid_size[0] * self.grid_size[1] * self.grid_size[2]
         self.num_img_patches = self.grid_size[1] * self.grid_size[2]
-        self.embed_dim = getattr(config, "mm_hidden_size", 1408)
+        self.embed_dim = config.mm_hidden_size
         self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches + 1, self.embed_dim))
         self.img_pos_embed = nn.Parameter(torch.zeros(1, self.num_img_patches + 1, self.embed_dim))
         # Adopted fromhttps://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L559
@@ -5201,7 +5201,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         image_sizes = []
         frames = []
         results = {}
-        local_num_frames = getattr(config, "mm_local_num_frames", 4)
+        local_num_frames = config.mm_local_num_frames
 
         # preprocess text
         prompt = f"<image>\n{text}" if (image is not None or video is not None) else text
