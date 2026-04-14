@@ -106,7 +106,15 @@ def infer_task(
                         "Eagle3LlamaForCausalLM",
                     ]
                     if any(arch in config.architectures for arch in with_past_arch_list):
-                        task = "text-generation-with-past"
+                        # VLM Eagle3 models (targeting VLM architectures like Qwen3-VL)
+                        # should use image-text-to-text task for proper inputs_embeds/3D position_ids export.
+                        if "Eagle3LlamaForCausalLM" in config.architectures and (
+                            getattr(config, "modal_type", "") == "VLM"
+                            or getattr(config, "target_model_type", "") in {"qwen2_vl", "qwen3_vl"}
+                        ):
+                            task = "image-text-to-text"
+                        else:
+                            task = "text-generation-with-past"
                 except Exception:
                     raise KeyError(
                         f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"

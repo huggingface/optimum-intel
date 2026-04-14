@@ -7911,30 +7911,136 @@ if is_transformers_version(">=", "4.57"):
         Extends LlamaEagle3Model by replacing the standard rotary embedding with
         Qwen3VLTextRotaryEmbedding, which supports interleaved multimodal RoPE
         (MRoPE). This allows the draft model to handle position IDs compatible
-        with Qwen3-VL target models. Standard 2D position_ids are accepted and
-        expanded internally to 3D (T/H/W) by the rotary embedding.
+        with Qwen3-VL target models.
+
+        The forward signature is redefined to accept ``inputs_embeds`` as the
+        primary input (instead of ``input_ids``). This is critical because the
+        TorchScript tracer uses ``inspect.signature(model.forward)`` to determine
+        input parameter names and ordering. By removing ``input_ids`` from the
+        signature entirely, the traced/converted OpenVINO model will have
+        ``inputs_embeds`` as an explicit input (float32 3D tensor).
+
+        ``position_ids`` is kept as 3D ``[3, batch, seq]`` for MRoPE without
+        flattening.
         """
 
         def __init__(self, config: LlamaConfig):
             super().__init__(config)
             # Replace standard rotary embedding with VLM-aware MRoPE embedding.
-            # Qwen3VLTextRotaryEmbedding.forward accepts both 2D [bs, seq] and
-            # 3D [3, bs, seq] position_ids and produces standard [bs, seq, head_dim]
-            # cos/sin outputs that are compatible with apply_rotary_pos_emb.
             self.rotary_emb = Qwen3VLTextRotaryEmbedding(config=config)
+
+        def forward(
+            self,
+            inputs_embeds: Optional[torch.FloatTensor] = None,
+            hidden_states: Optional[torch.FloatTensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            position_ids: Optional[torch.LongTensor] = None,
+            past_key_values: Optional[Cache] = None,
+            use_cache: Optional[bool] = None,
+            cache_position: Optional[torch.LongTensor] = None,
+            **kwargs,
+        ) -> BaseModelOutputWithPast:
+            batch_size, seq_length, _ = hidden_states.shape
+            use_cache = use_cache if use_cache is not None else self.config.use_cache
+
+            if use_cache and past_key_values is None:
+                past_key_values = DynamicCache(config=self.config)
+
+            if cache_position is None:
+                past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+                cache_position = torch.arange(
+                    past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
+                )
+
+            if position_ids is None:
+                position_ids = cache_position.unsqueeze(0)
+
+            causal_mask = create_causal_mask(
+                config=self.config,
+                input_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                cache_position=cache_position,
+                past_key_values=past_key_values,
+                position_ids=position_ids,
+            )
+
+            if hidden_states is None:
+                hidden_states = torch.zeros(
+                    [batch_size, seq_length, self.hidden_size],
+                    dtype=inputs_embeds.dtype,
+                    device=inputs_embeds.device,
+                )
+
+            inputs_embeds = inputs_embeds.to(hidden_states.dtype)
+            if hidden_states.shape[-1] != inputs_embeds.shape[-1]:
+                hidden_states = self.fc(hidden_states)
+
+            position_embeddings = self.rotary_emb(hidden_states, position_ids=position_ids)
+
+            hidden_states = self.midlayer(
+                input_emb=inputs_embeds,
+                hidden_states=hidden_states,
+                attention_mask=causal_mask,
+                position_embeddings=position_embeddings,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                use_cache=True,
+            )
+
+            hidden_states = self.norm(hidden_states)
+            return BaseModelOutputWithPast(
+                last_hidden_state=hidden_states,
+                past_key_values=past_key_values,
+            )
 
     class QwenVLEagle3ForCausalLM(LlamaEagle3ForCausalLM):
         """
         Eagle-3 causal LM with Qwen3-VL MRoPE for VLM speculative decoding.
 
-        Uses QwenVLEagle3Model as the underlying model, enabling speculative
-        decoding with Qwen3-VL target models via the AngelSlim Eagle3 architecture
-        (Eagle3LlamaForCausalLM).
+        Uses QwenVLEagle3Model as the underlying model. The forward signature
+        is redefined to accept ``inputs_embeds`` instead of ``input_ids``,
+        ensuring the TorchScript tracer produces an OpenVINO model with
+        ``inputs_embeds`` as a named input parameter.
         """
 
         def __init__(self, config):
             super().__init__(config)
             self.model = QwenVLEagle3Model(config)
+
+        def forward(
+            self,
+            inputs_embeds: Optional[torch.FloatTensor] = None,
+            hidden_states: Optional[torch.FloatTensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            position_ids: Optional[torch.LongTensor] = None,
+            past_key_values: Optional[Cache] = None,
+            use_cache: Optional[bool] = None,
+            cache_position: Optional[torch.LongTensor] = None,
+            logits_to_keep: Union[int, torch.Tensor] = 0,
+            **kwargs,
+        ) -> Eagle3Output:
+            outputs: BaseModelOutputWithPast = self.model(
+                inputs_embeds=inputs_embeds,
+                hidden_states=hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                cache_position=cache_position,
+                **kwargs,
+            )
+
+            hidden_states = outputs.last_hidden_state
+            slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+            logits = self.model.lm_head(hidden_states[:, slice_indices, :])
+
+            d2t_out = self.identity(self.model.d2t)
+            return Eagle3Output(
+                logits=logits,
+                past_key_values=outputs.past_key_values,
+                hidden_states=outputs.hidden_states,
+                d2t=d2t_out,
+            )
 
 
 # Patched implementation of the gated delta rule in recurrent form.
