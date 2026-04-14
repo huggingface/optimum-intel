@@ -7649,7 +7649,7 @@ class VideoChatFlashQwenVisionEmbeddingModelPatcher(ModelPatcher):
     ):
         model.__orig_forward = model.forward
 
-        # Modified from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L618
+        # Modified from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L618-L675
         # Export keeps only one traced branch, while this model needs both image and video paths.
         # We expose rotary_pos_emb as an input (instead of internal pos_embed/image_pos_embed) so the caller
         # decides which positional embedding to pass for image vs video.

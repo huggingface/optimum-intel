@@ -4924,7 +4924,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         # Here mm_num_attention_heads refers to the vision embedding model config. It is not set in config and uses the default value.
         # It comes from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L728
         self.mm_num_attention_heads = 16
+        # patch size is not set in config and uses the default value from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L731
         self.patch_size = 14
+        # image_size is not set in config and uses the default value from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L786
         self.image_size = 224
         self.grid_size = (
             num_frames,
@@ -4948,6 +4950,14 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             self.pos_embed.shape[-1], self.grid_size[1], 1, cls_token=True
         )
         self.img_pos_embed.data.copy_(img_pos_embed.to(dtype=self.img_pos_embed.dtype).unsqueeze(0))
+
+        if "unpad" in getattr(config, "mm_patch_merge_type", ""):
+            self.image_newline = nn.Parameter(torch.empty(config.hidden_size, dtype=self.dtype))
+        if (
+            "nopad" in getattr(config, "mm_patch_merge_type", "")
+            and getattr(self.config, "mm_newline_position", "nothing") != "nothing"
+        ):
+            self.frame_newline = nn.Parameter(torch.empty(config.hidden_size, dtype=self.dtype))
 
     # Copied from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L6
     def bipartite_soft_matching(
@@ -5159,8 +5169,10 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             images = list(images)
 
         if target_size is None:
+            # use default image_size from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L682
             target_size = (224, 224)
 
+        # use default image_mean and image_std from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L682
         image_mean = (0.485, 0.456, 0.406)
         image_std = (0.229, 0.224, 0.225)
 
@@ -5271,7 +5283,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         if tokenizer.pad_token_id is None:
             if "qwen" in tokenizer.name_or_path.lower():
                 logger.info("Setting pad token to bos token for qwen model.")
-                tokenizer.pad_token_id = 151643
+                tokenizer.pad_token_id = tokenizer.bos_token_id
         attention_masks = input_ids.ne(tokenizer.pad_token_id).long()
         results["attention_mask"] = attention_masks
 
@@ -5290,16 +5302,14 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                 concat_videos.append(image)
             else:
                 concat_images.append(image)
-        # print(concat_videos[0].shape)
         has_image = len(concat_images) > 0
         has_video = len(concat_videos) > 0
 
-        mm_local_num_frames = getattr(self.config, "mm_local_num_frames", -1)
+        mm_local_num_frames = self.config.mm_local_num_frames
         assert mm_local_num_frames != -1
         if has_image:
             image_split_sizes = [image.shape[0] for image in concat_images]
             concat_images = torch.cat([image.unsqueeze(1) for image in concat_images], dim=0)
-            # print("input vit image.shape:", concat_images.shape)
             images_features = self.get_vision_embeddings(concat_images)  # B_i, N, D
             images_features = torch.split(images_features, image_split_sizes)
 
@@ -5318,7 +5328,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                 ],
                 dim=0,
             )
-            # print("input vit video.shape:", concat_videos.shape)
             videos_features = self.get_vision_embeddings(concat_videos)  # B_v, N, D
             videos_features = [
                 v.reshape(-1, v.shape[-2] // mm_local_num_frames, v.shape[-1])
@@ -5338,7 +5347,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             else:
                 feat = self.get_vision_projection(images_features[img_idx], compress=False)
                 img_idx += 1
-            # print("video_idx_in_batch:", video_idx_in_batch)
             all_videos_or_images_features.append(feat)
 
         if has_video:
@@ -5385,7 +5393,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                 min_wasted_resolution = wasted_resolution
                 best_fit = (width, height)
 
-        # print(f"original_size={original_size}, possible_resolutions={possible_resolutions}, max_resolutions={max_resolutions}, best_fit={best_fit}")
         if best_fit is None:
             raise ValueError(f"Can't find suitable fit in {possible_resolutions} at max:{max_resolutions}")
         return best_fit
@@ -5462,7 +5469,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             inputs_embeds = self.get_text_embeddings(input_ids)
             return inputs_embeds, attention_mask, position_ids
 
-        # rank_print(modalities)
         if isinstance(images, list):
             images = [x.unsqueeze(0) if x.ndim == 3 else x for x in images]
             if modalities is None:
@@ -5508,18 +5514,17 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                             frame_feature = frame_feature.flatten(0, 1)
                             if "unpad" in mm_patch_merge_type:
                                 frame_feature = torch.cat(
-                                    (frame_feature, self.model.image_newline[None].to(frame_feature.device)), dim=0
+                                    (frame_feature, self.image_newline[None].to(frame_feature.device)), dim=0
                                 )
                             else:
                                 frame_feature = torch.cat(
-                                    (frame_feature, self.model.frame_newline[None].to(frame_feature.device)), dim=0
+                                    (frame_feature, self.frame_newline[None].to(frame_feature.device)), dim=0
                                 )
                         elif mm_newline_position == "nothing":
                             frame_feature = frame_feature.flatten(0, 1)
                     else:
                         frame_feature = frame_feature.flatten(0, 1)
 
-                    # print(f"final video frame_feature.shape: {frame_feature.shape}")
                     image_feature = frame_feature
 
                 elif image_feature.shape[0] > 1:  # multi patches and multi images operations
@@ -5555,7 +5560,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                 else:  # single image operations
                     image_feature = image_feature[0]
                     if "unpad" in mm_patch_merge_type:
-                        image_feature = torch.cat((image_feature, self.model.image_newline[None]), dim=0)
+                        image_feature = torch.cat((image_feature, self.image_newline[None]), dim=0)
 
                 new_image_features.append(image_feature)
             image_features = new_image_features
@@ -5584,24 +5589,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         mm_llm_compress = getattr(self.config, "mm_llm_compress", False)
 
-        if mm_llm_compress:
-            self.language_model.model.llm_compress_type = getattr(self.config, "llm_compress_type", "attention")
-            self.language_model.model.llm_compress_layer_list = getattr(
-                self.config, "llm_compress_layer_list", [8, 16, 24]
-            )
-            self.language_model.model.llm_image_token_ratio_list = getattr(
-                self.config, "llm_image_token_ratio_list", [1.0, 0.5, 0.25, 0.125]
-            )
-            first_image_token_position = []
-            text_prompt_lens = []
-        else:
-            self.language_model.model.llm_compress_type = "attention"
-            self.language_model.model.llm_compress_layer_list = []
-            self.language_model.model.llm_image_token_ratio_list = []
-            first_image_token_position = []
-            text_prompt_lens = []
-
-        # rank_print("Inserting Images embedding")
         for batch_idx, cur_input_ids in enumerate(input_ids):
             num_images = (cur_input_ids == _OVVideoChatFlashQwenForCausalLM.IMAGE_TOKEN_INDEX).sum()
 
@@ -5612,10 +5599,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                     0
                 ].tolist()
                 assert len(image_index) == 1, f"Only support singe/video: {image_index}"
-                if image_index == []:
-                    first_image_token_position.append(-1)
-                else:
-                    first_image_token_position.append(image_index[0])
 
                 # record input instruction length in inference mode
                 if not self.training:
@@ -5623,11 +5606,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                         assert num_images == 0, num_images
                     else:
                         assert num_images == 1, f"num_images={num_images}"
-                    text_prompt_lens.append(cur_input_ids.shape[0] - num_images)  # consider image place holder
 
-                ###############################################
-
-            # print(f"num_images={num_images}")
             if num_images == 0:
                 cur_image_features = image_features[cur_image_idx]
                 cur_input_embeds_1 = self.get_text_embeddings(cur_input_ids)
@@ -5652,31 +5631,22 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             for i in range(num_images + 1):
                 cur_new_input_embeds.append(cur_input_embeds_no_im[i])
                 if i < num_images:
-                    try:
+                    if cur_image_idx >= len(image_features):
+                        logger.warning_once(f"cur_image_idx={cur_image_idx} is out of range")
+                        cur_image_features = image_features[-1]
+                    else:
                         cur_image_features = image_features[cur_image_idx]
-                    except IndexError:
-                        print(f"cur_image_idx={cur_image_idx} is not ok")
-                        cur_image_features = image_features[cur_image_idx - 1]
                     cur_image_idx += 1
                     cur_new_input_embeds.append(cur_image_features)
 
             cur_new_input_embeds = [x.to(self.device) for x in cur_new_input_embeds]
 
-            # import pdb; pdb.set_trace()
             cur_new_input_embeds = torch.cat(cur_new_input_embeds)
 
             new_input_embeds.append(cur_new_input_embeds)
 
-        if mm_llm_compress:
-            self.language_model.model.first_image_token_position = first_image_token_position
-            self.language_model.model.text_prompt_lens = text_prompt_lens
-            self.language_model.model.num_image_token_lens = [
-                image_feature.shape[0] for image_feature in image_features
-            ]
-
         # Truncate sequences to max length as image embeddings can make the sequence longer
         tokenizer_model_max_length = getattr(self.config, "tokenizer_model_max_length", None)
-        # rank_print("Finishing Inserting")
 
         new_input_embeds = [x[:tokenizer_model_max_length] for x in new_input_embeds]
 
@@ -5687,7 +5657,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         new_input_embeds_padded = []
         attention_mask = torch.zeros((batch_size, max_len), dtype=attention_mask.dtype, device=attention_mask.device)
         position_ids = torch.zeros((batch_size, max_len), dtype=position_ids.dtype, device=position_ids.device)
-        # print("Prepare pos id")
 
         for i, cur_new_embed in enumerate(new_input_embeds):
             cur_len = cur_new_embed.shape[0]
