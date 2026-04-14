@@ -29,7 +29,17 @@ class OVSentenceTransformer(SentenceTransformer):
     @classmethod
     def from_pretrained(cls, model_name_or_path: str, **kwargs) -> "OVSentenceTransformer":
         model_kwargs = kwargs.pop("model_kwargs", {})
-        for key in ("export", "ov_config", "device", "file_name"):
+        for key in (
+            "export",
+            "ov_config",
+            "device",
+            "file_name",
+            "quantization_config",
+            "compile_only",
+            "compile",
+            "load_in_8bit",
+            "dynamic_shapes",
+        ):
             if key in kwargs:
                 model_kwargs[key] = kwargs.pop(key)
         return cls(model_name_or_path, model_kwargs=model_kwargs, **kwargs)
