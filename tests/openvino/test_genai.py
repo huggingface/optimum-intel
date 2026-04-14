@@ -156,9 +156,7 @@ class LLMPipelineTestCase(unittest.TestCase):
         echo = model_arch not in self.NO_ECHO_MODELS
         use_cache = model_arch not in self.NO_CACHE_MODELS
         trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
-        # 🔥 DEBUG: force for xglm
-        if model_arch == "xglm":
-            trust_remote_code = True
+
         set_seed(42)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=trust_remote_code).eval()
 
