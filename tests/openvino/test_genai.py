@@ -172,7 +172,7 @@ class LLMPipelineTestCase(unittest.TestCase):
             optimum_model = OVModelForCausalLM.from_pretrained(
                 tmpdirname, trust_remote_code=trust_remote_code, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
             )
-            genai_model = LLMPipeline(tmpdirname, device=OPENVINO_DEVICE, **F32_CONFIG, trust_remote_code=trust_remote_code)
+            genai_model = LLMPipeline(tmpdirname, device=OPENVINO_DEVICE, **F32_CONFIG)
 
         prompt = "Paris is the capital of"
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
