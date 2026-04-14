@@ -3562,6 +3562,14 @@ class DummyQwen2VLLMInputGenerator(DummyTextInputGenerator):
         return generated_input
 
 
+class DummyQwen3_5LMInputGenerator(DummyTextInputGenerator):
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        generated_input = super().generate(input_name, framework, int_dtype, float_dtype)
+        if input_name == "position_ids":
+            return generated_input.unsqueeze(0).expand(4, -1, -1)
+        return generated_input
+
+
 class DummyQwen2VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = (
         "hidden_states",
@@ -5610,6 +5618,7 @@ class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
         common_inputs = {
             "input_ids": {0: "batch_size", 1: "sequence_length"},
             "attention_mask": {0: "batch_size", 1: "sequence_length"},
+            "position_ids": {0: "batch_size", 1: "sequence_length"},
         }
         if self.use_past_in_inputs:
             self.add_past_key_values(common_inputs, direction="inputs")
@@ -5700,8 +5709,8 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
                 self.int_dtype,
                 self.float_dtype,
                 model_patcher=Qwen3_5ModelPatcher,
-                #dummy_input_generator=DummyQwen2VLLMInputGenerator,
-                #inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                dummy_input_generator=DummyQwen3_5LMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
             )
 
         if behavior in (
@@ -5788,6 +5797,8 @@ class Qwen3_5MoeOpenVINOConfig(Qwen3_5OpenVINOConfig):
                 self.int_dtype,
                 self.float_dtype,
                 model_patcher=Qwen3_5MoeModelPatcher,
+                dummy_input_generator=DummyQwen3_5LMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
             )
 
         if behavior in (

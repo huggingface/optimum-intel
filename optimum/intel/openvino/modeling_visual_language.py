@@ -188,9 +188,11 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
                 position_ids = np.cumsum(attention_mask, axis=1) - 1
                 position_ids[attention_mask == 0] = 1
             if past_len:
-                position_ids = position_ids[:, -inputs_embeds.shape[1] :]
+                position_ids = position_ids[..., -inputs_embeds.shape[1] :]
 
-            if (self.config.model_type in ["qwen2_vl", "qwen3_vl", "qwen3_5", "qwen3_5_moe"]) and position_ids.ndim != 3:
+            if self.config.model_type in ["qwen3_5", "qwen3_5_moe"] and position_ids.ndim != 3:
+                position_ids = np.repeat(np.expand_dims(position_ids, 0), 4, axis=0)
+            elif self.config.model_type in ["qwen2_vl", "qwen3_vl"] and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
 
             inputs["position_ids"] = position_ids
@@ -3445,6 +3447,7 @@ else:
     class Qwen3_5VisionModel:
         pass
 
+
 if is_transformers_version(">=", "5.2.0"):
     from transformers.models.qwen3_5.modeling_qwen3_5 import (
         Qwen3_5Model,
@@ -3475,6 +3478,7 @@ else:
 
     class Qwen3_5MoeVisionModel:
         pass
+
 
 # The inheritance from Qwen3VLModel is needed to get access to methods:
 # get_placeholder_mask(): https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1066
@@ -5089,14 +5093,25 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM, Qwen3_5Model, Qwen3_5Visio
         if position_ids is None and input_ids is not None and (attention_mask is None or attention_mask.ndim == 2):
             # calculate RoPE index once per generation in the pre-fill stage only
             if (cache_position is not None and cache_position[0] == 0) or self.rope_deltas is None:
-                # Construct mm_token_type_ids from input_ids
-                mm_token_type_ids = torch.zeros_like(input_ids, dtype=torch.int)
-                mm_token_type_ids[input_ids == self.config.image_token_id] = 1
-                mm_token_type_ids[input_ids == self.config.video_token_id] = 2
-                position_ids, rope_deltas = self.get_rope_index(
-                    input_ids, mm_token_type_ids, image_grid_thw, video_grid_thw, attention_mask
+                vision_positions, rope_deltas = self.get_rope_index(
+                    input_ids,
+                    image_grid_thw=image_grid_thw,
+                    video_grid_thw=video_grid_thw,
+                    attention_mask=attention_mask,
                 )
                 self.rope_deltas = rope_deltas
+                # Compute text positions (simple cumsum) and concatenate as dim 0
+                # to create shape (4, batch, seq_len): [text_pos, temporal, height, width]
+                if attention_mask is not None:
+                    text_positions = attention_mask.long().cumsum(-1) - 1
+                    text_positions = text_positions.masked_fill(attention_mask == 0, 1)
+                else:
+                    text_positions = (
+                        torch.arange(input_ids.shape[1], device=input_ids.device)
+                        .unsqueeze(0)
+                        .expand(input_ids.shape[0], -1)
+                    )
+                position_ids = torch.cat([text_positions.unsqueeze(0), vision_positions], dim=0)
             # then use the prev pre-calculated rope-deltas to get the correct position ids
             else:
                 batch_size, seq_length, _ = inputs_embeds.shape
@@ -5107,6 +5122,12 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM, Qwen3_5Model, Qwen3_5Visio
                     delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
                 position_ids = position_ids.add(delta)
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+                # Prepend text positions for shape (4, batch, seq_len)
+                text_positions = torch.arange(seq_length, device=inputs_embeds.device)
+                text_positions = text_positions.view(1, -1).expand(batch_size, -1)
+                if cache_position is not None:
+                    text_positions = text_positions + cache_position[0]
+                position_ids = torch.cat([text_positions.unsqueeze(0), position_ids], dim=0)
 
         return inputs_embeds, attention_mask, position_ids
 
@@ -5179,6 +5200,30 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM, Qwen3_5Model, Qwen3_5Visio
             logits=result.logits, past_key_values=result.past_key_values, rope_deltas=rope_deltas
         )
         return final_result
+
+    def _prepare_position_ids_for_generation(self, inputs_tensor, model_kwargs):
+        # Mirrors Qwen3_5ForConditionalGeneration._prepare_position_ids_for_generation
+        # Creates proper 4D position_ids: [text_positions, temporal, height, width]
+        text_positions = GenerationMixin._prepare_position_ids_for_generation(self, inputs_tensor, model_kwargs)
+
+        if "input_ids" in model_kwargs and model_kwargs["input_ids"].shape[1] > 0:
+            inputs_tensor = model_kwargs["input_ids"]
+
+        is_input_ids = len(inputs_tensor.shape) == 2 and inputs_tensor.dtype in [torch.int, torch.long]
+        if is_input_ids and (
+            model_kwargs.get("image_grid_thw") is not None or model_kwargs.get("video_grid_thw") is not None
+        ):
+            filtered_kwargs = {k: v for k, v in model_kwargs.items() if k != "input_ids"}
+            vision_positions, rope_deltas = self.get_rope_index(inputs_tensor, **filtered_kwargs)
+            self.rope_deltas = rope_deltas
+        else:
+            vision_positions = text_positions.unsqueeze(0).expand(3, -1, -1)
+            self.rope_deltas = torch.zeros(inputs_tensor.shape[0], 1, dtype=torch.long, device=inputs_tensor.device)
+
+        # Concatenate "text + vision" positions into [4, bs, seq-len]
+        text_positions = text_positions[None, ...]
+        position_ids = torch.cat([text_positions, vision_positions], dim=0)
+        return position_ids
 
     def generate(self, *args, **kwargs):
         # Clear cached rope delta from previous generations

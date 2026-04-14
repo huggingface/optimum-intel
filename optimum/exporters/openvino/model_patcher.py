@@ -8723,7 +8723,9 @@ class Qwen3_5VisionEmbMergerPatcher(ModelPatcher):
             emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
             position_embeddings = (emb.cos(), emb.sin())
             for blk in self.blocks:
-                hidden_states = blk(hidden_states, attention_mask=attention_mask, position_embeddings=position_embeddings)
+                hidden_states = blk(
+                    hidden_states, attention_mask=attention_mask, position_embeddings=position_embeddings
+                )
             return self.merger(hidden_states)
 
         model.forward = types.MethodType(image_embed_forward, model)
@@ -8807,4 +8809,3 @@ class Qwen3_5MoeModelPatcher(Qwen3_5ModelPatcher):
                 sparse_moe_block = decoder_layer.mlp
                 sparse_moe_block.forward = sparse_moe_block._orig_forward
                 del sparse_moe_block.gate_projs, sparse_moe_block.up_projs, sparse_moe_block.down_projs
-
