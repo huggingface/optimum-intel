@@ -1744,15 +1744,6 @@ class PhiMoEModelPatcher(Phi3ModelPatcher):
                 "long_mscale", None
             )
 
-        if is_transformers_version("<", "5"):
-            for layer in self._model.model.layers:
-                layer.block_sparse_moe._orig_forward = layer.block_sparse_moe.forward
-                layer.block_sparse_moe.forward = types.MethodType(
-                    _phi_moe_sparse_moe_block_forward, layer.block_sparse_moe
-                )
-        else:
-            self._model.set_experts_implementation("batched_mm")
-
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
