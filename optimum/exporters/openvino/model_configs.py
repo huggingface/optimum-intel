@@ -288,6 +288,16 @@ def init_model_configs():
         "AutoModelForImageTextToText",
     )
 
+    # Add support for Qwen3-VL-Embedding
+    TasksManager._CUSTOM_CLASSES[("pt", "qwen3_vl", "feature-extraction")] = (
+        "transformers",
+        "Qwen3VLForConditionalGeneration",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "qwen3_vl", "image-text-to-text")] = (
+        "transformers",
+        "Qwen3VLForConditionalGeneration",
+    )
+
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["fill"] = {"flux": "FluxFillPipeline"}
@@ -450,6 +460,33 @@ class DummyQwen3VLLMInputGenerator(DummyTextInputGenerator):
             )
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
+class DummyQwen3VLInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "image_grid_thw")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            # For Qwen3-VL-Embedding, the input shape is [batch_size, 3, 2, 16, 16]
+            return self.random_float_tensor(
+                [self.batch_size, 3, 2, 16, 16], framework=framework, dtype=float_dtype
+            )
+        if input_name == "image_grid_thw":
+            # For Qwen3-VL-Embedding, the input shape is [num_images, 3]
+            return self.random_int_tensor(
+                [1, 3], min_value=1, max_value=16, framework=framework, dtype=int_dtype
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
 
 @register_in_tasks_manager(
     "qwen3_vl_text",
@@ -1898,6 +1935,154 @@ class BaseVLMOpenVINOConfig(OnnxConfig):
             return super().patch_model_for_export(model, model_kwargs)
         return CommonImageEmbeddingsModelPatcher(self, model, model_kwargs)
 
+@register_in_tasks_manager(
+    "qwen3_vl",
+    *[
+        "feature-extraction",
+        "image-text-to-text",
+    ],
+    library_name="transformers",
+)
+class Qwen3VLOpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    SUPPORTS_PAST = True
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if not self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {
+            "pixel_values": {0: "batch_size", 1: "channels", 2: "temporal_patch_size", 3: "patch_height", 4: "patch_width"},
+            "image_grid_thw": {0: "num_images", 1: "3"}
+        }
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        # For feature-extraction task, we need to generate inputs for get_image_features method
+        import torch
+        # Only return the inputs that the model actually accepts
+        # Use shape [batch_size, 3, 2, 16, 16] for pixel_values
+        dummy_inputs = {
+            "pixel_values": torch.randn(1, 3, 2, 16, 16, dtype=torch.float32),
+            "image_grid_thw": torch.tensor([[1, 16, 16]], dtype=torch.int64)
+        }
+        return dummy_inputs
+
+    def rename_ambiguous_inputs(self, inputs):
+        # Do not add any new inputs, just return the original inputs
+        return inputs
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VLMConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+
+        Args:
+            behavior ([`ConfigBehavior`]):
+                The behavior to use for the new instance.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            # Use 'qwen3' as the model type instead of 'qwen3_vl_text'
+            model_type = "qwen3"
+            return get_vlm_text_embeddings_config(
+                model_type, self._orig_config.text_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            # Use 'qwen3' as the model type instead of 'qwen3_vl_text'
+            model_type = "qwen3"
+            return get_vlm_text_generation_config(
+                model_type, self._orig_config.text_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            # For Qwen3VLForConditionalGeneration, the language model part is in model.model.language_model
+            if hasattr(model, "model") and hasattr(model.model, "language_model"):
+                return model.model.language_model if not hasattr(model, "lm_head") else model
+            return model.language_model if not hasattr(model, "lm_head") else model
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            # For Qwen3VLForConditionalGeneration, the visual part is in model.model.visual
+            return model.model.visual if hasattr(model, "model") and hasattr(model.model, "visual") else model.visual
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            # For Qwen3VLForConditionalGeneration, the language model part is in model.model.language_model
+            if hasattr(model, "model") and hasattr(model.model, "language_model"):
+                text_embedding.config = model.model.language_model.config
+            else:
+                text_embedding.config = model.language_model.config
+            return text_embedding
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        # Create a simple patcher that doesn't rely on get_image_features or ModelPatcher
+        class Qwen3VLImageEmbeddingsModelPatcher:
+            def __init__(self, config, model, model_kwargs=None):
+                self.config = config
+                self.model = model
+                self.model_kwargs = model_kwargs
+                # Patch the forward method directly
+                self.orig_forward = model.forward
+                model.forward = self.patched_forward
+            def patched_forward(self, pixel_values, image_grid_thw, **kwargs):
+                # Get the original output
+                output = self.orig_forward(pixel_values, image_grid_thw, **kwargs)
+                # Return only the last_hidden_state to avoid type inference issues
+                return output.last_hidden_state
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                # Restore the original forward method
+                self.model.forward = self.orig_forward
+        return Qwen3VLImageEmbeddingsModelPatcher(self, model, model_kwargs)
+
+    def _create_dummy_input_generator_classes(self, **kwargs):
+        # Override this method to ensure our DummyQwen3VLInputGenerator is used
+        return [DummyQwen3VLInputGenerator(self.task, self._normalized_config, **kwargs)]
 
 @register_in_tasks_manager("llava", *["image-text-to-text"], library_name="transformers")
 class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
