@@ -14,7 +14,8 @@ _MIN_SENTENCE_TRANSFORMERS_VERSION = "5.0"
 class OVSentenceTransformer(SentenceTransformer):
     def __init__(self, model_name_or_path: Optional[str] = None, **kwargs):
         logger.warning(
-            "`OVSentenceTransformer` is deprecated and will be removed in optimum-intel v2.0. Please us sentence_transformers.SentenceTransformer instead."
+            "`OVSentenceTransformer` is deprecated and will be removed in optimum-intel v2.0. "
+            "Please us sentence_transformers.SentenceTransformer(.., backend='openvino') instead."
         )
 
         if is_sentence_transformers_version("<", _MIN_SENTENCE_TRANSFORMERS_VERSION):
