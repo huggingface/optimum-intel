@@ -1003,6 +1003,12 @@ def _get_submodels_and_export_configs(
         exporter,
     )
     stateful_per_model = [stateful] * len(models_for_export)
+
+    # VLM Eagle3 models need stateful KV cache despite model_type being "llama"
+    # (not in MULTI_MODAL_TEXT_GENERATION_MODELS) and task being "image-text-to-text".
+    if not stateful and getattr(export_config, "eagle3_vlm", False):
+        stateful_per_model = [True] * len(models_for_export)
+
     return export_config, models_for_export, stateful_per_model
 
 

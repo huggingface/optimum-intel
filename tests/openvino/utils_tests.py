@@ -232,6 +232,13 @@ MODEL_NAMES = {
 
 EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7B")}
 
+# VLM-based Eagle3 draft models (AngelSlim Eagle3LlamaForCausalLM architecture).
+# These use Qwen3-VL MRoPE and target VLM models for speculative decoding.
+# Only used in the decoder test (not genai, since the VLM target needs image-text-to-text export).
+EAGLE3_VLM_MODELS = {
+    "qwen3_vl_eagle3": ("AngelSlim/Qwen3-VL-4B-Instruct_eagle3", "Qwen/Qwen3-VL-4B-Instruct"),
+}
+
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "afmoe": {"model": 16},
     "bert": {"model": 68 if is_transformers_version("<", "5") else 70},
