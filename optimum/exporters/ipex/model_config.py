@@ -14,7 +14,7 @@
 
 from typing import Optional, Tuple
 
-from optimum.exporters.onnx.model_configs import (
+from optimum.exporters.openvino._onnx_compat.model_configs import (
     FalconOnnxConfig,
     GPT2OnnxConfig,
     LlamaOnnxConfig,

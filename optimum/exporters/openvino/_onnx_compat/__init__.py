@@ -12,11 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import optimum.exporters.openvino.model_configs
+"""
+Compatibility module providing alternatives to optimum-onnx exports.
 
-from .__main__ import main_export
-from .convert import export, export_from_model, export_models
-from .stateful import ensure_stateful_is_available, patch_stateful
-
-
-__all__ = ["main_export", "export", "export_models"]
+This module contains classes and functions originally from optimum.exporters.onnx
+that are needed by optimum-intel, extracted here to remove the optimum-onnx dependency.
+"""
