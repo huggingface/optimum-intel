@@ -256,14 +256,6 @@ def init_model_configs():
         "transformers",
         "AutoModelForCausalLM",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen3_5", "image-text-to-text")] = (
-        "transformers",
-        "AutoModelForImageTextToText",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen3_5_moe", "image-text-to-text")] = (
-        "transformers",
-        "AutoModelForImageTextToText",
-    )
 
     # since transformers v4.46, model can be loaded using default AutoModelForImageTextToText
     # https://github.com/huggingface/transformers/blob/v4.46.0/src/transformers/models/auto/modeling_auto.py#L776
@@ -1749,7 +1741,7 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
         return dummy_inputs
 
 
-class InputEmbedOpenvVINOConfig(TextDecoderOnnxConfig):
+class InputEmbedOpenVINOConfig(TextDecoderOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = InputEmbeddingPatcher
 
@@ -1792,8 +1784,8 @@ def get_vlm_internal_text_generation_config(model_type, model_config, int_dtype,
 
 def get_vlm_text_embeddings_config(model_type, model_config, int_dtype, float_dtype):
     internal_export_config = get_vlm_internal_text_generation_config(model_type, model_config, int_dtype, float_dtype)
-    InputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
-    export_config = InputEmbedOpenvVINOConfig(
+    InputEmbedOpenVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
+    export_config = InputEmbedOpenVINOConfig(
         model_config,
         task="feature-extraction",
         int_dtype=int_dtype,
@@ -3681,7 +3673,9 @@ class QwenVLConfigBehavior(str, enum.Enum):
 
 @register_in_tasks_manager("qwen2_vl", *["image-text-to-text"], library_name="transformers")
 class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
-    SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior]
+    SUPPORTED_BEHAVIORS = [
+        model_type.value for model_type in QwenVLConfigBehavior if model_type.value != "vision_embeddings_pos"
+    ]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLVisionEmbedInputGenerator,)
     MIN_TRANSFORMERS_VERSION = "4.45.0"
@@ -4496,10 +4490,10 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
     def inputs(self) -> Dict[str, Dict[int, str]]:
         common_inputs = {}
         if self._behavior is SpeechT5ConfigBehavior.ENCODER:
-            common_inputs["input_ids"] = {1: "encoder_sequence_length"}
+            common_inputs["input_ids"] = {0: "batch_size", 1: "encoder_sequence_length"}
         elif self._behavior is SpeechT5ConfigBehavior.DECODER:
             common_inputs["inputs_embeds"] = {0: "batch_size", 1: "decoder_sequence_length"}
-            common_inputs["speaker_embeddings"] = {}  # No dynamic shape here.
+            common_inputs["speaker_embeddings"] = {0: "batch_size"}
             common_inputs["encoder_hidden_states"] = {0: "batch_size", 1: "encoder_sequence_length"}
             common_inputs["encoder_attention_mask"] = {0: "batch_size", 1: "encoder_sequence_length"}
             if self.variant == "with-past" and self.use_past_in_inputs:
@@ -5038,7 +5032,6 @@ class ASTOpenVINOConfig(ASTOnnxConfig):
 )
 class AfmoeOpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.55.0"
-    MAX_TRANSFORMERS_VERSION = "4.57.6"
     _MODEL_PATCHER = AfmoeModelPatcher
 
 

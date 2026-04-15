@@ -385,7 +385,6 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
 
 REMOTE_CODE_MODELS = (
-    "afmoe",
     "chatglm",
     "minicpm",
     "baichuan2",
@@ -408,6 +407,9 @@ REMOTE_CODE_MODELS = (
     "deepseek",
     "qwen3_eagle3",
 )
+
+if is_transformers_version("<", "5"):
+    REMOTE_CODE_MODELS += ("afmoe",)
 
 
 def get_num_quantized_nodes(model):

@@ -302,6 +302,14 @@ def np_to_pt_generators(np_object, device):
         return np_object
 
 
+def ensure_numpy(x):
+    if isinstance(x, torch.Tensor):
+        return x.cpu().numpy()
+    if not isinstance(x, (np.ndarray, type(None))):
+        raise TypeError(f"`x` must be a np.ndarray or torch.Tensor, got {type(x)}")
+    return x
+
+
 def _raise_invalid_batch_size(
     expected_batch_size: int, batch_size: int, num_images_per_prompt: int, guidance_scale: float
 ):

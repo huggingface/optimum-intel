@@ -54,7 +54,12 @@ from optimum.exporters.onnx.model_patcher import (
     override_arguments,
     sdpa_mask_without_vmap,
 )
-from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_version, is_transformers_version
+from optimum.intel.utils.import_utils import (
+    is_diffusers_version,
+    is_openvino_version,
+    is_torch_version,
+    is_transformers_version,
+)
 
 from ._ov_ops import convert_recurrent_attention_cell
 
@@ -66,6 +71,8 @@ if is_transformers_version(">=", "4.54"):
     from transformers.masking_utils import create_causal_mask
 if is_transformers_version(">=", "4.56"):
     import transformers.masking_utils
+if is_transformers_version(">=", "5"):
+    from transformers.modeling_rope_utils import RotaryEmbeddingConfigMixin
 
 if TYPE_CHECKING:
     from transformers.cache_utils import Cache
@@ -260,6 +267,59 @@ def eager_mask_without_vmap(*args, **kwargs) -> Optional[torch.Tensor]:
     return mask
 
 
+# Adapted from https://github.com/huggingface/transformers/blob/3c307e380ad07ca16903a39e09a47d532cb782d9/src/transformers/models/phimoe/modular_phimoe.py#L57
+def _longrope_forward(self, x, position_ids=None, layer_type=None):
+    # _compute_longrope_parameters https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/modeling_rope_utils.py#L391
+    self.config.standardize_rope_params()
+    rope_parameters = (
+        self.config.rope_parameters[layer_type] if layer_type is not None else self.config.rope_parameters
+    )
+    rope_theta = rope_parameters["rope_theta"]
+    long_factor = rope_parameters["long_factor"]
+    short_factor = rope_parameters["short_factor"]
+    original_max = rope_parameters["original_max_position_embeddings"]
+    partial_rotary_factor = rope_parameters.get("partial_rotary_factor", 1.0)
+    long_mscale = rope_parameters.get("long_mscale")
+    short_mscale = rope_parameters.get("short_mscale")
+    head_dim = getattr(self.config, "head_dim", self.config.hidden_size // self.config.num_attention_heads)
+    dim = int(head_dim * partial_rotary_factor)
+
+    seq_len = torch.max(position_ids) + 1
+    # bool tensor to avoid only one path getting traced
+    is_long = seq_len > original_max
+
+    # Compute the inverse frequencies -- scaled based on the target sequence length
+    long_factors = torch.tensor(long_factor, dtype=torch.float32, device=x.device)
+    short_factors = torch.tensor(short_factor, dtype=torch.float32, device=x.device)
+    ext_factors = torch.where(is_long, long_factors, short_factors)
+    inv_freq_shape = torch.arange(0, dim, 2, dtype=torch.int64, device=x.device).float() / dim
+    inv_freq = 1.0 / (ext_factors * rope_theta**inv_freq_shape)
+
+    # https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/phimoe/modular_phimoe.py#L64-L71
+    if long_mscale is not None and short_mscale is not None:
+        long_mscale = torch.tensor(long_mscale, dtype=x.dtype, device=x.device)
+        short_mscale = torch.tensor(short_mscale, dtype=x.dtype, device=x.device)
+        mscale = torch.where(is_long, long_mscale, short_mscale)
+    else:
+        # https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/modeling_rope_utils.py#L461
+        factor = rope_parameters.get("factor") or self.config.max_position_embeddings / original_max
+        attention_factor = rope_parameters.get("attention_factor")
+        if attention_factor is None:
+            attention_factor = 1.0 if factor <= 1.0 else math.sqrt(1 + math.log(factor) / math.log(original_max))
+        mscale = attention_factor
+
+    # https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/phimoe/modeling_phimoe.py#L116
+    inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
+    position_ids_expanded = position_ids[:, None, :].float()
+    device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
+    with torch.autocast(device_type=device_type, enabled=False):
+        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        cos = emb.cos() * mscale
+        sin = emb.sin() * mscale
+    return cos.to(x.dtype), sin.to(x.dtype)
+
+
 class OVDecoderModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
@@ -282,6 +342,13 @@ class OVDecoderModelPatcher(ModelPatcher):
             # non-stateful models on cpu and stateful models on npu
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
 
+        if is_transformers_version(">=", "5"):
+            for module in self._model.modules():
+                rope_type = getattr(module, "rope_type", None)
+                if rope_type == "longrope" and isinstance(getattr(module, "config", None), RotaryEmbeddingConfigMixin):
+                    module._rope_orig_forward = module.forward
+                    module.forward = types.MethodType(_longrope_forward, module)
+
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
@@ -292,6 +359,12 @@ class OVDecoderModelPatcher(ModelPatcher):
         if is_transformers_version(">=", "4.53"):
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
+
+        if is_transformers_version(">=", "5"):
+            for module in self._model.modules():
+                if hasattr(module, "_rope_orig_forward"):
+                    module.forward = module._rope_orig_forward
+                    del module._rope_orig_forward
 
 
 def _mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -1652,6 +1725,24 @@ def _phi_moe_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torc
 class PhiMoEModelPatcher(Phi3ModelPatcher):
     def __enter__(self):
         super().__enter__()
+
+        if is_transformers_version("<", "5"):
+            for layer in self._model.model.layers:
+                layer.block_sparse_moe._orig_forward = layer.block_sparse_moe.forward
+                layer.block_sparse_moe.forward = types.MethodType(
+                    _phi_moe_sparse_moe_block_forward, layer.block_sparse_moe
+                )
+        else:
+            self._model.set_experts_implementation("batched_mm")
+
+        # fixed in https://github.com/huggingface/transformers/pull/43445, still needed for v5.0
+        if is_transformers_version("==", "5.0"):
+            self._model.model.rotary_emb.short_mscale = self._model.model.rotary_emb.config.rope_parameters.get(
+                "short_mscale", None
+            )
+            self._model.model.rotary_emb.long_mscale = self._model.model.rotary_emb.config.rope_parameters.get(
+                "long_mscale", None
+            )
 
         if is_transformers_version("<", "5"):
             for layer in self._model.model.layers:
@@ -5683,7 +5774,7 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             # Run the decoder layers on the last element of the prenet output.
             decoder_out = model.speecht5.decoder.wrapped_decoder(
                 hidden_states=decoder_hidden_states[:, -1:],
-                encoder_hidden_states=encoder_hidden_states[0],
+                encoder_hidden_states=encoder_hidden_states,
                 encoder_attention_mask=encoder_attention_mask,
                 past_key_values=past_key_values,
                 use_cache=True,
@@ -7194,11 +7285,17 @@ def lfm2_short_conv_forward_patched(
     cache_position=None,
     attention_mask=None,
 ):
-    from transformers.models.lfm2.modeling_lfm2 import apply_mask_to_padding_states
-
     seqlen = x.shape[1]
 
-    x = apply_mask_to_padding_states(x, attention_mask)
+    # only apply apply_mask_to_padding_states during the prefill phase
+    # https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/lfm2/modeling_lfm2.py#L427
+    # in transformers < v5 attention_mask was never applied in Lfm2ShortConv https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/lfm2/modeling_lfm2.py#L485
+    # until a fix was added in https://github.com/huggingface/transformers/pull/41790/
+    if is_transformers_version(">=", "5"):
+        dtype = x.dtype
+        is_decoding = torch.tensor(seqlen == 1, dtype=dtype)
+        x = (x * (attention_mask[:, :seqlen, None] * (1 - is_decoding) + is_decoding)).to(dtype)
+
     BCx = self.in_proj(x).transpose(-1, -2)
     B, C, x = BCx.chunk(3, dim=-2)
 
@@ -7597,7 +7694,7 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             )
 
         for idx, layer in enumerate(self._model.model.layers):
-            if hasattr(layer, "block_sparse_moe"):
+            if getattr(layer, "block_sparse_moe", None) is not None:
                 patch_sparse_moe(layer.block_sparse_moe)
             if self.real_config._config.layers_block_type[idx] == "mamba":
                 mamba_layer = layer.mamba
@@ -7619,7 +7716,7 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
 
         for idx, layer in enumerate(self._model.model.layers):
-            if hasattr(layer, "block_sparse_moe"):
+            if getattr(layer, "block_sparse_moe", None) is not None:
                 unpatch_sparse_moe(layer.block_sparse_moe)
             if self.real_config._config.layers_block_type[idx] == "mamba":
                 mamba_layer = layer.mamba
@@ -7676,10 +7773,10 @@ def afmoe_moe_forward_patched(self, hidden_states):
     act_fn = self.experts[0].act_fn
 
     # compute experts outputs in a vectorized form
-    gate = torch.bmm(hidden_states, self.gate_projs)
-    up = torch.bmm(hidden_states, self.up_projs)
+    gate = torch.bmm(hidden_states, self.gate_projs.transpose(1, 2))
+    up = torch.bmm(hidden_states, self.up_projs.transpose(1, 2))
     gate_up = act_fn(gate) * up
-    next_states = torch.bmm(gate_up, self.down_projs)
+    next_states = torch.bmm(gate_up, self.down_projs.transpose(1, 2))
     next_states = next_states.view(num_experts, batch_size, -1, hidden_dim)
     next_states = next_states * new_routing_weights.transpose(0, 1).view(num_experts, batch_size, -1)[..., None]
     next_states = next_states.sum(dim=0)
@@ -7705,29 +7802,22 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                 # with bf16 weights that leads to operands types mismatch in torch.bmm during TorchScript tracing
                 # Now we align with hidden_states (that will be always fp32 due to patching
                 # above for embedding layer during tracing)
-                afmoe_moe.down_projs = (
-                    torch.concat(
-                        tuple(afmoe_moe.experts[i].down_proj.weight.unsqueeze(0) for i in range(num_experts)),
-                        dim=0,
-                    )
-                    .transpose(1, 2)
-                    .float()
+                afmoe_moe.down_projs = torch.concat(
+                    tuple(afmoe_moe.experts[i].down_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                    dim=0,
                 )
-                afmoe_moe.gate_projs = (
-                    torch.concat(
-                        tuple(afmoe_moe.experts[i].gate_proj.weight.unsqueeze(0) for i in range(num_experts)),
-                        dim=0,
-                    )
-                    .transpose(1, 2)
-                    .float()
+                afmoe_moe.gate_projs = torch.concat(
+                    tuple(afmoe_moe.experts[i].gate_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                    dim=0,
                 )
-                afmoe_moe.up_projs = (
-                    torch.concat(
-                        tuple(afmoe_moe.experts[i].up_proj.weight.unsqueeze(0) for i in range(num_experts)), dim=0
-                    )
-                    .transpose(1, 2)
-                    .float()
+                afmoe_moe.up_projs = torch.concat(
+                    tuple(afmoe_moe.experts[i].up_proj.weight.unsqueeze(0) for i in range(num_experts)), dim=0
                 )
+
+                if is_openvino_version("<", "2026.1.0"):
+                    afmoe_moe.down_projs = afmoe_moe.down_projs.float()
+                    afmoe_moe.gate_projs = afmoe_moe.gate_projs.float()
+                    afmoe_moe.up_projs = afmoe_moe.up_projs.float()
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)

@@ -555,7 +555,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             "text-generation-with-past",
             "opt125m",
             "mxfp4",
-            {"model": {"int8": 4 if is_transformers_version("<", "5") else 6, "f4e2m1": 72, "f8e8m0": 72}},
+            {
+                "model": {
+                    "f4e2m1": 72,
+                    "f8e4m3": 2 if is_transformers_version("<", "5") else 3,
+                    "f8e8m0": 74 if is_transformers_version("<", "5") else 75,
+                }
+            },
         ),
         (
             "text-generation-with-past",
