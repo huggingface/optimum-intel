@@ -23,7 +23,6 @@ from utils_tests import (
 )
 
 from optimum.exporters.openvino.model_configs import (
-    AfmoeOpenVINOConfig,
     BitnetOpenVINOConfig,
     DeepseekOpenVINOConfig,
     LFM2OpenVINOConfig,
@@ -106,14 +105,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("cohere2",)
 
     if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo")
+        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phimoe")
 
         if is_transformers_version("<", "4.54.0"):
             SUPPORTED_ARCHITECTURES += ("deepseek",)
-
-        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-        if is_transformers_version("<", "5"):
-            SUPPORTED_ARCHITECTURES += ("phimoe",)
 
         # gptq and awq install disabled for windows test environment
         if platform.system() != "Windows" and is_transformers_version("<", "4.56.0"):
@@ -310,8 +305,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 supported_architectures.remove("deepseek_v2")
             if "deepseek_v3" in supported_architectures:
                 supported_architectures.remove("deepseek_v3")
-        if is_transformers_version(">", str(AfmoeOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
-            supported_architectures -= {"afmoe"}
         if is_transformers_version("<", str(BitnetOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"bitnet"}
         if is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
