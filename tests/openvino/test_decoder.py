@@ -173,7 +173,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "internlm",
             # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
             "dbrx",
-            # "phimoe",
             "marian",
         )
     GENERATION_LENGTH = 100
@@ -321,7 +320,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
         if is_transformers_version(">=", "5"):
             supported_architectures -= {
-                "phimoe",
                 "bitnet",
                 "dbrx",
                 "zamba2",
@@ -416,8 +414,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "gemma3_text",
             "llama4",
             "exaone4",
+            "phimoe",
         ]:
             transformers_model.to(torch.float32)
+
+        # fixed in https://github.com/huggingface/transformers/pull/43445, still needed for v5.0
+        if model_arch == "phimoe" and is_transformers_version("==", "5.0"):
+            transformers_model.model.rotary_emb.short_mscale = transformers_model.config.rope_parameters[
+                "short_mscale"
+            ]
+            transformers_model.model.rotary_emb.long_mscale = transformers_model.config.rope_parameters["long_mscale"]
 
         with torch.no_grad():
             with patch_awq_for_inference("awq" in model_arch):
@@ -781,8 +787,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
             transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
-        if model_arch in ["arctic", "gemma3_text"] or "mxfp4" in model_arch:
+        if model_arch in ["arctic", "gemma3_text", "phimoe"] or "mxfp4" in model_arch:
             transformers_model.to(torch.float32)
+
+        # fixed in https://github.com/huggingface/transformers/pull/43445, still needed for v5.0
+        if model_arch == "phimoe" and is_transformers_version("==", "5.0"):
+            transformers_model.model.rotary_emb.short_mscale = transformers_model.config.rope_parameters[
+                "short_mscale"
+            ]
+            transformers_model.model.rotary_emb.long_mscale = transformers_model.config.rope_parameters["long_mscale"]
+
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache, align cache representation in torch model
         if model_arch in ["gemma2", "gemma3_text"] and is_transformers_version("<", "4.53.0"):

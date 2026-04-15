@@ -415,14 +415,21 @@ def main_export(
                 orig_post_init_model = GPTQQuantizer.post_init_model
 
                 def post_init_model(self, model):
-                    from auto_gptq import exllama_set_max_input_length
+                    # optimum 2.1 / transformers v5 auto_gptq support dropped
+                    from gptqmodel import exllama_set_max_input_length
+                    from gptqmodel.utils.model import hf_convert_gptq_v1_to_v2_format
 
                     class StoreAttr(object):
                         pass
 
+                    model, _ = hf_convert_gptq_v1_to_v2_format(
+                        model, self.bits, self.quant_linear, self.format, self.meta
+                    )
+
                     model.quantize_config = StoreAttr()
                     model.quantize_config.desc_act = self.desc_act
-                    if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
+                    # BACKEND.EXLLAMA_V1 removed in gptqmodel >= v5.8
+                    if self.desc_act and self.backend == "exllama_v1" and self.max_input_length is not None:
                         model = exllama_set_max_input_length(model, self.max_input_length)
                     return model
 

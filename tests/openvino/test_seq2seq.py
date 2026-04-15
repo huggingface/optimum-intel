@@ -1044,11 +1044,14 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
     AUTOMODEL_CLASS = AutoModelForTextToSpectrogram
 
     def _generate_text(self):
-        return "This text is converted to speech using OpenVINO backend"
+        return [
+            "This text is converted to speech using OpenVINO backend",
+            "The sun was shining brightly as people walked through the quiet park.",
+        ]
 
     def _generate_speaker_embedding(self):
         np.random.seed(42)
-        speaker_embedding = np.random.randn(1, 512).astype(np.float32)
+        speaker_embedding = np.random.randn(2, 512).astype(np.float32)
         return torch.tensor(speaker_embedding)
 
     def _get_processor(self, model_id, model_arch):
@@ -1096,7 +1099,7 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         processor = self._get_processor(model_id, model_arch)
         vocoder = self._get_vocoder(vocoder_id, model_arch)
         model = self.AUTOMODEL_CLASS.from_pretrained(model_id)
-        inputs = processor(text=text_data, return_tensors="pt")
+        inputs = processor(text=text_data, padding=True, return_tensors="pt")
         ref_speech = model.generate_speech(inputs["input_ids"], speaker_embeddings, vocoder=vocoder)
         ref_speech = ref_speech.unsqueeze(0) if ref_speech.dim() == 1 else ref_speech
         ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, vocoder=vocoder_id, device=OPENVINO_DEVICE)
