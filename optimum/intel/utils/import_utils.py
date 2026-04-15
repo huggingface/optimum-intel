@@ -119,6 +119,15 @@ if _open_clip_available:
         pass
 
 
+_huggingface_hub_available = importlib.util.find_spec("huggingface_hub") is not None
+_huggingface_hub_version = "N/A"
+if _huggingface_hub_available:
+    try:
+        _huggingface_hub_version = importlib_metadata.version("huggingface_hub")
+    except importlib_metadata.PackageNotFoundError:
+        _huggingface_hub_available = False
+
+
 _safetensors_version = "N/A"
 _safetensors_available = importlib.util.find_spec("safetensors") is not None
 if _safetensors_available:
@@ -484,6 +493,15 @@ def is_sentence_transformers_version(operation: str, version: str):
     if not _sentence_transformers_available:
         return False
     return compare_versions(parse(_sentence_transformers_version), operation, version)
+
+
+def is_huggingface_hub_version(operation: str, version: str):
+    """
+    Compare the current huggingface_hub version to a given reference with an operation.
+    """
+    if not _huggingface_hub_available:
+        return False
+    return compare_versions(parse(_huggingface_hub_version), operation, version)
 
 
 DIFFUSERS_IMPORT_ERROR = """
