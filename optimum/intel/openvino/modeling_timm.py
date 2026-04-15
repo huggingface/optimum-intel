@@ -40,7 +40,7 @@ from transformers.image_utils import (
 from transformers.modeling_outputs import ImageClassifierOutput
 from transformers.utils import TensorType
 
-from optimum.exporters.onnx.config import VisionOnnxConfig
+from optimum.exporters.openvino._onnx_compat.config import VisionOnnxConfig
 from optimum.utils import NormalizedVisionConfig
 
 from .utils import _is_timm_ov_dir

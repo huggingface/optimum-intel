@@ -90,7 +90,7 @@ if is_diffusers_available():
 
 
 if TYPE_CHECKING:
-    from optimum.exporters.onnx.base import OnnxConfig
+    from optimum.exporters.openvino._onnx_compat.base import OnnxConfig
     from optimum.intel.openvino.configuration import OVConfig
 
 
@@ -231,73 +231,6 @@ def export(
         )
     else:
         raise RuntimeError("You either provided a non-PyTorch model or the PyTorch library is not installed.")
-
-
-def export_pytorch_via_onnx(
-    model: Union["PreTrainedModel", "ModelMixin"],
-    config: "OnnxConfig",
-    opset: int,
-    output: Path,
-    device: str = "cpu",
-    input_shapes: Optional[Dict] = None,
-    model_kwargs: Optional[Dict[str, Any]] = None,
-    ov_config: Optional["OVConfig"] = None,
-    library_name: Optional[str] = None,
-):
-    """
-    Exports a PyTorch model to an OpenVINO Intermediate Representation via ONNX export.
-
-    Args:
-        model ([`PreTrainedModel`]):
-            The model to export.
-        config ([`~exporters.onnx.config.OnnxConfig`]):
-            The configuration associated with the exported model.
-        opset (`int`):
-            The version of the ONNX operator set to use.
-        output (`Path`):
-            Directory to store the exported model.
-        device (`str`, defaults to `"cpu"`):
-            The device on which the model will be exported. Either `cpu` or `cuda`. Only PyTorch is supported for
-            export on CUDA devices.
-        input_shapes (`optional[Dict]`, defaults to `None`):
-            If specified, allows to use specific shapes for the example input provided to the exporter.
-        model_kwargs (optional[Dict[str, Any]], defaults to `None`):
-            Additional kwargs for model export.
-        ov_config (`OVConfig`, *optional*):
-            The configuration containing the parameters related to quantization.
-
-    Returns:
-        `Tuple[List[str], List[str], bool]`: A tuple with an ordered list of the model's inputs, and the named inputs from
-        the ONNX configuration and boolean flag - was legacy ONNX path were applied to model or not.
-    """
-    import torch
-
-    from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
-
-    output = Path(output)
-    orig_torch_onnx_export = torch.onnx.export
-    torch.onnx.export = functools.partial(orig_torch_onnx_export, do_constant_folding=False)
-    model.config.torchscript = False
-    model.config.return_dict = True
-    onnx_output = output.with_suffix(".onnx")
-    input_names, output_names = export_pytorch_to_onnx(
-        model, config, opset, onnx_output, device, input_shapes, model_kwargs
-    )
-    torch.onnx.export = orig_torch_onnx_export
-    ov_model = convert_model(str(onnx_output))
-
-    library_name = _infer_library_from_model_or_model_class(model=model, library_name=library_name)
-
-    _save_model(
-        ov_model,
-        output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output,
-        ov_config=ov_config,
-        library_name=library_name,
-        config=config,
-    )
-    del ov_model
-    gc.collect()
-    return input_names, output_names, True
 
 
 def export_pytorch(

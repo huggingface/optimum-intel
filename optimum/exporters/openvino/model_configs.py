@@ -19,8 +19,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
-from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
-from optimum.exporters.onnx.model_configs import (
+from optimum.exporters.openvino._onnx_compat.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
+from optimum.exporters.openvino._onnx_compat.model_configs import (
     AlbertOnnxConfig,
     ASTOnnxConfig,
     BartOnnxConfig,
@@ -105,7 +105,7 @@ from optimum.exporters.onnx.model_configs import (
     XLMOnnxConfig,
     XLMRobertaOnnxConfig,
 )
-from optimum.exporters.onnx.model_patcher import ModelPatcher
+from optimum.exporters.openvino._onnx_compat.model_patcher import ModelPatcher
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES

@@ -46,8 +46,8 @@ from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSp
 from transformers.processing_utils import Unpack
 from transformers.utils import ModelOutput
 
-from optimum.exporters.onnx.base import OnnxConfig
-from optimum.exporters.onnx.model_patcher import (
+from optimum.exporters.openvino._onnx_compat.base import OnnxConfig
+from optimum.exporters.openvino._onnx_compat.model_patcher import (
     UNSUPPORTED_OPS_PATCHING_SPEC,
     ModelPatcher,
     gpt_oss_forward,
@@ -78,7 +78,7 @@ if TYPE_CHECKING:
     from transformers.cache_utils import Cache
     from transformers.modeling_utils import PreTrainedModel
 
-    from optimum.exporters.onnx.config import OnnxConfig
+    from optimum.exporters.openvino._onnx_compat.config import OnnxConfig
 
 if is_transformers_version(">=", "4.54"):
     from transformers.utils import TransformersKwargs
