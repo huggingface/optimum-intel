@@ -39,7 +39,7 @@ from optimum.utils.normalized_config import NormalizedConfigManager
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
 from ...exporters.openvino.utils import SSM_MODELS
-from ..utils.import_utils import compare_versions
+from ..utils.import_utils import compare_versions, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import (
     OVConfig,
@@ -668,7 +668,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             outputs=outputs, model_kwargs=model_kwargs, is_encoder_decoder=is_encoder_decoder, **kwargs
         )
 
-        if "position_ids" in model_kwargs:
+        # _prepare_position_ids_for_generation will infer position ids since transformers v5.2
+        if "position_ids" in model_kwargs and is_transformers_version("<", "5.2"):
             position_ids = model_kwargs["position_ids"]
             new_position_id = position_ids[..., -1:].clone()
             new_position_id += 1
