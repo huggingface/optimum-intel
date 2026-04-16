@@ -876,8 +876,6 @@ class ExaoneOpenVINOConfig(LlamaOpenVINOConfig):
 )
 class Exaone4OpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.54.0"
-    # TODO (@echarlaix): add v5 support
-    MAX_TRANSFORMERS_VERSION = "4.57.6"
 
 
 @register_in_tasks_manager(
