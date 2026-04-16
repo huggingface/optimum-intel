@@ -373,6 +373,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "hunyuan_v1_dense": {"model": 32},
     "qwen3_eagle3": {"model": 20},
     "qwen3_next": {"model": 100},
+    "gemma4": {
+        "lm_model": 58,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 10,
+        "text_embeddings_per_layer_model": 1,
+    },
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
