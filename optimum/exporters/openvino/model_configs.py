@@ -4997,10 +4997,12 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
     def inputs(self) -> Dict[str, Dict[int, str]]:
         common_inputs = {
             "input_ids": {0: "batch_size", 1: "sequence_length"},
-            "attention_mask": {0: "batch_size", 1: "sequence_length"},
         }
         if self.use_past_in_inputs:
+            common_inputs["attention_mask"] = {0: "batch_size", 1: "past_sequence_length + sequence_length"}
             self.add_past_key_values(common_inputs, direction="inputs")
+        else:
+            common_inputs["attention_mask"] = {0: "batch_size", 1: "sequence_length"}
         return common_inputs
 
 
