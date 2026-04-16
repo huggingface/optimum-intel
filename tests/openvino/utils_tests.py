@@ -336,6 +336,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_merger_model": 32,
         "vision_embeddings_pos_model": 1,
     },
+    "videochat_flash_qwen": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 5,
+        "vision_projection_model": 2,
+    },
     "sana": {
         "transformer": 58,
         "vae_decoder": 28,
