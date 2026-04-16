@@ -8540,10 +8540,10 @@ class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
     def __enter__(self):
         super().__enter__()
         from transformers.models.lfm2_moe.modeling_lfm2_moe import (
-            Lfm2MoeShortConv,
             Lfm2MoeDecoderLayer,
-            Lfm2MoeSparseMoeBlock,
             Lfm2MoeExperts,
+            Lfm2MoeShortConv,
+            Lfm2MoeSparseMoeBlock,
         )
 
         super().__enter__()
@@ -8564,10 +8564,10 @@ class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         from transformers.models.lfm2_moe.modeling_lfm2_moe import (
-            Lfm2MoeShortConv,
             Lfm2MoeDecoderLayer,
-            Lfm2MoeSparseMoeBlock,
             Lfm2MoeExperts,
+            Lfm2MoeShortConv,
+            Lfm2MoeSparseMoeBlock,
         )
 
         super().__exit__(exc_type, exc_value, traceback)
