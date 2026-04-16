@@ -8500,15 +8500,12 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
                 del sparse_moe_block.down_projs, sparse_moe_block.gate_projs, sparse_moe_block.up_projs
 
 
-
-
 def lfm2_moe_experts_forward(
-        self,
-        hidden_states: torch.Tensor,
-        top_k_index: torch.Tensor,
-        top_k_weights: torch.Tensor,
+    self,
+    hidden_states: torch.Tensor,
+    top_k_index: torch.Tensor,
+    top_k_weights: torch.Tensor,
 ) -> torch.Tensor:
-
     routing_weights = top_k_weights.to(hidden_states.dtype)
     num_tokens, hidden_dim = hidden_states.shape
     num_experts = self.num_experts
@@ -8527,8 +8524,8 @@ def lfm2_moe_experts_forward(
 
     gate_proj, up_proj = self.gate_up_proj.chunk(2, dim=-2)
 
-    gate = torch.bmm(hidden_states_expanded,  gate_proj.transpose(1, 2))
-    up = torch.bmm(hidden_states_expanded,  up_proj.transpose(1, 2))
+    gate = torch.bmm(hidden_states_expanded, gate_proj.transpose(1, 2))
+    up = torch.bmm(hidden_states_expanded, up_proj.transpose(1, 2))
     next_states = self.act_fn(gate) * up
     next_states = torch.bmm(next_states, self.down_proj.transpose(1, 2))
 
@@ -8542,7 +8539,12 @@ def lfm2_moe_experts_forward(
 class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
     def __enter__(self):
         super().__enter__()
-        from transformers.models.lfm2_moe.modeling_lfm2_moe import Lfm2MoeShortConv, Lfm2MoeDecoderLayer, Lfm2MoeSparseMoeBlock, Lfm2MoeExperts
+        from transformers.models.lfm2_moe.modeling_lfm2_moe import (
+            Lfm2MoeShortConv,
+            Lfm2MoeDecoderLayer,
+            Lfm2MoeSparseMoeBlock,
+            Lfm2MoeExperts,
+        )
 
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
@@ -8561,7 +8563,12 @@ class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
                     lfm2_moe_experts.forward = types.MethodType(lfm2_moe_experts_forward, lfm2_moe_experts)
 
     def __exit__(self, exc_type, exc_value, traceback):
-        from transformers.models.lfm2_moe.modeling_lfm2_moe import Lfm2MoeShortConv, Lfm2MoeDecoderLayer, Lfm2MoeSparseMoeBlock, Lfm2MoeExperts
+        from transformers.models.lfm2_moe.modeling_lfm2_moe import (
+            Lfm2MoeShortConv,
+            Lfm2MoeDecoderLayer,
+            Lfm2MoeSparseMoeBlock,
+            Lfm2MoeExperts,
+        )
 
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
