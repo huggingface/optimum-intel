@@ -1113,7 +1113,6 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "albert",
         "bert",
         "camembert",
-        "convbert",
         "deberta",
         "deberta-v2",
         "distilbert",
@@ -1131,12 +1130,15 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     )
 
     # accuracy issue, need additional investigation
-    if is_transformers_version("<", "4.51.0"):
+    if is_transformers_version("<", "4.51"):
         SUPPORTED_ARCHITECTURES += ("nystromformer",)
 
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("data2vec-text", "flaubert", "xlm")
+
+    if is_transformers_version("!=", "4.52"):
+        SUPPORTED_ARCHITECTURES += ("convbert",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
