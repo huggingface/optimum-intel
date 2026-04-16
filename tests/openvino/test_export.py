@@ -78,6 +78,7 @@ class ExportModelTest(unittest.TestCase):
         "distilbert": OVModelForQuestionAnswering,
         "albert": OVModelForSequenceClassification,
         "vit": OVModelForImageClassification,
+        "swin2sr": OVModelForImageToImage,
         "roberta": OVModelForTokenClassification,
         "wav2vec2": OVModelForAudioClassification,
         "whisper": OVModelForSpeechSeq2Seq,

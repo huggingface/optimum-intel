@@ -33,6 +33,7 @@ from parameterized import parameterized
 from PIL import Image
 from sentence_transformers import SentenceTransformer
 from transformers import (
+    AutoImageProcessor,
     AutoFeatureExtractor,
     AutoModel,
     AutoModelForAudioClassification,
@@ -41,6 +42,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForCTC,
     AutoModelForImageClassification,
+    AutoModelForImageToImage,
     AutoModelForMaskedLM,
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
@@ -69,6 +71,7 @@ from optimum.intel import (
     OVModelForCustomTasks,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
+    OVModelForImageToImage,
     OVModelForMaskedLM,
     OVModelForQuestionAnswering,
     OVModelForSeq2SeqLM,
@@ -1258,6 +1261,59 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
             ov_model.save_pretrained(model_save_path)
             model = OVModelForImageClassification.from_pretrained(model_save_path, device=OPENVINO_DEVICE)
             model(pixel_values=torch.zeros((5, 3, model.config.image_size, model.config.image_size)))
+        gc.collect()
+
+
+class OVModelForImageToImageIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("swin2sr",)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForImageToImage.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
+        set_seed(SEED)
+        transformers_model = AutoModelForImageToImage.from_pretrained(model_id)
+        preprocessor = AutoImageProcessor.from_pretrained(model_id)
+        image = Image.open(requests.get(TEST_IMAGE_URL, stream=True).raw)
+        inputs = preprocessor(images=image, return_tensors="pt")
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+
+        for input_type in ["pt", "np"]:
+            inputs = preprocessor(images=image, return_tensors=input_type)
+            ov_outputs = ov_model(**inputs)
+            self.assertIn("reconstruction", ov_outputs)
+            self.assertIsInstance(ov_outputs.reconstruction, TENSOR_ALIAS_TO_TYPE[input_type])
+            self.assertTrue(
+                torch.allclose(torch.Tensor(ov_outputs.reconstruction), transformers_outputs.reconstruction, atol=1e-4)
+            )
+
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_save_and_infer(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        ov_model = OVModelForImageToImage.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        preprocessor = AutoImageProcessor.from_pretrained(model_id)
+        image = Image.open(requests.get(TEST_IMAGE_URL, stream=True).raw)
+        inputs = preprocessor(images=image, return_tensors="pt")
+
+        with TemporaryDirectory() as tmpdirname:
+            model_save_path = os.path.join(tmpdirname, "image_to_image_ov_model")
+            ov_model.save_pretrained(model_save_path)
+            model = OVModelForImageToImage.from_pretrained(model_save_path, device=OPENVINO_DEVICE)
+            outputs = model(**inputs)
+            self.assertIn("reconstruction", outputs)
+            self.assertIsInstance(outputs.reconstruction, torch.Tensor)
+
         gc.collect()
 
 

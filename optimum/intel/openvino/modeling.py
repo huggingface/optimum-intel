@@ -30,6 +30,7 @@ from transformers import (
     AutoModelForAudioXVector,
     AutoModelForCTC,
     AutoModelForImageClassification,
+    AutoModelForImageToImage,
     AutoModelForMaskedLM,
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
@@ -1003,6 +1004,7 @@ IMAGE_TO_IMAGE_EXAMPLE = r"""
     MODEL_START_DOCSTRING,
 )
 class OVModelForImageToImage(OVModelForCustomTasks):
+    auto_model_class = AutoModelForImageToImage
     export_feature = "image-to-image"
 
     @add_start_docstrings_to_model_forward(

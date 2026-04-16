@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Dict
 from unittest.mock import Mock
 
+import torch
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
@@ -171,6 +172,18 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_transformers_image_to_image_head_mapping(self):
         self.assertEqual(_HEAD_TO_AUTOMODELS["image-to-image"], "OVModelForImageToImage")
         self.assertEqual(OVModelForImageToImage.export_feature, "image-to-image")
+
+    def test_exporters_cli_transformers_image_to_image_inference(self):
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES['swin2sr']} --task image-to-image {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = OVModelForImageToImage.from_pretrained(tmpdir, device=OPENVINO_DEVICE)
+            outputs = model(pixel_values=torch.zeros((1, 3, 16, 16)))
+            self.assertIn("reconstruction", outputs)
+            self.assertIsInstance(outputs.reconstruction, torch.Tensor)
 
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
