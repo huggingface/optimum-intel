@@ -213,6 +213,7 @@ MODEL_NAMES = {
     "wav2vec2-hf": "optimum-intel-internal-testing/tiny-random-Wav2Vec2Model",
     "wav2vec2-conformer": "optimum-intel-internal-testing/tiny-random-wav2vec2-conformer",
     "whisper": "optimum-intel-internal-testing/tiny-random-whisper",
+    "paraformer": "funasr/paraformer-zh",
     "xlm": "optimum-intel-internal-testing/tiny-random-xlm",
     "xlm-roberta": "optimum-intel-internal-testing/tiny-random-xlm-roberta",
     "xglm": "optimum-intel-internal-testing/tiny-random-XGLMForCausalLM",
@@ -244,6 +245,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "granitemoehybrid": {"model": 118},
     "wav2vec2": {"model": 34},
     "distilbert": {"model": 66},
+    "paraformer": {"model": 268},
     "t5": {
         "encoder": 64,
         "decoder": 104 if is_transformers_version("<", "5") else 106,

@@ -198,6 +198,7 @@ from .model_patcher import (
     Qwen3NextModelPatcher,
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
+    ParaformerModelPatcher,
     QwenModelPatcher,
     SanaTextEncoderModelPatcher,
     XverseModelPatcher,
@@ -5496,3 +5497,127 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
                 )
 
         return dummy_inputs
+
+
+# ============================================================================
+# Paraformer ASR Model Support
+# ============================================================================
+# Registration for FunASR Paraformer models for automatic speech recognition
+# This allows export via: optimum-cli export openvino --model funasr/paraformer-zh
+
+# Import Paraformer model and configuration from modeling_paraformer
+try:
+    from .modeling_paraformer import (
+        ParaformerForASR,
+        ParaformerConfig,
+        _load_paraformer_model,
+    )
+
+    # Register paraformer library with TasksManager
+    if "paraformer" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
+        TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["paraformer"] = {
+            "paraformer": {
+                "automatic-speech-recognition": ("ParaformerForASR",),
+            }
+        }
+
+    # Register model loader for paraformer library
+    if "paraformer" not in TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP:
+        TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP["paraformer"] = {
+            "automatic-speech-recognition": _load_paraformer_model,
+        }
+
+    # Also register as custom class to avoid library import issues
+    TasksManager._CUSTOM_CLASSES[("pt", "paraformer", "automatic-speech-recognition")] = (
+        "optimum.exporters.openvino.modeling_paraformer",
+        "ParaformerForASR",
+    )
+
+    PARAFORMER_AVAILABLE = True
+except ImportError:
+    PARAFORMER_AVAILABLE = False
+    logger.debug("Paraformer support not available - modeling_paraformer module not found")
+
+# Import paraformer_plugin to hook into main_export for non-standard library support
+# This is necessary because 'paraformer' is a FunASR library, not a transformers library
+try:
+    from . import paraformer_plugin  # noqa: F401
+except ImportError:
+    pass  # Paraformer dependencies not available
+
+
+class ParaformerDummyAudioInputGenerator(DummyInputGenerator):
+    """
+    Generates dummy audio inputs for Paraformer model export.
+    """
+    SUPPORTED_INPUT_NAMES = ("speech", "speech_lengths")
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        """
+        Generates dummy audio features and lengths for Paraformer.
+        
+        Args:
+            input_name: Name of the input ("speech" or "speech_lengths")
+            framework: Framework to use (default: "pt")
+            int_dtype: Integer dtype
+            float_dtype: Float dtype
+            
+        Returns:
+            Dummy tensor for the specified input
+        """
+        if input_name == "speech":
+            # Paraformer expects speech features: (batch_size, feature_length, feature_dim)
+            # Typical feature_dim is 560 (80 mel features * 7 LFR stacking)
+            batch_size = self.batch_size
+            feature_length = 30  # Example length
+            feature_dim = 560
+            return self.random_float_tensor(
+                shape=(batch_size, feature_length, feature_dim),
+                min_value=-1.0,
+                max_value=1.0,
+                framework=framework,
+                dtype=float_dtype
+            )
+        elif input_name == "speech_lengths":
+            # Generate realistic speech lengths for the batch
+            return self.random_int_tensor(
+                shape=(self.batch_size,),
+                max_value=30,
+                min_value=6,
+                framework=framework,
+                dtype="int32"  # Paraformer uses int32 for lengths
+            )
+
+
+@register_in_tasks_manager(
+    "paraformer",
+    *["automatic-speech-recognition"],
+    library_name="transformers",
+)
+class ParaformerOpenVINOConfig(OnnxConfig):
+    """
+    OpenVINO configuration for Paraformer ASR models.
+    """
+    DEFAULT_ONNX_OPSET = 14
+    DUMMY_INPUT_GENERATOR_CLASSES = (ParaformerDummyAudioInputGenerator,)
+    _MODEL_PATCHER = ParaformerModelPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        """
+        Define model inputs with dynamic axes.
+        """
+        return {
+            "speech": {0: "batch_size", 1: "feats_length"},
+            "speech_lengths": {0: "batch_size"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        """
+        Define model outputs with dynamic axes.
+        """
+        return {
+            "logits": {0: "batch_size", 1: "logits_length"},
+            "token_num": {0: "batch_size"},
+        }
