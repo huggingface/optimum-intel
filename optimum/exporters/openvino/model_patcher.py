@@ -8498,3 +8498,81 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
                 sparse_moe_block = decoder_layer.mlp
                 decoder_layer.mlp.forward = decoder_layer.mlp._orig_forward
                 del sparse_moe_block.down_projs, sparse_moe_block.gate_projs, sparse_moe_block.up_projs
+
+
+
+
+def lfm2_moe_experts_forward(
+        self,
+        hidden_states: torch.Tensor,
+        top_k_index: torch.Tensor,
+        top_k_weights: torch.Tensor,
+) -> torch.Tensor:
+
+    routing_weights = top_k_weights.to(hidden_states.dtype)
+    num_tokens, hidden_dim = hidden_states.shape
+    num_experts = self.num_experts
+
+    dense_routing_weights = torch.zeros(
+        num_tokens,
+        num_experts,
+        device=hidden_states.device,
+        dtype=hidden_states.dtype,
+    )
+    dense_routing_weights.scatter_(dim=1, index=top_k_index, src=routing_weights)
+    hidden_states_expanded = hidden_states.repeat(num_experts, 1)  # (num_experts * num_tokens, hidden_dim)
+    hidden_states_expanded = hidden_states_expanded.view(
+        num_experts, -1, hidden_dim
+    )  # (num_experts, num_tokens, hidden_dim)
+
+    gate_proj, up_proj = self.gate_up_proj.chunk(2, dim=-2)
+
+    gate = torch.bmm(hidden_states_expanded,  gate_proj.transpose(1, 2))
+    up = torch.bmm(hidden_states_expanded,  up_proj.transpose(1, 2))
+    next_states = self.act_fn(gate) * up
+    next_states = torch.bmm(next_states, self.down_proj.transpose(1, 2))
+
+    next_states = next_states.view(num_experts, num_tokens, hidden_dim)
+    next_states = next_states * dense_routing_weights.transpose(0, 1).view(num_experts, num_tokens)[..., None]
+    next_states = next_states.sum(dim=0)
+
+    return next_states
+
+
+class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        from transformers.models.lfm2_moe.modeling_lfm2_moe import Lfm2MoeShortConv, Lfm2MoeDecoderLayer, Lfm2MoeSparseMoeBlock, Lfm2MoeExperts
+
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
+        for layer in self._model.model.layers:
+            if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2MoeShortConv):
+                conv_layer = layer.conv
+                conv_layer._orig_forward = conv_layer.slow_forward
+                conv_layer.slow_forward = types.MethodType(lfm2_short_conv_forward_patched, conv_layer)
+
+            if isinstance(layer, Lfm2MoeDecoderLayer) and isinstance(layer.feed_forward, Lfm2MoeSparseMoeBlock):
+                sparse_moe_block = layer.feed_forward
+                if isinstance(sparse_moe_block.experts, Lfm2MoeExperts):
+                    lfm2_moe_experts = sparse_moe_block.experts
+                    lfm2_moe_experts._orig_forward = lfm2_moe_experts.forward
+                    lfm2_moe_experts.forward = types.MethodType(lfm2_moe_experts_forward, lfm2_moe_experts)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        from transformers.models.lfm2_moe.modeling_lfm2_moe import Lfm2MoeShortConv, Lfm2MoeDecoderLayer, Lfm2MoeSparseMoeBlock, Lfm2MoeExperts
+
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+
+        for layer in self._model.model.layers:
+            if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2MoeShortConv):
+                conv_layer = layer.conv
+                conv_layer.slow_forward = conv_layer._orig_forward
+
+            if isinstance(layer, Lfm2MoeDecoderLayer) and isinstance(layer.feed_forward, Lfm2MoeSparseMoeBlock):
+                sparse_moe_block = layer.feed_forward
+                if isinstance(sparse_moe_block.experts, Lfm2MoeExperts):
+                    lfm2_moe_experts = sparse_moe_block.experts
+                    lfm2_moe_experts.forward = lfm2_moe_experts._orig_forward
