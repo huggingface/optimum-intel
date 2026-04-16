@@ -134,7 +134,7 @@ def sdpa_mask_without_vmap(batch_size, q_length=None, kv_length=None, q_offset=0
         return _orig_sdpa_mask_without_vmap(batch_size, cache_position, kv_length, kv_offset=kv_offset, **kwargs)
     else:
         return _orig_sdpa_mask_without_vmap(
-            batch_size, q_length=q_length, kv_length=kv_length, q_offset=q_offset, kv_offset=kv_offset, **kwargs
+            batch_size, q_length=q_length, kv_length=kv_length, q_offset=q_offset, kv_offset=kv_offset, **kwargs)
 for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
     if spec.name in {
         # onnx-exporter-specific fixes
