@@ -1518,6 +1518,10 @@ class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         self.layer_types = normalized_config.config.layer_types
         self.num_kv_shared_layers = normalized_config.config.num_kv_shared_layers
         self.sliding_window = normalized_config.config.sliding_window
+        # Full-attention layers use fewer KV heads than sliding-attention layers (e.g. 2 vs 8 for 26B-A4B)
+        self.num_global_key_value_heads = getattr(
+            normalized_config.config, "num_global_key_value_heads", None
+        ) or self.num_key_value_heads
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         # some layers do not produce their own KV-cache, they use the shared KV-cache
@@ -1537,7 +1541,7 @@ class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             else:
                 shape = (
                     self.batch_size,
-                    self.num_key_value_heads,
+                    self.num_global_key_value_heads,
                     self.sequence_length,
                     self.global_head_dim,
                 )
@@ -4462,6 +4466,15 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
                     self.config = config
 
                 def forward(self, input_ids: torch.Tensor):
+                    # 26B-A4B has hidden_size_per_layer_input=0 (PLE disabled)
+                    if self.language_model.config.hidden_size_per_layer_input <= 0:
+                        return torch.zeros(
+                            input_ids.shape[0],
+                            input_ids.shape[1],
+                            self.language_model.config.num_hidden_layers,
+                            0,
+                            dtype=torch.float32,
+                        )
                     # Replace multimodal token IDs with pad_token_id to match
                     # HF Gemma4Model.forward which uses llm_input_ids where
                     # image/video/audio positions are set to pad_token_id
