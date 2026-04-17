@@ -828,8 +828,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         (
             "image-text-to-text",
             "videochat_flash_qwen",
-            'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-            "--num-samples 1 --trust-remote-code",
+            "int4 --group-size 8 --ratio 0.8 --trust-remote-code",
             {
                 "lm_model": {"int8": 12, "int4": 18},
                 "text_embeddings_model": {"int8": 1},

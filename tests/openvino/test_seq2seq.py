@@ -599,8 +599,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         SUPPORTED_ARCHITECTURES += ["qwen3_vl"]
         SUPPORT_VIDEO += ["qwen3_vl"]
 
-    if is_transformers_version(">=", "4.54.0"):
-        # the layers attribute of DynamicCache is used in videochat_flash_qwen model
+    if is_transformers_version(">=", "4.54.0") and is_transformers_version("<", "5"):
+        # remote code models incompatible before transformers v4.54 and after transformers v5
         SUPPORTED_ARCHITECTURES += ["videochat_flash_qwen"]
         SUPPORT_VIDEO += ["videochat_flash_qwen"]
 
