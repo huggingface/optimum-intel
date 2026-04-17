@@ -4921,13 +4921,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             **kwargs,
         )
         num_frames = config.mm_local_num_frames
-        # Here mm_num_attention_heads refers to the vision embedding model config. It is not set in config and uses the default value.
-        # It comes from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L728
-        self.mm_num_attention_heads = 16
-        # patch size is not set in config and uses the default value from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L731
-        self.patch_size = 14
-        # image_size is not set in config and uses the default value from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L786
-        self.image_size = 224
+        self.mm_num_attention_heads = config.mm_num_attention_heads
+        self.patch_size = config.mm_patch_size
+        self.image_size = config.mm_image_size
         self.grid_size = (
             num_frames,
             self.image_size // self.patch_size,

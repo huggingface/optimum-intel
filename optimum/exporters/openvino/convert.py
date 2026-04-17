@@ -937,6 +937,10 @@ def _get_multi_modal_submodels_and_export_configs(
         model.config.glb_GN = model.model.embed_tokens_extend.image_embed.global_img_feature_extensor.tolist()
         model.config.sub_GN = model.model.embed_tokens_extend.image_embed.sub_img_feature_extensor.tolist()
         model.config.num_img_tokens = model.model.embed_tokens_extend.image_embed.num_img_tokens
+    if model_type == "videochat_flash_qwen":
+        model.config.mm_image_size = model.model.get_vision_tower().config.image_size
+        model.config.mm_patch_size = model.model.get_vision_tower().config.patch_size
+        model.config.mm_num_attention_heads = model.model.get_vision_tower().config.num_attention_heads
 
     if hasattr(model, "image_newline"):
         model.config.image_newline = model.image_newline.tolist()

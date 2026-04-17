@@ -5365,13 +5365,10 @@ class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, visual_seq_length, **kwargs)
         self.num_frames = normalized_config.config.mm_local_num_frames
         self.embed_dim = normalized_config.config.mm_hidden_size
-        # Then input image size and patch size for the vision encoder can not be got from the config, we set them to fixed values according to the original implementation.
-        # image_size is not set in config and uses the default value from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L786
-        self.height = 224
-        self.width = 224
+        self.height = normalized_config.config.mm_image_size
+        self.width = normalized_config.config.mm_image_size
         self.image_size = (self.height, self.width)
-        # patch size is not set in config and uses the default value from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L731
-        self.patch_size = 14
+        self.patch_size = normalized_config.config.mm_patch_size
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "hidden_states":
