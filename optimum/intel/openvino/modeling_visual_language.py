@@ -190,7 +190,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             if past_len:
                 position_ids = position_ids[:, -inputs_embeds.shape[1] :]
 
-            if (self.config.model_type in ["qwen2_vl", "qwen3_vl"]) and position_ids.ndim != 3:
+            if (self.config.model_type in ["qwen2_vl", "qwen2_5_vl", "qwen3_vl"]) and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
 
             inputs["position_ids"] = position_ids
@@ -2895,7 +2895,11 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
             inputs_embeds[video_mask] = video_embeds
 
         # if we get 4D attention mask we cannot calculate rope deltas anymore.
-        if position_ids is None and input_ids is not None and (attention_mask is None or attention_mask.ndim == 2):
+        if (
+            (position_ids is None or position_ids.ndim < 3)
+            and input_ids is not None
+            and (attention_mask is None or attention_mask.ndim == 2)
+        ):
             # calculate RoPE index once per generation in the pre-fill stage only
             if (cache_position is not None and cache_position[0] == 0) or self.rope_deltas is None:
                 position_ids, rope_deltas = self.get_rope_index(
@@ -3286,7 +3290,11 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
             inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
 
         # if we get 4D attention mask we cannot calculate rope deltas anymore.
-        if position_ids is None and input_ids is not None and (attention_mask is None or attention_mask.ndim == 2):
+        if (
+            (position_ids is None or position_ids.ndim < 3)
+            and input_ids is not None
+            and (attention_mask is None or attention_mask.ndim == 2)
+        ):
             # calculate RoPE index once per generation in the pre-fill stage only
             if (cache_position is not None and cache_position[0] == 0) or self.rope_deltas is None:
                 position_ids, rope_deltas = self.get_rope_index(
