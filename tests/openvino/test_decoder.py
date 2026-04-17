@@ -110,7 +110,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if platform.system() != "Windows" and is_transformers_version("<", "4.56.0"):
             SUPPORTED_ARCHITECTURES += ("opt_gptq", "mixtral_awq")
 
-    if is_transformers_version(">=", "4.53.0"):
+    if is_transformers_version(">=", "4.53.0") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("deepseek", "gigachat3")
 
     if is_transformers_version(">", "4.47"):
