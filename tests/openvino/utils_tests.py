@@ -373,7 +373,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "hunyuan_v1_dense": {"model": 32},
     "qwen3_eagle3": {"model": 20},
     "qwen3_next": {"model": 100},
-    "gigachat3": {"model": 58},
+    "gigachat3": {"model": 40},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
