@@ -3716,7 +3716,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM, Qwen3VLModel, Qwen3VLVisio
             visual_pos_masks = video_mask
             deepstack_visual_embeds = deepstack_video_embeds
 
-        if position_ids is None:
+        if position_ids is None or position_ids.ndim < 3:
             attention_mask_tensor = (
                 attention_mask if not isinstance(attention_mask, dict) else attention_mask["full_attention"]
             )
