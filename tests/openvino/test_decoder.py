@@ -27,6 +27,7 @@ from optimum.exporters.openvino.model_configs import (
     DeepseekOpenVINOConfig,
     LFM2OpenVINOConfig,
     Qwen3VLOpenVINOConfig,
+    LFM2MoeOpenVINOConfig,
 )
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
