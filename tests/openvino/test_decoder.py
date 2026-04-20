@@ -25,9 +25,9 @@ from utils_tests import (
 from optimum.exporters.openvino.model_configs import (
     BitnetOpenVINOConfig,
     DeepseekOpenVINOConfig,
+    LFM2MoeOpenVINOConfig,
     LFM2OpenVINOConfig,
     Qwen3VLOpenVINOConfig,
-    LFM2MoeOpenVINOConfig,
 )
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
@@ -313,7 +313,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             supported_architectures -= {"bitnet"}
         if is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"lfm2"}
-        if is_transformers_version("<",  str(LFM2MoeOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+        if is_transformers_version("<", str(LFM2MoeOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"lfm2_moe"}
         # qwen3_vl_text a part of qwen3_vl architecture and is tested in seq2seq group
         if is_transformers_version(">=", str(Qwen3VLOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
