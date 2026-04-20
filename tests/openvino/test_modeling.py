@@ -1137,7 +1137,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("data2vec-text", "flaubert", "xlm")
 
-    if is_transformers_version("!=", "4.52"):
+    if is_transformers_version("!=", "5.2"):
         SUPPORTED_ARCHITECTURES += ("convbert",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
