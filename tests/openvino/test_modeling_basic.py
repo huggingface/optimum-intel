@@ -17,29 +17,28 @@ from parameterized import parameterized
 from transformers import AutoTokenizer, pipeline
 from utils_tests import OPENVINO_DEVICE
 from optimum.intel import (
-    OVModelForAudioClassification,
     OVModelForCausalLM,
-    OVModelForFeatureExtraction,
-    OVModelForImageClassification,
     OVModelForMaskedLM,
     OVModelForQuestionAnswering,
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
-    OVModelForTokenClassification,
-    OVStableDiffusionPipeline,
 )
-
+from optimum.intel.utils.import_utils import is_transformers_version
 
 # Make sure that common architectures are used in combination with common tasks
 MODEL_NAMES = {
     "hf-internal-testing/tiny-random-bert": "OVModelForMaskedLM",
     "hf-internal-testing/tiny-random-distilbert": "OVModelForSequenceClassification",
     "hf-internal-testing/tiny-random-mbart": "OVModelForSeq2SeqLM",
-    "hf-internal-testing/tiny-random-roberta": "OVModelForQuestionAnswering",
     "hf-internal-testing/tiny-random-gpt2": "OVModelForCausalLM",
     "hf-internal-testing/tiny-random-t5": "OVModelForSeq2SeqLM",
     "hf-internal-testing/tiny-random-bart": "OVModelForSeq2SeqLM",
 }
+
+# question-answering pipeline is deprecated in transformers v5.3
+if is_transformers_version("<", "5.3"):
+    MODEL_NAMES["hf-internal-testing/tiny-random-roberta"] = "OVModelForQuestionAnswering"
+
 
 TASKS = {
     "OVModelForMaskedLM": "fill-mask",
@@ -58,6 +57,9 @@ class OVModelBasicIntegrationTest(unittest.TestCase):
         """
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model_class_str = MODEL_NAMES[model_id]
+        if model_class_str == "OVModelForSeq2SeqLM" and is_transformers_version(">=", "5"):
+            self.skipTest("text2text-generation pipeline was deprecated in transformers v5")
+
         model_class = eval(model_class_str)
         model = model_class.from_pretrained(model_id, device=OPENVINO_DEVICE)
         model.save_pretrained(f"{model_id}_ov")
@@ -69,9 +71,13 @@ class OVModelBasicIntegrationTest(unittest.TestCase):
         elif model_class_str == "OVModelForMaskedLM":
             input_text[0] = f"{input_text[0]} {tokenizer.mask_token}"
 
-        if model_class_str in TASKS:
-            task = TASKS[model_class_str]
-            pipe = pipeline(task, model=model, tokenizer=tokenizer)
+        task = TASKS[model_class_str]
+        pipe = pipeline(task, model=model, tokenizer=tokenizer)
+
+        if task == "question-answering":
+            # positional arguments deprecated for question-answering pipeline since v5
+            pipe(question=input_text[0], context=input_text[1])
+        else:
             pipe(*input_text)
         gc.collect()
 
