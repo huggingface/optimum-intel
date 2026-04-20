@@ -5365,10 +5365,10 @@ class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, visual_seq_length, **kwargs)
         self.num_frames = normalized_config.config.mm_local_num_frames
         self.embed_dim = normalized_config.config.mm_hidden_size
-        self.height = normalized_config.config.mm_image_size
-        self.width = normalized_config.config.mm_image_size
+        self.height = normalized_config.config.image_size
+        self.width = normalized_config.config.image_size
         self.image_size = (self.height, self.width)
-        self.patch_size = normalized_config.config.mm_patch_size
+        self.patch_size = normalized_config.config.patch_size
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "hidden_states":
@@ -5408,9 +5408,7 @@ class DummyVideoChatFlashQwenProjectorInputGenerator(DummyInputGenerator):
         self.task = task
         self.batch_size = batch_size
         self.hidden_size = normalized_config.config.mm_hidden_size
-        # num_patches=64 comes from the upstream projector_type "tome16_mlp_hd64", which uses a fixed 64-token output.
-        # Source: https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L135-L146
-        self.num_patches = 64
+        self.num_patches = normalized_config.config.mm_projector_num_tome_tokens
         self.normalized_config = normalized_config
 
     def generate(

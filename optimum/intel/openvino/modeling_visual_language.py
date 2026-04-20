@@ -4922,8 +4922,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         )
         num_frames = config.mm_local_num_frames
         self.mm_num_attention_heads = config.mm_num_attention_heads
-        self.patch_size = config.mm_patch_size
-        self.image_size = config.mm_image_size
+        self.patch_size = config.patch_size
+        self.image_size = config.image_size
+        self.num_tome_tokens = config.mm_projector_num_tome_tokens
         self.grid_size = (
             num_frames,
             self.image_size // self.patch_size,
@@ -5124,7 +5125,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                 x = x.reshape(1, -1, x.shape[-1])
             num_tome_tokens = 16 * num_frames
         else:
-            num_tome_tokens = 64
+            num_tome_tokens = self.num_tome_tokens
 
         x = self.merge_tokens(x, target_num_token=num_tome_tokens)
         x = self.vision_projection(x)
@@ -5155,7 +5156,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
     # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L681-L717
     # Use torchvision instead of transformers.image_transforms for image processing, to align with other models.
     # Simplify the output to be a single tensor instead of BatchFeature.
-    def image_preprocess(images, target_size=None):
+    def image_preprocess(images, target_size, image_mean, image_std):
         from PIL import Image
         from torchvision.transforms.functional import InterpolationMode, normalize, pil_to_tensor, resize
 
@@ -5163,14 +5164,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             images = [images]
         elif isinstance(images, np.ndarray):
             images = list(images)
-
-        if target_size is None:
-            # use default image_size from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L682
-            target_size = (224, 224)
-
-        # use default image_mean and image_std from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L682
-        image_mean = (0.485, 0.456, 0.406)
-        image_std = (0.229, 0.224, 0.225)
 
         processed_images = []
         for image in images:
@@ -5210,6 +5203,14 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         frames = []
         results = {}
         local_num_frames = config.mm_local_num_frames
+        if processor is None:
+            # if processor is not provided, use default image preprocessing parameters.
+            # use default image_size from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L682
+            target_image_size = getattr(config, "image_size", 224)
+            target_size = (target_image_size, target_image_size) if target_image_size is not None else None
+            # use default image_mean and image_std from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L682
+            image_mean = getattr(config, "image_mean", (0.485, 0.456, 0.406))
+            image_std = getattr(config, "image_std", (0.229, 0.224, 0.225))
 
         # preprocess text
         prompt = f"<image>\n{text}" if (image is not None or video is not None) else text
@@ -5253,7 +5254,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             if processor is not None:
                 processed_images = processor(images=video, return_tensors="pt")
             else:
-                processed_images = _OVVideoChatFlashQwenForCausalLM.image_preprocess(images=video)
+                processed_images = _OVVideoChatFlashQwenForCausalLM.image_preprocess(
+                    images=video, target_size=target_size, image_mean=image_mean, image_std=image_std
+                )
             frames.append(processed_images)
 
         # preprocess image
@@ -5268,7 +5271,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             if processor is not None:
                 image_frame = processor(images=image, return_tensors="pt")
             else:
-                image_frame = _OVVideoChatFlashQwenForCausalLM.image_preprocess(images=image)
+                image_frame = _OVVideoChatFlashQwenForCausalLM.image_preprocess(
+                    images=image, target_size=target_size, image_mean=image_mean, image_std=image_std
+                )
             frames.append(image_frame)
             image_sizes.append(image_size)
 
