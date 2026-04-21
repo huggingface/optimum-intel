@@ -159,9 +159,13 @@ class LLMPipelineTestCase(unittest.TestCase):
     def test_compare_outputs(self, model_arch):
         if model_arch in ("xglm",) and is_openvino_version(">=", "2026.1.0"):
             self.skipTest("CVS-183350: OpenVINO 2026.1.0 inference results mismatch")
-        if model_arch in ("mixtral", "qwen2_moe", "qwen3_moe", "gpt_oss") and is_openvino_version(">=", "2026.1.0") and is_transformers_version(">=", "5.0.0"):
+        if (
+            model_arch in ("mixtral", "qwen2_moe", "qwen3_moe", "gpt_oss")
+            and is_openvino_version(">=", "2026.1.0")
+            and is_transformers_version(">=", "5.0.0")
+        ):
             self.skipTest("CVS-183350: OpenVINO 2026.1.0 inference results mismatch")
-        
+
         model_id = MODEL_NAMES[model_arch]
         echo = model_arch not in self.NO_ECHO_MODELS
         use_cache = model_arch not in self.NO_CACHE_MODELS
