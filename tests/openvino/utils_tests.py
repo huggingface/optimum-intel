@@ -335,6 +335,18 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_merger_model": 32,
         "vision_embeddings_pos_model": 1,
     },
+    "qwen3_omni": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 34,
+        "vision_embeddings_pos_model": 1,
+        "audio_encoder_model": 10,
+        "talker_model": 30,
+        "talker_text_embeddings_model": 1,
+        "talker_projections_model": 5,
+        "code_predictor_model": 18,
+        "code2wav_model": 68,
+    },
     "sana": {
         "transformer": 58,
         "vae_decoder": 28,
