@@ -345,7 +345,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "opt",
             "pegasus",
         ) and is_openvino_version(">=", "2026.1.0"):
-            self.skipTest("CVS-183350: OpenVINO 2026.1.0 inference results mismatch")
+            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
         self.mock_torch_compile(model_arch)
         model_id = MODEL_NAMES[model_arch]
 
