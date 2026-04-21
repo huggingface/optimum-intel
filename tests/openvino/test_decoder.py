@@ -257,6 +257,24 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     }
     TASK = "text-generation"
 
+    @classmethod
+    def setUpClass(cls):
+        # Print CPU info for CVS-183350 debugging
+        if is_openvino_version(">=", "2026.1.0"):
+            import openvino as ov
+            import subprocess
+            core = ov.Core()
+            cpu_name = core.get_property("CPU", "FULL_DEVICE_NAME")
+            print(f"\n[CVS-183350 DEBUG] CI Environment Info:")
+            print(f"  OpenVINO CPU: {cpu_name}")
+            try:
+                lscpu_output = subprocess.check_output(["lscpu"], text=True)
+                for line in lscpu_output.split("\n"):
+                    if "Model name" in line or "Flags" in line:
+                        print(f"  {line.strip()}")
+            except Exception:
+                pass
+
     def mock_torch_compile(self, model_arch):
         if model_arch == "bitnet":
             # mock torch.compile to avoid compilation errors in tests
@@ -336,9 +354,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     # TODO: remove gptq/awq from here
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
-        if model_arch in ("xglm", "zamba2", "granitemoehybrid", "llama4", "afmoe") and is_openvino_version(
-            ">=", "2026.1.0"
-        ):
+        if model_arch in (
+            "xglm",
+            "zamba2",
+            "granitemoehybrid",
+            "llama4",
+            "afmoe",
+        ) and is_openvino_version(">=", "2026.1.0"):
             self.skipTest("CVS-183350: OpenVINO 2026.1.0 inference results mismatch")
         self.mock_torch_compile(model_arch)
         model_id = MODEL_NAMES[model_arch]
@@ -433,7 +455,21 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         atol = 3e-3 if model_arch in ["minicpm", "qwen2-moe"] else 1e-4
         # quantized models have different logits value range
         if "awq" not in model_arch and "gptq" not in model_arch:
-            self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
+            # Debug output for CVS-183350 investigation
+            max_diff = torch.max(torch.abs(ov_outputs.logits - transformers_outputs.logits)).item()
+            if model_arch in ["opt", "pegasus", "xglm"] and is_openvino_version(">=", "2026.1.0"):
+                import openvino as ov
+                core = ov.Core()
+                cpu_name = core.get_property("CPU", "FULL_DEVICE_NAME")
+                print(f"\n[CVS-183350 DEBUG] {model_arch}")
+                print(f"  CPU: {cpu_name}")
+                print(f"  Max diff: {max_diff}")
+                print(f"  Tolerance: {atol}")
+                print(f"  Pass: {max_diff <= atol}")
+                print(f"  OV logits sample [0,0,:5]: {ov_outputs.logits[0,0,:5]}")
+                print(f"  TF logits sample [0,0,:5]: {transformers_outputs.logits[0,0,:5]}")
+            self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol),
+                            f"Max diff {max_diff} exceeds tolerance {atol} for {model_arch}")
 
         # Qwen tokenizer does not support padding
         if model_arch in ["qwen"]:
