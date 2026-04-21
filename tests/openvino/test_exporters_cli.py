@@ -179,7 +179,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
-    if is_transformers_version(">=", "5.1"):
+    if is_transformers_version(">=", "5.0"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation", "lfm2_moe"),
