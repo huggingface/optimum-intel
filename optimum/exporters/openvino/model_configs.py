@@ -5510,5 +5510,5 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
     library_name="transformers",
 )
 class LFM2MoeOpenVINOConfig(LFM2OpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = "5.1"
+    MIN_TRANSFORMERS_VERSION = "5.0"
     _MODEL_PATCHER = Lfm2MoeModelPatcher
