@@ -116,7 +116,7 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.update({"qwen3_next": OVModelForCausalLM})
 
-    if is_transformers_version(">=", "5.1"):
+    if is_transformers_version(">=", "5.0"):
         SUPPORTED_ARCHITECTURES.update({"lfm2_moe": OVModelForCausalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
