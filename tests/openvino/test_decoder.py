@@ -336,9 +336,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     # TODO: remove gptq/awq from here
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
-        if model_arch in ("xglm", "zamba2", "granitemoehybrid", "llama4", "afmoe") and is_openvino_version(
-            ">=", "2026.1.0"
-        ):
+        if model_arch in ("xglm", "zamba2", "granitemoehybrid", "llama4", "afmoe") and is_openvino_version(">=", "2026.1.0"):
             self.skipTest("CVS-183350: OpenVINO 2026.1.0 inference results mismatch")
         self.mock_torch_compile(model_arch)
         model_id = MODEL_NAMES[model_arch]
