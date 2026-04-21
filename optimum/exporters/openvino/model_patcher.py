@@ -8502,10 +8502,7 @@ class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
     def __enter__(self):
         super().__enter__()
         from transformers.models.lfm2_moe.modeling_lfm2_moe import (
-            Lfm2MoeDecoderLayer,
-            Lfm2MoeExperts,
             Lfm2MoeShortConv,
-            Lfm2MoeSparseMoeBlock,
         )
 
         super().__enter__()
