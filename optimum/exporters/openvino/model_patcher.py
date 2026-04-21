@@ -8531,9 +8531,3 @@ class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
             if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2MoeShortConv):
                 conv_layer = layer.conv
                 conv_layer.slow_forward = conv_layer._orig_forward
-
-            if isinstance(layer, Lfm2MoeDecoderLayer) and isinstance(layer.feed_forward, Lfm2MoeSparseMoeBlock):
-                sparse_moe_block = layer.feed_forward
-                if isinstance(sparse_moe_block.experts, Lfm2MoeExperts):
-                    lfm2_moe_experts = sparse_moe_block.experts
-                    lfm2_moe_experts.forward = lfm2_moe_experts._orig_forward
