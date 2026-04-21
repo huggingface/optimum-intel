@@ -99,7 +99,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
         SUPPORTED_SSM_ARCHITECTURES += ("qwen3_next",)
 
-    if is_transformers_version(">=", "5.1.0"):
+    if is_transformers_version(">=", "5.0"):
         SUPPORTED_SSM_ARCHITECTURES += ("lfm2_moe",)
 
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
