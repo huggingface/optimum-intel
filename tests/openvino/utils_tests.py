@@ -370,7 +370,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "zamba2": {"model": 44},
     "exaone4": {"model": 16},
     "lfm2": {"model": 52 if is_transformers_version("<", "5") else 54},
-    "lfm2_moe": {"model": 54},
+    "lfm2_moe": {"model": 46},
     "hunyuan_v1_dense": {"model": 32},
     "qwen3_eagle3": {"model": 20},
     "qwen3_next": {"model": 100},
