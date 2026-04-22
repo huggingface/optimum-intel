@@ -37,6 +37,7 @@ _import_structure = {
         "OVModelForCausalLM",
         "OVModelForCTC",
         "OVModelForCustomTasks",
+        "OVModelForFeatureExtraction",
         "OVModelForImageClassification",
         "OVModelForImageToImage",
         "OVModelForMaskedLM",
