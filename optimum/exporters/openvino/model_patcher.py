@@ -5110,9 +5110,8 @@ def gemma4_eager_attention_forward_patched(
     if attention_mask is not None:
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
-    eps = 0.0000001
 
-    attn_weights = nn.functional.softmax(attn_weights + eps, dim=-1, dtype=torch.float32).to(query.dtype)
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
@@ -5178,7 +5177,7 @@ def gemma4_text_attention_forward(
         value_states,
         attention_mask,
         dropout=self.attention_dropout if self.training else 0.0,
-        scaling=1.0,
+        scaling=self.scaling,
         sliding_window=self.sliding_window,
         **kwargs,
     )
@@ -8891,9 +8890,18 @@ class Gemma4PerLayerInputsGetterModelPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
+# OpenVINO has a bug due to which Clamp(-inf, inf) doesn't work correctly: CVS-185473.
+# When min == -inf and max == inf, Clamp is equivalent to an identity operation and
+# can be removed from the model, which serves as a workaround for the issue.
+def patched_gemma4_clippable_linear_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    hidden_states = self.linear(hidden_states)
+    return hidden_states
+
 class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
     def __init__(self, config, model, model_kwargs):
         super().__init__(config, model, model_kwargs)
+        from transformers.models.gemma4.modeling_gemma4 import Gemma4ClippableLinear
+
         # Get the vision encoder - it's at model.model.vision_tower.encoder
         vision_model = model.model.vision_tower if is_transformers_version(">=", "5") else model.vision_tower
         self._vision_encoder = vision_model.encoder
@@ -8936,6 +8944,21 @@ class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
         self._orig_encoder_forward = orig_encoder_forward
         self._vision_encoder.forward = patched_encoder_forward
 
+        for layer in self._vision_encoder.layers:
+            for module in layer.modules():
+                if isinstance(module, Gemma4ClippableLinear) and module.use_clipped_linears:
+                    if module.input_min == -float("inf") and module.input_max == float("inf") and module.output_min == -float("inf") and module.output_max == float("inf"):
+                        module.orig_forward = module.forward
+                        module.forward = types.MethodType(patched_gemma4_clippable_linear_forward, module)
+
     def __exit__(self, exc_type, exc_value, traceback):
+        from transformers.models.gemma4.modeling_gemma4 import Gemma4ClippableLinear
         self._vision_encoder.forward = self._orig_encoder_forward
         super().__exit__(exc_type, exc_value, traceback)
+
+        for layer in self._vision_encoder.layers:
+            for module in layer.modules():
+                if isinstance(module, Gemma4ClippableLinear) and module.use_clipped_linears:
+                    if module.input_min == -float("inf") and module.input_max == float("inf") and module.output_min == -float(
+                            "inf") and module.output_max == float("inf"):
+                        module.forward = module.orig_forward

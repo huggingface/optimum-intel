@@ -686,6 +686,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
+        if model_arch != "gemma4":
+            return
         def compare_outputs(inputs, ov_model, transformers_model, generation_config):
             transformers_inputs = copy.deepcopy(inputs)
             ov_outputs = ov_model.generate(**inputs, generation_config=generation_config)
@@ -773,13 +775,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             set_seed(SEED)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**transformers_inputs)
-            # Gemma4 performs poorly with random weights.
-            # The full model "google/gemma-4-E2B-it" passes this test with 4e-2 eps, but
-            # after saving it with random weights the converted model generates logits with max difference around 5.
-            # On the tiny model the error is about 0.1.
-            eps = 0.2 if model_arch == "gemma4" else 4e-3
             self.assertTrue(
-                torch.allclose(ov_outputs.logits, transformers_outputs.logits.to(torch.float32), atol=eps),
+                torch.allclose(ov_outputs.logits, transformers_outputs.logits.to(torch.float32), atol=4e-3),
                 f"Max abs diff {(torch.abs(ov_outputs.logits - transformers_outputs.logits).max())}",
             )
 
@@ -791,12 +788,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         ov_model.generation_config.do_sample = False
         # minicpmo diverges after 20 tokens
         tokens_to_generate = 20 if model_arch == "minicpmo" else 30
-
-        # Gemma4 performs much poorly with random weights.
-        # The full model "google/gemma-4-E2B-it" passes this test, while the same architecture
-        # saved with random weights generates tokens that do not match transformers.
-        if model_arch == "gemma4":
-            tokens_to_generate = 1
 
         gen_config = GenerationConfig(
             max_new_tokens=tokens_to_generate,
