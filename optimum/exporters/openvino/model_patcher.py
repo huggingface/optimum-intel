@@ -52,16 +52,13 @@ from optimum.exporters.onnx.model_patcher import (
     ModelPatcher,
     gpt_oss_forward,
     override_arguments,
+    sdpa_mask_without_vmap as _orig_sdpa_mask_without_vmap
 )
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
     is_openvino_version,
     is_torch_version,
     is_transformers_version,
-)
-
-from optimum.exporters.onnx.model_patcher import (
-    sdpa_mask_without_vmap as _orig_sdpa_mask_without_vmap,
 )
 
 
@@ -122,7 +119,7 @@ def sdpa_mask_without_vmap(batch_size, q_length=None, kv_length=None, q_offset=0
     import inspect
 
     sig = inspect.signature(_orig_sdpa_mask_without_vmap)
-    if "cache_position" in sig.parameters:
+    if is_transformers_version(">=", "5.5") and "cache_position" in sig.parameters and q_length is not None:
         # Old optimum signature: (batch_size, cache_position, kv_length, kv_offset, ...)
         cache_position = torch.arange(q_length, dtype=torch.long) + q_offset
         kwargs.pop("q_offset", None)
