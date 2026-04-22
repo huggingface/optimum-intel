@@ -8498,6 +8498,9 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
                 del sparse_moe_block.down_projs, sparse_moe_block.gate_projs, sparse_moe_block.up_projs
 
 
+# Patches the MoE block with a vectorized implementation.
+# The vectorized form is required to ensure correct torch.jit tracing for this component.
+# Original implementation: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/lfm2_moe/modeling_lfm2_moe.py#L167
 def lfm2_moe_experts_forward(
     self,
     hidden_states: torch.Tensor,
