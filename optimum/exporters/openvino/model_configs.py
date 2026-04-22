@@ -244,9 +244,8 @@ def _warn_potential_accuracy_issue_ov_2026_1(model_type: str, min_transformers_v
         return
     if min_transformers_version is not None and not is_transformers_version(">=", min_transformers_version):
         return
-    logger.warning(
-        f"Model type '{model_type}' may have potential accuracy issues with OpenVINO >= 2026.1.0."
-    )
+    logger.warning(f"Model type '{model_type}' may have potential accuracy issues with OpenVINO >= 2026.1.0.")
+
 
 if TYPE_CHECKING:
     from transformers.modeling_utils import PreTrainedModel  # noqa: F811
