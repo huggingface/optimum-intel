@@ -2259,6 +2259,7 @@ class LlavaQwen2OpenVINOConfig(BaseVLMOpenVINOConfig):
                 float_dtype=self.float_dtype,
                 behavior=behavior,
                 preprocessors=self._preprocessors,
+                trust_remote_code=self._trust_remote_code,
             )
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
@@ -3133,6 +3134,7 @@ class Phi3VisionOpenVINOConfig(BaseVLMOpenVINOConfig):
                 float_dtype=self.float_dtype,
                 behavior=behavior,
                 preprocessors=self._preprocessors,
+                trust_remote_code=self._trust_remote_code,
             )
         if behavior == Phi3VisionConfigBehavior.VISION_PROJECTION:
             return self.__class__(
