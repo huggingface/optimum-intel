@@ -163,6 +163,8 @@ from .model_patcher import (
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
     Lfm2ModelPatcher,
+    Lfm2VlImageEmbeddingsModelPatcher,
+    Lfm2VlLMModelPatcher,
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
     LlavaImageEmbeddingModelPatcher,
@@ -4958,6 +4960,145 @@ class LFM2OpenVINOConfig(MambaOpenVINOConfig):
         if self.use_past_in_inputs:
             self.add_past_key_values(common_inputs, direction="inputs")
         return common_inputs
+
+
+class DummyLfm2VlVisionInputGenerator(DummyInputGenerator):
+    """
+    Generates dummy inputs for the LFM2-VL vision tower.
+    The LFM2-VL vision model uses a flat patch representation:
+    - pixel_values: (batch_size, num_patches, patch_size^2 * num_channels)
+    - pixel_attention_mask: (batch_size, num_patches)
+    - spatial_shapes: (batch_size, 2) - (height_in_patches, width_in_patches)
+    """
+
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "pixel_attention_mask", "spatial_shapes")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        **kwargs,
+    ):
+        self.task = task
+        vision_config = normalized_config.config
+        self.batch_size = batch_size
+        self.num_patches = getattr(vision_config, "num_patches", 256)
+        self.patch_size = getattr(vision_config, "patch_size", 16)
+        self.num_channels = getattr(vision_config, "num_channels", 3)
+        self.pixel_feature_size = self.patch_size * self.patch_size * self.num_channels
+        # Use sqrt of num_patches as height and width in patches
+        import math
+
+        self.num_patches_per_dim = int(math.isqrt(self.num_patches))
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            shape = (self.batch_size, self.num_patches, self.pixel_feature_size)
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        elif input_name == "pixel_attention_mask":
+            shape = (self.batch_size, self.num_patches)
+            return self.random_int_tensor(shape, max_value=2, framework=framework, dtype="bool")
+        elif input_name == "spatial_shapes":
+            import torch
+
+            return torch.tensor(
+                [[self.num_patches_per_dim, self.num_patches_per_dim]] * self.batch_size, dtype=torch.int64
+            )
+        raise ValueError(f"Unsupported input name: {input_name}")
+
+
+@register_in_tasks_manager("lfm2_vl", *["image-text-to-text"], library_name="transformers")
+class Lfm2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
+    """
+    OpenVINO export configuration for the LFM2-VL (Vision-Language) model family.
+    The model consists of a Siglip2 vision encoder, a multi-modal projector, and an LFM2 language model.
+    """
+
+    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm2VlVisionInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {
+            "pixel_values": {0: "batch_size", 1: "num_patches"},
+            "pixel_attention_mask": {0: "batch_size", 1: "num_patches"},
+            "spatial_shapes": {0: "batch_size"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {
+            "image_features": {0: "batch_size", 1: "num_image_tokens"},
+        }
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VLMConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                self._orig_config.text_config.model_type,
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Lfm2VlLMModelPatcher,
+            )
+
+        return super().with_behavior(behavior)
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            # Lfm2VlLMModelPatcher navigates to model.model.language_model internally
+            return model
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return model
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.model.language_model.config
+            return text_embedding
+
+    def patch_model_for_export(
+        self, model: "PreTrainedModel", model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return Lfm2VlImageEmbeddingsModelPatcher(self, model, model_kwargs)
 
 
 @register_in_tasks_manager(

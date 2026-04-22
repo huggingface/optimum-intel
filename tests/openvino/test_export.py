@@ -105,7 +105,7 @@ class ExportModelTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.update({"granitemoehybrid": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES.update({"exaone4": OVModelForCausalLM, "lfm2": OVModelForCausalLM})
+        SUPPORTED_ARCHITECTURES.update({"exaone4": OVModelForCausalLM, "lfm2": OVModelForCausalLM, "lfm2_vl": OVModelForVisualCausalLM})
 
     if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "4.58.0"):
         SUPPORTED_ARCHITECTURES.update({"afmoe": OVModelForCausalLM})

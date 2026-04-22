@@ -303,6 +303,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "phi4_multimodal",
     "llama4",
     "minicpmo",
+    "lfm2_vl",
 ]
 
 SSM_MODELS = ["mamba", "falcon_mamba", "zamba2", "lfm2", "granitemoehybrid", "qwen3_next"]
@@ -379,6 +380,24 @@ def save_config(config, save_dir):
         save_dir.mkdir(exist_ok=True, parents=True)
         output_config_file = Path(save_dir / "config.json")
         config.to_json_file(output_config_file, use_diff=True)
+
+    # Post-process the saved config.json to ensure model_type matches the instance attribute.
+    # Some configs (e.g. Lfm2VlConfig) have a class-level model_type with hyphens (e.g. "lfm2-vl")
+    # but the instance attribute uses underscores (e.g. "lfm2_vl"). The transformers CONFIG_MAPPING
+    # only has the underscore form, so the hyphen form cannot be loaded by AutoConfig.
+    import json as _json
+
+    save_dir = Path(save_dir)
+    config_file = save_dir / "config.json"
+    if config_file.exists():
+        instance_model_type = config.__dict__.get("model_type", None)
+        if instance_model_type is not None:
+            with open(config_file) as _f:
+                _cfg = _json.load(_f)
+            if _cfg.get("model_type") != instance_model_type:
+                _cfg["model_type"] = instance_model_type
+                with open(config_file, "w") as _f:
+                    _json.dump(_cfg, _f, indent=2)
 
 
 def deduce_diffusers_dtype(model_name_or_path, **loading_kwargs):

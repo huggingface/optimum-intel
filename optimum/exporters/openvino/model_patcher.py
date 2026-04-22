@@ -17,6 +17,7 @@ import inspect
 import logging
 import logging as log
 import math
+import copy
 import types
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
@@ -7466,6 +7467,326 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
 
         for layer in self._model.model.layers:
+            if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2ShortConv):
+                conv_layer = layer.conv
+            else:
+                continue
+            conv_layer.slow_forward = conv_layer._orig_forward
+
+
+def lfm2_vl_resize_positional_embeddings(positional_embeddings, spatial_shapes, max_length):
+    """
+    Patched version of Siglip2VisionEmbeddings.resize_positional_embeddings.
+    Uses torch.nn.functional.grid_sample with a dynamically-computed sampling grid
+    instead of F.interpolate with static sizes. This ensures the operation is
+    trace-compatible and works with variable spatial shapes in OpenVINO.
+
+    Note: Since pixel_values passed to the vision tower contain only valid (non-padded)
+    patches, max_length == h*w and no padding is required.
+    """
+    import torch.nn.functional as F
+
+    embed_dim = positional_embeddings.shape[-1]
+    source_dtype = positional_embeddings.dtype
+
+    # positional_embeddings: (base_h, base_w, embed_dim) → (1, embed_dim, base_h, base_w)
+    pos_emb = positional_embeddings.permute(2, 0, 1).unsqueeze(0).float()
+
+    target_h = spatial_shapes[0, 0]
+    target_w = spatial_shapes[0, 1]
+
+    # Create a normalized sampling grid of shape (1, target_h, target_w, 2).
+    # Using torch.linspace with a tensor `steps` argument, which is supported by
+    # torch.jit.trace + OpenVINO and produces a dynamically-sized output.
+    y_coords = torch.linspace(-1.0, 1.0, target_h, device=pos_emb.device)
+    x_coords = torch.linspace(-1.0, 1.0, target_w, device=pos_emb.device)
+    grid_y, grid_x = torch.meshgrid(y_coords, x_coords, indexing="ij")
+    grid = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)  # (1, target_h, target_w, 2)
+
+    # Bilinear interpolation via grid_sample (dynamic output size supported by OV)
+    resized = F.grid_sample(pos_emb, grid, mode="bilinear", align_corners=True)
+    # resized: (1, embed_dim, target_h, target_w) → (1, target_h*target_w, embed_dim)
+    resized = resized.flatten(2).transpose(1, 2).to(source_dtype)  # (1, h*w, embed_dim)
+
+    # No padding needed: pixel_values passed to the vision tower contain only valid patches
+    # so max_length == target_h * target_w.
+    return resized
+
+
+def lfm2_vl_get_image_features(self, pixel_values, spatial_shapes, pixel_attention_mask, **kwargs):
+    """
+    Patched version of Lfm2VlModel.get_image_features that is compatible with torch.jit.trace.
+    The original implementation uses a Python for-loop over the batch dimension and returns a list
+    of variable-length tensors - both patterns that are incompatible with tracing.
+    This version processes the batch directly and returns a single tensor.
+
+    To avoid shape-inference issues inside Siglip2VisionEmbeddings (caused by the F.interpolate
+    call with data-dependent target sizes), we trim pixel_values to valid patches only before
+    passing them to the vision tower. Dynamic slicing with a tensor index is supported by OV.
+    """
+    feature_org_h = spatial_shapes[0, 0]
+    feature_org_w = spatial_shapes[0, 1]
+    num_valid_patches = feature_org_h * feature_org_w  # tensor product (OV-compatible)
+
+    # Keep only valid (non-padding) patches — avoids padding-related broadcast issues
+    pixel_values_valid = pixel_values[:1, :num_valid_patches, :]
+    pixel_attention_mask_valid = (
+        pixel_attention_mask[:1, :num_valid_patches] if pixel_attention_mask is not None else None
+    )
+
+    image_outputs = self.vision_tower(
+        pixel_values=pixel_values_valid,
+        spatial_shapes=spatial_shapes,
+        pixel_attention_mask=pixel_attention_mask_valid,
+    ).last_hidden_state
+    # image_outputs: (1, h*w, hidden_dim) — no padding
+
+    # Reshape to (1, h, w, hidden_dim)
+    image_features = image_outputs.reshape(1, feature_org_h, feature_org_w, -1)
+
+    # Apply multi-modal projector (pixel unshuffle + MLP)
+    image_features = self.multi_modal_projector(image_features)
+
+    # Flatten spatial dims: (1, h', w', text_hidden_dim) -> (1, h'*w', text_hidden_dim)
+    image_features = image_features.reshape(1, -1, image_features.shape[-1])
+    return image_features
+
+
+class Lfm2VlImageEmbeddingsModelPatcher(ModelPatcher):
+    """
+    Patches the LFM2-VL vision embeddings model for export.
+    Replaces the forward method with a call to a patched get_image_features
+    that returns a single tensor instead of a list.
+    """
+
+    def __init__(self, config, model, model_kwargs):
+        super().__init__(config, model, model_kwargs)
+
+        @functools.wraps(self.orig_forward)
+        def patched_forward(pixel_values, spatial_shapes, pixel_attention_mask, **kwargs):
+            if hasattr(self._model, "model") and hasattr(self._model.model, "get_image_features"):
+                get_image_features = self._model.model.get_image_features
+            else:
+                get_image_features = self._model.get_image_features
+
+            outputs = get_image_features(
+                pixel_values=pixel_values,
+                spatial_shapes=spatial_shapes,
+                pixel_attention_mask=pixel_attention_mask,
+                **kwargs,
+            )
+            output_names = list(config.outputs.keys())
+            return {output_names[0]: outputs}
+
+        self.patched_forward = patched_forward
+
+    def __enter__(self):
+        super().__enter__()
+
+        # Patch get_image_features on the inner model to make it traceable
+        if hasattr(self._model, "model") and hasattr(self._model.model, "get_image_features"):
+            target = self._model.model
+        else:
+            target = self._model
+
+        target._orig_get_image_features = target.get_image_features
+        target.get_image_features = types.MethodType(lfm2_vl_get_image_features, target)
+
+        # Patch Siglip2 attention to use eager mode for tracing compatibility
+        vision_tower = target.vision_tower
+        if hasattr(vision_tower, "vision_model"):
+            vision_model = vision_tower.vision_model
+        else:
+            vision_model = vision_tower
+        for layer in vision_model.encoder.layers:
+            layer.self_attn.config = copy.deepcopy(layer.self_attn.config)
+            layer.self_attn.config._attn_implementation = "eager"
+        # Ensure the vision model uses eager attention for 4D mask preparation
+        if hasattr(vision_model, "config"):
+            vision_model.config._attn_implementation = "eager"
+
+        # Patch Siglip2VisionEmbeddings.resize_positional_embeddings to use grid_sample
+        # instead of F.interpolate with static sizes. This ensures dynamic spatial shapes
+        # work correctly in OpenVINO (the F.interpolate approach captures sizes as constants).
+        vision_embeddings = vision_model.embeddings
+        vision_embeddings._orig_resize_positional_embeddings = (
+            vision_embeddings.__class__.resize_positional_embeddings
+        )
+        vision_embeddings.__class__.resize_positional_embeddings = staticmethod(
+            lfm2_vl_resize_positional_embeddings
+        )
+
+        # Cast vision tower to fp32 to ensure consistent dtype during tracing.
+        # Siglip2VisionEmbeddings.forward casts pixel_values to patch_embedding.weight.dtype,
+        # which causes mixed-dtype issues when __make_16bit_traceable later converts LayerNorm
+        # weights to fp32 while Linear outputs remain bf16. Running the vision tower in fp32
+        # avoids this mismatch.
+        vision_tower.float()
+
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        if hasattr(self._model, "model") and hasattr(self._model.model, "_orig_get_image_features"):
+            self._model.model.get_image_features = self._model.model._orig_get_image_features
+        elif hasattr(self._model, "_orig_get_image_features"):
+            self._model.get_image_features = self._model._orig_get_image_features
+
+        # Restore original resize_positional_embeddings
+        if hasattr(self._model, "model"):
+            target = self._model.model
+        else:
+            target = self._model
+        vision_tower = target.vision_tower
+        if hasattr(vision_tower, "vision_model"):
+            vision_model = vision_tower.vision_model
+        else:
+            vision_model = vision_tower
+        vision_embeddings = vision_model.embeddings
+        if hasattr(vision_embeddings, "_orig_resize_positional_embeddings"):
+            vision_embeddings.__class__.resize_positional_embeddings = (
+                vision_embeddings._orig_resize_positional_embeddings
+            )
+
+
+class Lfm2VlLMModelPatcher(OVDecoderModelPatcher):
+    """
+    Patches the LFM2-VL model for language model export.
+    Extends Lfm2ModelPatcher to handle the VL model structure where layers
+    are at model.model.language_model.layers instead of model.model.layers,
+    and to correctly forward inputs_embeds.
+    """
+
+    def __init__(self, config, model, model_kwargs=None):
+        from transformers.models.lfm2.modeling_lfm2 import Lfm2HybridConvCache
+
+        super().__init__(config, model, model_kwargs)
+
+        class Lfm2HybridConvCacheWrap(Lfm2HybridConvCache):
+            def __init__(self, config, max_batch_size, conv_cache, key_cache, value_cache):
+                super().__init__(config=config, max_batch_size=max_batch_size)
+                self.key_cache = key_cache
+                self.value_cache = value_cache
+                self.conv_cache = conv_cache
+                self.conv_layer_idx_mapping = {}
+                self.attention_layer_idx_mapping = {}
+                conv_layer_idx = 0
+                attention_layer_idx = 0
+                for i in range(config.num_hidden_layers):
+                    if config.layer_types[i] == "full_attention":
+                        self.attention_layer_idx_mapping[i] = attention_layer_idx
+                        attention_layer_idx += 1
+                    elif config.layer_types[i] == "conv":
+                        self.conv_layer_idx_mapping[i] = conv_layer_idx
+                        conv_layer_idx += 1
+
+            def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
+                layer_idx = self.attention_layer_idx_mapping[layer_idx]
+                if self.key_cache[layer_idx].numel() == 0:
+                    self.key_cache[layer_idx] = key_states
+                    self.value_cache[layer_idx] = value_states
+                else:
+                    self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
+                    self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
+                return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+            def get_seq_length(self, layer_idx=0):
+                layer_idx = (
+                    self.first_attention_layer if self.layer_types[layer_idx] != "full_attention" else layer_idx
+                )
+                layer_idx = self.attention_layer_idx_mapping[layer_idx]
+                if len(self.key_cache) <= layer_idx or self.key_cache[layer_idx].numel() == 0:
+                    return 0
+                return self.key_cache[layer_idx].shape[-2]
+
+        def patched_forward(
+            input_ids=None,
+            attention_mask=None,
+            position_ids=None,
+            cache_params=None,
+            inputs_embeds=None,
+            labels=None,
+            use_cache=None,
+            cache_position=None,
+            logits_to_keep=0,
+        ):
+            use_cache = False
+            wrapped_cache_params = None
+            num_conv_layers = self.real_config._config.layer_types.count("conv")
+            num_atten_layers = self.real_config._config.layer_types.count("full_attention")
+            if cache_params is not None:
+                use_cache = True
+                conv_cache = []
+                key_cache = []
+                value_cache = []
+
+                batch_size = cache_params[0].size(0)
+
+                for idx in range(num_conv_layers):
+                    conv_cache.append(cache_params[idx])
+
+                for idx in range(num_atten_layers):
+                    key_cache.append(cache_params[num_conv_layers + idx * 2])
+                    value_cache.append(cache_params[num_conv_layers + idx * 2 + 1])
+
+                wrapped_cache_params = Lfm2HybridConvCacheWrap(
+                    self.real_config._config, batch_size, conv_cache, key_cache, value_cache
+                )
+
+            causal_lm_output = self.model_orig_forward(
+                input_ids=input_ids,
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                past_key_values=wrapped_cache_params,
+                use_cache=use_cache,
+            )
+            outputs = {
+                "logits": causal_lm_output.logits,
+            }
+
+            if use_cache:
+                key_values = causal_lm_output.past_key_values
+                present_key_values = []
+                for idx in range(num_conv_layers):
+                    present_key_values.append(key_values.conv_cache[idx])
+
+                for idx in range(num_atten_layers):
+                    present_key_values.append(key_values.key_cache[idx])
+                    present_key_values.append(key_values.value_cache[idx])
+
+                outputs["present_key_values"] = present_key_values
+
+            return outputs
+
+        self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+    def __enter__(self):
+        from transformers.models.lfm2.modeling_lfm2 import Lfm2ShortConv
+
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
+        # Navigate to language_model layers inside the VL model
+        language_model = self._model.model.language_model
+        for layer in language_model.layers:
+            if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2ShortConv):
+                conv_layer = layer.conv
+            else:
+                continue
+            conv_layer._orig_forward = conv_layer.slow_forward
+            conv_layer.slow_forward = types.MethodType(lfm2_short_conv_forward_patched, conv_layer)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        from transformers.models.lfm2.modeling_lfm2 import Lfm2ShortConv
+
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+
+        language_model = self._model.model.language_model
+        for layer in language_model.layers:
             if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2ShortConv):
                 conv_layer = layer.conv
             else:

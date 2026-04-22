@@ -1080,6 +1080,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     if is_transformers_version(">=", "4.57.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen3_vl", False))
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "hunyuan_v1_dense", False))
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "lfm2_vl", False))
 
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.extend(
