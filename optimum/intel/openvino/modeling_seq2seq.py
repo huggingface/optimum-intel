@@ -875,6 +875,8 @@ class OVEncoder(OVModelPart):
 
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names:
+            if attention_mask is None:
+                attention_mask = torch.ones_like(inputs[self.main_input_name])
             inputs["attention_mask"] = attention_mask
 
         # Run inference
