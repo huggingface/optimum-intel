@@ -148,6 +148,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.57.0"):
         SUPPORTED_ARCHITECTURES += ("hunyuan_v1_dense",)
 
+    if is_transformers_version(">=", "5.0.0"):
+        SUPPORTED_ARCHITECTURES += ("glm4_moe_lite",)
+
     if is_transformers_version("<", "4.56.0"):
         SUPPORTED_ARCHITECTURES += ("qwen", "chatglm", "chatglm4")
 
@@ -243,6 +246,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mixtral_awq": 2,
         "gemma3_text": 2,
         "glm4": 2,
+        "glm4_moe_lite": 2,
         "qwen3": 2,
         "qwen3_moe": 2,
         "mamba": 0,

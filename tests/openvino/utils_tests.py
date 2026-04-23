@@ -218,6 +218,7 @@ MODEL_NAMES = {
     "xglm": "optimum-intel-internal-testing/tiny-random-XGLMForCausalLM",
     "xverse": "optimum-intel-internal-testing/tiny-random-xverse",
     "glm4": "optimum-intel-internal-testing/tiny-random-glm4",
+    "glm4_moe_lite": "/tmp/model_enabler/tiny_model/GLM-4.7-Flash-tiny",
     "glm": "optimum-intel-internal-testing/tiny-random-glm-edge",
     "open-clip": "optimum-intel-internal-testing/tiny-open-clip-model",
     "open-clip-ov": "optimum-intel-internal-testing/tiny-open-clip-model",
@@ -234,6 +235,7 @@ EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "afmoe": {"model": 16},
+    "glm4_moe_lite": {"model": 42},
     "bert": {"model": 68 if is_transformers_version("<", "5") else 70},
     "roberta": {"model": 68},
     "albert": {"model": 84},

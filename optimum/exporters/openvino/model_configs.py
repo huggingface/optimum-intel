@@ -147,6 +147,7 @@ from .model_patcher import (
     FalconModelPatcher,
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
+    Glm4MoeLitePatcher,
     Gemma3LMModelPatcher,
     GptJModelPatcher,
     GptNeoModelPatcher,
@@ -3972,6 +3973,26 @@ class GLMOpenVINOConfig(LlamaOpenVINOConfig):
 )
 class GLM4OpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.3"
+
+
+@register_in_tasks_manager(
+    "glm4_moe_lite",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class Glm4MoeLiteOpenVINOConfig(MiniCPM3OpenVINOConfig):
+    """OpenVINO export config for GLM-4.7-Flash / Glm4MoeLiteForCausalLM.
+
+    The model uses Multi-head Latent Attention (MLA) with separate key/value
+    head dimensions, identical to MiniCPM3, so we reuse its dummy PKV
+    generator.  The only additional requirement is patching the
+    ``Glm4MoeLiteNaiveMoe`` forward method to replace its dynamic expert loop
+    with a vectorized implementation.
+    """
+
+    MIN_TRANSFORMERS_VERSION = "5.0.0"
+    MAX_TRANSFORMERS_VERSION = None  # No upper bound for this newer model
+    _MODEL_PATCHER = Glm4MoeLitePatcher
 
 
 @register_in_tasks_manager(
