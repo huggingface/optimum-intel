@@ -57,6 +57,7 @@ TESTS_REQUIRE = [
     "open_clip_torch>=2.26.1",
     "peft",
     "datasets>=1.4.0",
+    "torchcodec",
     "tbb",
     "langchain-huggingface",
     "hf_xet",
