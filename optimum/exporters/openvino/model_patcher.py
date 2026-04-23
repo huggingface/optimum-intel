@@ -52,6 +52,8 @@ from optimum.exporters.onnx.model_patcher import (
     ModelPatcher,
     gpt_oss_forward,
     override_arguments,
+)
+from optimum.exporters.onnx.model_patcher import (
     sdpa_mask_without_vmap as _orig_sdpa_mask_without_vmap,
 )
 from optimum.intel.utils.import_utils import (
@@ -60,7 +62,6 @@ from optimum.intel.utils.import_utils import (
     is_torch_version,
     is_transformers_version,
 )
-
 
 from ._ov_ops import convert_recurrent_attention_cell
 
