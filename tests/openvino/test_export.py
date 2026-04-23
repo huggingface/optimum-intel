@@ -98,7 +98,7 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.48.0"):
         SUPPORTED_ARCHITECTURES.update({"cohere2": OVModelForCausalLM})
 
-    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
+    if is_transformers_version(">=", "4.49") and is_transformers_version("<=", "4.57.6"):
         SUPPORTED_ARCHITECTURES.update(
             {"zamba2": OVModelForCausalLM, "videochat_flash_qwen": OVModelForVisualCausalLM}
         )

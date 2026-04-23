@@ -4814,7 +4814,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
     # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L181-L226
     # Use torch instead of numpy to align with the other models.
-    def get_3d_sincos_pos_embed(embed_dim, grid_size, t_size, cls_token=False):
+    def get_3d_sincos_pos_embed(self, embed_dim, grid_size, t_size, cls_token=False):
         """
         grid_size: int of the grid height and width
         t_size: int of the temporal size
@@ -4832,13 +4832,11 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         grid = torch.stack(grid, dim=0)
 
         grid = grid.reshape(2, 1, grid_size, grid_size)
-        pos_embed_spatial = _OVVideoChatFlashQwenForCausalLM.get_2d_sincos_pos_embed_from_grid(embed_dim_spatial, grid)
+        pos_embed_spatial = self.get_2d_sincos_pos_embed_from_grid(embed_dim_spatial, grid)
 
         # temporal
         grid_t = torch.arange(t_size, dtype=torch.float32)
-        pos_embed_temporal = _OVVideoChatFlashQwenForCausalLM.get_1d_sincos_pos_embed_from_grid(
-            embed_dim_temporal, grid_t
-        )
+        pos_embed_temporal = self.get_1d_sincos_pos_embed_from_grid(embed_dim_temporal, grid_t)
 
         # concate: [T, H, W] order
         pos_embed_temporal = pos_embed_temporal[:, None, :]
@@ -4855,24 +4853,20 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
     # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L141-L153
     # Use torch instead of numpy to align with the other models.
-    def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
+    def get_2d_sincos_pos_embed_from_grid(self, embed_dim, grid):
         assert embed_dim % 2 == 0
         grid = grid if isinstance(grid, torch.Tensor) else torch.as_tensor(grid, dtype=torch.float32)
 
         # use half of dimensions to encode grid_h
-        emb_h = _OVVideoChatFlashQwenForCausalLM.get_1d_sincos_pos_embed_from_grid(
-            embed_dim // 2, grid[0]
-        )  # (H*W, D/2)
-        emb_w = _OVVideoChatFlashQwenForCausalLM.get_1d_sincos_pos_embed_from_grid(
-            embed_dim // 2, grid[1]
-        )  # (H*W, D/2)
+        emb_h = self.get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[0])  # (H*W, D/2)
+        emb_w = self.get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[1])  # (H*W, D/2)
 
         emb = torch.cat([emb_h, emb_w], dim=1)  # (H*W, D)
         return emb
 
     # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L156-L174
     # Use torch instead of numpy to align with the other models.
-    def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
+    def get_1d_sincos_pos_embed_from_grid(self, embed_dim, pos):
         """
         embed_dim: output dimension for each position
         pos: a list of positions to be encoded: size (M,)
@@ -4906,8 +4900,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        from torch import nn
-
         super().__init__(
             language_model=language_model,
             text_embeddings=text_embeddings,
@@ -4933,28 +4925,26 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         self.num_patches = self.grid_size[0] * self.grid_size[1] * self.grid_size[2]
         self.num_img_patches = self.grid_size[1] * self.grid_size[2]
         self.embed_dim = config.mm_hidden_size
-        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches + 1, self.embed_dim))
-        self.img_pos_embed = nn.Parameter(torch.zeros(1, self.num_img_patches + 1, self.embed_dim))
-        # Adopted fromhttps://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L559
+        self.pos_embed = torch.nn.Parameter(torch.zeros(1, self.num_patches + 1, self.embed_dim))
+        self.img_pos_embed = torch.nn.Parameter(torch.zeros(1, self.num_img_patches + 1, self.embed_dim))
+        # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L559
         # pos_embed for video
-        pos_embed = _OVVideoChatFlashQwenForCausalLM.get_3d_sincos_pos_embed(
+        pos_embed = self.get_3d_sincos_pos_embed(
             self.pos_embed.shape[-1], self.grid_size[1], self.grid_size[0], cls_token=True
         )
         self.pos_embed.data.copy_(pos_embed.to(dtype=self.pos_embed.dtype).unsqueeze(0))
 
         # pos_embed for image
-        img_pos_embed = _OVVideoChatFlashQwenForCausalLM.get_3d_sincos_pos_embed(
-            self.pos_embed.shape[-1], self.grid_size[1], 1, cls_token=True
-        )
+        img_pos_embed = self.get_3d_sincos_pos_embed(self.pos_embed.shape[-1], self.grid_size[1], 1, cls_token=True)
         self.img_pos_embed.data.copy_(img_pos_embed.to(dtype=self.img_pos_embed.dtype).unsqueeze(0))
 
         if "unpad" in getattr(config, "mm_patch_merge_type", ""):
-            self.image_newline = nn.Parameter(torch.empty(config.hidden_size, dtype=self.dtype))
+            self.image_newline = torch.nn.Parameter(torch.empty(config.hidden_size, dtype=self.dtype))
         if (
             "nopad" in getattr(config, "mm_patch_merge_type", "")
             and getattr(self.config, "mm_newline_position", "nothing") != "nothing"
         ):
-            self.frame_newline = nn.Parameter(torch.empty(config.hidden_size, dtype=self.dtype))
+            self.frame_newline = torch.nn.Parameter(torch.empty(config.hidden_size, dtype=self.dtype))
 
     # Copied from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L6
     def bipartite_soft_matching(
@@ -5137,8 +5127,8 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
     def tokenizer_image_token(prompt, tokenizer, image_token_index=IMAGE_TOKEN_INDEX, return_tensors=None):
         prompt_chunks = [tokenizer(chunk).input_ids for chunk in prompt.split("<image>")]
 
-        def insert_separator(X, sep):
-            return [ele for sublist in zip(X, [sep] * len(X)) for ele in sublist][:-1]
+        def insert_separator(x, sep):
+            return [ele for sublist in zip(x, [sep] * len(x)) for ele in sublist][:-1]
 
         input_ids = []
         offset = 0
@@ -5158,7 +5148,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
     # Simplify the output to be a single tensor instead of BatchFeature.
     def image_preprocess(images, target_size, image_mean, image_std):
         from PIL import Image
-        from torchvision.transforms.functional import InterpolationMode, normalize, pil_to_tensor, resize
+        from torchvision.transforms.functional import normalize, to_tensor
 
         if isinstance(images, Image.Image):
             images = [images]
@@ -5173,14 +5163,10 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                 # Keep compatibility with list[np.ndarray] video frames.
                 pil_image = Image.fromarray(np.asarray(image)).convert("RGB")
 
-            image_tensor = pil_to_tensor(pil_image).to(dtype=torch.float32).div_(255.0)
-            image_tensor = resize(
-                image_tensor,
-                list(target_size),
-                interpolation=InterpolationMode.BICUBIC,
-                antialias=True,
-            )
-            image_tensor = normalize(image_tensor, mean=image_mean, std=image_std)
+            h, w = target_size
+            pil_image = pil_image.resize((w, h), Image.BICUBIC)
+            image_tensor = to_tensor(pil_image)  # uint8 PIL -> float32 CHW, /255
+            image_tensor = normalize(image_tensor, mean=list(image_mean), std=list(image_std))
             processed_images.append(image_tensor)
 
         return torch.stack(processed_images, dim=0)
@@ -5248,7 +5234,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                     pad_frames = local_num_frames - (num_frames % local_num_frames)
                     video = video + [video[-1]] * pad_frames
             else:
-                raise ValueError("Unsupported video type: {}".format(type(video)))
+                raise ValueError(f"Unsupported video type: {type(video)}")
 
             image_sizes.append(image_size)
             if processor is not None:
@@ -5359,7 +5345,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
     # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_utils.py#L502-L537
     # Use raise ValueError instead of assert.
-    def select_best_resolution(original_size, possible_resolutions, max_resolutions, patch_size):
+    def select_best_resolution(self, original_size, possible_resolutions, max_resolutions, patch_size):
         """
         Selects the best resolution from a list of possible resolutions based on the original size.
 
@@ -5400,7 +5386,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
     # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_utils.py#L601-L631
     # Follow the coding convention by using isinstance for type checks, and replace the ast.literal_eval with regex for parsing the grid pinpoints string.
-    def get_anyres_image_grid_shape(image_size, grid_pinpoints, patch_size, max_resolutions=None):
+    def get_anyres_image_grid_shape(self, image_size, grid_pinpoints, patch_size, max_resolutions=None):
         """
         Calculate the shape of the image patch grid after the preprocessing for images of any resolution.
 
@@ -5431,7 +5417,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         else:
             pairs = re.findall(r"\(\s*(\d+)\s*,\s*(\d+)\s*\)", grid_pinpoints)
             possible_resolutions = [(int(w), int(h)) for w, h in pairs]
-        width, height = _OVVideoChatFlashQwenForCausalLM.select_best_resolution(
+        width, height = self.select_best_resolution(
             image_size, possible_resolutions, max_resolutions=max_resolutions, patch_size=patch_size
         )
 
@@ -5542,7 +5528,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                         (
                             num_patch_width,
                             num_patch_height,
-                        ) = _OVVideoChatFlashQwenForCausalLM.get_anyres_image_grid_shape(
+                        ) = self.get_anyres_image_grid_shape(
                             image_sizes[image_idx],
                             self.config.image_grid_pinpoints,
                             vision_tower_image_size,
