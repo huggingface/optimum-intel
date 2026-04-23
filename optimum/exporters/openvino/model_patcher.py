@@ -4945,6 +4945,75 @@ def _gemma4_project_per_layer_inputs(
     return (per_layer_projection + per_layer_inputs) * self.per_layer_input_scale
 
 
+def _create_gemma4_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids, inputs_embeds, sliding_window):
+    """
+    Creates a dict of causal masks with bidirectional attention for vision tokens
+    on sliding_attention layers, matching the behavior of transformers'
+    create_causal_mask_mapping when use_bidirectional_attention == "vision".
+
+    Args:
+        attention_mask_2d: [batch, total_len] 2D attention mask (1=attend, 0=pad)
+        mm_token_type_ids: [batch, total_len] token type ids (0=text, 1=image, 2=video/audio)
+        inputs_embeds: [batch, seq_len, hidden_size]
+        sliding_window: int, sliding window size
+
+    Returns:
+        dict with "full_attention" and "sliding_attention" 4D masks
+    """
+    dtype = inputs_embeds.dtype
+    device = inputs_embeds.device
+    min_dtype = torch.finfo(dtype).min
+
+    batch_size = inputs_embeds.shape[0]
+    seq_len = inputs_embeds.shape[1]
+    target_len = attention_mask_2d.shape[-1]
+    past_len = target_len - seq_len
+
+    # Standard causal mask [seq_len, target_len]
+    causal_mask = torch.full((seq_len, target_len), min_dtype, dtype=dtype, device=device)
+    if seq_len != 1:
+        causal_mask = torch.triu(causal_mask, diagonal=past_len + 1)
+
+    # Apply padding from attention_mask_2d
+    padding_mask = (1.0 - attention_mask_2d[:, None, None, :].to(dtype=dtype, device=device)) * min_dtype
+    full_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1) + padding_mask
+
+    # Sliding window causal mask
+    sliding_mask = full_mask.clone()
+    if sliding_window is not None:
+        row_pos = torch.arange(seq_len, device=device).unsqueeze(1) + past_len
+        col_pos = torch.arange(target_len, device=device).unsqueeze(0)
+        beyond_window = (row_pos - col_pos) >= sliding_window
+        sliding_mask = sliding_mask.masked_fill(beyond_window[None, None, :, :], min_dtype)
+
+    # Apply bidirectional masking for vision tokens (only on sliding_attention mask)
+    # mm_token_type_ids: [batch, total_len] - 0=text, 1=image, 2=video/audio
+    is_vision = (mm_token_type_ids == 1) | (mm_token_type_ids == 2)
+
+    # Group contiguous vision tokens (trace-friendly, no in-place ops)
+    # Shift is_vision right by 1 position, padding with False on the left
+    is_prev_vision = torch.nn.functional.pad(is_vision[:, :-1].to(dtype=torch.int32), (1, 0), value=0).bool()
+    new_vision_starts = is_vision & ~is_prev_vision
+    vision_group_ids = torch.cumsum(new_vision_starts.to(dtype=torch.int32), dim=1) - 1
+    vision_group_ids = torch.where(is_vision, vision_group_ids, torch.tensor(-1, dtype=torch.int32, device=device))
+
+    # Query group IDs correspond to positions [past_len : past_len + seq_len]
+    query_groups = vision_group_ids[:, past_len : past_len + seq_len]  # [batch, seq_len]
+    key_groups = vision_group_ids  # [batch, total_len]
+
+    # same_group[b, q, k] = True iff query and key are in the same non-text vision group
+    same_group = (query_groups.unsqueeze(2) == key_groups.unsqueeze(1)) & (key_groups.unsqueeze(1) >= 0)
+    same_group = same_group.unsqueeze(1)  # [batch, 1, seq_len, total_len]
+
+    # Undo masking for same-group vision tokens in sliding mask
+    sliding_mask = sliding_mask.masked_fill(same_group, 0.0)
+
+    return {
+        "full_attention": full_mask,
+        "sliding_attention": sliding_mask,
+    }
+
+
 def gemma4_language_model_forward(
     self,
     input_ids: Optional[torch.LongTensor] = None,
@@ -4985,6 +5054,18 @@ def gemma4_language_model_forward(
         special_image_mask_expanded = special_image_mask.unsqueeze(-1).expand_as(inputs_embeds)
         inputs_embeds = inputs_embeds.masked_scatter(special_image_mask_expanded, image_features)
 
+    # Create bidirectional causal mask mapping when use_bidirectional_attention == "vision"
+    use_bidirectional = (
+        getattr(self.config.get_text_config(), "use_bidirectional_attention", None) == "vision"
+    )
+    if use_bidirectional and mm_token_type_ids is not None:
+        attention_mask = _create_gemma4_bidirectional_mask_dict(
+            attention_mask,
+            mm_token_type_ids,
+            inputs_embeds,
+            self.model.language_model.config.sliding_window,
+        )
+
     outputs = self.model.language_model(
         input_ids=None,
         per_layer_inputs=per_layer_inputs,
@@ -5015,12 +5096,12 @@ def gemma4_lm_forward(
     past_key_values: Optional[Cache] = None,
     inputs_embeds: Optional[torch.FloatTensor] = None,
     per_layer_inputs=None,
+    token_type_ids: Optional[torch.LongTensor] = None,
     input_ids: Optional[torch.LongTensor] = None,
     pixel_values: Optional[torch.FloatTensor] = None,
     pixel_values_videos: Optional[torch.FloatTensor] = None,
     input_features: Optional[torch.FloatTensor] = None,
     input_features_mask: Optional[torch.Tensor] = None,
-    mm_token_type_ids: Optional[torch.LongTensor] = None,
     cache_position: Optional[torch.LongTensor] = None,
     labels: Optional[torch.LongTensor] = None,
     use_cache: Optional[bool] = None,
@@ -5050,7 +5131,7 @@ def gemma4_lm_forward(
         input_features_mask=input_features_mask,
         position_ids=position_ids,
         past_key_values=past_key_values,
-        mm_token_type_ids=mm_token_type_ids,
+        mm_token_type_ids=token_type_ids,
         cache_position=cache_position,
         inputs_embeds=inputs_embeds,
         labels=labels,

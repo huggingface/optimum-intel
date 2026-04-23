@@ -4434,13 +4434,18 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
 
         if behavior == Gemma4ConfigBehavior.LANGUAGE:
             model_type = "gemma4_text"
+            inputs_update = {
+                "per_layer_inputs": {0: "batch_size", 1: "sequence_length", 2: "num_hidden_layers"},
+            }
+            if getattr(self._orig_config.get_text_config(), "use_bidirectional_attention", None) == "vision":
+                inputs_update["token_type_ids"] = {0: "batch_size", 1: "sequence_length"}
             return get_vlm_text_generation_config(
                 model_type,
                 self._orig_config.text_config,
                 self.int_dtype,
                 self.float_dtype,
                 model_patcher=Gemma4LMModelPatcher,
-                inputs_update={"per_layer_inputs": {0: "batch_size", 1: "sequence_length", 2: "num_hidden_layers"}},
+                inputs_update=inputs_update,
             )
         if behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
             config = self.__class__(

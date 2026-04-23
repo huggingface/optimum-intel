@@ -211,7 +211,11 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
         if "token_type_ids" in self.input_names:
             if token_type_ids is None:
-                token_type_ids = np.zeros(inputs_embeds.shape[:2], dtype=int)
+                # Use attention_mask shape to match total sequence length (including past tokens)
+                if attention_mask is not None:
+                    token_type_ids = np.zeros(attention_mask.shape, dtype=int)
+                else:
+                    token_type_ids = np.zeros(inputs_embeds.shape[:2], dtype=int)
             inputs["token_type_ids"] = token_type_ids
 
         if "beam_idx" in self.input_names:
@@ -3995,11 +3999,30 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
 
         return inputs_embeds, attention_mask, position_ids
 
-    def prepare_inputs_for_generation(self, input_ids, mm_token_type_ids=None, image_position_ids=None, **kwargs):
-        model_inputs = super().prepare_inputs_for_generation(input_ids, **kwargs)
-        model_inputs["mm_token_type_ids"] = mm_token_type_ids
+    def prepare_inputs_for_generation(
+        self, input_ids, past_key_values=None, inputs_embeds=None, pixel_values=None,
+        image_sizes=None, attention_mask=None, mm_token_type_ids=None, image_position_ids=None, **kwargs
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids, past_key_values=past_key_values, inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values, image_sizes=image_sizes, attention_mask=attention_mask, **kwargs
+        )
+        # Map mm_token_type_ids to token_type_ids for the OV language model input
+        model_inputs["token_type_ids"] = mm_token_type_ids
         model_inputs["image_position_ids"] = image_position_ids
         return model_inputs
+
+    def forward(self, input_ids, pixel_values=None, token_type_ids=None, **kwargs):
+        # Map mm_token_type_ids (from Gemma4 processor) to token_type_ids (OV language model input)
+        mm_token_type_ids = kwargs.pop("mm_token_type_ids", None)
+        if token_type_ids is None and mm_token_type_ids is not None:
+            token_type_ids = mm_token_type_ids
+        return super().forward(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            token_type_ids=token_type_ids,
+            **kwargs,
+        )
 
     def _update_model_kwargs_for_generation(
         self,
