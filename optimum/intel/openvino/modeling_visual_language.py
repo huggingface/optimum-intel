@@ -4000,12 +4000,25 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
         return inputs_embeds, attention_mask, position_ids
 
     def prepare_inputs_for_generation(
-        self, input_ids, past_key_values=None, inputs_embeds=None, pixel_values=None,
-        image_sizes=None, attention_mask=None, mm_token_type_ids=None, image_position_ids=None, **kwargs
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        image_sizes=None,
+        attention_mask=None,
+        mm_token_type_ids=None,
+        image_position_ids=None,
+        **kwargs,
     ):
         model_inputs = super().prepare_inputs_for_generation(
-            input_ids, past_key_values=past_key_values, inputs_embeds=inputs_embeds,
-            pixel_values=pixel_values, image_sizes=image_sizes, attention_mask=attention_mask, **kwargs
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            image_sizes=image_sizes,
+            attention_mask=attention_mask,
+            **kwargs,
         )
         # Map mm_token_type_ids to token_type_ids for the OV language model input
         model_inputs["token_type_ids"] = mm_token_type_ids

@@ -88,6 +88,7 @@ MODEL_NAMES = {
     "gemma3_text": "optimum-intel-internal-testing/tiny-random-gemma3-text",
     "gemma3": "optimum-intel-internal-testing/tiny-random-gemma3",
     "gemma4": "optimum-intel-internal-testing/tiny-random-gemma4",
+    "gemma4_moe": "optimum-intel-internal-testing/tiny-random-gemma4-moe",
     "falcon": "optimum-intel-internal-testing/really-tiny-falcon-testing",
     "falcon-40b": "optimum-intel-internal-testing/tiny-random-falcon-40b",
     "falcon_mamba": "optimum-intel-internal-testing/tiny-falcon-mamba",
@@ -374,10 +375,16 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "qwen3_eagle3": {"model": 20},
     "qwen3_next": {"model": 100},
     "gemma4": {
-        "lm_model": 58,
+        "lm_model": 54,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 10,
         "text_embeddings_per_layer_model": 1,
+    },
+    "gemma4_moe": {
+        "lm_model": 44,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 10,
+        "text_embeddings_per_layer_model": 0,
     },
 }
 

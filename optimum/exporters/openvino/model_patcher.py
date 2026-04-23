@@ -52,7 +52,7 @@ from optimum.exporters.onnx.model_patcher import (
     ModelPatcher,
     gpt_oss_forward,
     override_arguments,
-    sdpa_mask_without_vmap as _orig_sdpa_mask_without_vmap
+    sdpa_mask_without_vmap as _orig_sdpa_mask_without_vmap,
 )
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
@@ -5055,9 +5055,7 @@ def gemma4_language_model_forward(
         inputs_embeds = inputs_embeds.masked_scatter(special_image_mask_expanded, image_features)
 
     # Create bidirectional causal mask mapping when use_bidirectional_attention == "vision"
-    use_bidirectional = (
-        getattr(self.config.get_text_config(), "use_bidirectional_attention", None) == "vision"
-    )
+    use_bidirectional = getattr(self.config.get_text_config(), "use_bidirectional_attention", None) == "vision"
     if use_bidirectional and mm_token_type_ids is not None:
         attention_mask = _create_gemma4_bidirectional_mask_dict(
             attention_mask,
