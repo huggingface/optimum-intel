@@ -128,7 +128,12 @@ from optimum.utils.normalized_config import (
     NormalizedVisionConfig,
 )
 
-from ...intel.utils.import_utils import is_diffusers_available, is_diffusers_version, is_transformers_version
+from ...intel.utils.import_utils import (
+    is_diffusers_available,
+    is_diffusers_version,
+    is_openvino_version,
+    is_transformers_version,
+)
 from .model_patcher import (
     AfmoeModelPatcher,
     AquilaModelPatcher,
@@ -231,6 +236,16 @@ COMMON_TEXT2TEXT_GENERATION_TASKS = [
 
 
 logger = logging.getLogger(__name__)
+
+
+def _warn_potential_accuracy_issue_ov_2026_1(model_type: str, min_transformers_version: Optional[str] = None):
+    # Fix CVS-185350: OpenVINO 2026.1.0 inference results mismatch
+    if not is_openvino_version(">=", "2026.1.0"):
+        return
+    if min_transformers_version is not None and not is_transformers_version(">=", min_transformers_version):
+        return
+    logger.warning(f"Model type '{model_type}' may have potential accuracy issues with OpenVINO >= 2026.1.0.")
+
 
 if TYPE_CHECKING:
     from transformers.modeling_utils import PreTrainedModel  # noqa: F811
@@ -1258,6 +1273,10 @@ class XGLMConfig(TextDecoderWithPositionIdsOnnxConfig):
     )
     _MODEL_PATCHER = OVDecoderModelPatcher
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _warn_potential_accuracy_issue_ov_2026_1("xglm")
+
 
 class AquilaDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
@@ -1913,6 +1932,7 @@ class BaseVLMOpenVINOConfig(OnnxConfig):
 @register_in_tasks_manager("llava", *["image-text-to-text"], library_name="transformers")
 class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.37.2"
+    _OV_2026_1_MODEL_TYPE = "llava"
 
     def __init__(
         self,
@@ -1935,6 +1955,7 @@ class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+        _warn_potential_accuracy_issue_ov_2026_1(self._OV_2026_1_MODEL_TYPE, min_transformers_version="5.0")
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
@@ -1951,6 +1972,7 @@ class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
 @register_in_tasks_manager("llava_next", *["image-text-to-text"], library_name="transformers")
 class LlavaNextOpenVINOConfig(LlavaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.40.0"
+    _OV_2026_1_MODEL_TYPE = "llava_next"
 
 
 class DummyLLavaMultiModalProjectorInputGenerator(DummyInputGenerator):
@@ -2887,6 +2909,7 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in MiniCPMVConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = ()
+    MODEL_TYPE = "minicpmv"
 
     def __init__(
         self,
@@ -2912,6 +2935,7 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == MiniCPMVConfigBehavior.RESAMPLER:
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMVResampleInputGenerator,)
         self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+        _warn_potential_accuracy_issue_ov_2026_1(self.MODEL_TYPE)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -3011,6 +3035,7 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
 class MiniCPMOOpenVINOConfig(MiniCPMVOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.43.0"
     MAX_TRANSFORMERS_VERSION = "4.51.3"
+    MODEL_TYPE = "minicpmo"
 
 
 class Phi3VisionConfigBehavior(str, enum.Enum):
@@ -4345,6 +4370,10 @@ class BlenderbotSmallOpenVINOConfig(BlenderbotSmallOnnxConfig):
 class PegasusOpenVINOConfig(PegasusOnnxConfig):
     _MODEL_PATCHER = PegasusModelPatcher
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _warn_potential_accuracy_issue_ov_2026_1("pegasus")
+
 
 @register_in_tasks_manager(
     "marian",
@@ -4579,6 +4608,10 @@ class Llama4OpenVINOConfig(GotOCR2OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
     # TODO (@echarlaix): add v5 support
     MAX_TRANSFORMERS_VERSION = "4.57.6"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _warn_potential_accuracy_issue_ov_2026_1("llama4")
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
@@ -4824,6 +4857,10 @@ class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
     # MIN_TRANSFORMERS_VERSION = "5.2.0"
     _MODEL_PATCHER = Zamba2ModelPatcher
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _warn_potential_accuracy_issue_ov_2026_1("zamba2")
+
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
             raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
@@ -4970,6 +5007,10 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.53.0"
     _MODEL_PATCHER = GraniteMoeHybridModelPatcher
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _warn_potential_accuracy_issue_ov_2026_1("granitemoehybrid")
+
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
             raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
@@ -5023,6 +5064,10 @@ class AfmoeOpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.55.0"
     _MODEL_PATCHER = AfmoeModelPatcher
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _warn_potential_accuracy_issue_ov_2026_1("afmoe")
+
 
 @register_in_tasks_manager("olmo2", *COMMON_TEXT_GENERATION_TASKS, library_name="transformers")
 class Olmo2OOpenVINOConfig(Olmo2OnnxConfig):
@@ -5031,7 +5076,9 @@ class Olmo2OOpenVINOConfig(Olmo2OnnxConfig):
 
 @register_in_tasks_manager("opt", *[*COMMON_TEXT_GENERATION_TASKS, "text-classification", "question-answering"])
 class OPTOpenVINOConfig(OPTOnnxConfig):
-    pass
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _warn_potential_accuracy_issue_ov_2026_1("opt")
 
 
 @register_in_tasks_manager(
