@@ -1094,7 +1094,9 @@ class OVCacheWithMambaStates(MambaCache):
         self.mamba_expand = getattr(config, "mamba_expand", None)
         self.mamba_d_state = getattr(config, "mamba_d_state", None)
         self.intermediate_size = config.intermediate_size
-        self.conv_kernel_size = getattr(config, "conv_kernel", getattr(config, "mamba_d_conv", getattr(config, "conv_L_cache", None)))
+        self.conv_kernel_size = getattr(
+            config, "conv_kernel", getattr(config, "mamba_d_conv", getattr(config, "conv_L_cache", None))
+        )
         if config.model_type == "granitemoehybrid":
             layer_types = getattr(config, "layer_types", None)
             self.num_key_value_heads = getattr(config, "num_key_value_heads", None)
