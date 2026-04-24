@@ -98,10 +98,8 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.48.0"):
         SUPPORTED_ARCHITECTURES.update({"cohere2": OVModelForCausalLM})
 
-    if is_transformers_version(">=", "4.49") and is_transformers_version("<=", "4.57.6"):
-        SUPPORTED_ARCHITECTURES.update(
-            {"zamba2": OVModelForCausalLM, "videochat_flash_qwen": OVModelForVisualCausalLM}
-        )
+    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES.update({"granitemoehybrid": OVModelForCausalLM})
@@ -117,6 +115,9 @@ class ExportModelTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.update({"qwen3_next": OVModelForCausalLM})
+
+    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "4.57.6"):
+        SUPPORTED_ARCHITECTURES.update({"videochat_flash_qwen": OVModelForVisualCausalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},

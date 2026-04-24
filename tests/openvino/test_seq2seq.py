@@ -602,8 +602,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         SUPPORTED_ARCHITECTURES += ["qwen3_vl"]
         SUPPORT_VIDEO += ["qwen3_vl"]
 
-    if is_transformers_version(">=", "4.54.0") and is_transformers_version("<", "5"):
-        # remote code models incompatible before transformers v4.54 and after transformers v5
+    if is_transformers_version(">=", "4.54.0") and is_transformers_version("<=", "4.57.6"):
+        # remote code models incompatible before transformers v4.54 and after transformers v4.57.6
         SUPPORTED_ARCHITECTURES += ["videochat_flash_qwen"]
         SUPPORT_VIDEO += ["videochat_flash_qwen"]
 
@@ -969,9 +969,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             model_id, export=True, trust_remote_code=trust_remote_code, device=OPENVINO_DEVICE
         )
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
-        preprocessors = self.get_preprocessors(model_arch)
-
         question = "Describe image"
+        preprocessors = self.get_preprocessors(model_arch)
         inputs = model.preprocess_inputs(**preprocessors, text=question, image=self.IMAGE.resize((600, 600)))
         # General case
         outputs = model.generate(**inputs, max_new_tokens=10)
