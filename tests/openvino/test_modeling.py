@@ -97,7 +97,7 @@ from optimum.intel.openvino.utils import (
     TemporaryDirectory,
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import _langchain_hf_available, is_transformers_version
+from optimum.intel.utils.import_utils import _langchain_hf_available, is_datasets_version, is_transformers_version
 from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
