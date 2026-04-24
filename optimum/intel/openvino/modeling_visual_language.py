@@ -2629,7 +2629,9 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
         **kwargs,
     ):
         # reconstruct cache_position as partially removed in v5.3 and totally removed in v5.5
-        if cache_position is None or (not is_first_iteration and cache_position[0] == 0):
+        if is_transformers_version(">=", "5.3") and (
+            cache_position is None or (not is_first_iteration and cache_position[0] == 0)
+        ):
             if next_sequence_length is not None:
                 past_len = input_ids.shape[1] - next_sequence_length
                 cache_position = torch.arange(past_len, past_len + next_sequence_length, device=input_ids.device)
@@ -2950,7 +2952,9 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
         **kwargs,
     ):
         # reconstruct cache_position as partially removed in v5.3 and totally removed in v5.5
-        if cache_position is None or (not is_first_iteration and cache_position[0] == 0):
+        if is_transformers_version(">=", "5.3") and (
+            cache_position is None or (not is_first_iteration and cache_position[0] == 0)
+        ):
             if next_sequence_length is not None:
                 past_len = input_ids.shape[1] - next_sequence_length
                 cache_position = torch.arange(past_len, past_len + next_sequence_length, device=input_ids.device)
@@ -3308,7 +3312,9 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM, Qwen3VLModel, Qwen3VLVisio
         **kwargs,
     ):
         # reconstruct cache_position as partially removed in v5.3 and totally removed in v5.5
-        if cache_position is None or (not is_first_iteration and cache_position[0] == 0):
+        if is_transformers_version(">=", "5.3") and (
+            cache_position is None or (not is_first_iteration and cache_position[0] == 0)
+        ):
             if next_sequence_length is not None:
                 past_len = input_ids.shape[1] - next_sequence_length
                 cache_position = torch.arange(past_len, past_len + next_sequence_length, device=input_ids.device)
