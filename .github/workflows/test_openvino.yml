@@ -53,7 +53,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          apt-get update && apt-get install -y ffmpeg
+          sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Install dependencies
         run: |
