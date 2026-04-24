@@ -53,6 +53,10 @@ jobs:
 
       - name: Install dependencies
         run: |
+          apt-get update && apt-get install -y ffmpeg
+
+      - name: Install dependencies
+        run: |
           pip install --upgrade pip uv
           uv pip install .[tests] librosa diffusers
 
