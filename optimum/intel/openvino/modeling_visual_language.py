@@ -3238,6 +3238,16 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
 
         inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
+
+        # since transformers v5.3, get_rope_index consumes one second_per_grid_ts entry per
+        # non-text token group (images and videos), but the processor only populates it for videos
+        if is_transformers_version(">=", "5.3.0") and "second_per_grid_ts" in inputs and "mm_token_type_ids" in inputs:
+            non_text_groups = inputs["mm_token_type_ids"][0].unique_consecutive()
+            non_text_groups = non_text_groups[non_text_groups != 0].tolist()
+            video_ts_iter = iter(inputs["second_per_grid_ts"].tolist())
+            full_ts = [next(video_ts_iter, 1.0) if g == 2 else 1.0 for g in non_text_groups]
+            inputs["second_per_grid_ts"] = torch.tensor(full_ts, dtype=inputs["second_per_grid_ts"].dtype)
+
         return inputs
 
 
