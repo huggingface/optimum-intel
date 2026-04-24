@@ -5187,6 +5187,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             raise ValueError("Tokenizer is required.")
         image_sizes = []
         frames = []
+        modalities = []
         results = {}
         local_num_frames = config.mm_local_num_frames
         if processor is None:
@@ -5244,6 +5245,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                     images=video, target_size=target_size, image_mean=image_mean, image_std=image_std
                 )
             frames.append(processed_images)
+            modalities.append("video")
 
         # preprocess image
         if image is not None:
@@ -5262,10 +5264,12 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
                 )
             frames.append(image_frame)
             image_sizes.append(image_size)
+            modalities.append("image")
 
         if len(frames) >= 1:
             results["images"] = frames
             results["image_sizes"] = image_sizes
+            results["modalities"] = modalities
 
         if tokenizer.pad_token_id is None:
             if "qwen" in tokenizer.name_or_path.lower():
@@ -5726,6 +5730,30 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             )
 
         return model_kwargs
+
+    # Keep modalities compatibility only for VideoChat.
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        image_sizes=None,
+        modalities=None,
+        attention_mask=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            image_sizes=image_sizes,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        model_inputs["modalities"] = modalities
+        return model_inputs
 
 
 MODEL_TYPE_TO_CLS_MAPPING = {

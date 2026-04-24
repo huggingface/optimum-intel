@@ -701,16 +701,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
-        def compare_outputs(inputs, ov_model, transformers_model, generation_config, has_image=False, has_video=True):
+        def compare_outputs(inputs, ov_model, transformers_model, generation_config):
             transformers_inputs = copy.deepcopy(inputs)
             if model_arch == "videochat_flash_qwen":
-                input_ids = transformers_inputs.pop("input_ids")
-                transformers_inputs["inputs"] = input_ids
-                transformers_inputs["modalities"] = []
-                if has_video:
-                    transformers_inputs["modalities"].append("video")
-                if has_image:
-                    transformers_inputs["modalities"].append("image")
+                transformers_inputs["inputs"] = transformers_inputs.pop("input_ids")
             ov_outputs = ov_model.generate(**inputs, generation_config=generation_config)
             # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
             if model_arch in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
@@ -779,9 +773,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
             transformers_inputs["past_key_values"] = DynamicCache()
         if model_arch == "videochat_flash_qwen":
-            input_ids = transformers_inputs.pop("input_ids")
-            transformers_inputs["inputs"] = input_ids
-            transformers_inputs["modalities"] = ["image"]
+            transformers_inputs["inputs"] = transformers_inputs.pop("input_ids")
 
         test_device = "AUTO"
         ov_model.to(test_device)
@@ -884,7 +876,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
             # check video+image scenario
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video, image=image)
-            compare_outputs(inputs, ov_model, transformers_model, gen_config, has_image=True)
+            compare_outputs(inputs, ov_model, transformers_model, gen_config)
 
         if model_arch in self.SUPPORT_AUDIO:
             input_audio = self._generate_random_audio_data()
