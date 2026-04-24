@@ -1094,7 +1094,9 @@ class OVCacheWithMambaStates(MambaCache):
         self.mamba_expand = getattr(config, "mamba_expand", None)
         self.mamba_d_state = getattr(config, "mamba_d_state", None)
         self.intermediate_size = config.intermediate_size
-        self.conv_kernel_size = getattr(config, "conv_kernel", getattr(config, "mamba_d_conv", None))
+        self.conv_kernel_size = getattr(
+            config, "conv_kernel", getattr(config, "mamba_d_conv", getattr(config, "conv_L_cache", None))
+        )
         if config.model_type == "granitemoehybrid":
             layer_types = getattr(config, "layer_types", None)
             self.num_key_value_heads = getattr(config, "num_key_value_heads", None)
@@ -1118,6 +1120,11 @@ class OVCacheWithMambaStates(MambaCache):
             # some of these layers are hybrid so they contain both attention and mamba blocks
             self.num_mamba_layers = config.num_hidden_layers
             self.num_attn_layers = len(hybrid_layer_ids) if hybrid_layer_ids else 0
+
+        if config.model_type in ["lfm2", "lfm2_moe"]:
+            layer_types = getattr(config, "layer_types", None)
+            self.num_attn_layers = layer_types.count("full_attention")
+            self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
 
         self.conv_states = conv_states
         if self.conv_states is None:
@@ -1146,25 +1153,26 @@ class OVCacheWithMambaStates(MambaCache):
         self.ssm_states = ssm_states
         if self.ssm_states is None:
             self.ssm_states: List[torch.Tensor] = []
-            for _ in range(self.num_mamba_layers):
-                if self.n_mamba_heads and self.mamba_headdim:
-                    # Mamba2 block
-                    ssm_state_shape = (
-                        self.max_batch_size,
-                        self.n_mamba_heads,
-                        self.mamba_headdim,
-                        self.ssm_state_size,
-                    )
-                else:
-                    # Mamba block
-                    ssm_state_shape = (self.max_batch_size, self.intermediate_size, self.ssm_state_size)
+            if config.model_type in ["lfm2_moe", "lfm2"]:
+                for _ in range(self.num_mamba_layers):
+                    if self.n_mamba_heads and self.mamba_headdim:
+                        # Mamba2 block
+                        ssm_state_shape = (
+                            self.max_batch_size,
+                            self.n_mamba_heads,
+                            self.mamba_headdim,
+                            self.ssm_state_size,
+                        )
+                    else:
+                        # Mamba block
+                        ssm_state_shape = (self.max_batch_size, self.intermediate_size, self.ssm_state_size)
 
-                ssm_state: torch.Tensor = torch.zeros(
-                    ssm_state_shape,
-                    device=self.device,
-                    dtype=dtype,
-                )
-                self.ssm_states.append(ssm_state)
+                    ssm_state: torch.Tensor = torch.zeros(
+                        ssm_state_shape,
+                        device=self.device,
+                        dtype=dtype,
+                    )
+                    self.ssm_states.append(ssm_state)
 
         self.key_cache = key_cache
         if self.key_cache is None:
@@ -1449,7 +1457,7 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                 # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)
 
-                if self.config.model_type not in ["lfm2", "granitemoehybrid", "qwen3_next"]:
+                if self.config.model_type not in ["lfm2", "lfm2_moe", "granitemoehybrid", "qwen3_next"]:
                     # LFM2, GraniteMoeHybrid (Granite-4.0), and Qwen3-Next require the attention mask
                     # to be the length of the full context, so default mask from OVModelForCausalLM needs to be used.
                     # Other models like Mamba typically do not require an attention_mask
