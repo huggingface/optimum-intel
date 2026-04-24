@@ -2577,6 +2577,7 @@ class QWen2VLModelOutputWithPast(ModelOutput):
 
 class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
     get_rope_index = Qwen2VLModel.get_rope_index
+    get_vision_position_ids = getattr(Qwen2_5_VLModel, "get_vision_position_ids", None)
     additional_parts = ["vision_embeddings_merger"]
 
     def __init__(
