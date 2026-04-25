@@ -93,6 +93,7 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-3": OVStableDiffusion3Pipeline,
         "flux": OVFluxPipeline,
         "ltx-video": OVLTXPipeline,
+        "ltx-video-0.9.1": OVLTXPipeline,
     }
 
     if is_transformers_version(">=", "4.48.0"):
@@ -119,6 +120,7 @@ class ExportModelTest(unittest.TestCase):
         "flux": {"text_encoder_2": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "stable-diffusion-xl-refiner": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "ltx-video": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
+        "ltx-video-0.9.1": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
     }
 
     if is_transformers_version(">=", "4.51"):
