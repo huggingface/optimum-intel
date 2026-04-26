@@ -2192,6 +2192,9 @@ class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
         if isinstance(behavior, str) and not isinstance(behavior, Mistral3ConfigBehavior):
             behavior = Mistral3ConfigBehavior(behavior)
 
+        if behavior == Mistral3ConfigBehavior.LANGUAGE:
+            return model.float()
+
         if behavior == Mistral3ConfigBehavior.MULTI_MODAL_PROJECTOR:
             return (
                 model.multi_modal_projector
