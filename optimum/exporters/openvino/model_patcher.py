@@ -3438,14 +3438,25 @@ class LlavaNextVideoImageEmbeddingModelPatcher(ModelPatcher):
 # Mistral3Model.get_image_features() with only projector.norm() applied instead of full projector forward,
 # as the patch_merger cycle block (unfold loop) cannot be traced to OpenVINO IR.
 def mistral3_vision_embed_forward(self, pixel_values):
-    image_features = self.vision_tower(pixel_values, output_hidden_states=True)
+    vision_tower = _get_model_attribute(self, "vision_tower")
+    multi_modal_projector = _get_model_attribute(self, "multi_modal_projector")
+
+    if pixel_values.is_floating_point():
+        pixel_values = pixel_values.to(next(vision_tower.parameters()).dtype)
+
+    image_features = vision_tower(pixel_values, output_hidden_states=True)
+
     vision_feature_layer = self.config.vision_feature_layer
     if isinstance(vision_feature_layer, int):
         selected_image_feature = image_features.hidden_states[vision_feature_layer]
     else:
         hs_pool = [image_features.hidden_states[layer_idx] for layer_idx in vision_feature_layer]
         selected_image_feature = torch.cat(hs_pool, dim=-1)
-    image_features = self.multi_modal_projector.norm(selected_image_feature.squeeze(0))
+
+    if selected_image_feature.is_floating_point():
+        selected_image_feature = selected_image_feature.to(multi_modal_projector.norm.weight.dtype)
+
+    image_features = multi_modal_projector.norm(selected_image_feature.squeeze(0))
     return image_features
 
 
@@ -3454,9 +3465,20 @@ def mistral3_vision_embed_forward(self, pixel_values):
 # Mistral3MultiModalProjector.forward() and Mistral3PatchMerger.forward() with norm and cycle block excluded.
 # norm is moved to vision_embed_forward, cycle block runs in PyTorch at runtime.
 def mistral3_multi_modal_projector_forward(self, image_features):
+    if image_features.is_floating_point():
+        image_features = image_features.to(self.patch_merger.merging_layer.weight.dtype)
+
     hidden_states = self.patch_merger.merging_layer(image_features)
+
+    if hidden_states.is_floating_point():
+        hidden_states = hidden_states.to(self.linear_1.weight.dtype)
+
     hidden_states = self.linear_1(hidden_states)
     hidden_states = self.act(hidden_states)
+
+    if hidden_states.is_floating_point():
+        hidden_states = hidden_states.to(self.linear_2.weight.dtype)
+
     hidden_states = self.linear_2(hidden_states)
     return hidden_states
 
