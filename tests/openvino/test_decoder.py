@@ -146,7 +146,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4", "afmoe")
 
     if is_transformers_version(">=", "4.57.0"):
-        SUPPORTED_ARCHITECTURES += ("hunyuan_v1_dense",)
+        SUPPORTED_ARCHITECTURES += ("hunyuan_v1_dense", "deepseek_v4")
 
     if is_transformers_version("<", "4.56.0"):
         SUPPORTED_ARCHITECTURES += ("qwen", "chatglm", "chatglm4")

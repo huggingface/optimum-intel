@@ -144,6 +144,7 @@ from .model_patcher import (
     DBRXModelPatcher,
     DeciLMModelPatcher,
     DeepseekPatcher,
+    DeepseekV4Patcher,
     FalconModelPatcher,
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
@@ -4099,6 +4100,54 @@ class MBartOpenVINOConfig(BartOpenVINOConfig):
 )
 class M2M100OpenVINOConfig(BartOpenVINOConfig):
     pass
+
+
+class OVDeepseekV4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    """Custom PKV generator for DeepseekV4 which stores k/v with num_attention_heads dimension."""
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+        )
+        self.head_dim = normalized_config.head_dim
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        shape = (
+            self.batch_size,
+            self.num_attention_heads,
+            self.sequence_length,
+            self.head_dim,
+        )
+        return [
+            (
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+            )
+            for _ in range(self.num_layers)
+        ]
+
+
+@register_in_tasks_manager("deepseek_v4", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class DeepseekV4OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, OVDeepseekV4DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = OVDeepseekV4DummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = DeepseekV4Patcher
 
 
 @register_in_tasks_manager(
