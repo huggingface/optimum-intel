@@ -250,15 +250,21 @@ def patch_cos_sin_cached_fp32(model):
                     dtype=torch.float32,
                 )
 
+
 # Adapted from https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/masking_utils.py#L433
 # Specifically for OpenVINO, we use torch.finfo(torch.float16).min instead of torch.finfo(dtype).min
-def eager_mask_without_vmap(*args, **kwargs) -> Optional[torch.Tensor]:
+def eager_mask_without_vmap(batch_size, **kwargs) -> Optional[torch.Tensor]:
     kwargs.pop("allow_is_causal_skip", None)
+    kwargs.pop("use_vmap", None)
     dtype = kwargs.get("dtype", torch.float32)
-    if is_transformers_version(">=", "5"):
-        mask = sdpa_mask(*args, use_vmap=False, **kwargs)
+    if is_transformers_version(">=", "5.4"):
+        q_length = kwargs.pop("q_length")
+        if isinstance(q_length, torch.Tensor):
+            q_offset = kwargs.pop("q_offset", 0)
+            q_length = torch.arange(q_offset, q_offset + q_length, device=q_length.device)
+        mask = sdpa_mask(batch_size=batch_size, q_length=q_length, use_vmap=False, **kwargs)
     else:
-        mask = sdpa_mask_without_vmap(*args, allow_is_causal_skip=False, **kwargs)
+        mask = sdpa_mask_without_vmap(batch_size=batch_size, allow_is_causal_skip=False, **kwargs)
     # we use torch.finfo(torch.float16).min instead torch.finfo(dtype).min to avoid an overflow but not
     # sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
     mask = torch.where(
