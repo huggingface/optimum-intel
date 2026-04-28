@@ -390,35 +390,6 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
             common_inputs = super().inputs
         return common_inputs
 
-@register_in_tasks_manager("qwen3-text-encoder", *["feature-extraction"], library_name="diffusers")
-class Qwen3TextEncoderOpenVINOConfig(Qwen3OpenVINOConfig):
-    @property
-    def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {
-            "input_ids": {0: "batch_size", 1: "sequence_length"},
-            "attention_mask": {0: "batch_size", 1: "sequence_length"},
-        }
-
-    @property
-    def outputs(self) -> Dict[str, Dict[int, str]]:
-        common_outputs = {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
-
-        num_layers = getattr(self._normalized_config, "num_layers", None)
-        if num_layers is None:
-            num_layers = getattr(self._normalized_config, "num_hidden_layers", 0)
-
-        for i in range(int(num_layers) + 1):
-            common_outputs[f"hidden_states.{i}"] = {0: "batch_size", 1: "sequence_length"}
-
-        return common_outputs
-
-    @property
-    def values_override(self) -> Optional[Dict[str, Any]]:
-        values = super().values_override or {}
-        values.update({"output_hidden_states": True, "return_dict": True, "use_cache": False})
-        return values
-
-
 class DummyQwen3VLLMInputGenerator(DummyTextInputGenerator):
     SUPPORTED_INPUT_NAMES = (
         "input_ids",
@@ -2450,6 +2421,34 @@ class Gemma2TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
             "input_ids": {0: "batch_size", 1: "sequence_length"},
             "attention_mask": {0: "batch_size", 1: "sequence_length"},
         }
+
+@register_in_tasks_manager("qwen3-text-encoder", *["feature-extraction"], library_name="diffusers")
+class Qwen3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        common_outputs = {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
+
+        num_layers = getattr(self._normalized_config, "num_layers", None)
+        if num_layers is None:
+            num_layers = getattr(self._normalized_config, "num_hidden_layers", 0)
+
+        for i in range(int(num_layers) + 1):
+            common_outputs[f"hidden_states.{i}"] = {0: "batch_size", 1: "sequence_length"}
+
+        return common_outputs
+
+    @property
+    def values_override(self) -> Optional[Dict[str, Any]]:
+        values = super().values_override or {}
+        values.update({"output_hidden_states": True, "return_dict": True, "use_cache": False})
+        return values
 
 
 class DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
