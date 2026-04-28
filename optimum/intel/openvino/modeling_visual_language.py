@@ -3251,14 +3251,12 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
         return inputs
 
 
-# The inheritance from Qwen3VLModel is needed to get access to methods:
-# get_placeholder_mask(): https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1066
-# get_rope_index(): https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L916
-# get_video_features(): https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1035
-#
-# and inheritance from Qwen3VLVisionModel is needed for accessing the following method:
-# rot_pos_emb(): https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L603
-class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM, Qwen3VLModel, Qwen3VLVisionModel):
+class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
+    get_placeholder_mask = Qwen3VLModel.get_placeholder_mask
+    get_rope_index = Qwen3VLModel.get_rope_index
+    get_video_features = Qwen3VLModel.get_video_features
+    rot_pos_emb = Qwen3VLVisionModel.rot_pos_emb
+    get_vision_position_ids = getattr(Qwen3VLModel, "get_vision_position_ids", None)
     additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
 
     def __init__(
