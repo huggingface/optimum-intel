@@ -1336,39 +1336,68 @@ def _resolve_flux_text_encoder_model_type(text_encoder, default_model_type: str,
     return default_model_type
 
 
+def _add_flux_text_encoder_for_export(
+    models_for_export,
+    model_key: str,
+    text_encoder,
+    tokenizer,
+    default_model_type: str,
+    exporter: str,
+    int_dtype: str,
+    float_dtype: str,
+    set_runtime_options: bool = False,
+):
+    if text_encoder is None:
+        return
+
+    text_encoder_for_export = text_encoder
+    if "CausalLM" in text_encoder.__class__.__name__ and hasattr(text_encoder, "model"):
+        text_encoder_for_export = text_encoder.model
+
+    text_encoder_model_type = _resolve_flux_text_encoder_model_type(
+        text_encoder,
+        default_model_type,
+        tokenizer,
+    )
+
+    if hasattr(text_encoder_for_export, "config"):
+        text_encoder_for_export.config.output_hidden_states = True
+        text_encoder_for_export.config.return_dict = True
+
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=text_encoder_for_export,
+        exporter=exporter,
+        library_name="diffusers",
+        task="feature-extraction",
+        model_type=text_encoder_model_type,
+    )
+    export_config = export_config_constructor(
+        text_encoder_for_export.config,
+        int_dtype=int_dtype,
+        float_dtype=float_dtype,
+    )
+    if set_runtime_options:
+        export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+
+    models_for_export[model_key] = (text_encoder_for_export, export_config)
+
+
 def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     models_for_export = {}
 
-    # Text encoder
-    text_encoder = getattr(pipeline, "text_encoder", None)
-    if text_encoder is not None:
-        text_encoder_for_export = text_encoder
-        if "CausalLM" in text_encoder.__class__.__name__ and hasattr(text_encoder, "model"):
-            text_encoder_for_export = text_encoder.model
+    # Text Encoder
+    _add_flux_text_encoder_for_export(
+        models_for_export=models_for_export,
+        model_key="text_encoder",
+        text_encoder=getattr(pipeline, "text_encoder", None),
+        tokenizer=getattr(pipeline, "tokenizer", None),
+        default_model_type="clip-text",
+        exporter=exporter,
+        int_dtype=int_dtype,
+        float_dtype=float_dtype,
+    )
 
-        text_encoder_model_type = _resolve_flux_text_encoder_model_type(
-            text_encoder,
-            "clip-text",
-            getattr(pipeline, "tokenizer", None),
-        )
-
-        text_encoder_library_name = "diffusers"
-        if hasattr(text_encoder_for_export, "config"):
-            text_encoder_for_export.config.output_hidden_states = True
-            text_encoder_for_export.config.return_dict = True
-
-        text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
-            model=text_encoder_for_export,
-            exporter=exporter,
-            library_name=text_encoder_library_name,
-            task="feature-extraction",
-            model_type=text_encoder_model_type,
-        )
-        text_encoder_export_config = text_encoder_config_constructor(
-            text_encoder_for_export.config, int_dtype=int_dtype, float_dtype=float_dtype
-        )
-        models_for_export["text_encoder"] = (text_encoder_for_export, text_encoder_export_config)
-
+    # Transformer
     transformer = pipeline.transformer
     transformer.config.text_encoder_projection_dim = transformer.config.joint_attention_dim
     transformer.config.requires_aesthetics_score = getattr(pipeline.config, "requires_aesthetics_score", False)
@@ -1439,32 +1468,18 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
 
-    text_encoder_2 = getattr(pipeline, "text_encoder_2", None)
-    if text_encoder_2 is not None:
-        text_encoder_2_for_export = text_encoder_2
-        if "CausalLM" in text_encoder_2.__class__.__name__ and hasattr(text_encoder_2, "model"):
-            text_encoder_2_for_export = text_encoder_2.model
-
-        text_encoder_2_model_type = _resolve_flux_text_encoder_model_type(
-            text_encoder_2,
-            "t5-encoder-model",
-            getattr(pipeline, "tokenizer_2", None),
-        )
-
-        export_config_constructor = TasksManager.get_exporter_config_constructor(
-            model=text_encoder_2_for_export,
-            exporter=exporter,
-            library_name="diffusers",
-            task="feature-extraction",
-            model_type=text_encoder_2_model_type,
-        )
-        export_config = export_config_constructor(
-            text_encoder_2_for_export.config,
-            int_dtype=int_dtype,
-            float_dtype=float_dtype,
-        )
-        export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
-        models_for_export["text_encoder_2"] = (text_encoder_2_for_export, export_config)
+    # Text Encoder 2
+    _add_flux_text_encoder_for_export(
+        models_for_export=models_for_export,
+        model_key="text_encoder_2",
+        text_encoder=getattr(pipeline, "text_encoder_2", None),
+        tokenizer=getattr(pipeline, "tokenizer_2", None),
+        default_model_type="t5-encoder-model",
+        exporter=exporter,
+        int_dtype=int_dtype,
+        float_dtype=float_dtype,
+        set_runtime_options=True,
+    )
 
     return models_for_export
 
