@@ -119,6 +119,9 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.49") and is_transformers_version("<", "4.57.6"):
         SUPPORTED_ARCHITECTURES.update({"videochat_flash_qwen": OVModelForVisualCausalLM})
 
+    if is_transformers_version(">=", "5.0"):
+        SUPPORTED_ARCHITECTURES.update({"lfm2_moe": OVModelForCausalLM})
+
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "stable-diffusion-3": {"text_encoder_3": "8.0"},
