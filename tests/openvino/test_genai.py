@@ -36,7 +36,6 @@ from optimum.intel.openvino import (
 from optimum.intel.utils.import_utils import is_openvino_version
 from optimum.utils import is_transformers_version
 
-
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
@@ -121,11 +120,6 @@ class LLMPipelineTestCase(unittest.TestCase):
         "decilm",
         "minicpm3",
         "deepseek",
-        "xglm",
-        "granitemoe",
-        "granite",
-        "llama4",
-        "zamba2",
     )
     NO_CACHE_MODELS = (  # mostly remote that are broken with past key values
         "aquila",
