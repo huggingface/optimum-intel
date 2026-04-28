@@ -51,9 +51,9 @@ jobs:
           pip install --upgrade pip uv
           uv pip install .[tests] librosa diffusers
 
-      - name: Install transformers 5.5
+      - name: Install transformers 5.5.0
         run: |
-          uv pip install transformers==5.5
+          uv pip install transformers==5.5.0
 
       - name: Login with fork PRs CI token
         if: ${{ env.HF_TOKEN == '' }}
