@@ -120,6 +120,11 @@ if is_diffusers_version(">=", "0.33.0"):
 else:
     SanaSprintPipeline = object
 
+if is_diffusers_version(">=", "0.37.0"):
+    from diffusers import ZImagePipeline
+else:
+    ZImagePipeline = object
+
 
 if is_diffusers_version(">=", "0.35.0"):
     from diffusers.models.cache_utils import CacheMixin
@@ -1663,6 +1668,143 @@ class OVLTXPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTXPipel
     auto_model_class = LTXPipeline
 
 
+class _OVZImageTransformerAdapter:
+    """Adapter that converts ZImagePipeline's transformer calling convention to OV model inputs.
+
+    ZImagePipeline calls the transformer as:
+        transformer(x_list, t, cap_feats_list, return_dict=False)
+    where x_list is a list of [C,1,H,W] tensors (with frame dim) and cap_feats_list is a list
+    of variable-length [seq_len, dim] tensors.
+
+    The exported OV model expects single-item batches (batch=1) with no frame dim:
+        hidden_states [1, C, H, W], timestep scalar, encoder_hidden_states [1, CAP_SEQ, dim]
+    and returns sample [1, C, H, W].
+
+    This adapter processes each batch item individually, mirroring the logic in
+    ZImageTransformerModelPatcher.patched_forward.
+    """
+
+    _ZIMAGE_CAP_SEQ = 128
+
+    def __init__(self, ov_transformer, cap_seq: int = 128):
+        self._ov_transformer = ov_transformer
+        self._ZIMAGE_CAP_SEQ = cap_seq
+
+    def __call__(self, x, t, cap_feats, return_dict=True, **kwargs):
+        import torch
+
+        results = []
+        batch_size = len(x)
+        for i, (x_item, cf_item) in enumerate(zip(x, cap_feats)):
+            # x_item: [C, 1, H, W] → squeeze F → [C, H, W] → add batch → [1, C, H, W]
+            hs = x_item.squeeze(1).unsqueeze(0)  # [1, C, H, W]
+
+            # t may be scalar or [batch] tensor — extract per-item timestep
+            if isinstance(t, torch.Tensor) and t.numel() > 1:
+                t_item = t[i : i + 1]
+            else:
+                t_item = t
+
+            # cf_item: [seq_len, dim] → pad/truncate → [1, CAP_SEQ, dim]
+            cap_feat_dim = cf_item.shape[-1]
+            enc_hs = torch.zeros(1, self._ZIMAGE_CAP_SEQ, cap_feat_dim, dtype=cf_item.dtype)
+            L = min(cf_item.shape[0], self._ZIMAGE_CAP_SEQ)
+            enc_hs[0, :L] = cf_item[:L]
+
+            ov_out = self._ov_transformer(
+                hidden_states=hs,
+                timestep=t_item,
+                encoder_hidden_states=enc_hs,
+                return_dict=False,
+            )
+
+            # Extract sample from output
+            if isinstance(ov_out, (tuple, list)):
+                sample = ov_out[0]
+            elif hasattr(ov_out, "sample"):
+                sample = ov_out.sample
+            else:
+                sample = list(ov_out.values())[0] if hasattr(ov_out, "values") else ov_out
+
+            if not isinstance(sample, torch.Tensor):
+                sample = torch.from_numpy(sample)
+
+            # sample: [1, C, H, W] → squeeze batch → [C, H, W] → add F dim → [C, 1, H, W]
+            sample = sample.squeeze(0).unsqueeze(1)
+            results.append(sample)
+
+        return (results,)
+
+    def __getattr__(self, name):
+        return getattr(self._ov_transformer, name)
+
+
+class OVZImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, ZImagePipeline):
+    main_input_name = "prompt"
+    export_feature = "text-to-image"
+    auto_model_class = ZImagePipeline
+
+    _ZIMAGE_CAP_SEQ = 128  # must match ZIMAGE_CAP_SEQ in model_patcher.py
+
+    def __call__(self, *args, **kwargs):
+        """Wrap transformer with ZImage-to-OV adapter before calling the pipeline."""
+        orig_transformer = self.transformer
+        if not isinstance(orig_transformer, _OVZImageTransformerAdapter):
+            self.transformer = _OVZImageTransformerAdapter(orig_transformer, self._ZIMAGE_CAP_SEQ)
+        try:
+            return ZImagePipeline.__call__(self, *args, **kwargs)
+        finally:
+            self.transformer = orig_transformer
+
+    def _encode_prompt(self, prompt, device=None, prompt_embeds=None, max_sequence_length=512):
+        """Override to use last_hidden_state from the OV text encoder.
+
+        The OV text encoder exports hidden_states[-2] as last_hidden_state
+        (see ZImageTextEncoderModelPatcher), so we read that directly instead
+        of calling with output_hidden_states=True.
+        """
+        import torch
+
+        if prompt_embeds is not None:
+            return prompt_embeds
+
+        if isinstance(prompt, str):
+            prompt = [prompt]
+
+        for i, prompt_item in enumerate(prompt):
+            messages = [{"role": "user", "content": prompt_item}]
+            prompt_item = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=True,
+            )
+            prompt[i] = prompt_item
+
+        text_inputs = self.tokenizer(
+            prompt,
+            padding="max_length",
+            max_length=max_sequence_length,
+            truncation=True,
+            return_tensors="pt",
+        )
+
+        text_input_ids = text_inputs.input_ids
+        prompt_masks = text_inputs.attention_mask.bool()
+
+        # OV text encoder returns last_hidden_state which is already hidden_states[-2]
+        encoder_out = self.text_encoder(input_ids=text_input_ids, attention_mask=prompt_masks)
+        prompt_embeds = encoder_out.last_hidden_state
+        if not isinstance(prompt_embeds, torch.Tensor):
+            prompt_embeds = torch.from_numpy(prompt_embeds)
+
+        embeddings_list = []
+        for i in range(len(prompt_embeds)):
+            embeddings_list.append(prompt_embeds[i][prompt_masks[i]])
+
+        return embeddings_list
+
+
 SUPPORTED_OV_PIPELINES = [
     OVStableDiffusionPipeline,
     OVStableDiffusionImg2ImgPipeline,
@@ -1747,6 +1889,10 @@ if is_diffusers_version(">=", "0.32.0"):
 if is_diffusers_version(">=", "0.33.0"):
     SUPPORTED_OV_PIPELINES.append(OVSanaSprintPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana-sprint"] = OVSanaSprintPipeline
+
+if is_diffusers_version(">=", "0.37.0"):
+    SUPPORTED_OV_PIPELINES.append(OVZImagePipeline)
+    OV_TEXT2IMAGE_PIPELINES_MAPPING["z-image"] = OVZImagePipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,
