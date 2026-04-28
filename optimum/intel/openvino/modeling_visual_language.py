@@ -5427,20 +5427,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
         return width // patch_size, height // patch_size
 
-    def get_text_embeddings(self, input_ids):
-        squeeze_batch_dim = False
-        if input_ids.ndim == 1:
-            input_ids = input_ids.unsqueeze(0)
-            squeeze_batch_dim = True
-
-        text_embed = super().get_text_embeddings(input_ids)
-
-        if squeeze_batch_dim and text_embed.ndim > 0 and text_embed.shape[0] == 1:
-            text_embed = text_embed[0]
-
-        text_embed = torch.from_numpy(text_embed) if isinstance(text_embed, np.ndarray) else text_embed
-        return text_embed
-
     # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/modeling_videochat_flash.py#L183-L487
     # When only input_ids are provided, call text_embeddings to convert input_ids to text embeddings and return. Do not output input_ids.
     # Removed unused labels.
@@ -5457,7 +5443,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         images = pixel_values
 
         if images is None:
-            inputs_embeds = self.get_text_embeddings(input_ids)
+            inputs_embeds = torch.from_numpy(super().get_text_embeddings(input_ids))
             return inputs_embeds, attention_mask, position_ids
 
         if isinstance(images, list):
@@ -5600,7 +5586,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
             if num_images == 0:
                 cur_image_features = image_features[cur_image_idx]
-                cur_input_embeds_1 = self.get_text_embeddings(cur_input_ids)
+                cur_input_embeds_1 = torch.from_numpy(super().get_text_embeddings(cur_input_ids.unsqueeze(0))[0])
                 cur_input_embeds = torch.cat([cur_input_embeds_1, cur_image_features[0:0]], dim=0)
                 new_input_embeds.append(cur_input_embeds)
                 cur_image_idx += 1
@@ -5615,7 +5601,7 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             for i in range(len(image_token_indices) - 1):
                 cur_input_ids_noim.append(cur_input_ids[image_token_indices[i] + 1 : image_token_indices[i + 1]])
             split_sizes = [x.shape[0] for x in cur_input_ids_noim]
-            cur_input_embeds = self.get_text_embeddings(torch.cat(cur_input_ids_noim))
+            cur_input_embeds = torch.from_numpy(super().get_text_embeddings(torch.cat(cur_input_ids_noim).unsqueeze(0))[0])
             cur_input_embeds_no_im = torch.split(cur_input_embeds, split_sizes, dim=0)
             cur_new_input_embeds = []
 
