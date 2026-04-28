@@ -22,6 +22,7 @@ from collections import OrderedDict
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Any, Dict, List, Optional, Tuple, Union
+from types import SimpleNamespace
 
 import numpy as np
 import openvino
@@ -1466,11 +1467,11 @@ class OVModelVae(OVModelHostMixin):
         bn_eps = float(getattr(self.decoder.config, "bn_eps", 1e-5))
 
         if bn_mean is not None and bn_var is not None:
-            bn_state = type("BNState", (), {})()
-            bn_state.running_mean = torch.tensor(bn_mean, dtype=torch.float32)
-            bn_state.running_var = torch.tensor(bn_var, dtype=torch.float32)
-            bn_state.eps = bn_eps
-            self.bn = bn_state
+            self.bn = SimpleNamespace(
+                running_mean=torch.tensor(bn_mean, dtype=torch.float32),
+                running_var=torch.tensor(bn_var, dtype=torch.float32),
+                eps=bn_eps,
+            )
 
     @property
     def _component_names(self) -> List[str]:
