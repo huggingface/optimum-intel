@@ -189,7 +189,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "llava": 2,
         "sana": 2,
         "ltx-video": 2,
-        "ltx-video-091": 2,
+        "ltx-video-0.9.1": 2,
         "sam": 0,  # no tokenizer
         "speecht5": 2,
         "clip": 2,
