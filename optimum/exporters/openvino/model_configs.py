@@ -2284,9 +2284,16 @@ class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
     ):
         self.task = task
         self.batch_size = batch_size
-        self.pooled_projection_dim = normalized_config.config.pooled_projection_dim
+        config = normalized_config.config
+        pooled_projection_dim = getattr(config, "pooled_projection_dim", None)
+        if pooled_projection_dim is None and hasattr(config, "get"):
+            pooled_projection_dim = config.get("pooled_projection_dim", None)
+
+        self.pooled_projection_dim = pooled_projection_dim
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if self.pooled_projection_dim is None:
+            raise ValueError("`pooled_projection_dim` is required to generate `pooled_projections` input.")
         shape = [self.batch_size, self.pooled_projection_dim]
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
@@ -2683,36 +2690,17 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
     )
     _MODEL_PATCHER = FluxTransfromerModelPatcher
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        common_inputs.pop("sample", None)
 
         config = self._normalized_config.config
         pooled_projection_dim = getattr(config, "pooled_projection_dim", None)
         if pooled_projection_dim is None and hasattr(config, "get"):
             pooled_projection_dim = config.get("pooled_projection_dim", None)
 
-        self._use_pooled_projections = pooled_projection_dim is not None
-
-        if self._use_pooled_projections:
-            self.DUMMY_INPUT_GENERATOR_CLASSES = (
-                DummyTransformerTimestpsInputGenerator,
-                DummyFluxTransformerInputGenerator,
-                DummyFluxTextInputGenerator,
-                PooledProjectionsDummyInputGenerator,
-            )
-        else:
-            self.DUMMY_INPUT_GENERATOR_CLASSES = (
-                DummyTransformerTimestpsInputGenerator,
-                DummyFluxTransformerInputGenerator,
-                DummyFluxTextInputGenerator,
-            )
-
-    @property
-    def inputs(self):
-        common_inputs = super().inputs
-        common_inputs.pop("sample", None)
-
-        if not getattr(self, "_use_pooled_projections", True):
+        if pooled_projection_dim is None:
             common_inputs.pop("pooled_projections", None)
 
         common_inputs["hidden_states"] = {0: "batch_size", 1: "packed_height_width"}
