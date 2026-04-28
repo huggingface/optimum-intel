@@ -63,6 +63,7 @@ from optimum.utils import (
 )
 
 from ...exporters.openvino import main_export
+from ...exporters.openvino.model_configs import _get_flux_ids_dim
 from ..utils.import_utils import is_diffusers_version
 from .configuration import OVConfig, OVQuantizationConfigBase, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
@@ -804,7 +805,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             elif inputs.get_any_name() == "img_ids":
                 ids_dim = inputs.get_partial_shape()[-1]
                 if hasattr(ids_dim, "is_dynamic") and ids_dim.is_dynamic:
-                    ids_dim = 3
+                    ids_dim = _get_flux_ids_dim(self.transformer.config)
                 else:
                     ids_dim = int(ids_dim.get_length())
 
@@ -816,7 +817,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             elif inputs.get_any_name() == "txt_ids":
                 ids_dim = inputs.get_partial_shape()[-1]
                 if hasattr(ids_dim, "is_dynamic") and ids_dim.is_dynamic:
-                    ids_dim = 3
+                    ids_dim = _get_flux_ids_dim(self.transformer.config)
                 else:
                     ids_dim = int(ids_dim.get_length())
 
