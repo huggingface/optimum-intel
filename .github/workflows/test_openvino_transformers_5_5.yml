@@ -51,9 +51,10 @@ jobs:
           pip install --upgrade pip uv
           uv pip install .[tests] librosa diffusers
 
-      - name: Install transformers 5.5.0
+      - name: Install transformers 5.5.0 and latest openvino nightly
         run: |
           uv pip install transformers==5.5.0
+          uv pip install --pre -U openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
       - name: Login with fork PRs CI token
         if: ${{ env.HF_TOKEN == '' }}
