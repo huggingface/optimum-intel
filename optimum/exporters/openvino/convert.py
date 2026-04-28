@@ -532,44 +532,21 @@ def export_models(
         output_name = output_names[i] if output_names is not None else Path(model_name + ".xml")
         output_path = output_dir / output_name
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            outputs.append(
-                export(
-                    model=submodel,
-                    config=sub_export_config,
-                    output=output_path,
-                    opset=opset,
-                    device=device,
-                    input_shapes=input_shapes,
-                    model_kwargs=model_kwargs,
-                    ov_config=ov_config,
-                    stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
-                    patch_16bit_model=patch_16bit_model,
-                    library_name=library_name,
-                )
+        outputs.append(
+            export(
+                model=submodel,
+                config=sub_export_config,
+                output=output_path,
+                opset=opset,
+                device=device,
+                input_shapes=input_shapes,
+                model_kwargs=model_kwargs,
+                ov_config=ov_config,
+                stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
+                patch_16bit_model=patch_16bit_model,
+                library_name=library_name,
             )
-        except Exception as e:
-            if "prim::TupleConstruct" not in str(e):
-                raise
-
-            resolved_opset = opset or getattr(sub_export_config, "DEFAULT_ONNX_OPSET", 14)
-            logger.warning(
-                f"Falling back to ONNX export for submodel `{model_name}` due to PyTorch frontend limitation: {e}"
-            )
-            outputs.append(
-                export_pytorch_via_onnx(
-                    model=submodel,
-                    config=sub_export_config,
-                    opset=resolved_opset,
-                    output=output_path,
-                    device=device,
-                    input_shapes=input_shapes,
-                    model_kwargs=model_kwargs,
-                    ov_config=ov_config,
-                    library_name=library_name,
-                )
-            )
-
+        )
     outputs = list(map(list, zip(*outputs)))
     return outputs
 
