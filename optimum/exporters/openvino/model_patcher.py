@@ -8584,3 +8584,370 @@ class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
                 if isinstance(sparse_moe_block.experts, Lfm2MoeExperts):
                     lfm2_moe_experts = sparse_moe_block.experts
                     lfm2_moe_experts.forward = lfm2_moe_experts._orig_forward
+
+
+# Fixed cap sequence length for ZImage OV export.
+# All cap (text) tokens are padded / truncated to this length before tracing.
+# Must be a multiple of SEQ_MULTI_OF (32).  128 = 4 × 32 covers most prompts.
+ZIMAGE_CAP_SEQ = 128
+
+
+def _z_image_rope_embedder_call(self, ids: "torch.Tensor"):
+    """
+    Patched RopeEmbedder.__call__ for OV export.
+
+    Returns a real-valued tensor of shape [seq_len, total_freq, 2]
+    where [..., 0] = cos and [..., 1] = sin.
+    This avoids complex-tensor indexing which OV cannot convert.
+    """
+    import torch
+
+    device = ids.device
+
+    # Lazily precompute real (cos, sin) lookup tables
+    if not hasattr(self, "_ov_freqs_cos") or self._ov_freqs_cos is None:
+        raw_freqs = self.precompute_freqs_cis(self.axes_dims, self.axes_lens, theta=self.theta)
+        self._ov_freqs_cos = [f.real.float() for f in raw_freqs]
+        self._ov_freqs_sin = [f.imag.float() for f in raw_freqs]
+        self.freqs_cis = raw_freqs  # keep original for non-export use
+
+    # Move to the correct device
+    if self._ov_freqs_cos[0].device != device:
+        self._ov_freqs_cos = [f.to(device) for f in self._ov_freqs_cos]
+        self._ov_freqs_sin = [f.to(device) for f in self._ov_freqs_sin]
+
+    result_cos, result_sin = [], []
+    for i in range(len(self.axes_dims)):
+        index = ids[:, i]  # [seq_len] integer indices
+        result_cos.append(self._ov_freqs_cos[i][index])  # [seq_len, freq_i] real
+        result_sin.append(self._ov_freqs_sin[i][index])  # [seq_len, freq_i] real
+
+    cos = torch.cat(result_cos, dim=-1)  # [seq_len, total_freq]
+    sin = torch.cat(result_sin, dim=-1)  # [seq_len, total_freq]
+    # Stack as [seq_len, total_freq, 2] where last dim = [cos, sin]
+    return torch.stack([cos, sin], dim=-1)
+
+
+def _z_image_attn_proc_call(
+    self,
+    attn,
+    hidden_states: "torch.Tensor",
+    encoder_hidden_states=None,
+    attention_mask=None,
+    freqs_cis=None,
+):
+    """
+    Patched ZSingleStreamAttnProcessor.__call__ for OV export.
+
+    Replaces torch.view_as_complex / view_as_real with real-number RoPE.
+    freqs_cis is now [batch, seq_len, head_dim//2, 2] (cos, sin stacked).
+    """
+    import torch
+
+    def apply_rotary_emb_real(x_in, freqs_cis_real):
+        """Real-number RoPE: avoids view_as_complex/view_as_real."""
+        # x_in:          [batch, seq, heads, head_dim]
+        # freqs_cis_real:[batch, seq, head_dim//2, 2]  (last dim: [cos, sin])
+        cos = freqs_cis_real[..., 0]  # [batch, seq, head_dim//2]
+        sin = freqs_cis_real[..., 1]  # [batch, seq, head_dim//2]
+
+        x_float = x_in.float()
+        x_pairs = x_float.reshape(*x_float.shape[:-1], -1, 2)  # [batch, seq, heads, head_dim//2, 2]
+
+        # Broadcast cos/sin over the heads dimension
+        cos = cos.unsqueeze(2)  # [batch, seq, 1, head_dim//2]
+        sin = sin.unsqueeze(2)
+
+        out_real = x_pairs[..., 0] * cos - x_pairs[..., 1] * sin  # [batch, seq, heads, head_dim//2]
+        out_imag = x_pairs[..., 0] * sin + x_pairs[..., 1] * cos
+        out = torch.stack([out_real, out_imag], dim=-1).flatten(-2)  # [batch, seq, heads, head_dim]
+        return out.type_as(x_in)
+
+    query = attn.to_q(hidden_states)
+    key = attn.to_k(hidden_states)
+    value = attn.to_v(hidden_states)
+
+    query = query.unflatten(-1, (attn.heads, -1))
+    key = key.unflatten(-1, (attn.heads, -1))
+    value = value.unflatten(-1, (attn.heads, -1))
+
+    if attn.norm_q is not None:
+        query = attn.norm_q(query)
+    if attn.norm_k is not None:
+        key = attn.norm_k(key)
+
+    if freqs_cis is not None:
+        query = apply_rotary_emb_real(query, freqs_cis)
+        key = apply_rotary_emb_real(key, freqs_cis)
+
+    dtype = query.dtype
+    query, key = query.to(dtype), key.to(dtype)
+
+    if attention_mask is not None and attention_mask.ndim == 2:
+        attention_mask = attention_mask[:, None, None, :]
+
+    # Standard SDPA
+    hidden_states = torch.nn.functional.scaled_dot_product_attention(
+        query.transpose(1, 2),
+        key.transpose(1, 2),
+        value.transpose(1, 2),
+        attn_mask=attention_mask.bool() if attention_mask is not None else None,
+        dropout_p=0.0,
+        is_causal=False,
+    ).transpose(1, 2)
+
+    hidden_states = hidden_states.flatten(2, 3)
+    hidden_states = hidden_states.to(dtype)
+
+    output = attn.to_out[0](hidden_states)
+    if len(attn.to_out) > 1:
+        output = attn.to_out[1](output)
+
+    return output
+
+
+def _patched_z_image_prepare_sequence(
+    self,
+    feats,
+    pos_ids,
+    inner_pad_mask,
+    pad_token,
+    noise_mask=None,
+    device=None,
+):
+    """
+    Patched _prepare_sequence for OV export (batch_size=1 only).
+
+    Replaces:
+      - index_put_ (feats_cat[bool_mask] = pad_token) with torch.where
+      - pad_sequence with unsqueeze (no variable-length batching needed)
+    """
+    import torch
+
+    # batch_size=1: process the single element
+    feat = feats[0]  # [seq_len, dim]
+    pos_id = pos_ids[0]  # [seq_len, 3]
+    pad_mask = inner_pad_mask[0]  # [seq_len] bool
+
+    # Apply pad token using torch.where (avoids aten::index_put_)
+    # pad_token may be shape [1, dim] or [dim]; broadcast directly to [seq_len, dim]
+    feat = torch.where(pad_mask.unsqueeze(-1), pad_token.view(1, -1).expand_as(feat), feat)
+
+    # RoPE: call helper directly to avoid class-level __call__ dispatch issue
+    # (Python's special method lookup bypasses instance-level __call__ patches)
+    # pos_id may be longer than feat (pos_grid_size includes padding positions):
+    # truncate freqs_cis to match the actual feature length, as the original does
+    # with pad_sequence + [:, :feats.shape[1]].
+    freqs_cis = _z_image_rope_embedder_call(self.rope_embedder, pos_id)  # [pos_len, total_freq, 2]
+    seq_len = feat.shape[0]  # actual (padded) feature length
+    freqs_cis = freqs_cis[:seq_len]  # truncate to [seq_len, total_freq, 2]
+
+    # Expand to batch dimension (unsqueeze avoids aten::pad_sequence)
+    feats_batched = feat.unsqueeze(0)  # [1, seq_len, dim]
+    freqs_batched = freqs_cis.unsqueeze(0)  # [1, seq_len, total_freq, 2]
+
+    # All-True attention mask: for batch_size=1 there is no inter-sequence padding
+    seq_len = feat.shape[0]
+    attn_mask = torch.ones((1, seq_len), dtype=torch.bool, device=device)
+
+    return feats_batched, freqs_batched, attn_mask, [seq_len], None
+
+
+def _patched_z_image_build_unified_sequence(
+    self,
+    x,
+    x_freqs,
+    x_seqlens,
+    x_noise_mask,
+    cap,
+    cap_freqs,
+    cap_seqlens,
+    cap_noise_mask,
+    siglip,
+    siglip_freqs,
+    siglip_seqlens,
+    siglip_noise_mask,
+    omni_mode,
+    device,
+):
+    """
+    Patched _build_unified_sequence for OV export (batch_size=1, non-omni only).
+
+    Replaces pad_sequence + bool-masked creation with torch.cat + unsqueeze.
+    """
+    import torch
+
+    x_len = x_seqlens[0]
+    cap_len = cap_seqlens[0]
+
+    # Extract single-batch items  (x/cap are [1, seq, dim] from _prepare_sequence)
+    x_sq = x[0][:x_len]  # [x_len, dim]
+    cap_sq = cap[0][:cap_len]  # [cap_len, dim]
+    x_freqs_sq = x_freqs[0][:x_len]  # [x_len, total_freq, 2]
+    cap_freqs_sq = cap_freqs[0][:cap_len]  # [cap_len, total_freq, 2]
+
+    # Basic mode order: [x, cap]
+    unified_sq = torch.cat([x_sq, cap_sq], dim=0)  # [unified_len, dim]
+    unified_freqs_sq = torch.cat([x_freqs_sq, cap_freqs_sq], dim=0)  # [unified_len, total_freq, 2]
+
+    # Expand to batch dimension
+    unified = unified_sq.unsqueeze(0)  # [1, unified_len, dim]
+    unified_freqs = unified_freqs_sq.unsqueeze(0)  # [1, unified_len, total_freq, 2]
+
+    unified_len = unified_sq.shape[0]
+    attn_mask = torch.ones((1, unified_len), dtype=torch.bool, device=device)
+
+    return unified, unified_freqs, attn_mask, None  # noise_mask_tensor=None for non-omni
+
+
+class ZImageTransformerModelPatcher(ModelPatcher):
+    """
+    Model patcher for ZImageTransformer2DModel OV export.
+
+    Patches:
+    - RopeEmbedder.__call__: returns real [seq, freq, 2] instead of complex
+    - ZSingleStreamAttnProcessor.__call__: real-number RoPE, avoids view_as_complex
+    - ZImageTransformer2DModel._prepare_sequence: avoids index_put_, pad_sequence
+    - ZImageTransformer2DModel._build_unified_sequence: avoids pad_sequence
+    - ZImageTransformer2DModel.forward: wraps to accept/return standard tensors
+
+    Only supports batch_size=1, non-omni mode (single image per inference call).
+    """
+
+    def __enter__(self):
+        super().__enter__()
+
+        # Import the processor class to patch at class level
+        # (Python's special method lookup always goes to the type, not the instance,
+        #  so we must patch at class level, not instance level)
+        from diffusers.models.transformers.transformer_z_image import ZSingleStreamAttnProcessor as _ZAttnProc
+
+        # 1. Patch ZSingleStreamAttnProcessor at class level to use real RoPE
+        _ZAttnProc._orig_ov_call = _ZAttnProc.__call__
+        _ZAttnProc.__call__ = _z_image_attn_proc_call
+
+        # 2. Patch _prepare_sequence
+        self._model._orig_ov_prepare_sequence = self._model._prepare_sequence
+        self._model._prepare_sequence = types.MethodType(_patched_z_image_prepare_sequence, self._model)
+
+        # 3. Patch _build_unified_sequence
+        self._model._orig_ov_build_unified = self._model._build_unified_sequence
+        self._model._build_unified_sequence = types.MethodType(
+            _patched_z_image_build_unified_sequence, self._model
+        )
+
+        # 4. Wrap forward to accept/return standard batched tensors
+        #    hidden_states: [B, C, H, W]   (no F dim — we add it internally)
+        #    timestep:      [B]
+        #    encoder_hidden_states: [B, seq_len, cap_feat_dim]
+        # Use self.orig_forward (the REAL model forward set by ModelPatcher.__init__)
+        # to avoid double-wrapping through the base patcher's output filtering logic.
+        _orig_forward = self.orig_forward
+        _model_ref = self._model
+
+        def patched_forward(hidden_states, timestep, encoder_hidden_states):
+            import torch
+
+            # ── Cap sequence ────────────────────────────────────────────────────
+            # torch.jit.trace burns Python-level len() calls as static constants.
+            # To guarantee that `cap_seqlens = [len(ci) for ci in cap_feats]`
+            # always matches the trace value, we pad / truncate encoder_hidden_states
+            # to exactly ZIMAGE_CAP_SEQ tokens here, before calling the model.
+            # Tokens beyond the real prompt length are zero-filled; the model
+            # attends to them but their contribution is minimal (bias-only after
+            # cap_embedder), so quality impact is acceptable.
+            cap_feat_dim = encoder_hidden_states.shape[2]
+            cap_len = encoder_hidden_states.shape[1]
+            if cap_len < ZIMAGE_CAP_SEQ:
+                pad = torch.zeros(
+                    1, ZIMAGE_CAP_SEQ - cap_len, cap_feat_dim,
+                    dtype=encoder_hidden_states.dtype,
+                    device=encoder_hidden_states.device,
+                )
+                encoder_hidden_states = torch.cat([encoder_hidden_states, pad], dim=1)
+            elif cap_len > ZIMAGE_CAP_SEQ:
+                encoder_hidden_states = encoder_hidden_states[:, :ZIMAGE_CAP_SEQ]
+
+            # Add frame dimension: [B, C, H, W] -> [B, C, 1, H, W]
+            x_with_f = hidden_states.unsqueeze(2)
+            # Convert to list of [C, 1, H, W] for the model
+            x = list(x_with_f.unbind(0))
+            # Convert cap_feats to list of [ZIMAGE_CAP_SEQ, cap_feat_dim]
+            cap_feats = list(encoder_hidden_states.unbind(0))
+
+            out = _orig_forward(x, timestep, cap_feats, return_dict=False)
+
+            # Stack list output [B x [C, 1, H, W]] into tensor [B, C, 1, H, W]
+            result = torch.stack(out[0], dim=0)
+            # Remove frame dimension: [B, C, 1, H, W] -> [B, C, H, W]
+            return result.squeeze(2)
+
+        self._model.forward = patched_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        # Restore ZSingleStreamAttnProcessor class-level patch
+        try:
+            from diffusers.models.transformers.transformer_z_image import ZSingleStreamAttnProcessor as _ZAttnProc
+
+            if hasattr(_ZAttnProc, "_orig_ov_call"):
+                _ZAttnProc.__call__ = _ZAttnProc._orig_ov_call
+                del _ZAttnProc._orig_ov_call
+        except ImportError:
+            pass
+
+        # Restore model methods
+        if hasattr(self._model, "_orig_ov_prepare_sequence"):
+            self._model._prepare_sequence = self._model._orig_ov_prepare_sequence
+            del self._model._orig_ov_prepare_sequence
+        if hasattr(self._model, "_orig_ov_build_unified"):
+            self._model._build_unified_sequence = self._model._orig_ov_build_unified
+            del self._model._orig_ov_build_unified
+        # Forward is restored by the base ModelPatcher via _orig_forward mechanism
+
+
+class ZImageTextEncoderModelPatcher(ModelPatcher):
+    """
+    Model patcher for the Qwen3-based text encoder used in ZImagePipeline.
+
+    The pipeline uses hidden_states[-2] from the Qwen3 model as text features.
+    This patcher wraps forward to return hidden_states[-2] directly as the
+    last_hidden_state output so it matches the CLIPText export interface.
+    """
+
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs=None,
+    ):
+        super().__init__(config, model, model_kwargs)
+        _orig_forward = self.orig_forward
+
+        @functools.wraps(_orig_forward)
+        def patched_forward(input_ids, attention_mask):
+            out = _orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+            )
+            # Return second-to-last hidden state as the text features
+            # (ZImagePipeline uses prompt_embeds[i][prompt_masks[i]] from hidden_states[-2])
+            # Must return a dict so ts_patched_forward can call .values() on it.
+            return {"last_hidden_state": out.hidden_states[-2]}
+
+        self.patched_forward = patched_forward
+
+    def __enter__(self):
+        super().__enter__()
+        # Ensure SDPA is used for tracing (avoids boolean mask issues with eager mode)
+        if hasattr(self._model, "config") and hasattr(self._model.config, "_attn_implementation"):
+            self._model.config._orig_ov_attn_impl = self._model.config._attn_implementation
+            self._model.config._attn_implementation = "sdpa"
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if hasattr(self._model, "config") and hasattr(self._model.config, "_orig_ov_attn_impl"):
+            self._model.config._attn_implementation = self._model.config._orig_ov_attn_impl
+            del self._model.config._orig_ov_attn_impl
