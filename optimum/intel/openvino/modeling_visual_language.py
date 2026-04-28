@@ -5601,7 +5601,9 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
             for i in range(len(image_token_indices) - 1):
                 cur_input_ids_noim.append(cur_input_ids[image_token_indices[i] + 1 : image_token_indices[i + 1]])
             split_sizes = [x.shape[0] for x in cur_input_ids_noim]
-            cur_input_embeds = torch.from_numpy(super().get_text_embeddings(torch.cat(cur_input_ids_noim).unsqueeze(0))[0])
+            cur_input_embeds = torch.from_numpy(
+                super().get_text_embeddings(torch.cat(cur_input_ids_noim).unsqueeze(0))[0]
+            )
             cur_input_embeds_no_im = torch.split(cur_input_embeds, split_sizes, dim=0)
             cur_new_input_embeds = []
 
