@@ -1312,6 +1312,17 @@ def _resolve_flux_text_encoder_model_type(text_encoder, default_model_type: str,
 
     return default_model_type
 
+def _resolve_vae_scaling_factor(vae_config) -> Optional[float]:
+    scaling_factor = getattr(vae_config, "scaling_factor", None)
+    if scaling_factor is not None:
+        return float(scaling_factor)
+
+    block_out_channels = getattr(vae_config, "block_out_channels", None)
+    if block_out_channels:
+        return float(2 ** (len(block_out_channels) - 1))
+
+    return None
+
 
 def _add_flux_text_encoder_for_export(
     models_for_export,
@@ -1399,7 +1410,7 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
 
     vae_scaling_factor = None
     if hasattr(pipeline, "vae") and hasattr(pipeline.vae, "config"):
-        vae_scaling_factor = getattr(pipeline.vae.config, "scaling_factor", None)
+        vae_scaling_factor = _resolve_vae_scaling_factor(pipeline.vae.config)
 
     # VAE Encoder
     vae_encoder = copy.deepcopy(pipeline.vae)

@@ -1701,6 +1701,15 @@ class OVFlux2KleinPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, F
     export_feature = "text-to-image"
     auto_model_class = Flux2KleinPipeline
 
+    def __call__(self, *args, **kwargs):
+        if args and isinstance(args[0], str) and "prompt" not in kwargs:
+            user_prompt = args[0]
+            raise ValueError(
+                f"`prompt` must be passed as a keyword argument for Flux2Klein pipelines because the first positional "
+                f"argument is `image`. Use `pipeline(prompt={user_prompt!r})`."
+            )
+        return super().__call__(*args, **kwargs)
+
 
 class OVFluxImg2ImgPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, FluxImg2ImgPipeline):
     main_input_name = "image"
