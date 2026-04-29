@@ -41,6 +41,9 @@ from optimum.intel.openvino.utils import TemporaryDirectory
 from optimum.intel.utils.import_utils import is_diffusers_version, is_transformers_version
 from optimum.utils.testing_utils import require_diffusers
 
+if is_diffusers_version(">=", "0.37.0"):
+    from optimum.intel.openvino import OVZImagePipeline
+
 
 def get_generator(framework, seed):
     if framework == "np":
@@ -1200,3 +1203,174 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
         inputs.pop("width")
         image = pipeline(**inputs).frames[0]
         self.assertTupleEqual(image.shape[-3:-1], (32, 32))
+
+
+@unittest.skipIf(not is_diffusers_version(">=", "0.37.0"), reason="ZImagePipeline requires diffusers >= 0.37.0")
+@require_diffusers
+class OVZImagePipelineTest(unittest.TestCase):
+    """Tests for OVZImagePipeline (Tongyi-MAI/Z-Image-Turbo architecture).
+
+    Uses a tiny randomly-initialised ZImagePipeline created in memory so that
+    no large model download is required during CI.  The only external assets
+    are the Qwen3 tokenizer files from
+    ``optimum-intel-internal-testing/tiny-random-qwen3`` (~14 MB).
+
+    The tiny model parameters are chosen so that:
+    - ``dim=64``, ``n_heads=2`` → ``head_dim=32 == sum(axes_dims)``
+    - ``cap_feat_dim=32`` matches the Qwen3 ``hidden_size=32``
+    - ``in_channels=16`` matches ``AutoencoderKL`` ``latent_channels=16``
+    """
+
+    # Tiny but self-consistent model configuration
+    TRANSFORMER_CONFIG = dict(
+        all_patch_size=[2],
+        all_f_patch_size=[1],
+        in_channels=16,
+        dim=64,
+        n_layers=1,
+        n_refiner_layers=1,
+        n_heads=2,
+        n_kv_heads=2,
+        norm_eps=1e-5,
+        qk_norm=True,
+        cap_feat_dim=32,
+        siglip_feat_dim=None,
+        rope_theta=256.0,
+        t_scale=1000.0,
+        axes_dims=[4, 14, 14],  # must sum to head_dim=32
+        axes_lens=[256, 128, 128],
+    )
+
+    VAE_CONFIG = dict(
+        in_channels=3,
+        out_channels=3,
+        latent_channels=16,
+        down_block_types=("DownEncoderBlock2D",),
+        up_block_types=("UpDecoderBlock2D",),
+        block_out_channels=(32,),
+        layers_per_block=1,
+        norm_num_groups=32,
+        scaling_factor=0.3611,
+        shift_factor=0.1159,
+    )
+
+    QWEN3_CONFIG = dict(
+        vocab_size=100,
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        head_dim=16,
+        max_position_embeddings=512,
+        rms_norm_eps=1e-5,
+    )
+
+    # Public tokenizer with chat-template support; ~14 MB download
+    TOKENIZER_ID = "optimum-intel-internal-testing/tiny-random-qwen3"
+
+    def _build_tiny_pipeline(self):
+        """Create an in-memory ZImagePipeline with random weights."""
+        from diffusers import FlowMatchEulerDiscreteScheduler, ZImagePipeline
+        from diffusers.models import AutoencoderKL
+        from diffusers.models.transformers import ZImageTransformer2DModel
+        from transformers import AutoTokenizer, Qwen3Config, Qwen3Model
+
+        transformer = ZImageTransformer2DModel(**self.TRANSFORMER_CONFIG)
+        vae = AutoencoderKL(**self.VAE_CONFIG)
+        text_encoder = Qwen3Model(Qwen3Config(**self.QWEN3_CONFIG))
+        tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_ID)
+        scheduler = FlowMatchEulerDiscreteScheduler()
+
+        return ZImagePipeline(
+            scheduler=scheduler,
+            vae=vae,
+            text_encoder=text_encoder,
+            tokenizer=tokenizer,
+            transformer=transformer,
+        )
+
+    def test_export_tiny_model(self):
+        """Exporting a tiny ZImagePipeline produces the expected four OV sub-models."""
+        from optimum.intel.openvino.utils import TemporaryDirectory
+
+        pipe = self._build_tiny_pipeline()
+        with TemporaryDirectory() as src_dir, TemporaryDirectory() as ov_dir:
+            pipe.save_pretrained(src_dir)
+
+            import subprocess
+
+            result = subprocess.run(
+                f"optimum-cli export openvino --model {src_dir} --task text-to-image {ov_dir}",
+                shell=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, msg=f"Export failed:\n{result.stderr}")
+
+            exported_xmls = {p.parent.name for p in Path(ov_dir).rglob("openvino_model.xml")}
+            self.assertSetEqual(
+                exported_xmls,
+                {"text_encoder", "transformer", "vae_encoder", "vae_decoder"},
+            )
+
+    def test_inference_output_shape(self):
+        """OVZImagePipeline generates images with the requested spatial resolution."""
+        from optimum.intel.openvino import OVZImagePipeline
+        from optimum.intel.openvino.utils import TemporaryDirectory
+
+        pipe = self._build_tiny_pipeline()
+        height, width = 64, 64
+
+        with TemporaryDirectory() as src_dir, TemporaryDirectory() as ov_dir:
+            pipe.save_pretrained(src_dir)
+
+            import subprocess
+
+            result = subprocess.run(
+                f"optimum-cli export openvino --model {src_dir} --task text-to-image {ov_dir}",
+                shell=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, msg=f"Export failed:\n{result.stderr}")
+
+            ov_pipe = OVZImagePipeline.from_pretrained(ov_dir, device=OPENVINO_DEVICE)
+            output = ov_pipe(
+                "a beautiful landscape",
+                num_inference_steps=1,
+                height=height,
+                width=width,
+                output_type="np",
+            )
+            images = output.images
+            self.assertEqual(len(images), 1)
+            self.assertTupleEqual(images[0].shape, (height, width, 3))
+
+    def test_pipeline_class_dispatch(self):
+        """OVDiffusionPipeline.from_pretrained dispatches to OVZImagePipeline."""
+        from optimum.intel.openvino import OVDiffusionPipeline, OVZImagePipeline
+        from optimum.intel.openvino.utils import TemporaryDirectory
+
+        pipe = self._build_tiny_pipeline()
+
+        with TemporaryDirectory() as src_dir, TemporaryDirectory() as ov_dir:
+            pipe.save_pretrained(src_dir)
+
+            import subprocess
+
+            result = subprocess.run(
+                f"optimum-cli export openvino --model {src_dir} --task text-to-image {ov_dir}",
+                shell=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, msg=f"Export failed:\n{result.stderr}")
+
+            # Direct load
+            ov_pipe = OVZImagePipeline.from_pretrained(ov_dir, device=OPENVINO_DEVICE)
+            self.assertIsInstance(ov_pipe, OVZImagePipeline)
+
+            # Dispatch via OVDiffusionPipeline
+            ov_pipe_dispatched = OVDiffusionPipeline.from_pretrained(ov_dir, device=OPENVINO_DEVICE)
+            self.assertIsInstance(ov_pipe_dispatched, OVZImagePipeline)
