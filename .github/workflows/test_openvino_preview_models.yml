@@ -60,7 +60,7 @@ jobs:
         run: |
           uv pip install --pre -U openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
-      - name: Preview Models Support
+      - name: Gemma 4 Validation
         run: |
           uv pip install transformers==5.5.0
           pytest tests/openvino/${{ matrix.test-pattern }} -m gemma4 --durations=0
