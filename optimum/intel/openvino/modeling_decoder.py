@@ -668,7 +668,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             outputs=outputs, model_kwargs=model_kwargs, is_encoder_decoder=is_encoder_decoder, **kwargs
         )
 
-        if "position_ids" in model_kwargs:
+        # _prepare_position_ids_for_generation will infer position ids since transformers v5.2
+        if "position_ids" in model_kwargs and not hasattr(self, "_prepare_position_ids_for_generation"):
             position_ids = model_kwargs["position_ids"]
             new_position_id = position_ids[..., -1:].clone()
             new_position_id += 1

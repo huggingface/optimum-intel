@@ -143,8 +143,6 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
         "blenderbot",
         "blenderbot-small",
         "longt5",
-        "m2m_100",
-        "mbart",
         "pegasus",
         "t5",
     )
@@ -153,20 +151,18 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
     TASK = "text2text-generation"
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
-    UNSUPPORTED_ARCHITECTURES = set()
-    if not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2026.1")) and is_transformers_version(
-        "<", "5"
-    ):
-        # There are known issues with marian model on OpenVINO 2025.3.x and 2025.4.x
-        SUPPORTED_ARCHITECTURES += ("marian",)
-    else:
-        UNSUPPORTED_ARCHITECTURES.add("marian")
-
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES += ("mt5",)
-    else:
-        UNSUPPORTED_ARCHITECTURES.add("mt5")
+    _is_model_supported = {
+        # config loading failing coming from type mismatch coming from transformers v5.4
+        "m2m_100": is_transformers_version("!=", "5.4"),
+        "mbart": is_transformers_version("!=", "5.4"),
+        # known issues with marian on OpenVINO 2025.3.x and 2025.4.x
+        "marian": not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2026.1"))
+        and is_transformers_version("<", "5"),
+        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly (mt5)
+        "mt5": is_transformers_version("<", "5"),
+    }
+    SUPPORTED_ARCHITECTURES += tuple(arch for arch, supported in _is_model_supported.items() if supported)
+    UNSUPPORTED_ARCHITECTURES = {arch for arch, supported in _is_model_supported.items() if not supported}
 
     SUPPORT_STATEFUL = ("t5", "mt5", "longt5")
     if is_transformers_version(">=", "4.52.0"):
@@ -445,10 +441,17 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
 
 class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
-    SUPPORTED_ARCHITECTURES = ["vision-encoder-decoder", "trocr", "donut"]
+    SUPPORTED_ARCHITECTURES = ["vision-encoder-decoder", "trocr"]
     # GOT-OCR2 models shouldn't be exported using the task image-to-text (currently equivalent to exporting the model using image-text-to-text) and will be deprecated v1.29
     # TODO: move pix2struct tests from OVModelForPix2StructIntegrationTest
-    UNSUPPORTED_ARCHITECTURES = {"got_ocr2", "pix2struct"}
+
+    # config loading failing coming from type mismatch coming from transformers v5.4
+    _is_model_supported = {"donut": is_transformers_version("!=", "5.4")}
+    SUPPORTED_ARCHITECTURES += [arch for arch, supported in _is_model_supported.items() if supported]
+    UNSUPPORTED_ARCHITECTURES = {"got_ocr2", "pix2struct"} | {
+        arch for arch, supported in _is_model_supported.items() if not supported
+    }
+
     TASK = "image-to-text"
     OVMODEL_CLASS = OVModelForVision2Seq
     AUTOMODEL_CLASS = transformers_auto_class
@@ -568,17 +571,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ["maira2"]
 
-        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-        if is_transformers_version("<", "5"):
-            SUPPORTED_ARCHITECTURES += ["idefics3"]
-
     if is_transformers_version(">=", "4.49.0"):
         SUPPORTED_ARCHITECTURES += ["qwen2_5_vl"]
         SUPPORT_VIDEO.append("qwen2_5_vl")
-
-        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-        if is_transformers_version("<", "5"):
-            SUPPORTED_ARCHITECTURES += ["got_ocr2"]
 
         if is_transformers_version("<", "4.54.0"):
             # remote code models differs after transformers v4.54
@@ -587,14 +582,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     if is_transformers_version(">=", "4.50"):
         SUPPORTED_ARCHITECTURES += ["gemma3"]
-        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-        if is_transformers_version("<", "5"):
-            SUPPORTED_ARCHITECTURES += ["smolvlm"]
-
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version(">=", "4.51") and is_transformers_version("<", "5"):
-        # SUPPORTED_ARCHITECTURES += ["llama4", "phi4_multimodal"]
-        SUPPORTED_ARCHITECTURES += ["llama4"]
 
     if is_transformers_version("<", "4.52"):
         SUPPORTED_ARCHITECTURES += ["minicpmo"]
@@ -611,10 +598,15 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         SUPPORTED_ARCHITECTURES += ["internvl_chat", "minicpmv"]
 
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES += ("llava_next_video",)
-    else:
-        UNSUPPORTED_ARCHITECTURES.update({"got_ocr2", "idefics3", "llama4", "llava_next_video", "smolvlm"})
+    _is_model_supported = {
+        "idefics3": is_transformers_version(">=", "4.46.0") and is_transformers_version("<", "5"),
+        "got_ocr2": is_transformers_version(">=", "4.49.0") and is_transformers_version("<", "5"),
+        "smolvlm": is_transformers_version(">=", "4.50") and is_transformers_version("<", "5"),
+        "llama4": is_transformers_version(">=", "4.51") and is_transformers_version("<", "5"),
+        "llava_next_video": is_transformers_version("<", "5"),
+    }
+    SUPPORTED_ARCHITECTURES += [arch for arch, supported in _is_model_supported.items() if supported]
+    UNSUPPORTED_ARCHITECTURES.update(arch for arch, supported in _is_model_supported.items() if not supported)
     REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "minicpmo", "llava-qwen2", "phi3_v", "maira2", "phi4mm"]
     IMAGE = Image.open(
         requests.get(

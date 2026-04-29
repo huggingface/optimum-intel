@@ -52,8 +52,8 @@ from optimum.exporters.onnx.model_patcher import (
     ModelPatcher,
     gpt_oss_forward,
     override_arguments,
-    sdpa_mask_without_vmap,
 )
+from optimum.exporters.onnx.model_patcher import sdpa_mask_without_vmap as sdpa_mask_without_vmap_legacy
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
     is_openvino_version,
@@ -251,19 +251,34 @@ def patch_cos_sin_cached_fp32(model):
                 )
 
 
+def sdpa_mask_without_vmap(**kwargs) -> Optional[torch.Tensor]:
+    kwargs.pop("use_vmap", None)
+    if is_transformers_version("<", "5"):
+        return sdpa_mask_without_vmap_legacy(**kwargs)
+    elif is_transformers_version(">=", "5.4") and is_transformers_version("<=", "5.7"):
+        q_length = kwargs.pop("q_length", None)
+        q_offset = kwargs.pop("q_offset", 0)
+        cache_position = torch.arange(q_offset, q_offset + q_length, device=q_length.device)
+        return sdpa_mask(q_length=cache_position, use_vmap=False, **kwargs)
+    else:
+        return sdpa_mask(use_vmap=False, **kwargs)
+
+
 # Adapted from https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/masking_utils.py#L433
 # Specifically for OpenVINO, we use torch.finfo(torch.float16).min instead of torch.finfo(dtype).min
-def eager_mask_without_vmap(*args, **kwargs) -> Optional[torch.Tensor]:
+def eager_mask_without_vmap(**kwargs) -> Optional[torch.Tensor]:
     kwargs.pop("allow_is_causal_skip", None)
-    dtype = kwargs.get("dtype", torch.float32)
-    mask = sdpa_mask_without_vmap(*args, allow_is_causal_skip=False, **kwargs)
-    # we use torch.finfo(torch.float16).min instead torch.finfo(dtype).min to avoid an overflow but not
-    # sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
-    mask = torch.where(
-        mask,
-        torch.tensor(0.0, device=mask.device, dtype=dtype),
-        torch.tensor(torch.finfo(torch.float16).min, device=mask.device, dtype=dtype),
-    )
+    kwargs.pop("allow_torch_fix", None)
+    dtype = kwargs.pop("dtype", torch.float32)
+    mask = sdpa_mask_without_vmap(allow_is_causal_skip=False, allow_torch_fix=False, **kwargs)
+    if mask is not None:
+        # we use torch.finfo(torch.float16).min instead torch.finfo(dtype).min to avoid an overflow but not
+        # sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
+        mask = torch.where(
+            mask,
+            torch.tensor(0.0, device=mask.device, dtype=dtype),
+            torch.tensor(torch.finfo(torch.float16).min, device=mask.device, dtype=dtype),
+        )
     return mask
 
 

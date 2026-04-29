@@ -104,20 +104,26 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
-    if is_transformers_version(">=", "4.48.0"):
+    # config loading failing coming from type mismatch coming from transformers v5.4
+    if is_transformers_version(">=", "4.48.0") and is_transformers_version("!=", "5.4"):
         SUPPORTED_ARCHITECTURES += ("cohere2",)
 
     if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phimoe")
+        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo")
 
         if is_transformers_version("<", "4.54.0"):
             SUPPORTED_ARCHITECTURES += ("deepseek",)
+
+        # config loading failing coming from type mismatch coming from transformers v5.4
+        if is_transformers_version("!=", "5.4"):
+            SUPPORTED_ARCHITECTURES += ("phimoe",)
 
         # gptq and awq install disabled for windows test environment
         if platform.system() != "Windows" and is_transformers_version("<", "4.56.0"):
             SUPPORTED_ARCHITECTURES += ("opt_gptq", "mixtral_awq")
 
-    if is_transformers_version(">", "4.47"):
+    # config loading failing coming from type mismatch coming from transformers v5.4
+    if is_transformers_version(">", "4.47") and is_transformers_version("!=", "5.4"):
         SUPPORTED_ARCHITECTURES += ("olmo2",)
 
     if is_transformers_version(">=", "4.50"):
