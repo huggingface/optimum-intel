@@ -143,8 +143,6 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
         "blenderbot",
         "blenderbot-small",
         "longt5",
-        "m2m_100",
-        "mbart",
         "pegasus",
         "t5",
     )
@@ -154,6 +152,12 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
     UNSUPPORTED_ARCHITECTURES = set()
+
+    if is_transformers_version("!=", "5.4"):
+        SUPPORTED_ARCHITECTURES += ("m2m_100", "mbart")
+    else:
+        UNSUPPORTED_ARCHITECTURES.update({"m2m_100", "mbart"})
+
     if not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2026.1")) and is_transformers_version(
         "<", "5"
     ):
@@ -445,10 +449,17 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
 
 class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
-    SUPPORTED_ARCHITECTURES = ["vision-encoder-decoder", "trocr", "donut"]
+    SUPPORTED_ARCHITECTURES = ["vision-encoder-decoder", "trocr"]
     # GOT-OCR2 models shouldn't be exported using the task image-to-text (currently equivalent to exporting the model using image-text-to-text) and will be deprecated v1.29
     # TODO: move pix2struct tests from OVModelForPix2StructIntegrationTest
+
     UNSUPPORTED_ARCHITECTURES = {"got_ocr2", "pix2struct"}
+
+    if is_transformers_version("!=", "5.4"):
+        SUPPORTED_ARCHITECTURES += ("donut",)
+    else:
+        UNSUPPORTED_ARCHITECTURES.add("donut")
+
     TASK = "image-to-text"
     OVMODEL_CLASS = OVModelForVision2Seq
     AUTOMODEL_CLASS = transformers_auto_class
