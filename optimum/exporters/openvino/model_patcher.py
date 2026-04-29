@@ -4977,8 +4977,9 @@ def _create_gemma4_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids,
     # Apply padding from attention_mask_2d
     padding_mask = (1.0 - attention_mask_2d[:, None, None, :].to(dtype=dtype, device=device)) * min_dtype
     full_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1) + padding_mask
-    mm_token_type_ids = torch.nn.functional.pad(mm_token_type_ids,
-                                                (0, target_len - mm_token_type_ids.shape[-1]), value=0)
+    mm_token_type_ids = torch.nn.functional.pad(
+        mm_token_type_ids, (0, target_len - mm_token_type_ids.shape[-1]), value=0
+    )
 
     # Sliding window causal mask
     sliding_mask = full_mask.clone()
