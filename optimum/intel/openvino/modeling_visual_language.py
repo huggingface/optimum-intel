@@ -211,11 +211,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
         if "token_type_ids" in self.input_names:
             if token_type_ids is None:
-                # Use attention_mask shape to match total sequence length (including past tokens)
-                if attention_mask is not None:
-                    token_type_ids = np.zeros(attention_mask.shape, dtype=int)
-                else:
-                    token_type_ids = np.zeros(inputs_embeds.shape[:2], dtype=int)
+               token_type_ids = np.zeros(inputs_embeds.shape[:2], dtype=int)
             inputs["token_type_ids"] = token_type_ids
 
         if "beam_idx" in self.input_names:
