@@ -62,7 +62,6 @@ from optimum.intel.utils.import_utils import _transformers_version, is_transform
 from optimum.utils import logging
 from optimum.utils.save_utils import maybe_load_preprocessors
 
-
 logger = logging.get_logger()
 
 
@@ -125,6 +124,7 @@ class ExportModelTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.update({"qwen3": OVModelForFeatureExtraction})
 
     GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
+    OV_MULTIMODAL_REMOTE_CODE_MODELS = ("llava-qwen2", "phi3_v")
 
     def _openvino_export(
         self,
@@ -333,6 +333,29 @@ class ExportModelTest(unittest.TestCase):
             only_onnx = onnx_architectures - openvino_architectures
             if len(only_onnx) > 0:
                 logger.warning(f"The following architectures export {only_onnx} is supported by ONNX but not OpenVINO")
+
+    @parameterized.expand(OV_MULTIMODAL_REMOTE_CODE_MODELS)
+    def test_export_requires_trust_remote_code_for_multimodal_models(self, model_type):
+
+        model = MODEL_NAMES[model_type]
+        task = "image-text-to-text"
+        with TemporaryDirectory() as tmpdirname:
+            with self.assertRaises(ValueError) as ctx:
+                main_export(
+                    model_name_or_path=model,
+                    task=task,
+                    output=Path(tmpdirname),
+                    trust_remote_code=False,
+                )
+
+            self.assertIn("trust_remote_code", str(ctx.exception))
+
+            main_export(
+                model_name_or_path=model,
+                task=task,
+                output=Path(tmpdirname),
+                trust_remote_code=True,
+            )
 
 
 class CustomExportModelTest(unittest.TestCase):
