@@ -46,21 +46,21 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip uv
-          uv pip install .[tests] librosa diffusers
-
-      - name: Install transformers 5.5.0 and latest openvino nightly
-        run: |
-          uv pip install transformers==5.5.0
-          uv pip install --pre -U openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
-
       - name: Login with fork PRs CI token
         if: ${{ env.HF_TOKEN == '' }}
         run: |
           python tests/scripts/login_with_ci_token.py
 
-      - name: Test Gemma4 with Pytest
+      - name: Install dependencies
         run: |
+          pip install --upgrade pip uv
+          uv pip install .[tests] librosa diffusers
+
+      - name: Install latest openvino nightly
+        run: |
+          uv pip install --pre -U openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+
+      - name: Preview Models Support
+        run: |
+          uv pip install transformers==5.5.0
           pytest tests/openvino/${{ matrix.test-pattern }} -m gemma4 --durations=0
