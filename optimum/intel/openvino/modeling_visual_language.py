@@ -211,7 +211,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
         if "token_type_ids" in self.input_names:
             if token_type_ids is None:
-               token_type_ids = np.zeros(inputs_embeds.shape[:2], dtype=int)
+                token_type_ids = np.zeros(inputs_embeds.shape[:2], dtype=int)
             inputs["token_type_ids"] = token_type_ids
 
         if "beam_idx" in self.input_names:
@@ -796,7 +796,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             additional_kwargs["per_layer_inputs"] = extra_outputs[0]
 
         return self.language_model.forward(
-            input_ids=input_ids,
+            input_ids=None,
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             position_ids=position_ids,
