@@ -169,6 +169,8 @@ from .model_patcher import (
     JaisModelPatcher,
     Lfm2ModelPatcher,
     Lfm2MoeModelPatcher,
+    Lfm2VlImageEmbeddingModelPatcher,
+    Lfm2VlLanguageModelPatcher,
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
     LlavaImageEmbeddingModelPatcher,
@@ -5559,3 +5561,139 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
 class LFM2MoeOpenVINOConfig(LFM2OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "5.0"
     _MODEL_PATCHER = Lfm2MoeModelPatcher
+
+
+class DummyLfm2VlVisionInputGenerator(DummyVisionInputGenerator):
+    """
+    Generates dummy vision inputs for LFM2-VL vision embedding model.
+
+    LFM2-VL uses a NaFlex-style tiled image format:
+      - pixel_values: [num_tiles, num_patches, channels_per_patch]
+      - spatial_shapes: [num_tiles, 2]  (all [[h, w]] for full tiles)
+      - pixel_attention_mask: [num_tiles, num_patches]  (all 1s for full tiles)
+    """
+
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "spatial_shapes", "pixel_attention_mask")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: "NormalizedVisionConfig",
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        config = normalized_config.config
+        # tile_size and encoder_patch_size live on the top-level lfm2_vl config
+        tile_size = getattr(config, "tile_size", 512)
+        patch_size = getattr(config, "encoder_patch_size", getattr(config, "patch_size", 16))
+        self._patches_per_side = tile_size // patch_size
+        self._num_patches = self._patches_per_side * self._patches_per_side
+        # pixel_values are pre-patchified: channels * patch_h * patch_w values per patch
+        _num_channels = getattr(config, "num_channels", 3)
+        if hasattr(config, "vision_config"):
+            _num_channels = getattr(config.vision_config, "num_channels", _num_channels)
+        self._channels_per_patch = _num_channels * patch_size * patch_size
+        self._num_tiles = 1  # use a single tile as a minimal dummy input
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            shape = [self._num_tiles, self._num_patches, self._channels_per_patch]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+        if input_name == "spatial_shapes":
+            import torch
+
+            return torch.full((self._num_tiles, 2), self._patches_per_side, dtype=torch.long)
+
+        if input_name == "pixel_attention_mask":
+            import torch
+
+            return torch.ones((self._num_tiles, self._num_patches), dtype=torch.bool)
+
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+@register_in_tasks_manager("lfm2_vl", *["image-text-to-text"], library_name="transformers")
+class Lfm2VlOpenVINOConfig(BaseVLMOpenVINOConfig):
+    """OpenVINO export config for LFM2-VL (lfm2_vl) vision-language models."""
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm2VlVisionInputGenerator,)
+    MIN_TRANSFORMERS_VERSION = "5.0.0"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: "VLMConfigBehavior" = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        self._behavior = behavior
+
+    def patch_model_for_export(self, model: "PreTrainedModel", model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return Lfm2VlImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {
+            "pixel_values": {0: "num_tiles", 1: "num_patches"},
+            "spatial_shapes": {0: "num_tiles"},
+            "pixel_attention_mask": {0: "num_tiles", 1: "num_patches"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"last_hidden_state": {0: "total_image_tokens"}}
+
+    def get_model_for_behavior(self, model, behavior):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return model
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = _get_model_attribute(model, "language_model").config
+            return text_embedding
+
+    def with_behavior(self, behavior):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                self._orig_config.text_config.model_type,
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Lfm2VlLanguageModelPatcher,
+            )
+
+        # For TEXT_EMBEDDINGS and VISION_EMBEDDINGS, use the base class logic
+        return super().with_behavior(behavior)
+

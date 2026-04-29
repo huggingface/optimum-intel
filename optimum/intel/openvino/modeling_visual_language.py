@@ -35,7 +35,13 @@ from ...exporters.openvino.utils import save_config
 from ..utils.import_utils import is_transformers_version
 from .configuration import OVConfig, OVQuantizationConfigBase, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
-from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
+from .modeling_decoder import (
+    CausalLMOutputWithPast,
+    OVCacheWithMambaStates,
+    OVModelForCausalLM,
+    OVModelWithMambaForCausalLM,
+    OVOutputWithMambaStates,
+)
 from .utils import (
     OV_LANGUAGE_MODEL_NAME,
     OV_TEXT_EMBEDDINGS_MODEL_NAME,
@@ -742,6 +748,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         second_per_grid_ts=None,
         token_type_ids=None,
         pixel_attention_mask=None,
+        spatial_shapes=None,
         input_image_embeds: Optional[torch.FloatTensor] = None,
         image_pixel_values: Optional[torch.FloatTensor] = None,
         image_attention_mask=None,
@@ -770,6 +777,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             rope_deltas=rope_deltas,
             second_per_grid_ts=second_per_grid_ts,
             pixel_attention_mask=pixel_attention_mask,
+            spatial_shapes=spatial_shapes,
             input_image_embeds=input_image_embeds,
             image_attention_mask=image_attention_mask,
             input_audio_embeds=input_audio_embeds if input_audio_embeds is not None else audio_input_features,
@@ -895,6 +903,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "video_grid_thw": kwargs.get("video_grid_thw"),
                 "token_type_ids": kwargs.get("token_type_ids"),
                 "pixel_attention_mask": kwargs.get("pixel_attention_mask"),
+                "spatial_shapes": kwargs.get("spatial_shapes"),
                 "image_attention_mask": kwargs.get("image_attention_mask"),
                 "input_audio_embeds": kwargs.get("input_audio_embeds", kwargs.get("audio_input_features")),
                 "audio_embed_sizes": kwargs.get("audio_embed_sizes"),
@@ -4802,6 +4811,317 @@ class _OVLlama4ForCausalLM(OVModelForVisualCausalLM):
         return inputs
 
 
+
+class OVLfm2VlLanguageModel(OVModelWithEmbedForCausalLM):
+    """
+    Language model for LFM2-VL that uses mamba-style cache (cache_params.past.*)
+    instead of standard past_key_values.
+
+    Bridges OVModelWithEmbedForCausalLM (which provides embed_tokens and text_emb_model)
+    with OVModelWithMambaForCausalLM cache-handling logic.
+    """
+
+    def __init__(self, model, text_embeds_model, config=None, **kwargs):
+        super().__init__(model, text_embeds_model, config=config, **kwargs)
+        # Build mamba cache input/output name lists (same as OVModelWithMambaForCausalLM)
+        self.key_cache_input_names = sorted([k for k in self.input_names if "cache_params.past.key" in k])
+        self.value_cache_input_names = sorted([k for k in self.input_names if "cache_params.past.value" in k])
+        self.ssm_cache_input_names = sorted([k for k in self.input_names if "cache_params.past.ssm" in k])
+        self.conv_cache_input_names = sorted([k for k in self.input_names if "cache_params.past.conv" in k])
+
+        self.key_cache_output_names = sorted([k for k in self.output_names if "cache_params.present.key" in k])
+        self.value_cache_output_names = sorted([k for k in self.output_names if "cache_params.present.value" in k])
+        self.ssm_cache_output_names = sorted([k for k in self.output_names if "cache_params.present.ssm" in k])
+        self.conv_cache_output_names = sorted([k for k in self.output_names if "cache_params.present.conv" in k])
+
+        if hasattr(config, "text_config"):
+            _text_cfg = config.text_config
+        else:
+            _text_cfg = config
+        self._lm_config = _text_cfg
+
+    @staticmethod
+    def _has_cache_inputs(model) -> bool:
+        return any(
+            "past_key_values" in key.get_any_name() or "cache_params" in key.get_any_name()
+            for key in model.inputs
+        )
+
+    def _get_cache_text_config(self):
+        """Return the text (language model) config that OVCacheWithMambaStates expects."""
+        return self._lm_config
+
+    def _create_empty_cache(self, config, batch_size):
+        """
+        Create an empty cache for the first generation step.
+        lfm2 uses short-conv layers (no SSM state), so we build conv states and
+        attention KV cache manually rather than going through OVCacheWithMambaStates
+        which would try to allocate SSM states it cannot size.
+        """
+        layer_types = getattr(config, "layer_types", [])
+        num_conv_layers = layer_types.count("conv")
+        num_attn_layers = layer_types.count("full_attention")
+        conv_kernel = getattr(config, "conv_kernel", getattr(config, "conv_L_cache", 3))
+        conv_dim = getattr(config, "conv_dim", config.intermediate_size)
+        num_kv_heads = getattr(config, "num_key_value_heads", config.num_attention_heads)
+        head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
+
+        conv_states = [np.zeros((batch_size, conv_dim, conv_kernel), dtype=np.float32) for _ in range(num_conv_layers)]
+        key_cache = [np.zeros((batch_size, num_kv_heads, 0, head_dim), dtype=np.float32) for _ in range(num_attn_layers)]
+        value_cache = [np.zeros((batch_size, num_kv_heads, 0, head_dim), dtype=np.float32) for _ in range(num_attn_layers)]
+
+        # Use OVCacheWithMambaStates but pass pre-built states so it skips allocation
+        return OVCacheWithMambaStates(
+            config,
+            batch_size=batch_size,
+            conv_states=conv_states,
+            ssm_states=[],  # lfm2 has no SSM states
+            key_cache=key_cache,
+            value_cache=value_cache,
+        )
+
+    def prepare_inputs(
+        self,
+        input_ids,
+        attention_mask=None,
+        past_key_values=None,
+        position_ids=None,
+        inputs_embeds=None,
+        **kwargs,
+    ):
+        """
+        Override to handle mamba-style cache (cache_params.*) while preserving
+        the text-embedding pipeline from OVModelWithEmbedForCausalLM.
+        """
+        batch_size = input_ids.shape[0] if input_ids is not None else inputs_embeds.shape[0]
+
+        # 1. Embed tokens if inputs_embeds not provided
+        if inputs_embeds is None:
+            if past_key_values is None:
+                inputs_embeds = self.embed_tokens(input_ids)
+            else:
+                inputs_embeds = self.embed_tokens(input_ids[:, -1:])
+            if hasattr(self.config, "scale_emb"):
+                inputs_embeds = inputs_embeds * self.config.scale_emb
+
+        inputs = {"inputs_embeds": inputs_embeds}
+
+        # 2. Attention mask
+        if "attention_mask" in self.input_names:
+            if attention_mask is None:
+                attention_mask = np.ones((batch_size, inputs_embeds.shape[1]), dtype=np.int64)
+            inputs["attention_mask"] = attention_mask
+
+        # 3. Mamba cache states
+        if self.stateful:
+            # Stateful mode: states are internal to the OV model
+            if past_key_values is None:
+                if self.request is not None:
+                    self.request.reset_state()
+                self._past_length = 0
+        else:
+            # Non-stateful mode: pass explicit cache tensors
+            cache_text_config = self._get_cache_text_config()
+            if past_key_values is None:
+                # First step: create empty/zero cache for conv and attn states.
+                # lfm2 has no SSM states — pass ssm_states=[] to avoid OVCacheWithMambaStates
+                # trying to instantiate them (it would fail since mamba_d_state is not set).
+                cache_params = self._create_empty_cache(cache_text_config, batch_size)
+            else:
+                cache_params = past_key_values
+
+            if cache_params is not None:
+                if hasattr(cache_params, "ssm_states") and cache_params.ssm_states:
+                    inputs.update(zip(self.ssm_cache_input_names, cache_params.ssm_states))
+                if hasattr(cache_params, "conv_states") and cache_params.conv_states:
+                    inputs.update(zip(self.conv_cache_input_names, cache_params.conv_states))
+                if hasattr(cache_params, "key_cache") and cache_params.key_cache:
+                    inputs.update(zip(self.key_cache_input_names, cache_params.key_cache))
+                if hasattr(cache_params, "value_cache") and cache_params.value_cache:
+                    inputs.update(zip(self.value_cache_input_names, cache_params.value_cache))
+
+        if "beam_idx" in self.input_names:
+            inputs["beam_idx"] = (
+                self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=int)
+            )
+
+        return inputs
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        past_key_values=None,
+        position_ids=None,
+        inputs_embeds=None,
+        **kwargs,
+    ):
+        self.compile()
+        inputs = self.prepare_inputs(
+            input_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+        )
+
+        self.request.start_async(inputs, share_inputs=True)
+        self.request.wait()
+        logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+
+        # Build updated cache from outputs
+        if self.stateful:
+            # In stateful mode, cache is internal; return a placeholder
+            batch_size = inputs_embeds.shape[0] if inputs_embeds is not None else input_ids.shape[0]
+            seq_len = inputs_embeds.shape[1] if inputs_embeds is not None else input_ids.shape[1]
+            self._past_length += seq_len
+            new_cache = self._create_empty_cache(self._get_cache_text_config(), batch_size)
+        else:
+            # Non-stateful: gather explicit output states
+            batch_size = inputs_embeds.shape[0] if inputs_embeds is not None else input_ids.shape[0]
+            conv_states = [self.request.get_tensor(k).data for k in self.conv_cache_output_names]
+            ssm_states = [self.request.get_tensor(k).data for k in self.ssm_cache_output_names]
+            key_cache = [self.request.get_tensor(k).data for k in self.key_cache_output_names]
+            value_cache = [self.request.get_tensor(k).data for k in self.value_cache_output_names]
+            new_cache = OVCacheWithMambaStates(
+                self._get_cache_text_config(),
+                batch_size=batch_size,
+                conv_states=conv_states,
+                ssm_states=ssm_states if ssm_states else [],
+                key_cache=key_cache,
+                value_cache=value_cache,
+            )
+
+        return OVOutputWithMambaStates(logits=logits, cache_params=new_cache)
+
+    def _update_model_kwargs_for_generation(self, outputs, model_kwargs, num_new_tokens=1, **kwargs):
+        # Route the mamba cache_params back through past_key_values for the VLM generation loop
+        model_kwargs["past_key_values"] = outputs.get("cache_params", None)
+        if self._past_length is not None:
+            self._past_length += num_new_tokens
+        return model_kwargs
+
+    def _get_past_length(self, past_key_values=None):
+        return self._past_length if self._past_length else 0
+
+
+class _OVLfm2VlForCausalLM(OVModelForVisualCausalLM):
+    def __init__(
+        self,
+        language_model,
+        text_embeddings,
+        vision_embeddings,
+        config=None,
+        device="CPU",
+        dynamic_shapes=None,
+        ov_config=None,
+        model_save_dir=None,
+        quantization_config=None,
+        **kwargs,
+    ):
+        # Call grandparent __init__ to set up common attributes, but skip
+        # OVModelForVisualCausalLM's init that hardcodes OVModelWithEmbedForCausalLM
+        # We use OVLfm2VlLanguageModel instead to support mamba-style cache.
+        from openvino import Model as OVModel
+
+        self.is_dynamic = True
+        self.config = config
+        self.use_cache = kwargs.get("use_cache", True)
+        self.model_save_dir = model_save_dir
+        self._device = device.upper()
+        self.ov_config = {} if ov_config is None else {**ov_config}
+        self.preprocessors = kwargs.get("preprocessors", [])
+        self._supports_cache_class = False
+        self.main_input_name = "input_ids"
+        self._compile_only = kwargs.get("compile_only", False)
+
+        for part in self.additional_parts:
+            setattr(self, f"{part}_model", kwargs.get(part))
+
+        enable_compilation = kwargs.get("compile", True)
+        self.generation_config = kwargs.get("generation_config", GenerationConfig.from_model_config(config))
+        self._openvino_config = None
+        if quantization_config:
+            from .configuration import OVConfig
+
+            self._openvino_config = OVConfig(quantization_config=quantization_config)
+        self._set_ov_config_parameters()
+        self.language_model = OVLfm2VlLanguageModel(
+            language_model,
+            text_embeddings,
+            config=config,
+            device=device,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            compile=self._compile_only or enable_compilation,
+            compile_only=self._compile_only,
+        )
+        self.vision_embeddings = OVVisionEmbedding(vision_embeddings, self)
+        for part in self.additional_parts:
+            model_part = getattr(self, f"{part}_model", None)
+            if model_part is not None:
+                model_part = MODEL_PARTS_CLS_MAPPING[part](model_part, self)
+            setattr(self, part, model_part)
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        spatial_shapes = kwargs.get("spatial_shapes")
+        pixel_attention_mask = kwargs.get("pixel_attention_mask")
+        return self.vision_embeddings(
+            pixel_values,
+            spatial_shapes=spatial_shapes,
+            pixel_attention_mask=pixel_attention_mask,
+        ).last_hidden_state
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        # Adopted from transformers/models/lfm2_vl/modeling_lfm2_vl.py
+        image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+
+        special_image_mask = (input_ids == self.config.image_token_index).unsqueeze(-1)
+        special_image_mask = special_image_mask.expand_as(inputs_embeds).to(inputs_embeds.device)
+
+        image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
+        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+        inputs = processor(images=image, text=text_prompt, return_tensors="pt")
+        return inputs
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
@@ -4824,4 +5144,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "llama4": _OVLlama4ForCausalLM,
     "qwen3_vl": _OVQwen3VLForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
+    "lfm2_vl": _OVLfm2VlForCausalLM,
 }
