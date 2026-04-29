@@ -301,7 +301,9 @@ def patch_stateful_hybrid_ssm(ov_model: ov.Model):
     # hybrid models can contain transformer blocks as well
     # so KV tensors must be handled properly
     batch_dim = 0
-    fuse_cache_reorder(ov_model, not_cache_inputs, cache_inputs, batch_dim)
+    # Only KV tensors need beam-search reorder; SSM states are not per-beam
+    if kv_input_names:
+        fuse_cache_reorder(ov_model, not_cache_inputs, kv_input_names, batch_dim)
     make_stateful(ov_model, not_cache_inputs, cache_inputs, cache_outputs, batch_dim)
 
 
