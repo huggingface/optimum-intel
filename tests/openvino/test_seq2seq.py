@@ -151,14 +151,14 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
     TASK = "text2text-generation"
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
-    # config loading failing coming from type mismatch coming from transformers v5.4
-    # known issues with marian on OpenVINO 2025.3.x and 2025.4.x
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly (mt5)
     _is_model_supported = {
+        # config loading failing coming from type mismatch coming from transformers v5.4
         "m2m_100": is_transformers_version("!=", "5.4"),
         "mbart": is_transformers_version("!=", "5.4"),
+        # known issues with marian on OpenVINO 2025.3.x and 2025.4.x
         "marian": not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2026.1"))
         and is_transformers_version("<", "5"),
+        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly (mt5)
         "mt5": is_transformers_version("<", "5"),
     }
     SUPPORTED_ARCHITECTURES += tuple(arch for arch, supported in _is_model_supported.items() if supported)
