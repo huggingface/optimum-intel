@@ -1,4 +1,4 @@
-name: OpenVINO - Test Gemma4
+name: Preview Models Support Validation
 
 on:
   workflow_dispatch:
