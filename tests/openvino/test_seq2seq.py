@@ -153,6 +153,7 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
     SPEEDUP_CACHE = 1.1
     UNSUPPORTED_ARCHITECTURES = set()
 
+    # config loading failing coming from type mismatch coming from transformers v5.4
     if is_transformers_version("!=", "5.4"):
         SUPPORTED_ARCHITECTURES += ("m2m_100", "mbart")
     else:
@@ -455,6 +456,7 @@ class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
     UNSUPPORTED_ARCHITECTURES = {"got_ocr2", "pix2struct"}
 
+    # config loading failing coming from type mismatch coming from transformers v5.4
     if is_transformers_version("!=", "5.4"):
         SUPPORTED_ARCHITECTURES += ("donut",)
     else:

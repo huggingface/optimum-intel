@@ -104,6 +104,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
+    # config loading failing coming from type mismatch coming from transformers v5.4
     if is_transformers_version(">=", "4.48.0") and is_transformers_version("!=", "5.4"):
         SUPPORTED_ARCHITECTURES += ("cohere2",)
 
@@ -113,6 +114,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if is_transformers_version("<", "4.54.0"):
             SUPPORTED_ARCHITECTURES += ("deepseek",)
 
+        # config loading failing coming from type mismatch coming from transformers v5.4
         if is_transformers_version("!=", "5.4"):
             SUPPORTED_ARCHITECTURES += ("phimoe",)
 
@@ -120,6 +122,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if platform.system() != "Windows" and is_transformers_version("<", "4.56.0"):
             SUPPORTED_ARCHITECTURES += ("opt_gptq", "mixtral_awq")
 
+    # config loading failing coming from type mismatch coming from transformers v5.4
     if is_transformers_version(">", "4.47") and is_transformers_version("!=", "5.4"):
         SUPPORTED_ARCHITECTURES += ("olmo2",)
 
