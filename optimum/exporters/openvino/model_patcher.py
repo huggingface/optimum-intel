@@ -8721,6 +8721,9 @@ def _patched_z_image_prepare_sequence(
     Replaces:
       - index_put_ (feats_cat[bool_mask] = pad_token) with torch.where
       - pad_sequence with unsqueeze (no variable-length batching needed)
+
+    Dynamic-shape-safe: avoids Python-level len()/shape[] constants that would
+    be burned as static constants in OV IR and fail at different resolutions.
     """
     import torch
 
@@ -8735,21 +8738,23 @@ def _patched_z_image_prepare_sequence(
 
     # RoPE: call helper directly to avoid class-level __call__ dispatch issue
     # (Python's special method lookup bypasses instance-level __call__ patches)
-    # pos_id may be longer than feat (pos_grid_size includes padding positions):
-    # truncate freqs_cis to match the actual feature length, as the original does
-    # with pad_sequence + [:, :feats.shape[1]].
-    freqs_cis = _z_image_rope_embedder_call(self.rope_embedder, pos_id)  # [pos_len, total_freq, 2]
-    seq_len = feat.shape[0]  # actual (padded) feature length
-    freqs_cis = freqs_cis[:seq_len]  # truncate to [seq_len, total_freq, 2]
+    # NOTE: Do NOT truncate freqs_cis with a Python-level seq_len constant!
+    # When called from _patched_z_image_inner_forward, pos_id always has the
+    # same length as feat (both come from the same patchify_and_embed output),
+    # so freqs_cis[:seq_len] would be a no-op but burns seq_len as a static
+    # constant in OV IR, causing VariadicSplit/Slice failures at other resolutions.
+    freqs_cis = _z_image_rope_embedder_call(self.rope_embedder, pos_id)  # [N, total_freq, 2]
+    # freqs_cis already has the same length as feat; no truncation needed.
 
     # Expand to batch dimension (unsqueeze avoids aten::pad_sequence)
-    feats_batched = feat.unsqueeze(0)  # [1, seq_len, dim]
-    freqs_batched = freqs_cis.unsqueeze(0)  # [1, seq_len, total_freq, 2]
+    feats_batched = feat.unsqueeze(0)  # [1, N, dim]
+    freqs_batched = freqs_cis.unsqueeze(0)  # [1, N, total_freq, 2]
 
-    # All-True attention mask: for batch_size=1 there is no inter-sequence padding
-    seq_len = feat.shape[0]
-    attn_mask = torch.ones((1, seq_len), dtype=torch.bool, device=device)
+    # Dynamic attention mask: derive shape from feat tensor via ones_like
+    # (avoids static torch.ones((1, seq_len), ...) which burns seq_len as constant)
+    attn_mask = torch.ones_like(feat[:, 0]).unsqueeze(0).bool()  # [1, N] — fully dynamic
 
+    seq_len = feat.shape[0]  # kept for backward compat in return signature
     return feats_batched, freqs_batched, attn_mask, [seq_len], None
 
 
@@ -8774,30 +8779,146 @@ def _patched_z_image_build_unified_sequence(
     Patched _build_unified_sequence for OV export (batch_size=1, non-omni only).
 
     Replaces pad_sequence + bool-masked creation with torch.cat + unsqueeze.
+
+    Dynamic-shape-safe: does NOT slice x[0][:x_len] / cap[0][:cap_len] with
+    Python-level x_seqlens[0]/cap_seqlens[0] constants — those are burned as
+    static OV constants and fail at resolutions different from the export dummy.
+    For batch_size=1 with no batch-padding, x[0] and cap[0] already contain
+    exactly the right tokens, so slicing is a no-op and can be omitted safely.
     """
     import torch
 
-    x_len = x_seqlens[0]
-    cap_len = cap_seqlens[0]
-
-    # Extract single-batch items  (x/cap are [1, seq, dim] from _prepare_sequence)
-    x_sq = x[0][:x_len]  # [x_len, dim]
-    cap_sq = cap[0][:cap_len]  # [cap_len, dim]
-    x_freqs_sq = x_freqs[0][:x_len]  # [x_len, total_freq, 2]
-    cap_freqs_sq = cap_freqs[0][:cap_len]  # [cap_len, total_freq, 2]
+    # batch_size=1: use full tensors without static-constant slicing
+    # (x[0][:x_len] would burn x_len as a constant and fail at other resolutions)
+    x_sq = x[0]  # [N, dim] — full image sequence, dynamic N
+    cap_sq = cap[0]  # [M, dim] — full cap sequence, dynamic M (=ZIMAGE_CAP_SEQ)
+    x_freqs_sq = x_freqs[0]  # [N, total_freq, 2]
+    cap_freqs_sq = cap_freqs[0]  # [M, total_freq, 2]
 
     # Basic mode order: [x, cap]
-    unified_sq = torch.cat([x_sq, cap_sq], dim=0)  # [unified_len, dim]
-    unified_freqs_sq = torch.cat([x_freqs_sq, cap_freqs_sq], dim=0)  # [unified_len, total_freq, 2]
+    unified_sq = torch.cat([x_sq, cap_sq], dim=0)  # [N+M, dim]
+    unified_freqs_sq = torch.cat([x_freqs_sq, cap_freqs_sq], dim=0)  # [N+M, total_freq, 2]
 
     # Expand to batch dimension
-    unified = unified_sq.unsqueeze(0)  # [1, unified_len, dim]
-    unified_freqs = unified_freqs_sq.unsqueeze(0)  # [1, unified_len, total_freq, 2]
+    unified = unified_sq.unsqueeze(0)  # [1, N+M, dim]
+    unified_freqs = unified_freqs_sq.unsqueeze(0)  # [1, N+M, total_freq, 2]
 
-    unified_len = unified_sq.shape[0]
-    attn_mask = torch.ones((1, unified_len), dtype=torch.bool, device=device)
+    # Dynamic attention mask: derive shape from unified tensor (avoids burned constant)
+    attn_mask = torch.ones_like(unified_sq[:, 0]).unsqueeze(0).bool()  # [1, N+M] dynamic
 
     return unified, unified_freqs, attn_mask, None  # noise_mask_tensor=None for non-omni
+
+
+def _patched_z_image_inner_forward(
+    model,
+    x,
+    t,
+    cap_feats,
+    return_dict=True,
+    patch_size=2,
+    f_patch_size=1,
+    **kwargs,
+):
+    """
+    OV-friendly inner forward for ZImageTransformer2DModel (batch_size=1, non-omni only).
+
+    This replaces the original model forward to eliminate ALL static sequence-length
+    constants that would be burned into the OV IR and fail at resolutions different
+    from the export dummy input.
+
+    Root cause of static shapes in the original forward:
+
+      # Line 1: burns x_seqlens as Python list of ints
+      x_seqlens = [len(xi) for xi in x]          # e.g. [1024]
+      x = all_x_embedder(torch.cat(x, dim=0))    # [N, hidden]
+      # Line 2: creates VariadicSplit with constant split sizes [1024]
+      list(x.split(x_seqlens, dim=0))             # FAILS at N=4096!
+
+    Fix: for batch_size=1, torch.cat(x, dim=0) == x[0] (single image).
+    After embedding, just wrap in [x_emb] — no split needed.
+
+    Similarly for cap_seqlens.  All attention masks are created with ones_like
+    (tensor-derived, fully dynamic) instead of torch.ones((1, static_N), ...).
+    """
+    import torch
+    from diffusers.models.modeling_outputs import Transformer2DModelOutput
+
+    assert not isinstance(x[0], list), "omni_mode not supported for OV export"
+    device = x[0].device
+
+    # Timestep embedding (non-omni mode only)
+    adaln_input = model.t_embedder(t * model.t_scale).type_as(x[0])
+
+    # Patchify: produces lists of length batch_size=1
+    (
+        x,
+        cap_feats,
+        x_size,
+        x_pos_ids,
+        cap_pos_ids,
+        x_pad_mask,
+        cap_pad_mask,
+    ) = model.patchify_and_embed(x, cap_feats, patch_size, f_patch_size)
+
+    # ── Image embed & refine ────────────────────────────────────────────────
+    # DYNAMIC: do NOT compute x_seqlens = [len(xi) for xi in x] (static!)
+    # For batch_size=1: torch.cat(x, dim=0) == x[0]. Pass [x_emb] directly —
+    # no VariadicSplit is created.
+    x_emb = model.all_x_embedder[f"{patch_size}-{f_patch_size}"](torch.cat(x, dim=0))
+    x, x_freqs, x_mask, x_seqlens, _ = model._prepare_sequence(
+        [x_emb],  # [full_tensor] — no static split
+        x_pos_ids,
+        x_pad_mask,
+        model.x_pad_token,
+        None,
+        device,
+    )
+    for layer in model.noise_refiner:
+        x = layer(x, x_mask, x_freqs, adaln_input, None, None, None)
+
+    # ── Cap embed & refine ──────────────────────────────────────────────────
+    # DYNAMIC: do NOT compute cap_seqlens = [len(ci) for ci in cap_feats] (static!)
+    cap_emb = model.cap_embedder(torch.cat(cap_feats, dim=0))
+    cap_feats, cap_freqs, cap_mask, cap_seqlens, _ = model._prepare_sequence(
+        [cap_emb],  # [full_tensor] — no static split
+        cap_pos_ids,
+        cap_pad_mask,
+        model.cap_pad_token,
+        None,
+        device,
+    )
+    for layer in model.context_refiner:
+        cap_feats = layer(cap_feats, cap_mask, cap_freqs)
+
+    # ── Unified sequence ────────────────────────────────────────────────────
+    unified, unified_freqs, unified_mask, _ = model._build_unified_sequence(
+        x,
+        x_freqs,
+        x_seqlens,
+        None,  # x_noise_mask
+        cap_feats,
+        cap_freqs,
+        cap_seqlens,
+        None,  # cap_noise_mask
+        None,  # siglip
+        None,  # siglip_freqs
+        None,  # siglip_seqlens
+        None,  # siglip_noise_mask
+        False,  # omni_mode
+        device,
+    )
+
+    # ── Main transformer layers ─────────────────────────────────────────────
+    for layer in model.layers:
+        unified = layer(unified, unified_mask, unified_freqs, adaln_input, None, None, None)
+
+    # ── Final layer ─────────────────────────────────────────────────────────
+    unified = model.all_final_layer[f"{patch_size}-{f_patch_size}"](unified, c=adaln_input)
+
+    # ── Unpatchify ──────────────────────────────────────────────────────────
+    result = model.unpatchify(list(unified.unbind(dim=0)), x_size, patch_size, f_patch_size, None)
+
+    return (result,) if not return_dict else Transformer2DModelOutput(sample=result)
 
 
 class ZImageTransformerModelPatcher(ModelPatcher):
@@ -8807,9 +8928,15 @@ class ZImageTransformerModelPatcher(ModelPatcher):
     Patches:
     - RopeEmbedder.__call__: returns real [seq, freq, 2] instead of complex
     - ZSingleStreamAttnProcessor.__call__: real-number RoPE, avoids view_as_complex
-    - ZImageTransformer2DModel._prepare_sequence: avoids index_put_, pad_sequence
-    - ZImageTransformer2DModel._build_unified_sequence: avoids pad_sequence
-    - ZImageTransformer2DModel.forward: wraps to accept/return standard tensors
+    - ZImageTransformer2DModel._prepare_sequence: avoids index_put_, pad_sequence,
+      creates dynamic attention masks via ones_like (no static seq_len constant)
+    - ZImageTransformer2DModel._build_unified_sequence: avoids pad_sequence and
+      static slicing; uses dynamic attention mask via ones_like
+    - ZImageTransformer2DModel.forward: replaced by _patched_z_image_inner_forward
+      which eliminates the VariadicSplit nodes caused by:
+        x_seqlens = [len(xi) for xi in x]       # burned as static [1024]
+        list(x.split(x_seqlens, dim=0))          # VariadicSplit → fails at 4096!
+      The fix: for batch_size=1, wrap embedded tensor in [x_emb] — no split needed.
 
     Only supports batch_size=1, non-omni mode (single image per inference call).
     """
@@ -8840,22 +8967,17 @@ class ZImageTransformerModelPatcher(ModelPatcher):
         #    hidden_states: [B, C, H, W]   (no F dim — we add it internally)
         #    timestep:      [B]
         #    encoder_hidden_states: [B, seq_len, cap_feat_dim]
-        # Use self.orig_forward (the REAL model forward set by ModelPatcher.__init__)
-        # to avoid double-wrapping through the base patcher's output filtering logic.
-        _orig_forward = self.orig_forward
+        # Call _patched_z_image_inner_forward (not the original forward) to ensure
+        # all static-sequence-length constants are eliminated from the OV IR.
         _model_ref = self._model
 
         def patched_forward(hidden_states, timestep, encoder_hidden_states):
             import torch
 
             # ── Cap sequence ────────────────────────────────────────────────────
-            # torch.jit.trace burns Python-level len() calls as static constants.
-            # To guarantee that `cap_seqlens = [len(ci) for ci in cap_feats]`
-            # always matches the trace value, we pad / truncate encoder_hidden_states
-            # to exactly ZIMAGE_CAP_SEQ tokens here, before calling the model.
-            # Tokens beyond the real prompt length are zero-filled; the model
-            # attends to them but their contribution is minimal (bias-only after
-            # cap_embedder), so quality impact is acceptable.
+            # Pad/truncate cap tokens to ZIMAGE_CAP_SEQ so the cap embedder
+            # always sees the same fixed-size input.  This is safe: extra tokens
+            # are zero-filled and contribute only a small additive bias.
             cap_feat_dim = encoder_hidden_states.shape[2]
             cap_len = encoder_hidden_states.shape[1]
             if cap_len < ZIMAGE_CAP_SEQ:
@@ -8875,7 +8997,8 @@ class ZImageTransformerModelPatcher(ModelPatcher):
             # Convert cap_feats to list of [ZIMAGE_CAP_SEQ, cap_feat_dim]
             cap_feats = list(encoder_hidden_states.unbind(0))
 
-            out = _orig_forward(x, timestep, cap_feats, return_dict=False)
+            # Call the dynamic inner forward (avoids all static seq-length constants)
+            out = _patched_z_image_inner_forward(_model_ref, x, timestep, cap_feats, return_dict=False)
 
             # Stack list output [B x [C, 1, H, W]] into tensor [B, C, 1, H, W]
             result = torch.stack(out[0], dim=0)
