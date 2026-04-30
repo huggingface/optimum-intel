@@ -4923,44 +4923,12 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
             self._model.model._update_causal_mask = self._model.model._orig_update_causual_mask
             del self._model.model._orig_update_causual_mask
 
-
-def _gemma4_project_per_layer_inputs(
-    self,
-    inputs_embeds: torch.Tensor,
-    per_layer_inputs: Optional[torch.Tensor] = None,
-) -> torch.Tensor:
-    per_layer_projection = self.per_layer_model_projection(inputs_embeds) * self.per_layer_model_projection_scale
-    per_layer_projection = per_layer_projection.reshape(
-        *inputs_embeds.shape[:-1],
-        self.config.num_hidden_layers,
-        self.hidden_size_per_layer_input,
-    )
-    per_layer_projection = self.per_layer_projection_norm(per_layer_projection)
-
-    if per_layer_inputs is None:
-        return per_layer_projection
-
-    if per_layer_projection.shape != per_layer_inputs.shape:
-        per_layer_inputs = per_layer_inputs[..., : self.config.num_hidden_layers, :]
-
-    return (per_layer_projection + per_layer_inputs) * self.per_layer_input_scale
-
-
+# Creates a dict of causal masks with bidirectional attention for vision tokens
+# on sliding_attention layers, matching the behavior of transformers
+# create_causal_mask_mapping when use_bidirectional_attention == "vision".
+# Needs to be patched to pass proper 'sliding_mask' for prefill stage.
+# Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/gemma4/modeling_gemma4.py#L1986
 def _create_gemma4_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids, inputs_embeds, sliding_window):
-    """
-    Creates a dict of causal masks with bidirectional attention for vision tokens
-    on sliding_attention layers, matching the behavior of transformers'
-    create_causal_mask_mapping when use_bidirectional_attention == "vision".
-
-    Args:
-        attention_mask_2d: [batch, total_len] 2D attention mask (1=attend, 0=pad)
-        mm_token_type_ids: [batch, total_len] token type ids (0=text, 1=image, 2=video/audio)
-        inputs_embeds: [batch, seq_len, hidden_size]
-        sliding_window: int, sliding window size
-
-    Returns:
-        dict with "full_attention" and "sliding_attention" 4D masks
-    """
     dtype = inputs_embeds.dtype
     device = inputs_embeds.device
     min_dtype = torch.finfo(dtype).min
@@ -4983,11 +4951,10 @@ def _create_gemma4_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids,
 
     # Sliding window causal mask
     sliding_mask = full_mask.clone()
-    if sliding_window is not None:
-        row_pos = torch.arange(seq_len, device=device).unsqueeze(1) + past_len
-        col_pos = torch.arange(target_len, device=device).unsqueeze(0)
-        beyond_window = (row_pos - col_pos) >= sliding_window
-        sliding_mask = sliding_mask.masked_fill(beyond_window[None, None, :, :], min_dtype)
+    row_pos = torch.arange(seq_len, device=device).unsqueeze(1) + past_len
+    col_pos = torch.arange(target_len, device=device).unsqueeze(0)
+    beyond_window = (row_pos - col_pos) >= sliding_window
+    sliding_mask = sliding_mask.masked_fill(beyond_window[None, None, :, :], min_dtype)
 
     # Apply bidirectional masking for vision tokens (only on sliding_attention mask)
     # mm_token_type_ids: [batch, total_len] - 0=text, 1=image, 2=video/audio
@@ -5016,7 +4983,10 @@ def _create_gemma4_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids,
         "sliding_attention": sliding_mask,
     }
 
-
+# Forward method of the language model of Gemma4, needs to be patched to pass 'per_layer_inputs',
+# as original code fails to create per_layer_inputs without the providing of input_ids,
+# while OV language model expects only inputs_embeds without input_ids.
+# Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/gemma4/modeling_gemma4.py#L2152
 def gemma4_language_model_forward(
     self,
     input_ids: Optional[torch.LongTensor] = None,
@@ -5089,7 +5059,8 @@ def gemma4_language_model_forward(
         image_hidden_states=image_features if pixel_values is not None else None,
     )
 
-
+# Gemma4 model forward, needs to be patched to pass 'per_layer_inputs',
+# Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/gemma4/modeling_gemma4.py#L2396
 def gemma4_lm_forward(
     self,
     attention_mask: Optional[torch.Tensor] = None,
@@ -5163,6 +5134,8 @@ def gemma4_lm_forward(
     return tuple([value if not isinstance(value, list) else tuple(value) for value in outputs_dict.values()])
 
 
+# Needs to be patched to reshape 'attention_mask' to match attention weights
+# Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/gemma4/modeling_gemma4.py#L768
 def gemma4_eager_attention_forward_patched(
     module: nn.Module,
     query: torch.Tensor,
@@ -5197,6 +5170,8 @@ def gemma4_eager_attention_forward_patched(
     return attn_output, attn_weights
 
 
+# Needs to be patched to run methods 'gemma4_eager_attention_forward_patched' instead of original one
+# Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/gemma4/modeling_gemma4.py#L1179
 def gemma4_text_attention_forward(
     self,
     hidden_states: torch.Tensor,
@@ -5281,14 +5256,6 @@ class Gemma4LMModelPatcher(Gemma3LMModelPatcher):
 
         setattr(self._model, self.orig_forward_name, types.MethodType(gemma4_lm_forward, self._model))
         setattr(self._model.model, "forward", types.MethodType(gemma4_language_model_forward, self._model))
-
-        self._model.model.language_model._orig_project_per_layer_inputs = (
-            self._model.model.language_model.project_per_layer_inputs
-        )
-        self._model.model.language_model.project_per_layer_inputs = types.MethodType(
-            _gemma4_project_per_layer_inputs, self._model.model.language_model
-        )
-
         for decoder_layer in self._model.model.language_model.layers:
             decoder_layer.self_attn.orig_forward = decoder_layer.self_attn.forward
             decoder_layer.self_attn.forward = types.MethodType(gemma4_text_attention_forward, decoder_layer.self_attn)
@@ -5298,9 +5265,6 @@ class Gemma4LMModelPatcher(Gemma3LMModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        self._model.model.language_model.project_per_layer_inputs = (
-            self._model.model.language_model._orig_project_per_layer_inputs
-        )
 
         for decoder_layer in self._model.model.language_model.layers:
             decoder_layer.self_attn.forward = decoder_layer.self_attn.orig_forward

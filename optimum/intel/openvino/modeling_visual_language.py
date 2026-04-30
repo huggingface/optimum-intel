@@ -221,7 +221,8 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
         if "per_layer_inputs" in self.input_names:
             per_layer_inputs = kwargs.pop("per_layer_inputs", None)
-            assert per_layer_inputs is not None, "Expected 'per_layer_inputs', but it was not passed"
+            if per_layer_inputs is None:
+                raise ValueError("Expected 'per_layer_inputs', but it was not passed")
             inputs["per_layer_inputs"] = torch.Tensor(per_layer_inputs)
 
         return inputs
