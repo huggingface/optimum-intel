@@ -383,7 +383,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_per_layer_model": 1,
     },
     "gemma4_moe": {
-        "lm_model": 44,
+        "lm_model": 48,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 10,
         "text_embeddings_per_layer_model": 0,

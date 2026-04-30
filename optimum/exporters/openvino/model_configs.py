@@ -14,9 +14,11 @@
 
 import enum
 import logging
+import math
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
+import torch
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
 from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
@@ -4370,10 +4372,6 @@ class DummyGemma4VisionInputGenerator(DummyVisionInputGenerator):
                 dtype=float_dtype,
             )
         if input_name == "image_position_ids":
-            import math
-
-            import torch
-
             # Create position ids as a grid. The patch count = h_patches * w_patches
             # where both are divisible by pooling_kernel_size for correct pooling.
             k = self.pooling_kernel_size

@@ -33,10 +33,12 @@ from transformers.generation.utils import GenerateOutput, GenerationMode
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
 from transformers.utils.hub import PushToHubMixin
 
+from ..utils.import_utils import compare_versions, is_transformers_version
 
-try:
+
+if is_transformers_version("<", "5.5"):
     from transformers.models.mamba.modeling_mamba import MambaCache
-except ImportError:
+else:
     MambaCache = object
 
 from optimum.utils.normalized_config import NormalizedConfigManager
@@ -44,7 +46,6 @@ from optimum.utils.normalized_config import NormalizedConfigManager
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
 from ...exporters.openvino.utils import SSM_MODELS
-from ..utils.import_utils import compare_versions
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import (
     OVConfig,

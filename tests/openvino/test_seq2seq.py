@@ -787,7 +787,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             with torch.no_grad():
                 transformers_outputs = transformers_model(**transformers_inputs)
             self.assertTrue(
-                torch.allclose(ov_outputs.logits, transformers_outputs.logits.to(torch.float32), atol=4e-3),
+                torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=4e-3),
                 f"Max abs diff {(torch.abs(ov_outputs.logits - transformers_outputs.logits).max())}",
             )
 
