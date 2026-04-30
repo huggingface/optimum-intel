@@ -7899,3 +7899,281 @@ class LlamaEagle3ForCausalLM(LlamaPreTrainedModel, GenerationMixin):
             hidden_states=outputs.hidden_states,
             d2t=d2t_out,
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ZImage Transformer Model Patcher (Tongyi-MAI/Z-Image-Turbo)
+# Fixes issues that prevent OV conversion:
+#   1. RoPE uses complex tensor ops (torch.polar, view_as_complex/real, .real/.imag)
+#   2. pad_sequence (unsupported) called in _prepare_sequence and _build_unified_sequence
+#   3. _prepare_sequence uses boolean index_put_
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _pad_sequence_fixed(sequences, batch_first=True, padding_value=0.0):
+    """Drop-in replacement for torch.nn.utils.rnn.pad_sequence.
+
+    Assumes all sequences have the same length (fixed-resolution export).
+    Uses torch.stack instead of the unsupported pad_sequence op.
+    """
+    if len(sequences) == 1:
+        s = sequences[0].unsqueeze(0) if batch_first else sequences[0].unsqueeze(1)
+        return s
+    return torch.stack(sequences, dim=0 if batch_first else 1)
+
+
+def _rope_embedder_call_real(self, ids: torch.Tensor) -> torch.Tensor:
+    """Patched RopeEmbedder.__call__ that returns float [N, total_D, 2] instead of complex.
+
+    freqs_cis cache must have been pre-converted to float [end, D_i, 2] before calling.
+    This avoids any complex tensor operations during OV tracing.
+    """
+    device = ids.device
+    if self.freqs_cis[0].device != device:
+        self.freqs_cis = [f.to(device) for f in self.freqs_cis]
+
+    result = []
+    for i in range(len(self.axes_dims)):
+        index = ids[:, i]
+        result.append(self.freqs_cis[i][index])  # [N, D_i, 2] float
+    return torch.cat(result, dim=-2)  # [N, total_D, 2] float
+
+
+def _apply_rotary_emb_real(x_in: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+    """Real-valued RoPE application.
+
+    Args:
+        x_in:      [B, S, H, head_dim] - query or key tensor
+        freqs_cis: [..., D, 2] float with freqs_cis[..., 0]=cos, freqs_cis[..., 1]=sin
+                   where D = head_dim // 2
+
+    The complex rotation (a+ib)(c+id) = (ac-bd) + i(ad+bc) is computed in real arithmetic.
+    """
+    x_float = x_in.float()
+    # Reshape to pairs: [B, S, H, D, 2]
+    x_pairs = x_float.reshape(*x_float.shape[:-1], -1, 2)
+    x_real = x_pairs[..., 0]  # [B, S, H, D]
+    x_imag = x_pairs[..., 1]  # [B, S, H, D]
+
+    # freqs_cis: [..., D, 2] - insert head dim for broadcasting [B, S, 1, D]
+    freqs_cos = freqs_cis[..., 0].unsqueeze(-2)  # [..., 1, D]
+    freqs_sin = freqs_cis[..., 1].unsqueeze(-2)  # [..., 1, D]
+
+    out_real = x_real * freqs_cos - x_imag * freqs_sin  # ac - bd
+    out_imag = x_real * freqs_sin + x_imag * freqs_cos  # ad + bc
+
+    out = torch.stack([out_real, out_imag], dim=-1).flatten(-2)  # [..., head_dim]
+    return out.type_as(x_in)
+
+
+def _pad_with_ids_patched(self, feat, pos_grid_size, pos_start, device, noise_mask_val=None):
+    """Patched _pad_with_ids (same logic as original; included for completeness)."""
+    ori_len = len(feat)
+    pad_len = (-ori_len) % 32  # SEQ_MULTI_OF = 32
+    total_len = ori_len + pad_len
+
+    ori_pos_ids = self.create_coordinate_grid(size=pos_grid_size, start=pos_start, device=device).flatten(0, 2)
+    if pad_len > 0:
+        pad_pos_ids = (
+            self.create_coordinate_grid(size=(1, 1, 1), start=(0, 0, 0), device=device)
+            .flatten(0, 2)
+            .repeat(pad_len, 1)
+        )
+        pos_ids = torch.cat([ori_pos_ids, pad_pos_ids], dim=0)
+        padded_feat = torch.cat([feat, feat[-1:].repeat(pad_len, 1)], dim=0)
+        pad_mask = torch.cat(
+            [
+                torch.zeros(ori_len, dtype=torch.bool, device=device),
+                torch.ones(pad_len, dtype=torch.bool, device=device),
+            ]
+        )
+    else:
+        pos_ids = ori_pos_ids
+        padded_feat = feat
+        pad_mask = torch.zeros(ori_len, dtype=torch.bool, device=device)
+
+    noise_mask = [noise_mask_val] * total_len if noise_mask_val is not None else None
+    return padded_feat, pos_ids, pad_mask, total_len, noise_mask
+
+
+def _prepare_sequence_patched(
+    self,
+    feats,
+    pos_ids,
+    inner_pad_mask,
+    pad_token,
+    noise_mask=None,
+    device=None,
+):
+    """Patched _prepare_sequence.
+
+    Replaces:
+      - feats_cat[bool_mask] = pad_token   →  torch.where (avoids boolean index_put_)
+      - pad_sequence(...)                  →  _pad_sequence_fixed(...) (avoids aten::pad_sequence)
+    """
+    item_seqlens = [len(f) for f in feats]
+    max_seqlen = max(item_seqlens)
+    bsz = len(feats)
+
+    # Replace pad token positions via torch.where
+    feats_cat = torch.cat(feats, dim=0)
+    combined_mask = torch.cat(inner_pad_mask)  # [total_len] bool
+    feats_cat = torch.where(
+        combined_mask.unsqueeze(-1),
+        pad_token.expand_as(feats_cat),
+        feats_cat,
+    )
+    feats = list(feats_cat.split(item_seqlens, dim=0))
+
+    # RoPE frequencies (rope_embedder now returns float [N, D, 2])
+    freqs_cis_list = list(self.rope_embedder(torch.cat(pos_ids, dim=0)).split([len(p) for p in pos_ids], dim=0))
+
+    # Stack instead of pad_sequence
+    feats = _pad_sequence_fixed(feats)
+    freqs_cis = _pad_sequence_fixed(freqs_cis_list)[:, : feats.shape[1]]
+
+    # Attention mask (use tensor ops instead of loop+slice-assign)
+    col_idx = torch.arange(max_seqlen, device=device).unsqueeze(0)          # [1, S]
+    seq_lens_t = torch.tensor(item_seqlens, dtype=torch.long, device=device).unsqueeze(1)  # [B, 1]
+    attn_mask = col_idx < seq_lens_t                                          # [B, S]
+
+    # Noise mask
+    noise_mask_tensor = None
+    if noise_mask is not None:
+        noise_mask_tensor = _pad_sequence_fixed(
+            [torch.tensor(m, dtype=torch.long, device=device) for m in noise_mask]
+        )[:, : feats.shape[1]]
+
+    return feats, freqs_cis, attn_mask, item_seqlens, noise_mask_tensor
+
+
+class ZImageTransformerModelPatcher(ModelPatcher):
+    """Patches ZImageTransformer2DModel to make it traceable for OV export.
+
+    Fixes applied in __enter__:
+    - Module-level pad_sequence → _pad_sequence_fixed (covers _prepare_sequence and _build_unified_sequence)
+    - RopeEmbedder.freqs_cis pre-converted to float; __call__ patched to index float cache
+    - _prepare_sequence → _prepare_sequence_patched (boolean index_put_ → torch.where)
+    - ZSingleStreamAttnProcessor.__call__ → _patched_call (view_as_complex/real → real arithmetic)
+    """
+
+    def __enter__(self):
+        super().__enter__()
+
+        try:
+            import diffusers.models.transformers.transformer_z_image as _zt_module
+            from diffusers.models.transformers.transformer_z_image import (
+                ZImageTransformer2DModel,
+                ZSingleStreamAttnProcessor,
+                RopeEmbedder,
+            )
+        except ImportError:
+            return self
+
+        # ── 1. Patch module-level pad_sequence ──────────────────────────────
+        self._orig_pad_sequence = _zt_module.pad_sequence
+        _zt_module.pad_sequence = _pad_sequence_fixed
+        self._zt_module = _zt_module
+
+        # ── 2. Pre-convert RopeEmbedder.freqs_cis to float [end, D, 2] ─────
+        rope_emb = self._model.transformer.rope_embedder
+        if rope_emb.freqs_cis is None:
+            # Force precompute with dummy ids on CPU
+            dummy_ids = torch.zeros((1, len(rope_emb.axes_dims)), dtype=torch.long)
+            rope_emb(dummy_ids)  # fills rope_emb.freqs_cis as complex tensors
+        # Convert complex [end, D] to float [end, D, 2]  (cos, sin stacked)
+        rope_emb.freqs_cis = [torch.view_as_real(f.contiguous()) for f in rope_emb.freqs_cis]
+
+        # Patch RopeEmbedder.__call__ to index the float cache
+        RopeEmbedder._orig_call = RopeEmbedder.__call__
+        RopeEmbedder.__call__ = _rope_embedder_call_real
+        self._RopeEmbedder = RopeEmbedder
+
+        # ── 3. Patch _prepare_sequence ──────────────────────────────────────
+        ZImageTransformer2DModel._orig_prepare_sequence = ZImageTransformer2DModel._prepare_sequence
+        ZImageTransformer2DModel._prepare_sequence = _prepare_sequence_patched
+        self._ZImageTransformer2DModel = ZImageTransformer2DModel
+
+        # ── 4. Patch ZSingleStreamAttnProcessor.__call__ ────────────────────
+        def _patched_attn_call(
+            attn_self,
+            attn,
+            hidden_states,
+            encoder_hidden_states=None,
+            attention_mask=None,
+            freqs_cis=None,
+        ):
+            query = attn.to_q(hidden_states)
+            key = attn.to_k(hidden_states)
+            value = attn.to_v(hidden_states)
+
+            query = query.unflatten(-1, (attn.heads, -1))
+            key = key.unflatten(-1, (attn.heads, -1))
+            value = value.unflatten(-1, (attn.heads, -1))
+
+            if attn.norm_q is not None:
+                query = attn.norm_q(query)
+            if attn.norm_k is not None:
+                key = attn.norm_k(key)
+
+            if freqs_cis is not None:
+                query = _apply_rotary_emb_real(query, freqs_cis)
+                key = _apply_rotary_emb_real(key, freqs_cis)
+
+            dtype = query.dtype
+            query, key = query.to(dtype), key.to(dtype)
+
+            if attention_mask is not None and attention_mask.ndim == 2:
+                attention_mask = attention_mask[:, None, None, :]
+
+            from diffusers.models.transformers.transformer_z_image import dispatch_attention_fn
+            hidden_states = dispatch_attention_fn(
+                query,
+                key,
+                value,
+                attn_mask=attention_mask,
+                dropout_p=0.0,
+                is_causal=False,
+                backend=attn_self._attention_backend,
+                parallel_config=attn_self._parallel_config,
+            )
+
+            hidden_states = hidden_states.flatten(2, 3)
+            hidden_states = hidden_states.to(dtype)
+
+            output = attn.to_out[0](hidden_states)
+            if len(attn.to_out) > 1:
+                output = attn.to_out[1](output)
+            return output
+
+        ZSingleStreamAttnProcessor._orig_call = ZSingleStreamAttnProcessor.__call__
+        ZSingleStreamAttnProcessor.__call__ = _patched_attn_call
+        self._ZSingleStreamAttnProcessor = ZSingleStreamAttnProcessor
+
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        # Restore pad_sequence
+        if hasattr(self, "_zt_module") and hasattr(self, "_orig_pad_sequence"):
+            self._zt_module.pad_sequence = self._orig_pad_sequence
+
+        # Restore RopeEmbedder.__call__
+        if hasattr(self, "_RopeEmbedder") and hasattr(self._RopeEmbedder, "_orig_call"):
+            self._RopeEmbedder.__call__ = self._RopeEmbedder._orig_call
+            del self._RopeEmbedder._orig_call
+
+        # Restore _prepare_sequence
+        if hasattr(self, "_ZImageTransformer2DModel"):
+            cls = self._ZImageTransformer2DModel
+            if hasattr(cls, "_orig_prepare_sequence"):
+                cls._prepare_sequence = cls._orig_prepare_sequence
+                del cls._orig_prepare_sequence
+
+        # Restore ZSingleStreamAttnProcessor.__call__
+        if hasattr(self, "_ZSingleStreamAttnProcessor"):
+            cls = self._ZSingleStreamAttnProcessor
+            if hasattr(cls, "_orig_call"):
+                cls.__call__ = cls._orig_call
+                del cls._orig_call
