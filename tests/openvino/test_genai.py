@@ -45,7 +45,6 @@ class LLMPipelineTestCase(unittest.TestCase):
         "gpt_bigcode",
         "bloom",
         "codegen",
-        "codegen2",
         "gpt2",
         "gptj",
         "gpt_neox",
@@ -53,27 +52,18 @@ class LLMPipelineTestCase(unittest.TestCase):
         "mistral",
         "mixtral",
         "phi",
-        "internlm2",
-        "orion",
         "falcon",
         "persimmon",
         "xglm",
-        "aquila",
-        "aquila2",
-        "internlm",
-        "jais",
-        "decilm",
         "gemma",
         "olmo",
         "stablelm",
         "starcoder2",
-        "dbrx",
         "cohere",
         "qwen2",
         "qwen2_moe",
         "phi3",
         "gemma2",
-        "exaone",
         "granite",
         "granitemoe",
     )
@@ -81,12 +71,14 @@ class LLMPipelineTestCase(unittest.TestCase):
     if is_transformers_version(">=", "4.48.0"):
         SUPPORTED_ARCHITECTURES += ("cohere2",)
     if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phimoe", "opt")
+        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "opt")
         if is_transformers_version("<", "4.54.0"):
             SUPPORTED_ARCHITECTURES += ("deepseek",)
         if is_transformers_version("<", "4.56.0"):
             SUPPORTED_ARCHITECTURES += ("qwen",)
-    if is_transformers_version(">=", "4.49"):
+        if is_transformers_version("<", "5"):
+            SUPPORTED_ARCHITECTURES += ("phimoe",)
+    if is_transformers_version(">=", "4.50"):
         SUPPORTED_ARCHITECTURES += ("gemma3_text",)
     if is_transformers_version(">=", "4.51.0"):
         SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe")
@@ -94,7 +86,7 @@ class LLMPipelineTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("glm4",)
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES += ("arcee",)
-    if is_transformers_version(">=", "4.54.0"):
+    if is_transformers_version(">=", "4.54.0") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("exaone4",)
     if is_transformers_version(">=", "4.55.0"):
         SUPPORTED_ARCHITECTURES += ("gpt_oss",)
@@ -102,6 +94,24 @@ class LLMPipelineTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("minicpm", "minicpm3", "arctic")
     if is_transformers_version("<", "4.56.0"):
         SUPPORTED_ARCHITECTURES += ("chatglm", "chatglm4")
+
+    if is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES += (
+            # remote modeling incompatible with v5
+            "codegen2",
+            "exaone",
+            "decilm",
+            "internlm2",
+            "orion",
+            "aquila2",
+            "jais",
+            # remote modeling code failing with v5
+            "aquila",
+            "internlm",
+            # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
+            "dbrx",
+            # "phimoe",
+        )
 
     REMOTE_CODE_MODELS = (
         "chatglm",
@@ -147,6 +157,15 @@ class LLMPipelineTestCase(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_outputs(self, model_arch):
+        if model_arch in ("xglm",) and is_openvino_version(">=", "2026.1.0"):
+            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
+        if (
+            model_arch in ("mixtral", "qwen2_moe", "qwen3_moe", "gpt_oss")
+            and is_openvino_version(">=", "2026.1.0")
+            and is_transformers_version(">=", "5.0.0")
+        ):
+            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
+
         model_id = MODEL_NAMES[model_arch]
         echo = model_arch not in self.NO_ECHO_MODELS
         use_cache = model_arch not in self.NO_CACHE_MODELS
@@ -202,9 +221,7 @@ class LLMPipelineTestCase(unittest.TestCase):
 
 class VLMPipelineTestCase(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
-        "llava",
         "llava_next",
-        "llava_next_video",
         # "minicpmv", # output is truncated for some reason
         "qwen2_vl",
     )
@@ -218,8 +235,10 @@ class VLMPipelineTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("qwen2_5_vl",)
         if is_transformers_version("<", "4.54.0"):
             SUPPORTED_ARCHITECTURES += ("phi4mm",)
-    if is_transformers_version(">=", "4.49"):
+    if is_transformers_version(">=", "4.50"):
         SUPPORTED_ARCHITECTURES += ("gemma3",)
+    if is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES += ("llava", "llava_next_video")
 
     REMOTE_CODE_MODELS = (
         "minicpmv",
@@ -251,9 +270,9 @@ class VLMPipelineTestCase(unittest.TestCase):
 
             return AutoModelForImageTextToText
         elif model_arch == "llava_next_video":
-            from transformers import AutoModelForVision2Seq
+            from transformers import LlavaNextVideoForConditionalGeneration
 
-            return AutoModelForVision2Seq
+            return LlavaNextVideoForConditionalGeneration
         elif model_arch == "llava":
             from transformers import LlavaForConditionalGeneration
 
@@ -407,6 +426,8 @@ class Text2SpeechPipelineTestCase(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_outputs(self, model_arch):
+        if model_arch in ("speecht5",) and is_openvino_version(">=", "2026.1.0"):
+            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
         model_id = MODEL_NAMES[model_arch]
 
         set_seed(42)

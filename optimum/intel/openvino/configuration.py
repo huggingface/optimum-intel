@@ -556,6 +556,7 @@ _DEFAULT_IGNORED_SCOPE_CONFIGS = {
                 "__module.layers.27.mlp.up_proj/aten::linear/MatMul",
                 "__module.layers.27.mlp.gate_proj/aten::linear/MatMul",
             ],
+            "validate": False,
         },
     },
     "microsoft/speecht5_tts": {
