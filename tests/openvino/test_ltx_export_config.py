@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import torch
 
 from optimum.exporters.openvino.model_configs import LTXVaeDecoderOpenVINOConfig, LTXVaeDummyInputGenerator
+from optimum.utils.normalized_config import NormalizedConfig
 
 
 class LTXVideoExportConfigTestCase(unittest.TestCase):
@@ -44,7 +45,7 @@ class LTXVideoExportConfigTestCase(unittest.TestCase):
         self.assertNotIn("timestep", export_config.inputs)
 
     def test_ltx_vae_dummy_generator_produces_expected_shapes(self):
-        normalized_config = SimpleNamespace(config=SimpleNamespace(in_channels=3, latent_channels=8))
+        normalized_config = NormalizedConfig(SimpleNamespace(in_channels=3, latent_channels=8))
         generator = LTXVaeDummyInputGenerator(
             task="semantic-segmentation",
             normalized_config=normalized_config,
