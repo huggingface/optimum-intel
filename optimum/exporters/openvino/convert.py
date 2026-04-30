@@ -447,16 +447,6 @@ def export_pytorch(
                     extension=conversion_extensions,
                 )
 
-                if patch_16bit_model:
-                    # Undo __make_16bit_traceable patching on sub-modules to avoid corrupting
-                    # forward methods of modules shared across export behaviors (e.g. pos_embed
-                    # Embedding in VLMs that is also exported separately as vision_embeddings_pos).
-                    _orig_forward_attr = "_openvino_module_extension_patch_orig_forward"
-                    for module in model.modules():
-                        if hasattr(module, _orig_forward_attr):
-                            module.forward = getattr(module, _orig_forward_attr)
-                            delattr(module, _orig_forward_attr)
-
         ov_model.validate_nodes_and_infer_types()  # TODO: remove as unnecessary validation?
 
         output_names = list(config.outputs.keys())

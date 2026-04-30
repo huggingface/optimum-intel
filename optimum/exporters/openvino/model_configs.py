@@ -5722,12 +5722,17 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
         model_kwargs = model_kwargs or {}
         if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return Qwen3_5VisionEmbMergerPatcher(self, model, model_kwargs)
-        if (
-            self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS
-            or self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS
-        ):
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
             return ModelPatcher(self, model, model_kwargs=model_kwargs)
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
+            return InputEmbeddingPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
+        #if (
+        #    self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS
+        #    or self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS
+        #):
+        #    return ModelPatcher(self, model, model_kwargs=model_kwargs)
+        #return super().patch_model_for_export(model, model_kwargs)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
