@@ -5266,35 +5266,6 @@ def gemma4_text_attention_forward(
     return attn_output, attn_weights
 
 
-def _gemma4_moe_block_forward(self, hidden_states, top_k_index, top_k_weights):
-    # hidden_states: [B*S, hidden_dim]
-    # top_k_index: [B*S, K], top_k_weights: [B*S, K]
-    num_tokens = hidden_states.shape[0]
-
-    # Compute all expert outputs via batched matmul
-    # expanded: [E, B*S, hidden_dim]
-    expanded_hidden = hidden_states.unsqueeze(0).expand(self.num_experts, -1, -1)
-
-    # gate_up_proj: [E, 2*inter, hidden] -> transpose to [E, hidden, 2*inter]
-    gate_up = torch.bmm(expanded_hidden, self.gate_up_proj.transpose(1, 2))
-    gate, up = gate_up.chunk(2, dim=-1)
-    intermediate = self.act_fn(gate) * up
-
-    # down_proj: [E, hidden, inter] -> transpose to [E, inter, hidden]
-    expert_outputs = torch.bmm(intermediate, self.down_proj.transpose(1, 2))
-    # expert_outputs: [E, B*S, hidden_dim]
-
-    # Build full routing weight matrix [B*S, E] from sparse top-k
-    full_weights = torch.zeros(num_tokens, self.num_experts, dtype=hidden_states.dtype, device=hidden_states.device)
-    full_weights.scatter_add_(1, top_k_index, top_k_weights)
-
-    # Weighted sum over experts: [B*S, 1, E] @ [B*S, E, hidden_dim] -> [B*S, hidden_dim]
-    expert_outputs = expert_outputs.permute(1, 0, 2)  # [B*S, E, hidden_dim]
-    final_hidden_states = torch.bmm(full_weights.unsqueeze(1), expert_outputs).squeeze(1)
-
-    return final_hidden_states
-
-
 class Gemma4LMModelPatcher(Gemma3LMModelPatcher):
     def __init__(self, config, model, model_kwargs):
         super().__init__(config, model, model_kwargs)
@@ -5323,7 +5294,7 @@ class Gemma4LMModelPatcher(Gemma3LMModelPatcher):
             decoder_layer.self_attn.forward = types.MethodType(gemma4_text_attention_forward, decoder_layer.self_attn)
             if hasattr(decoder_layer, "experts"):
                 decoder_layer.experts._orig_forward = decoder_layer.experts.forward
-                decoder_layer.experts.forward = types.MethodType(_gemma4_moe_block_forward, decoder_layer.experts)
+                decoder_layer.experts.forward = types.MethodType(lfm2_moe_experts_forward, decoder_layer.experts)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
