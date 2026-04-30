@@ -209,6 +209,7 @@ from .model_patcher import (
     XverseModelPatcher,
     Zamba2ModelPatcher,
     _get_model_attribute,
+    ZImageTransformerModelPatcher,
 )
 
 
@@ -5559,3 +5560,114 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
 class LFM2MoeOpenVINOConfig(LFM2OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "5.0"
     _MODEL_PATCHER = Lfm2MoeModelPatcher
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ZImage Pipeline (Tongyi-MAI/Z-Image-Turbo) Export Configs
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@register_in_tasks_manager("qwen3-text-encoder", *["feature-extraction"], library_name="diffusers")
+class Qwen3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+    """Export config for the Qwen3-based text encoder in ZImagePipeline.
+
+    Wrapped by _ZImageTextEncoderWrapper so it returns last_hidden_state = hidden_states[-2].
+    Input/output shape is identical to CLIP text encoder (no pooled projection).
+    """
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+        }
+
+
+class ZImageTransformerDummyInputGenerator(DummyInputGenerator):
+    """Dummy input generator for _ZImageTransformerWrapper.
+
+    The wrapper forward signature is:
+        hidden_states[B, C, H, W], timestep[B], encoder_hidden_states[B, seq_len, dim]
+    """
+
+    SUPPORTED_INPUT_NAMES = ("hidden_states", "timestep", "encoder_hidden_states")
+        batch_size: int = 2,        # 2 for CFG (cond + uncond)
+        sequence_length: int = 32,  # min 32 (SEQ_MULTI_OF); 512 for full-length
+        height: int = 16,           # latent height; use small value for dummy export
+        width: int = 16,            # latent width
+        **kwargs,
+    ):
+        import math as _math
+
+        self.batch_size = batch_size
+        self.sequence_length = max(32, _math.ceil(max(sequence_length, 1) / 32) * 32)
+        self.height = height
+        self.width = width
+        self.in_channels = getattr(normalized_config, "in_channels", 16)
+        self.cap_feat_dim = getattr(normalized_config, "cap_feat_dim", 2560)
+
+    def generate(
+        self,
+        input_name: str,
+        framework: str = "pt",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+    ):
+        if input_name == "hidden_states":
+            return self.random_float_tensor(
+                [self.batch_size, self.in_channels, self.height, self.width],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "timestep":
+            return self.random_float_tensor(
+                [self.batch_size],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "encoder_hidden_states":
+            return self.random_float_tensor(
+                [self.batch_size, self.sequence_length, self.cap_feat_dim],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        raise ValueError(f"ZImageTransformerDummyInputGenerator: unknown input '{input_name}'")
+
+
+@register_in_tasks_manager("zimage-transformer", *["semantic-segmentation"], library_name="diffusers")
+class ZImageTransformerOpenVINOConfig(OnnxConfig):
+    """Export configuration for _ZImageTransformerWrapper.
+
+    Inputs:  hidden_states [B,C,H,W], timestep [B], encoder_hidden_states [B,T,D]
+    Outputs: sample [B,C,H,W]
+    """
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (ZImageTransformerDummyInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        in_channels="in_channels",
+        cap_feat_dim="cap_feat_dim",
+        allow_new=True,
+    )
+    DEFAULT_ONNX_OPSET = 14
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "hidden_states": {0: "batch_size", 2: "height", 3: "width"},
+            "timestep": {0: "batch_size"},
+            "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "height", 3: "width"},
+        }
+
+    _MODEL_PATCHER = ZImageTransformerModelPatcher
