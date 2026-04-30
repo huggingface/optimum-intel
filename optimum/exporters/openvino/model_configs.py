@@ -1589,7 +1589,7 @@ class Gemma4TextOpenVINOConfig(Gemma3TextOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Gemma4DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Gemma4DummyPastKeyValuesGenerator
-    MIN_TRANSFORMERS_VERSION = "4.50.0"
+    MIN_TRANSFORMERS_VERSION = "5.5"
 
     def add_past_key_values(self, inputs_or_outputs: dict[str, dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
