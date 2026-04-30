@@ -25,6 +25,7 @@ from utils_tests import (
 from optimum.exporters.openvino.model_configs import (
     BitnetOpenVINOConfig,
     DeepseekOpenVINOConfig,
+    LFM2MoeOpenVINOConfig,
     LFM2OpenVINOConfig,
     Qwen3VLOpenVINOConfig,
 )
@@ -34,7 +35,7 @@ from optimum.exporters.tasks import TasksManager
 from optimum.intel import OVModelForCausalLM, OVModelForSequenceClassification
 from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import is_transformers_version
+from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 
 
 if is_transformers_version(">=", "4.55"):
@@ -97,6 +98,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
         SUPPORTED_SSM_ARCHITECTURES += ("qwen3_next",)
+
+    if is_transformers_version(">=", "5.0"):
+        SUPPORTED_SSM_ARCHITECTURES += ("lfm2_moe",)
 
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
@@ -191,6 +195,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neo": 4,
         "gpt_neox": 5,
         "lfm2": 1,
+        "lfm2_moe": 2,
         "llama": 2,
         "llama4": 5,
         "marian": 2,
@@ -308,7 +313,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             supported_architectures -= {"bitnet"}
         if is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"lfm2"}
-
+        if is_transformers_version("<", str(LFM2MoeOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"lfm2_moe"}
         # qwen3_vl_text a part of qwen3_vl architecture and is tested in seq2seq group
         if is_transformers_version(">=", str(Qwen3VLOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"qwen3_vl_text"}
@@ -336,6 +342,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     # TODO: remove gptq/awq from here
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
+        if model_arch in (
+            "xglm",
+            "zamba2",
+            "granitemoehybrid",
+            "llama4",
+            "afmoe",
+            "opt",
+            "pegasus",
+        ) and is_openvino_version(">=", "2026.1.0"):
+            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
         self.mock_torch_compile(model_arch)
         model_id = MODEL_NAMES[model_arch]
 
@@ -372,7 +388,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 self.assertIsInstance(ov_outputs.cache_params.conv_states, list)
                 self.assertIsInstance(ov_outputs.cache_params.ssm_states, list)
                 self.assertTrue(len(ov_outputs.cache_params.conv_states) > 0)
-                if model_arch != "lfm2":
+                if model_arch not in ["lfm2", "lfm2_moe"]:
                     self.assertTrue(len(ov_outputs.cache_params.ssm_states) > 0)
         else:
             self.assertTrue("past_key_values" in ov_outputs)
@@ -542,10 +558,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 if is_transformers_version("<=", "4.46") and model_arch == "qwen"
                 # in older transformers versions, remote code tokenizers (and granite/granitemoe)
                 # were not loaded in pipelines because they were not registered in TOKENIZER_MAPPING
-                else model_id
-                if is_transformers_version("<=", "4.46")
-                and model_arch in REMOTE_CODE_MODELS + ("granite", "granitemoe")
-                else None
+                else (
+                    model_id
+                    if is_transformers_version("<=", "4.46")
+                    and model_arch in REMOTE_CODE_MODELS + ("granite", "granitemoe")
+                    else None
+                )
             ),
         )
         set_seed(SEED)
@@ -686,6 +704,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_beam_search(self, model_arch):
+        if model_arch in ("opt", "pegasus", "xglm") and is_openvino_version(">=", "2026.1.0"):
+            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
         self.mock_torch_compile(model_arch)
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
@@ -700,10 +720,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in ["qwen", "chatglm", "chatglm4"]:
             return
 
-        # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
-        # CVS-177964 GraniteMoeHybrid fails due to lack support of Beam search for hybrid models in OpenVINO
-        # For this support, we expect changes in IRs to have connected beam_idx with Mamba/Linear attention states
-        if model_arch in ["lfm2", "granitemoehybrid"]:
+        # LFM2, LFM2-MoE and GraniteMoeHybrid generate wrong output with beam search, ticket: CVS-185664
+        if model_arch in ["lfm2", "lfm2_moe", "granitemoehybrid"]:
             return
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49
@@ -918,5 +936,96 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertEqual(ov_model.stateful, True)
         self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
 
+        del ov_model
+        gc.collect()
+
+    HYBRID_ARCHITECTURES = []
+    if is_transformers_version(">=", "4.53"):
+        HYBRID_ARCHITECTURES.append("granitemoehybrid")
+    if is_transformers_version(">=", "4.54"):
+        HYBRID_ARCHITECTURES.append("lfm2")
+    if is_transformers_version(">=", "4.57"):
+        HYBRID_ARCHITECTURES.append("qwen3_next")
+    # not including zamba2 - the Mamba mixer's torch_forward crashes on the second chunk
+
+    @parameterized.expand(HYBRID_ARCHITECTURES, skip_on_empty=True)
+    @pytest.mark.run_slow
+    @slow
+    def test_hybrid_model_multi_step_generation(self, model_arch):
+        """
+        Validates that hybrid models with mixed recurrent/attention layers produce correct results
+        over multiple sequential generation calls with cache.
+        """
+        model_id = MODEL_NAMES[model_arch]
+        tokenizer = self.get_tokenizer(model_arch)
+
+        ov_model = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        self.assertTrue(ov_model.stateful, "Hybrid model should be exported as stateful")
+
+        set_seed(SEED)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        ov_model.generation_config.eos_token_id = None
+        transformers_model.generation_config.eos_token_id = None
+        ov_model.config.eos_token_id = None
+        transformers_model.config.eos_token_id = None
+
+        full_text = "Today is a nice day and I am happy"
+        full_tokens = tokenizer(full_text, return_tensors="pt")
+        full_input_ids = full_tokens["input_ids"]
+        num_tokens = full_input_ids.shape[1]
+
+        chunk_size = max(num_tokens // 3, 1)
+        chunks = [full_input_ids[:, i : i + chunk_size] for i in range(0, num_tokens, chunk_size)]
+
+        # OV chunked prefill
+        ov_cache = None
+        ov_past_len = 0
+        for chunk_ids in chunks:
+            cur_len = chunk_ids.shape[1]
+            attn_mask = torch.ones((1, ov_past_len + cur_len), dtype=torch.int64)
+            ov_out = ov_model(input_ids=chunk_ids, attention_mask=attn_mask, cache_params=ov_cache)
+            ov_cache = ov_out.cache_params
+            ov_past_len += cur_len
+        # Transformers chunked prefill with the model-specific hybrid cache
+        if model_arch == "granitemoehybrid":
+            from transformers.models.granitemoehybrid.modeling_granitemoehybrid import (
+                HybridMambaAttentionDynamicCache,
+            )
+
+            cache = HybridMambaAttentionDynamicCache(config=transformers_model.config, batch_size=1)
+        elif model_arch == "lfm2":
+            from transformers.models.lfm2.modeling_lfm2 import Lfm2HybridConvCache
+
+            cache = Lfm2HybridConvCache(config=transformers_model.config, max_batch_size=1)
+        elif model_arch == "qwen3_next":
+            from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextDynamicCache
+
+            cache = Qwen3NextDynamicCache(config=transformers_model.config)
+
+        past_len = 0
+        for chunk_ids in chunks:
+            cur_len = chunk_ids.shape[1]
+            attn_mask = torch.ones((1, past_len + cur_len), dtype=torch.int64)
+            with torch.no_grad():
+                tf_out = transformers_model(
+                    input_ids=chunk_ids, attention_mask=attn_mask, past_key_values=cache, use_cache=True
+                )
+            cache = tf_out.past_key_values
+            past_len += cur_len
+
+        self.assertTrue(
+            torch.allclose(
+                ov_out.logits,
+                tf_out.logits,
+                atol=5e-2,  # qwen3-next max diff is 0.04301672801375389
+            ),
+            f"Chunked prefill OV vs transformers mismatch:\n"
+            f"  max diff: {(ov_out.logits - tf_out.logits).abs().max().item()}",
+        )
+
+        del transformers_model
         del ov_model
         gc.collect()

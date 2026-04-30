@@ -312,6 +312,7 @@ SSM_MODELS = [
     "falcon_mamba",
     "zamba2",
     "lfm2",
+    "lfm2_moe",
     "granitemoehybrid",
     "qwen3_next",
     "qwen3_5_text",
