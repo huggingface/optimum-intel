@@ -168,6 +168,7 @@ from .model_patcher import (
     LlavaImageEmbeddingModelPatcher,
     LlavaNextVideoImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
+    LTXVaeDecoderModelPatcher,
     MairaImageEmbeddingModelPatcher,
     MambaPatcher,
     MarianModelPatcher,
@@ -2666,9 +2667,7 @@ class LTXVaeDummyInputGenerator(DummyVisionInputGenerator):
             )
         if input_name == "timestep":
             # Export timestep as float and keep batch-dynamic mapping in decoder config.
-            return self.random_float_tensor(
-                [self.batch_size], framework=framework, dtype=float_dtype
-            )
+            return self.random_float_tensor([self.batch_size], framework=framework, dtype=float_dtype)
 
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
@@ -2693,6 +2692,7 @@ class LTXVaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
 @register_in_tasks_manager("ltx-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
 class LTXVaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeDummyInputGenerator,)
+    _MODEL_PATCHER = LTXVaeDecoderModelPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:

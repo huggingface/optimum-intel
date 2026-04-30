@@ -18,7 +18,17 @@ from types import SimpleNamespace
 import torch
 
 from optimum.exporters.openvino.model_configs import LTXVaeDecoderOpenVINOConfig, LTXVaeDummyInputGenerator
+from optimum.exporters.openvino.model_patcher import LTXVaeDecoderModelPatcher, _ltx_vae_decoder_forward
 from optimum.utils.normalized_config import NormalizedConfig
+
+
+class DummyLTXVaeDecoder:
+    def __init__(self):
+        self.temb = None
+
+    def decode(self, z, temb=None):
+        self.temb = temb
+        return {"sample": z}
 
 
 class LTXVideoExportConfigTestCase(unittest.TestCase):
@@ -64,3 +74,18 @@ class LTXVideoExportConfigTestCase(unittest.TestCase):
         self.assertEqual(tuple(latent_sample.shape), (2, 8, 6, 5, 4))
         self.assertEqual(tuple(timestep.shape), (2,))
         self.assertTrue(torch.is_floating_point(timestep))
+
+    def test_ltx_vae_decoder_uses_ltx_patcher(self):
+        self.assertIs(LTXVaeDecoderOpenVINOConfig._MODEL_PATCHER, LTXVaeDecoderModelPatcher)
+
+    def test_ltx_vae_decoder_patcher_normalizes_timestep(self):
+        decoder = DummyLTXVaeDecoder()
+        latent_sample = torch.zeros((2, 4, 1, 2, 2), dtype=torch.float32)
+        timestep = torch.tensor(5, dtype=torch.int64)
+
+        output = _ltx_vae_decoder_forward(decoder, latent_sample, timestep)
+
+        self.assertIs(output["sample"], latent_sample)
+        self.assertEqual(tuple(decoder.temb.shape), (2,))
+        self.assertEqual(decoder.temb.dtype, latent_sample.dtype)
+        torch.testing.assert_close(decoder.temb, torch.full((2,), 5, dtype=latent_sample.dtype))
