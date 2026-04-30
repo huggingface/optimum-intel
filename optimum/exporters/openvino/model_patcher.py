@@ -4923,6 +4923,7 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
             self._model.model._update_causal_mask = self._model.model._orig_update_causual_mask
             del self._model.model._orig_update_causual_mask
 
+
 # Creates a dict of causal masks with bidirectional attention for vision tokens
 # on sliding_attention layers, matching the behavior of transformers
 # create_causal_mask_mapping when use_bidirectional_attention == "vision".
@@ -4982,6 +4983,7 @@ def _create_gemma4_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids,
         "full_attention": full_mask,
         "sliding_attention": sliding_mask,
     }
+
 
 # Forward method of the language model of Gemma4, needs to be patched to pass 'per_layer_inputs',
 # as original code fails to create per_layer_inputs without the providing of input_ids,
@@ -5058,6 +5060,7 @@ def gemma4_language_model_forward(
         attentions=outputs.attentions,
         image_hidden_states=image_features if pixel_values is not None else None,
     )
+
 
 # Gemma4 model forward, needs to be patched to pass 'per_layer_inputs',
 # Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/gemma4/modeling_gemma4.py#L2396
