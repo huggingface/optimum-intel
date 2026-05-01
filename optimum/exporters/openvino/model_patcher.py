@@ -8177,3 +8177,28 @@ class ZImageTransformerModelPatcher(ModelPatcher):
             if hasattr(cls, "_orig_call"):
                 cls.__call__ = cls._orig_call
                 del cls._orig_call
+
+
+class WanAnimateTransformerModelPatcher(ModelPatcher):
+    """Patches WanAnimateTransformer3DModel to fix trace-incompatible motion encoder batching loop.
+
+    The WanAnimateTransformer3DModel.forward() contains a data-dependent Python for-loop:
+
+        face_batches = torch.split(face_pixel_values, motion_encode_batch_size)
+        for face_batch in face_batches:        # iteration count depends on runtime shape
+            motion_vec_batch = self.motion_encoder(face_batch)
+            motion_vec_batches.append(motion_vec_batch)
+
+    Fix: Set motion_encoder_batch_size=10000 so torch.split() always returns exactly
+    one chunk, making the loop iterate exactly once and fully trace-compatible.
+    """
+
+    def __enter__(self):
+        super().__enter__()
+        self._original_motion_batch_size = getattr(self._model.config, "motion_encoder_batch_size", 1)
+        self._model.config.motion_encoder_batch_size = 10000
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._model.config.motion_encoder_batch_size = self._original_motion_batch_size
+        return super().__exit__(exc_type, exc_val, exc_tb)

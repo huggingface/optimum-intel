@@ -1004,6 +1004,80 @@ def _get_submodels_and_export_configs(
     return export_config, models_for_export, stateful_per_model
 
 
+
+def get_wan_models_for_export(pipeline, exporter, int_dtype, float_dtype):
+    """Build models_for_export dict for Wan video generation pipelines.
+
+    Handles: WanAnimatePipeline, WanPipeline, WanImageToVideoPipeline
+
+    VAE NOTE: vae_encoder and vae_decoder bypass AutoencoderKLWan causal
+    streaming loops by calling sub-modules directly without feat_cache.
+    """
+    import copy
+
+    models_for_export = {}
+    is_animate = hasattr(pipeline, "transformer") and hasattr(pipeline.transformer, "motion_encoder")
+
+    if hasattr(pipeline, "text_encoder") and pipeline.text_encoder is not None:
+        text_encoder = pipeline.text_encoder
+        te_cfg_ctor = TasksManager.get_exporter_config_constructor(
+            model=text_encoder, exporter=exporter, library_name="diffusers",
+            task="feature-extraction", model_type="t5-encoder-model",
+        )
+        te_cfg = te_cfg_ctor(text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype)
+        te_cfg.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+        models_for_export["text_encoder"] = (text_encoder, te_cfg)
+
+    if hasattr(pipeline, "image_encoder") and pipeline.image_encoder is not None:
+        image_encoder = pipeline.image_encoder
+        ie_cfg_ctor = TasksManager.get_exporter_config_constructor(
+            model=image_encoder, exporter=exporter, library_name="diffusers",
+            task="feature-extraction", model_type="clip-vision-model",
+        )
+        ie_cfg = ie_cfg_ctor(image_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype)
+        models_for_export["image_encoder"] = (image_encoder, ie_cfg)
+
+    transformer = pipeline.transformer
+    model_type = "wan-animate-transformer" if is_animate else "wan-transformer-3d"
+    tr_cfg_ctor = TasksManager.get_exporter_config_constructor(
+        model=transformer, exporter=exporter, library_name="diffusers",
+        task="semantic-segmentation", model_type=model_type,
+    )
+    tr_cfg = tr_cfg_ctor(transformer.config, int_dtype=int_dtype, float_dtype=float_dtype)
+    tr_cfg.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["transformer"] = (transformer, tr_cfg)
+
+    vae_encoder = copy.deepcopy(pipeline.vae)
+    def _wan_vae_enc_fwd(sample):
+        enc = vae_encoder.encoder(sample)
+        enc = vae_encoder.quant_conv(enc)
+        return {"latent_parameters": enc}
+    vae_encoder.forward = _wan_vae_enc_fwd
+    vae_enc_cfg_ctor = TasksManager.get_exporter_config_constructor(
+        model=vae_encoder, exporter=exporter, library_name="diffusers",
+        task="semantic-segmentation", model_type="wan-vae-encoder",
+    )
+    vae_enc_cfg = vae_enc_cfg_ctor(vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype)
+    vae_enc_cfg.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_encoder"] = (vae_encoder, vae_enc_cfg)
+
+    vae_decoder = copy.deepcopy(pipeline.vae)
+    def _wan_vae_dec_fwd(latent_sample):
+        import torch as _t
+        z = vae_decoder.post_quant_conv(latent_sample)
+        out = vae_decoder.decoder(z)
+        return {"sample": _t.clamp(out, min=-1.0, max=1.0)}
+    vae_decoder.forward = _wan_vae_dec_fwd
+    vae_dec_cfg_ctor = TasksManager.get_exporter_config_constructor(
+        model=vae_decoder, exporter=exporter, library_name="diffusers",
+        task="semantic-segmentation", model_type="wan-vae-decoder",
+    )
+    vae_dec_cfg = vae_dec_cfg_ctor(vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype)
+    vae_dec_cfg.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_decoder"] = (vae_decoder, vae_dec_cfg)
+
+    return models_for_export
+
 def get_diffusion_models_for_export_ext(
     pipeline: "DiffusionPipeline", int_dtype: str = "int64", float_dtype: str = "fp32", exporter: str = "openvino"
 ):
@@ -1039,6 +1113,12 @@ def get_diffusion_models_for_export_ext(
         models_for_export = get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif pipeline.__class__.__name__.startswith("ZImage"):
         models_for_export = get_zimage_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+    elif pipeline.__class__.__name__.startswith("WanAnimate") or pipeline.__class__.__name__ in (
+        "WanImageToVideoPipeline",
+        "WanPipeline",
+    ):
+        models_for_export = get_wan_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+
     else:
         raise ValueError(f"Unsupported pipeline type `{pipeline.__class__.__name__}` provided")
     return None, models_for_export
