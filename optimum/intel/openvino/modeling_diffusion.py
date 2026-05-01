@@ -1662,6 +1662,51 @@ class OVLTXPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTXPipel
     export_feature = "text-to-video"
     auto_model_class = LTXPipeline
 
+    @staticmethod
+    def _expand_decode_condition(value, batch_size: int, num_videos_per_prompt: int):
+        effective_batch_size = batch_size * num_videos_per_prompt
+
+        if isinstance(value, tuple):
+            value = list(value)
+
+        if isinstance(value, list):
+            if len(value) == effective_batch_size:
+                return value
+            if len(value) == batch_size:
+                return [item for item in value for _ in range(num_videos_per_prompt)]
+            if len(value) == 1:
+                return value * effective_batch_size
+
+        return [value] * effective_batch_size
+
+    def __call__(self, *args, **kwargs):
+        prompt = kwargs.get("prompt", args[0] if args else None)
+        prompt_embeds = kwargs.get("prompt_embeds")
+        num_videos_per_prompt = kwargs.get("num_videos_per_prompt", 1) or 1
+
+        if prompt is not None and isinstance(prompt, str):
+            batch_size = 1
+        elif prompt is not None and isinstance(prompt, list):
+            batch_size = len(prompt)
+        elif prompt_embeds is not None:
+            batch_size = prompt_embeds.shape[0]
+        else:
+            batch_size = 1
+
+        if kwargs.get("decode_timestep") is None:
+            kwargs["decode_timestep"] = self._expand_decode_condition(0.0, batch_size, num_videos_per_prompt)
+        else:
+            kwargs["decode_timestep"] = self._expand_decode_condition(
+                kwargs["decode_timestep"], batch_size, num_videos_per_prompt
+            )
+
+        if kwargs.get("decode_noise_scale") is not None:
+            kwargs["decode_noise_scale"] = self._expand_decode_condition(
+                kwargs["decode_noise_scale"], batch_size, num_videos_per_prompt
+            )
+
+        return super().__call__(*args, **kwargs)
+
 
 SUPPORTED_OV_PIPELINES = [
     OVStableDiffusionPipeline,
