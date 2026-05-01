@@ -5717,6 +5717,7 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
     MIN_TRANSFORMERS_VERSION = "5.2.0"
     MAX_TRANSFORMERS_VERSION = "5.2.99"
+
     def __init__(
         self,
         config: "PretrainedConfig",
