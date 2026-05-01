@@ -19,6 +19,7 @@ import os
 import shutil
 from abc import abstractmethod
 from collections import OrderedDict
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -119,6 +120,12 @@ if is_diffusers_version(">=", "0.33.0"):
     from diffusers import SanaSprintPipeline
 else:
     SanaSprintPipeline = object
+
+
+try:
+    from diffusers import Flux2KleinPipeline
+except ImportError:
+    Flux2KleinPipeline = object
 
 
 if is_diffusers_version(">=", "0.35.0"):
@@ -1307,6 +1314,14 @@ class OVModelTransformer(OVPipelinePart):
 
         return ModelOutput(**model_outputs)
 
+    @contextmanager
+    def cache_context(self, name: str):
+        """No-op stub so that ``Flux2KleinPipeline.__call__`` can call
+        ``self.transformer.cache_context(...)`` without error.  The OV
+        transformer does not support KV caching for reference-image editing.
+        """
+        yield
+
 
 class OVModelVaeEncoder(OVPipelinePart):
     def __init__(self, *args, **kwargs):
@@ -1645,6 +1660,152 @@ class OVFluxFillPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, Flu
     auto_model_class = FluxFillPipeline
 
 
+class OVFlux2KleinPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, Flux2KleinPipeline):
+    """OpenVINO pipeline for ``Flux2KleinPipeline`` (text-to-image and image editing).
+
+    Overrides ``_get_qwen3_prompt_embeds`` so the OV text encoder — which already
+    stacks the Qwen3 hidden states — is called correctly.  Also loads the VAE
+    batch-norm running statistics saved at export time and attaches them to
+    ``self.vae`` so that ``Flux2KleinPipeline.__call__`` can normalise latents.
+    """
+
+    main_input_name = "prompt"
+    export_feature = "text-to-image"
+    auto_model_class = Flux2KleinPipeline
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._attach_vae_bn_stats()
+
+    def _attach_vae_bn_stats(self):
+        """Load VAE batch-norm stats saved at export time and attach a proxy
+        ``bn`` object to ``self.vae`` so that ``Flux2KleinPipeline.__call__``
+        can normalise latents without the original ``AutoencoderKLFlux2``.
+        """
+        import numpy as _np
+        import types as _types
+
+        bn_path = Path(self.model_save_dir) / "vae_decoder" / "bn_stats.npz"
+        if not bn_path.is_file():
+            logger.warning(
+                f"VAE batch-norm stats file not found at {bn_path}. "
+                "Latent normalisation will use zeros/ones. Re-export with updated optimum-intel to fix this."
+            )
+            running_mean = torch.zeros(128)
+            running_var = torch.ones(128)
+        else:
+            data = _np.load(str(bn_path))
+            running_mean = torch.from_numpy(data["running_mean"])
+            running_var = torch.from_numpy(data["running_var"])
+
+        bn_proxy = _types.SimpleNamespace(running_mean=running_mean, running_var=running_var)
+        self.vae.bn = bn_proxy
+
+    @staticmethod
+    def _get_qwen3_prompt_embeds(
+        text_encoder,
+        tokenizer,
+        prompt,
+        dtype=None,
+        device=None,
+        max_sequence_length: int = 512,
+        hidden_states_layers=None,  # unused for OV; stacking is done at export time
+    ):
+        """Encode a prompt using the OV Qwen3 text encoder.
+
+        The exported IR already bakes in the hidden-state stacking, so we simply
+        tokenise the prompt, run a forward pass, and return ``last_hidden_state``.
+        """
+        import torch
+
+        if isinstance(prompt, str):
+            prompt = [prompt]
+
+        all_input_ids = []
+        all_attention_masks = []
+
+        for single_prompt in prompt:
+            messages = [{"role": "user", "content": single_prompt}]
+            text = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+            inputs = tokenizer(
+                text,
+                return_tensors="pt",
+                padding="max_length",
+                truncation=True,
+                max_length=max_sequence_length,
+            )
+            all_input_ids.append(inputs["input_ids"])
+            all_attention_masks.append(inputs["attention_mask"])
+
+        input_ids = torch.cat(all_input_ids, dim=0)
+        attention_mask = torch.cat(all_attention_masks, dim=0)
+
+        if device is not None:
+            input_ids = input_ids.to(device)
+            attention_mask = attention_mask.to(device)
+
+        output = text_encoder(input_ids=input_ids, attention_mask=attention_mask)
+        # The OV text encoder returns the stacked embeddings directly as last_hidden_state
+        prompt_embeds = output.last_hidden_state
+
+        if dtype is not None:
+            prompt_embeds = prompt_embeds.to(dtype=dtype)
+
+        return prompt_embeds
+
+    def _reshape_transformer(
+        self,
+        model: "openvino.Model",
+        batch_size: int = -1,
+        height: int = -1,
+        width: int = -1,
+        num_images_per_prompt: int = -1,
+        tokenizer_max_length: int = -1,
+        num_frames: int = -1,
+    ):
+        """Override to handle Flux2Klein's 4D img_ids/txt_ids (T,H,W,L coords)."""
+        if batch_size == -1 or num_images_per_prompt == -1:
+            batch_size = -1
+        else:
+            batch_size *= num_images_per_prompt
+
+        height = height // self.vae_scale_factor if height > 0 else height
+        width = width // self.vae_scale_factor if width > 0 else width
+        packed_height = height // 2 if height > 0 else height
+        packed_width = width // 2 if width > 0 else width
+        packed_height_width = packed_width * packed_height if height > 0 and width > 0 else -1
+
+        shapes = {}
+        for inputs in model.inputs:
+            shapes[inputs] = inputs.get_partial_shape()
+            name = inputs.get_any_name()
+            if name in ["timestep", "guidance"]:
+                shapes[inputs][0] = batch_size
+            elif name == "hidden_states":
+                in_channels = self.transformer.config.get("in_channels", None)
+                if in_channels is None:
+                    in_channels = shapes[inputs][2]
+                shapes[inputs] = [batch_size, packed_height_width, in_channels]
+            elif name == "encoder_hidden_states":
+                shapes[inputs] = [batch_size, -1, shapes[inputs][2]]
+            elif name == "img_ids":
+                # Flux2Klein uses (B, H*W, 4) — batch-major 4-coord ids
+                shapes[inputs] = [batch_size, packed_height_width, 4]
+            elif name == "txt_ids":
+                # Flux2Klein uses (B, seq_len, 4)
+                shapes[inputs] = [batch_size, -1, 4]
+            else:
+                shapes[inputs][0] = batch_size
+                shapes[inputs][1] = -1
+        model.reshape(shapes)
+        return model
+
+
 class OVSanaPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, SanaPipeline):
     main_input_name = "prompt"
     export_feature = "text-to-image"
@@ -1747,6 +1908,10 @@ if is_diffusers_version(">=", "0.32.0"):
 if is_diffusers_version(">=", "0.33.0"):
     SUPPORTED_OV_PIPELINES.append(OVSanaSprintPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana-sprint"] = OVSanaSprintPipeline
+
+if Flux2KleinPipeline is not object:
+    SUPPORTED_OV_PIPELINES.append(OVFlux2KleinPipeline)
+    OV_TEXT2IMAGE_PIPELINES_MAPPING["flux2-klein"] = OVFlux2KleinPipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,

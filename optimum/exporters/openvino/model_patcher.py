@@ -4683,6 +4683,26 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
 
 
+class Qwen3DiffusionTextEncoderModelPatcher(OVDecoderModelPatcher):
+    """Patcher for ``Qwen3TextEncoderForFlux2Klein`` wrapper used in Flux2Klein diffusion pipeline.
+
+    The wrapper has a ``.model`` attribute pointing to the inner ``Qwen3ForCausalLM``.
+    We keep ``self._model`` as the wrapper throughout so that the base-class
+    ``__enter__`` patches the wrapper's ``forward`` (not the inner model's ``forward``).
+    The inner Qwen3 is a sub-module of the wrapper, so all module-level patches
+    (RoPE, attention, causal mask) are applied correctly when iterating
+    ``self._model.modules()``.
+
+    Keeping the wrapper's ``forward`` as the patched entry-point avoids an infinite
+    recursion that would otherwise occur if both the wrapper's ``forward`` (which calls
+    ``self.model``) and the inner model's ``forward`` (set to the same
+    ``ts_patched_forward``) end up calling each other.
+    """
+
+    # No __enter__/__exit__ overrides needed — OVDecoderModelPatcher operates on
+    # the wrapper, whose modules() iterator covers all inner Qwen3 layers.
+
+
 class SanaTextEncoderModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
