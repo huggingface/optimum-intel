@@ -5642,7 +5642,8 @@ class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Qwen3_5DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Qwen3_5DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    MIN_TRANSFORMERS_VERSION = "5.2.0"
+    MAX_TRANSFORMERS_VERSION = "5.2.99"
     _MODEL_PATCHER = Qwen3_5ModelPatcher
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
@@ -5714,8 +5715,8 @@ class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
 class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
-    MIN_TRANSFORMERS_VERSION = "4.57.0"
-
+    MIN_TRANSFORMERS_VERSION = "5.2.0"
+    MAX_TRANSFORMERS_VERSION = "5.2.99"
     def __init__(
         self,
         config: "PretrainedConfig",
@@ -5785,19 +5786,7 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
         model_kwargs = model_kwargs or {}
         if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return Qwen3_5VisionEmbMergerPatcher(self, model, model_kwargs)
-        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
-            return ModelPatcher(self, model, model_kwargs=model_kwargs)
-        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
-            return InputEmbeddingPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
-
-    @property
-    def inputs(self) -> Dict[str, Dict[int, str]]:
-        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
-            return {
-                "input": {1: "sequence_length"},
-            }
-        return super().inputs
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
