@@ -1,0 +1,66 @@
+name: Preview Models Support Validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - v*-release
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  UV_TORCH_BACKEND: cpu
+  UV_SYSTEM_PYTHON: true
+  TRANSFORMERS_IS_CI: true
+  HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-pattern:
+          [
+            "*export*",
+            "*seq2seq*",
+            "*quantization*",
+          ]
+
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip uv
+          uv pip install .[tests] librosa diffusers
+
+      - name: Login with fork PRs CI token
+        if: ${{ env.HF_TOKEN == '' }}
+        run: |
+          python tests/scripts/login_with_ci_token.py
+
+      - name: Install latest openvino nightly
+        run: |
+          uv pip install --pre -U openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+
+      - name: Gemma 4 Validation
+        run: |
+          uv pip install transformers==5.5.0
+          pytest tests/openvino/${{ matrix.test-pattern }} -m gemma4 --durations=0
