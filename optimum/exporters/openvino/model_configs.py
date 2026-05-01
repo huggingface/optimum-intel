@@ -5597,6 +5597,11 @@ class ZImageTransformerDummyInputGenerator(DummyInputGenerator):
     """
 
     SUPPORTED_INPUT_NAMES = ("hidden_states", "timestep", "encoder_hidden_states")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
         batch_size: int = 2,        # 2 for CFG (cond + uncond)
         sequence_length: int = 32,  # min 32 (SEQ_MULTI_OF); 512 for full-length
         height: int = 16,           # latent height; use small value for dummy export

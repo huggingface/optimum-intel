@@ -399,3 +399,183 @@ class CustomExportModelTest(unittest.TestCase):
         ov_outputs = ov_model(**tokens)
         self.assertTrue(torch.allclose(ov_outputs.token_embeddings, model_outputs.token_embeddings, atol=1e-4))
         self.assertTrue(torch.allclose(ov_outputs.sentence_embedding, model_outputs.sentence_embedding, atol=1e-4))
+
+
+class WanConfigUnitTest(unittest.TestCase):
+    """Unit tests for Wan video generation model export configs.
+
+    These tests verify config class registration, input generator shapes and
+    inputs/outputs properties without downloading the large 14B model weights.
+    """
+
+    def _make_vae_normalized_config(self):
+        from optimum.utils import NormalizedConfig
+        from transformers import PretrainedConfig
+
+        class _WanVaeCfg(PretrainedConfig):
+            def __init__(self):
+                super().__init__()
+                self.z_dim = 16
+
+        return NormalizedConfig(_WanVaeCfg(), allow_new=True)
+
+    def _make_transformer_normalized_config(self, sample_size=8):
+        from optimum.utils import NormalizedConfig
+        from transformers import PretrainedConfig
+
+        class _WanTransformerCfg(PretrainedConfig):
+            def __init__(self):
+                super().__init__()
+                self.in_channels = 16
+                self.latent_channels = 16
+                self.text_dim = 4096
+                self.image_dim = 1280
+                self.num_attention_heads = 16
+                self.sample_size = sample_size
+
+        return NormalizedConfig(
+            _WanTransformerCfg(),
+            allow_new=True,
+            image_size="sample_size",
+            num_channels="in_channels",
+            hidden_size="num_attention_heads",
+        )
+
+    # ── Registration ────────────────────────────────────────────────────────
+
+    def test_wan_vae_encoder_registered(self):
+        self.assertIn("wan-vae-encoder", TasksManager._DIFFUSERS_SUPPORTED_MODEL_TYPE)
+
+    def test_wan_vae_decoder_registered(self):
+        self.assertIn("wan-vae-decoder", TasksManager._DIFFUSERS_SUPPORTED_MODEL_TYPE)
+
+    def test_wan_transformer_3d_registered(self):
+        self.assertIn("wan-transformer-3d", TasksManager._DIFFUSERS_SUPPORTED_MODEL_TYPE)
+
+    def test_wan_animate_transformer_registered(self):
+        self.assertIn("wan-animate-transformer", TasksManager._DIFFUSERS_SUPPORTED_MODEL_TYPE)
+
+    # ── DummyWanVaeInputGenerator ────────────────────────────────────────────
+
+    def test_wan_vae_input_generator_sample_shape(self):
+        from optimum.exporters.openvino.model_configs import DummyWanVaeInputGenerator
+
+        gen = DummyWanVaeInputGenerator(
+            task="semantic-segmentation",
+            normalized_config=self._make_vae_normalized_config(),
+            batch_size=1,
+            num_channels=3,
+            width=8,
+            height=8,
+            num_frames=9,
+        )
+        tensor = gen.generate("sample", framework="pt")
+        self.assertEqual(list(tensor.shape), [1, 3, 9, 8, 8])
+
+    def test_wan_vae_input_generator_latent_shape(self):
+        from optimum.exporters.openvino.model_configs import DummyWanVaeInputGenerator
+
+        gen = DummyWanVaeInputGenerator(
+            task="semantic-segmentation",
+            normalized_config=self._make_vae_normalized_config(),
+            batch_size=1,
+            num_channels=3,
+            width=8,
+            height=8,
+            num_frames=9,
+        )
+        tensor = gen.generate("latent_sample", framework="pt")
+        # latent_channels = z_dim = 16
+        self.assertEqual(list(tensor.shape), [1, 16, 9, 8, 8])
+
+    # ── DummyWanTransformerInputGenerator ───────────────────────────────────
+
+    def test_wan_transformer_input_generator_hidden_states_shape(self):
+        from optimum.exporters.openvino.model_configs import DummyWanTransformerInputGenerator
+
+        gen = DummyWanTransformerInputGenerator(
+            task="semantic-segmentation",
+            normalized_config=self._make_transformer_normalized_config(),
+            batch_size=1,
+            num_frames=5,
+            height=8,
+            width=8,
+        )
+        tensor = gen.generate("hidden_states", framework="pt")
+        self.assertEqual(list(tensor.shape), [1, 16, 5, 8, 8])
+
+    def test_wan_transformer_input_generator_encoder_hidden_states_shape(self):
+        from optimum.exporters.openvino.model_configs import DummyWanTransformerInputGenerator
+
+        gen = DummyWanTransformerInputGenerator(
+            task="semantic-segmentation",
+            normalized_config=self._make_transformer_normalized_config(),
+            batch_size=1,
+            seq_len=64,
+        )
+        tensor = gen.generate("encoder_hidden_states", framework="pt")
+        self.assertEqual(list(tensor.shape), [1, 64, 4096])
+
+    def test_wan_transformer_input_generator_timestep_shape(self):
+        from optimum.exporters.openvino.model_configs import DummyWanTransformerInputGenerator
+
+        gen = DummyWanTransformerInputGenerator(
+            task="semantic-segmentation",
+            normalized_config=self._make_transformer_normalized_config(),
+            batch_size=2,
+        )
+        tensor = gen.generate("timestep", framework="pt")
+        self.assertEqual(list(tensor.shape), [2])
+
+    # ── Config inputs/outputs properties ────────────────────────────────────
+
+    def test_wan_vae_encoder_config_inputs_outputs(self):
+        from optimum.exporters.openvino.model_configs import WanVaeEncoderOpenVINOConfig
+
+        cfg = WanVaeEncoderOpenVINOConfig(
+            config=self._make_vae_normalized_config(),
+            task="semantic-segmentation",
+        )
+        inputs = cfg.inputs
+        outputs = cfg.outputs
+        self.assertIn("sample", inputs)
+        self.assertIn("latent_parameters", outputs)
+
+    def test_wan_vae_decoder_config_inputs_outputs(self):
+        from optimum.exporters.openvino.model_configs import WanVaeDecoderOpenVINOConfig
+
+        cfg = WanVaeDecoderOpenVINOConfig(
+            config=self._make_vae_normalized_config(),
+            task="semantic-segmentation",
+        )
+        inputs = cfg.inputs
+        outputs = cfg.outputs
+        self.assertIn("latent_sample", inputs)
+        self.assertIn("sample", outputs)
+
+    def test_wan_transformer_3d_config_inputs_outputs(self):
+        from optimum.exporters.openvino.model_configs import WanTransformer3DModelOpenVINOConfig
+
+        cfg = WanTransformer3DModelOpenVINOConfig(
+            config=self._make_transformer_normalized_config(),
+            task="semantic-segmentation",
+        )
+        inputs = cfg.inputs
+        outputs = cfg.outputs
+        self.assertIn("hidden_states", inputs)
+        self.assertIn("timestep", inputs)
+        self.assertIn("encoder_hidden_states", inputs)
+        self.assertIn("sample", outputs)
+
+    def test_wan_animate_transformer_config_inputs_outputs(self):
+        from optimum.exporters.openvino.model_configs import WanAnimateTransformer3DModelOpenVINOConfig
+
+        cfg = WanAnimateTransformer3DModelOpenVINOConfig(
+            config=self._make_transformer_normalized_config(),
+            task="semantic-segmentation",
+        )
+        inputs = cfg.inputs
+        self.assertIn("hidden_states", inputs)
+        self.assertIn("encoder_hidden_states_image", inputs)
+        self.assertIn("pose_hidden_states", inputs)
+        self.assertIn("face_pixel_values", inputs)
