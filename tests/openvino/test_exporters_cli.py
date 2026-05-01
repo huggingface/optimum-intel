@@ -186,6 +186,14 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "5.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation", "lfm2_moe"),
+                ("text-generation-with-past", "lfm2_moe"),
+            ]
+        )
+
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
         "t5": 2,
@@ -204,6 +212,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "lfm2": 2
         if is_openvino_version(">=", "2026.0")
         else 0,  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
+        "lfm2_moe": 2,
         "llava": 2,
         "sana": 2,
         "ltx-video": 2,

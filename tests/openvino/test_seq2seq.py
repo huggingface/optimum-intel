@@ -179,6 +179,9 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
+        if model_arch in ("marian") and is_openvino_version(">=", "2026.1.0"):
+            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
+
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = self.OVMODEL_CLASS.from_pretrained(
@@ -607,6 +610,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         # remote code models incompatible after transformers v5
         SUPPORTED_ARCHITECTURES += ["internvl_chat", "minicpmv"]
 
+    if is_transformers_version(">=", "5.5"):
+        SUPPORTED_ARCHITECTURES += ["gemma4", "gemma4_moe"]
+
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("llava_next_video",)
@@ -683,6 +689,16 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
+        if model_arch in ("llama4", "minicpmv", "minicpmo") and is_openvino_version(">=", "2026.1.0"):
+            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
+
+        if (
+            model_arch in ("qwen3_vl", "llava", "llava_next", "llava_next_mistral")
+            and is_openvino_version(">=", "2026.1.0")
+            and is_transformers_version(">=", "5.0")
+        ):
+            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
+
         def compare_outputs(inputs, ov_model, transformers_model, generation_config):
             transformers_inputs = copy.deepcopy(inputs)
             ov_outputs = ov_model.generate(**inputs, generation_config=generation_config)
@@ -783,6 +799,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         ov_model.generation_config.do_sample = False
         # minicpmo diverges after 20 tokens
         tokens_to_generate = 20 if model_arch == "minicpmo" else 30
+
         gen_config = GenerationConfig(
             max_new_tokens=tokens_to_generate,
             min_new_tokens=tokens_to_generate,

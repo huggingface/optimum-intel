@@ -297,6 +297,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "qwen3_vl",
     "got_ocr2",
     "gemma3",
+    "gemma4",
     "idefics3",
     "smolvlm",
     "phi4mm",
@@ -305,7 +306,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "minicpmo",
 ]
 
-SSM_MODELS = ["mamba", "falcon_mamba", "zamba2", "lfm2", "granitemoehybrid", "qwen3_next"]
+SSM_MODELS = ["mamba", "falcon_mamba", "zamba2", "lfm2", "lfm2_moe", "granitemoehybrid", "qwen3_next"]
 
 # All transformers, diffusers, timm and sentence transformers models that are supported via optimum-onnx OnnxConfigs but that have currently no test
 # TODO: add tests for all models that are compatible and remove support for all others
