@@ -6,6 +6,8 @@ Test OpenVINO GenAI inference on models exported with optimum-intel
   - For GPU, there are known failed tests on some GPUs. This is under investigation.
 """
 
+# ruff: noqa: I001  # Avoid black/ruff conflict: ruff isort wants 2 blank lines after imports, black collapses to 1
+
 import gc
 import os
 import shutil
