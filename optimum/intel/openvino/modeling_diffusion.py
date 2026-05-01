@@ -126,6 +126,11 @@ if is_diffusers_version(">=", "0.35.0"):
 else:
     CacheMixin = object
 
+try:
+    from diffusers import HiDreamImageEditingPipeline
+except ImportError:
+    HiDreamImageEditingPipeline = object
+
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
 DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER = "text_encoder_3"
 
@@ -1657,6 +1662,12 @@ class OVSanaSprintPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, S
     auto_model_class = SanaSprintPipeline
 
 
+class OVHiDreamImageEditingPipeline(OVDiffusionPipeline, HiDreamImageEditingPipeline):
+    main_input_name = "image"
+    export_feature = "image-to-image"
+    auto_model_class = HiDreamImageEditingPipeline
+
+
 class OVLTXPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTXPipeline):
     main_input_name = "prompt"
     export_feature = "text-to-video"
@@ -1747,6 +1758,10 @@ if is_diffusers_version(">=", "0.32.0"):
 if is_diffusers_version(">=", "0.33.0"):
     SUPPORTED_OV_PIPELINES.append(OVSanaSprintPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana-sprint"] = OVSanaSprintPipeline
+
+if HiDreamImageEditingPipeline is not object:
+    SUPPORTED_OV_PIPELINES.append(OVHiDreamImageEditingPipeline)
+    OV_IMAGE2IMAGE_PIPELINES_MAPPING["hidream-image-editing"] = OVHiDreamImageEditingPipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,
