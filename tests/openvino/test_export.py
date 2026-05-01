@@ -399,3 +399,51 @@ class CustomExportModelTest(unittest.TestCase):
         ov_outputs = ov_model(**tokens)
         self.assertTrue(torch.allclose(ov_outputs.token_embeddings, model_outputs.token_embeddings, atol=1e-4))
         self.assertTrue(torch.allclose(ov_outputs.sentence_embedding, model_outputs.sentence_embedding, atol=1e-4))
+
+
+class Mistral3OpenVINORegistrationTest(unittest.TestCase):
+    """Tests for mistral3 OpenVINO support registration - no model downloads required."""
+
+    def test_mistral3_tasks_registered_in_tasks_manager(self):
+        """Test that mistral3 is registered for the expected tasks in TasksManager."""
+        from optimum.exporters.tasks import TasksManager
+
+        supported_model_types = TasksManager._SUPPORTED_MODEL_TYPE
+        self.assertIn("mistral3", supported_model_types, "mistral3 not found in TasksManager._SUPPORTED_MODEL_TYPE")
+
+        mistral3_exporters = supported_model_types["mistral3"]
+        self.assertIn("openvino", mistral3_exporters, "mistral3 missing 'openvino' exporter key")
+
+        openvino_tasks = mistral3_exporters["openvino"]
+        for task in ("image-text-to-text", "text-generation", "text-generation-with-past"):
+            self.assertIn(task, openvino_tasks, f"mistral3 missing task '{task}' in openvino exporter")
+
+    def test_mistral3_in_multi_modal_text_generation_models(self):
+        """Test that mistral3 is listed in MULTI_MODAL_TEXT_GENERATION_MODELS."""
+        from optimum.exporters.openvino.utils import MULTI_MODAL_TEXT_GENERATION_MODELS
+
+        self.assertIn(
+            "mistral3",
+            MULTI_MODAL_TEXT_GENERATION_MODELS,
+            "mistral3 not found in MULTI_MODAL_TEXT_GENERATION_MODELS",
+        )
+
+    @unittest.skipIf(
+        not is_transformers_version(">=", "4.52.0"),
+        "Mistral3OpenVINOConfig requires transformers >= 4.52.0",
+    )
+    def test_mistral3_openvino_config_importable(self):
+        """Test that Mistral3OpenVINOConfig can be imported from model_configs."""
+        from optimum.exporters.openvino.model_configs import Mistral3OpenVINOConfig
+
+        self.assertTrue(issubclass(Mistral3OpenVINOConfig, object))
+
+    @unittest.skipIf(
+        not is_transformers_version(">=", "4.52.0"),
+        "Mistral3OpenVINOConfig requires transformers >= 4.52.0",
+    )
+    def test_mistral3_openvino_config_min_transformers_version(self):
+        """Test that Mistral3OpenVINOConfig declares the correct minimum transformers version."""
+        from optimum.exporters.openvino.model_configs import Mistral3OpenVINOConfig
+
+        self.assertEqual(Mistral3OpenVINOConfig.MIN_TRANSFORMERS_VERSION, "4.52.0")
