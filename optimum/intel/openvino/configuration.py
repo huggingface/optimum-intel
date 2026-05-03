@@ -436,6 +436,18 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "dataset": "contextual",
         "scale_estimation": True,
     },
+    "google/gemma-4-26B-A4B-it": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "group_size_fallback": "adjust",
+    },
+    "google/gemma-4-26B-A4B": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "group_size_fallback": "adjust",
+    },
 }
 
 _DEFAULT_8BIT_WQ_CONFIGS = {
@@ -565,6 +577,16 @@ _DEFAULT_IGNORED_SCOPE_CONFIGS = {
                 "__module.speech_decoder_postnet",
                 "__module.speecht5.decoder.prenet",
             ],
+        },
+    },
+    "google/gemma-4-26B-A4B-it": {
+        "lm_model": {
+            "patterns": [".*router.*"],
+        },
+    },
+    "google/gemma-4-26B-A4B": {
+        "lm_model": {
+            "patterns": [".*router.*"],
         },
     },
 }
