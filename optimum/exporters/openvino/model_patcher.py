@@ -8593,6 +8593,7 @@ class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
 # approach, which replaces the GatedDeltaNet block with a single operation,
 # `GatedDeltaNetOp`. OpenVINO then applies the `convert_recurrent_attention_cell()`
 # conversion rule to this operation.
+# Adapted from: https://github.com/huggingface/transformers/blob/v5.2-release/src/transformers/models/qwen3_5/modeling_qwen3_5.py#L511
 def qwen3_5_gated_delta_net_forward(
     self,
     hidden_states: torch.Tensor,
