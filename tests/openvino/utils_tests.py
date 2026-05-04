@@ -177,6 +177,7 @@ MODEL_NAMES = {
     "qwen3_vl": "optimum-intel-internal-testing/tiny-random-qwen3-vl",
     "qwen3_next": "optimum-intel-internal-testing/tiny-random-qwen3-next",
     "qwen3_5": "optimum-intel-internal-testing/tiny-random-qwen3.5",
+    "qwen3_5_moe": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
     "rembert": "optimum-intel-internal-testing/tiny-random-rembert",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",
     "roberta": "optimum-intel-internal-testing/tiny-random-roberta",

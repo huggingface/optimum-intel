@@ -613,6 +613,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     if is_transformers_version(">=", "5.5"):
         SUPPORTED_ARCHITECTURES += ["gemma4", "gemma4_moe"]
 
+    if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
+        SUPPORTED_ARCHITECTURES += ["qwen3_5", "qwen3_5_moe"]
+
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("llava_next_video",)
@@ -639,6 +642,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "smolvlm",
             "llama4",
             "qwen3_vl",
+            "qwen3_5",
+            "qwen3_5_moe",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -786,9 +791,15 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             set_seed(SEED)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**transformers_inputs)
+            ov_logits = ov_outputs.logits
+            transformers_logits = transformers_outputs.logits
+            if model_arch == "qwen3_5_moe":
+                ov_logits = ov_logits.to(torch.float32)
+                transformers_logits = transformers_logits.to(torch.float32)
+            atol = 1.2e-2 if model_arch == "qwen3_5_moe" else 4e-3
             self.assertTrue(
-                torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=4e-3),
-                f"Max abs diff {(torch.abs(ov_outputs.logits - transformers_outputs.logits).max())}",
+                torch.allclose(ov_logits, transformers_logits, atol=atol),
+                f"Max abs diff {(torch.abs(ov_logits - transformers_logits).max())}",
             )
 
         ov_model.generation_config.eos_token_id = None

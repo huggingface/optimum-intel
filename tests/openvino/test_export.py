@@ -58,7 +58,7 @@ from optimum.intel import (
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version
+from optimum.intel.utils.import_utils import _transformers_version, is_openvino_version, is_transformers_version
 from optimum.utils import logging
 from optimum.utils.save_utils import maybe_load_preprocessors
 
@@ -114,6 +114,10 @@ class ExportModelTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.update({"gemma4": OVModelForVisualCausalLM})
         SUPPORTED_ARCHITECTURES.update({"gemma4_moe": OVModelForVisualCausalLM})
 
+    if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
+        SUPPORTED_ARCHITECTURES.update({"qwen3_5": OVModelForVisualCausalLM})
+        SUPPORTED_ARCHITECTURES.update({"qwen3_5_moe": OVModelForVisualCausalLM})
+
     if is_transformers_version(">=", "4.57.0"):
         SUPPORTED_ARCHITECTURES.update({"hunyuan_v1_dense": OVModelForCausalLM})
 
@@ -148,6 +152,11 @@ class ExportModelTest(unittest.TestCase):
         model_name = MODEL_NAMES[model_type]
         library_name = TasksManager.infer_library_from_model(model_name)
         loading_kwargs = {"attn_implementation": "eager"} if model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED else {}
+
+        # On OV 2026.1 the torch->OV tracing path for Qwen3.5-MoE is sensitive to bf16/fp32 mixing.
+        # Force fp32 load to keep export deterministic in CI.
+        if model_type == "qwen3_5_moe":
+            loading_kwargs["torch_dtype"] = torch.float32
 
         if model_type in REMOTE_CODE_MODELS:
             loading_kwargs["trust_remote_code"] = True
@@ -236,6 +245,13 @@ class ExportModelTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, model_type: str):
+        if (
+            model_type == "qwen3_5_moe"
+            and is_openvino_version(">=", "2026.1.0")
+            and is_openvino_version("<", "2026.2.0")
+        ):
+            self.skipTest("Known OV 2026.1 tracing dtype issue for qwen3_5_moe export")
+
         model_kwargs = None
         if model_type == "speecht5":
             model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
