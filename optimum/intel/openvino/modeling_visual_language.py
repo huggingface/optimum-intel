@@ -4979,7 +4979,7 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM, Qwen3_5Model, Qwen3_5Visio
         **kwargs,
     ):
         if is_transformers_version("<", "5.2.0"):
-            raise Exception(""Qwen3.5 requires transformers >= 5.2.0; earlier versions are not supported."")
+            raise Exception("Qwen3.5 requires transformers >= 5.2.0; earlier versions are not supported.")
 
         super().__init__(
             language_model=language_model,
