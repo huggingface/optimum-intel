@@ -153,11 +153,6 @@ class ExportModelTest(unittest.TestCase):
         library_name = TasksManager.infer_library_from_model(model_name)
         loading_kwargs = {"attn_implementation": "eager"} if model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED else {}
 
-        # On OV 2026.1 the torch->OV tracing path for Qwen3.5-MoE is sensitive to bf16/fp32 mixing.
-        # Force fp32 load to keep export deterministic in CI.
-        if model_type == "qwen3_5_moe":
-            loading_kwargs["torch_dtype"] = torch.float32
-
         if model_type in REMOTE_CODE_MODELS:
             loading_kwargs["trust_remote_code"] = True
 
