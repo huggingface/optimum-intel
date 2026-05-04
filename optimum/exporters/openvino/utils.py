@@ -353,7 +353,6 @@ ONNX_SUPPORTED_ARCHITECTURES = {
     "rt_detr",
     "rt_detr_v2",
     "siglip_vision_model",
-    "smollm3",
     "speech_to_text",
     "splinter",
     "swin2sr",

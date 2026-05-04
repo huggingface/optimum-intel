@@ -85,7 +85,7 @@ class LLMPipelineTestCase(unittest.TestCase):
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
     if is_transformers_version(">=", "4.53.0"):
-        SUPPORTED_ARCHITECTURES += ("arcee",)
+        SUPPORTED_ARCHITECTURES += ("arcee", "smollm3")
     if is_transformers_version(">=", "4.54.0") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("exaone4",)
     if is_transformers_version(">=", "4.55.0"):

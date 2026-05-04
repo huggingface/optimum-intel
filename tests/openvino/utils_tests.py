@@ -183,6 +183,7 @@ MODEL_NAMES = {
     "segformer": "optimum-intel-internal-testing/tiny-random-SegformerModel",
     "sentence-transformers-bert": "optimum-intel-internal-testing/stsb-bert-tiny-safetensors",
     "sam": "optimum-intel-internal-testing/sam-vit-tiny-random",
+    "smollm3": "optimum-intel-internal-testing/tiny-random-smollm3",
     "smolvlm": "optimum-intel-internal-testing/tiny-random-smolvlm2",
     "speecht5": "optimum-intel-internal-testing/tiny-random-SpeechT5ForTextToSpeech",
     "speech_to_text": "optimum-intel-internal-testing/tiny-random-Speech2TextModel",
