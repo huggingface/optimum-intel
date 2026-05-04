@@ -219,8 +219,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
         # whose language model exposes conv/recurrent/key/value caches under the `cache_params.*` namespace
         # instead of the standard `past_key_values.*` one.
         return any(
-            "past_key_values" in key.get_any_name() or "cache_params" in key.get_any_name()
-            for key in model.inputs
+            "past_key_values" in key.get_any_name() or "cache_params" in key.get_any_name() for key in model.inputs
         )
 
     @staticmethod
