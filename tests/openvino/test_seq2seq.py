@@ -791,15 +791,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             set_seed(SEED)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**transformers_inputs)
-            ov_logits = ov_outputs.logits
-            transformers_logits = transformers_outputs.logits
-            if model_arch == "qwen3_5_moe":
-                ov_logits = ov_logits.to(torch.float32)
-                transformers_logits = transformers_logits.to(torch.float32)
-            atol = 1.2e-2 if model_arch == "qwen3_5_moe" else 4e-3
             self.assertTrue(
-                torch.allclose(ov_logits, transformers_logits, atol=atol),
-                f"Max abs diff {(torch.abs(ov_logits - transformers_logits).max())}",
+                torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=4e-3),
+                f"Max abs diff {(torch.abs(ov_outputs.logits - transformers_outputs.logits).max())}",
             )
 
         ov_model.generation_config.eos_token_id = None
