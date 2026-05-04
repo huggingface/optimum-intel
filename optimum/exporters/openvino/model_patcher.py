@@ -8734,7 +8734,6 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
         super().__init__(config)
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, config.pad_token_id)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-        self._load_target_weights(config)
 
     def _load_target_weights(self, config):
         embed_weight = _dflash_load_target_tensor(config, ("model.embed_tokens.weight", "embed_tokens.weight"))
@@ -8743,8 +8742,25 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
         except ValueError:
             lm_head_weight = embed_weight
 
+        target_dtype = self.fc.weight.dtype
+        embed_weight = embed_weight.to(target_dtype)
+        lm_head_weight = lm_head_weight.to(target_dtype)
+
         self.embed_tokens.weight = nn.Parameter(embed_weight, requires_grad=False)
         self.lm_head.weight = nn.Parameter(lm_head_weight, requires_grad=False)
+
+    @classmethod
+    def from_pretrained(cls, *model_args, **kwargs):
+        output_loading_info = kwargs.get("output_loading_info", False)
+        result = super().from_pretrained(*model_args, **kwargs)
+
+        if output_loading_info:
+            model, loading_info = result
+            model._load_target_weights(model.config)
+            return model, loading_info
+
+        result._load_target_weights(result.config)
+        return result
 
     def forward(
         self,

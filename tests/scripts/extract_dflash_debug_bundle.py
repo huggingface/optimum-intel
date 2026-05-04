@@ -44,15 +44,16 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.target_model, trust_remote_code=True)
     target = AutoModelForCausalLM.from_pretrained(
         args.target_model,
-        torch_dtype=dtype,
+        dtype=dtype,
         device_map=args.device_map,
         trust_remote_code=True,
     ).eval()
     draft = AutoModel.from_pretrained(
         args.draft_model,
-        torch_dtype=dtype,
+        dtype=dtype,
         device_map=args.device_map,
         trust_remote_code=True,
+        attn_implementation="eager",
     ).eval()
 
     device = next(target.parameters()).device
