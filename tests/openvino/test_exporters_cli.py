@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import json
+import os
 import subprocess
 import unittest
 from pathlib import Path
@@ -28,6 +29,7 @@ from transformers import (
 )
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
+    DFLASH_MODELS,
     MODEL_NAMES,
     OPENVINO_DEVICE,
     REMOTE_CODE_MODELS,
@@ -854,6 +856,21 @@ class OVCLIExportTestCase(unittest.TestCase):
             main_export(
                 model_name_or_path=model_name, output=tmpdir, task=task, model_kwargs=model_kwargs, **loading_kwargs
             )
+
+    @unittest.skipUnless(os.environ.get("RUN_DFLASH_EXPORT_TEST"), "Set RUN_DFLASH_EXPORT_TEST=1 to run DFlash export")
+    def test_dflash_export_smoke(self):
+        draft_model_id, target_model_id = DFLASH_MODELS["qwen3_coder_dflash"]
+        with TemporaryDirectory() as tmpdir:
+            main_export(
+                model_name_or_path=draft_model_id,
+                output=tmpdir,
+                task="text-generation",
+                trust_remote_code=True,
+                dflash_target_model=target_model_id,
+                convert_tokenizer=False,
+            )
+            self.assertTrue((Path(tmpdir) / "openvino_model.xml").exists())
+            self.assertTrue((Path(tmpdir) / "openvino_model.bin").exists())
 
     def test_filtered_architectures(cls):
         if is_transformers_version("<", "4.49"):

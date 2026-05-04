@@ -14,11 +14,13 @@
 
 import functools
 import inspect
+import json
 import logging
 import logging as log
 import math
 import types
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -31,6 +33,7 @@ from transformers.modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPast,
     BaseModelOutputWithPooling,
+    CausalLMOutputWithPast,
 )
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.llama.configuration_llama import LlamaConfig
@@ -71,6 +74,34 @@ if is_transformers_version(">=", "4.53"):
     from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
 if is_transformers_version(">=", "4.54"):
     from transformers.masking_utils import create_causal_mask
+if is_transformers_version(">=", "4.57"):
+    from transformers.models.qwen3.modeling_qwen3 import (
+        Qwen3Config,
+        Qwen3MLP,
+        Qwen3PreTrainedModel,
+        Qwen3RMSNorm,
+        Qwen3RotaryEmbedding,
+        eager_attention_forward as qwen3_eager_attention_forward,
+        rotate_half as qwen3_rotate_half,
+    )
+else:
+    Qwen3Config = PretrainedConfig
+    Qwen3PreTrainedModel = PreTrainedModel
+
+    class _UnavailableQwen3Module(nn.Module):
+        def __init__(self, *args, **kwargs):
+            raise ImportError("DFlash export requires transformers >= 4.57.")
+
+    Qwen3MLP = _UnavailableQwen3Module
+    Qwen3RMSNorm = _UnavailableQwen3Module
+    Qwen3RotaryEmbedding = _UnavailableQwen3Module
+
+    def qwen3_eager_attention_forward(*args, **kwargs):
+        raise ImportError("DFlash export requires transformers >= 4.57.")
+
+    def qwen3_rotate_half(*args, **kwargs):
+        raise ImportError("DFlash export requires transformers >= 4.57.")
+
 if is_transformers_version(">=", "4.56"):
     import transformers.masking_utils
 if is_transformers_version(">=", "5"):
@@ -8459,6 +8490,287 @@ class LlamaEagle3ForCausalLM(LlamaPreTrainedModel, GenerationMixin):
             hidden_states=outputs.hidden_states,
             d2t=d2t_out,
         )
+
+
+def _dflash_apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
+    q_len = q.size(-2)
+    q_embed = (q * cos[..., -q_len:, :]) + (qwen3_rotate_half(q) * sin[..., -q_len:, :])
+    k_embed = (k * cos) + (qwen3_rotate_half(k) * sin)
+    return q_embed, k_embed
+
+
+def _dflash_resolve_tensor_file(config: PretrainedConfig, tensor_name: str) -> str:
+    target_model = getattr(config, "dflash_target_model", None)
+    if target_model is None:
+        raise ValueError("DFlash logits export requires `dflash_target_model` to load target weights.")
+
+    target_path = Path(target_model)
+    if target_path.is_dir():
+        index_path = target_path / "model.safetensors.index.json"
+        if index_path.exists():
+            with index_path.open() as f:
+                weight_map = json.load(f)["weight_map"]
+            return str(target_path / weight_map[tensor_name])
+        single_file = target_path / "model.safetensors"
+        if single_file.exists():
+            return str(single_file)
+        raise FileNotFoundError(f"Could not find safetensors weights in {target_path}.")
+
+    from huggingface_hub import hf_hub_download
+
+    cache_dir = getattr(config, "dflash_target_cache_dir", None)
+    revision = getattr(config, "dflash_target_revision", "main")
+    token = getattr(config, "dflash_target_token", None)
+    local_files_only = getattr(config, "dflash_target_local_files_only", False)
+
+    try:
+        index_path = hf_hub_download(
+            target_model,
+            "model.safetensors.index.json",
+            cache_dir=cache_dir,
+            revision=revision,
+            token=token,
+            local_files_only=local_files_only,
+        )
+        with open(index_path) as f:
+            weight_map = json.load(f)["weight_map"]
+        filename = weight_map[tensor_name]
+    except Exception:
+        filename = "model.safetensors"
+
+    return hf_hub_download(
+        target_model,
+        filename,
+        cache_dir=cache_dir,
+        revision=revision,
+        token=token,
+        local_files_only=local_files_only,
+    )
+
+
+def _dflash_load_target_tensor(config: PretrainedConfig, tensor_names: Tuple[str, ...]) -> torch.Tensor:
+    from safetensors import safe_open
+
+    last_error = None
+    for tensor_name in tensor_names:
+        try:
+            tensor_file = _dflash_resolve_tensor_file(config, tensor_name)
+            with safe_open(tensor_file, framework="pt", device="cpu") as f:
+                if tensor_name in f.keys():
+                    return f.get_tensor(tensor_name)
+        except Exception as error:
+            last_error = error
+    raise ValueError(f"Could not load any of {tensor_names} from DFlash target model.") from last_error
+
+
+class Qwen3DFlashAttention(nn.Module):
+    """Qwen3 attention variant used by DFlash, where draft tokens attend over target context and noise tokens."""
+
+    def __init__(self, config: "Qwen3Config", layer_idx: int):
+        super().__init__()
+        self.config = config
+        self.layer_idx = layer_idx
+        self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
+        self.num_key_value_groups = config.num_attention_heads // config.num_key_value_heads
+        self.scaling = self.head_dim**-0.5
+        self.attention_dropout = config.attention_dropout
+        self.is_causal = False
+        self.q_proj = nn.Linear(config.hidden_size, config.num_attention_heads * self.head_dim, bias=config.attention_bias)
+        self.k_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * self.head_dim, bias=config.attention_bias)
+        self.v_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * self.head_dim, bias=config.attention_bias)
+        self.o_proj = nn.Linear(config.num_attention_heads * self.head_dim, config.hidden_size, bias=config.attention_bias)
+        self.q_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
+        self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
+        self.sliding_window = config.sliding_window if config.layer_types[layer_idx] == "sliding_attention" else None
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        target_hidden: torch.Tensor,
+        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+        attention_mask: Optional[torch.Tensor] = None,
+        past_key_values: Optional[Cache] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        bsz, q_len = hidden_states.shape[:-1]
+        ctx_len = target_hidden.shape[1]
+
+        query_states = self.q_proj(hidden_states).view(bsz, q_len, -1, self.head_dim)
+        query_states = self.q_norm(query_states).transpose(1, 2)
+
+        key_context = self.k_proj(target_hidden)
+        key_noise = self.k_proj(hidden_states)
+        value_context = self.v_proj(target_hidden)
+        value_noise = self.v_proj(hidden_states)
+
+        key_states = torch.cat([key_context, key_noise], dim=1).view(bsz, ctx_len + q_len, -1, self.head_dim)
+        value_states = torch.cat([value_context, value_noise], dim=1).view(bsz, ctx_len + q_len, -1, self.head_dim)
+        key_states = self.k_norm(key_states).transpose(1, 2)
+        value_states = value_states.transpose(1, 2)
+
+        cos, sin = position_embeddings
+        query_states, key_states = _dflash_apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+        if past_key_values is not None:
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+        attn_output, attn_weights = qwen3_eager_attention_forward(
+            self,
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            dropout=0.0 if not self.training else self.attention_dropout,
+            scaling=self.scaling,
+            sliding_window=self.sliding_window,
+            **kwargs,
+        )
+        attn_output = attn_output.reshape(bsz, q_len, -1)
+        attn_output = self.o_proj(attn_output)
+        return attn_output, attn_weights
+
+
+class Qwen3DFlashDecoderLayer(nn.Module):
+    def __init__(self, config: "Qwen3Config", layer_idx: int):
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        self.self_attn = Qwen3DFlashAttention(config=config, layer_idx=layer_idx)
+        self.mlp = Qwen3MLP(config)
+        self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+    def forward(
+        self,
+        target_hidden: torch.Tensor,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Cache] = None,
+        output_attentions: Optional[bool] = False,
+        use_cache: Optional[bool] = False,
+        cache_position: Optional[torch.LongTensor] = None,
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> torch.FloatTensor:
+        residual = hidden_states
+        hidden_states = self.input_layernorm(hidden_states)
+        hidden_states = self.self_attn(
+            hidden_states=hidden_states,
+            target_hidden=target_hidden,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_value,
+            output_attentions=output_attentions,
+            use_cache=use_cache,
+            cache_position=cache_position,
+            position_embeddings=position_embeddings,
+            **kwargs,
+        )[0]
+        hidden_states = residual + hidden_states
+
+        residual = hidden_states
+        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = residual + hidden_states
+        return hidden_states
+
+
+class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
+    config_class = Qwen3Config
+    _no_split_modules = ["Qwen3DFlashDecoderLayer"]
+
+    def __init__(self, config) -> None:
+        super().__init__(config)
+        self.layers = nn.ModuleList(
+            [Qwen3DFlashDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+        )
+        dflash_config = getattr(config, "dflash_config", {})
+        self.target_layer_ids = dflash_config.get("target_layer_ids", [])
+        self.norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.rotary_emb = Qwen3RotaryEmbedding(config)
+        self.fc = nn.Linear(len(self.target_layer_ids) * config.hidden_size, config.hidden_size, bias=False)
+        self.hidden_norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.block_size = config.block_size
+        self.mask_token_id = dflash_config.get("mask_token_id", None)
+        self.post_init()
+
+    def forward(
+        self,
+        position_ids: torch.LongTensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        noise_embedding: Optional[torch.Tensor] = None,
+        target_hidden: Optional[torch.Tensor] = None,
+        past_key_values: Optional[Cache] = None,
+        use_cache: bool = False,
+        **kwargs,
+    ) -> torch.FloatTensor:
+        hidden_states = noise_embedding
+        target_hidden = target_hidden.to(hidden_states.dtype)
+        target_hidden = self.hidden_norm(self.fc(target_hidden))
+        position_embeddings = self.rotary_emb(hidden_states, position_ids)
+        for layer in self.layers:
+            hidden_states = layer(
+                hidden_states=hidden_states,
+                target_hidden=target_hidden,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_value=past_key_values,
+                use_cache=use_cache,
+                position_embeddings=position_embeddings,
+                **kwargs,
+            )
+        return self.norm(hidden_states)
+
+
+class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
+    _tied_weights_keys = ["lm_head.weight"]
+    _keys_to_ignore_on_load_missing = [r"embed_tokens.weight", r"lm_head.weight"]
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, config.pad_token_id)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self._load_target_weights(config)
+
+    def _load_target_weights(self, config):
+        embed_weight = _dflash_load_target_tensor(config, ("model.embed_tokens.weight", "embed_tokens.weight"))
+        try:
+            lm_head_weight = _dflash_load_target_tensor(config, ("lm_head.weight",))
+        except ValueError:
+            lm_head_weight = embed_weight
+
+        self.embed_tokens.weight = nn.Parameter(embed_weight, requires_grad=False)
+        self.lm_head.weight = nn.Parameter(lm_head_weight, requires_grad=False)
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor,
+        target_hidden: torch.Tensor,
+        position_ids: torch.LongTensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        past_key_values: Optional[Cache] = None,
+        use_cache: bool = False,
+        logits_to_keep: Optional[int] = None,
+        **kwargs,
+    ) -> CausalLMOutputWithPast:
+        noise_embedding = self.embed_tokens(input_ids)
+        hidden_states = super().forward(
+            target_hidden=target_hidden,
+            noise_embedding=noise_embedding,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+            **kwargs,
+        )
+        if logits_to_keep is None:
+            logits_to_keep = self.block_size - 1
+        logits = self.lm_head(hidden_states[:, -logits_to_keep:, :])
+        return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
 
 
 # Patched implementation of the gated delta rule in recurrent form.

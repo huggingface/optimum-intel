@@ -342,6 +342,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             model_loading_kwargs["torch_dtype"] = torch_dtype
 
         variant = kwargs.pop("variant", None)
+        dflash_target_model = kwargs.pop("dflash_target_model", None)
 
         main_export(
             model_name_or_path=model_id,
@@ -359,6 +360,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             model_loading_kwargs=model_loading_kwargs,
             library_name=cls._library_name,
             variant=variant,
+            dflash_target_model=dflash_target_model,
         )
 
         if config.model_type == "phi3" and config.max_position_embeddings != getattr(
@@ -566,6 +568,13 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 hs_shape = (batch_size, input_ids.shape[1], self.config.hidden_size * 3)
                 hidden_states = torch.zeros(hs_shape, device=self.device, dtype=torch.float32)
             inputs["hidden_states"] = hidden_states
+
+        # DFlash draft models consume target-model context features explicitly.
+        if "target_hidden" in self.input_names:
+            target_hidden = kwargs.get("target_hidden", None)
+            if target_hidden is None:
+                raise ValueError("DFlash draft models require `target_hidden` to be passed to the forward call.")
+            inputs["target_hidden"] = target_hidden
 
         return inputs
 

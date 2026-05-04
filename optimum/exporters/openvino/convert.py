@@ -136,6 +136,8 @@ def _save_model(
 
     if getattr(config, "eagle3", False):
         model = _add_eagle3_mode_to_rt_info(model)
+    if getattr(config, "dflash", False):
+        model = _add_dflash_mode_to_rt_info(model, config._config)
 
     save_model(model, path, compress_to_fp16)
     del model
@@ -863,6 +865,24 @@ def _add_eagle3_mode_to_rt_info(model: Model):
     """
     try:
         model.set_rt_info("True", ["eagle3_mode"])
+    except Exception:
+        pass
+
+    return model
+
+
+def _add_dflash_mode_to_rt_info(model: Model, hf_config):
+    """
+    Add DFlash metadata.
+    """
+    try:
+        model.set_rt_info("True", ["dflash_mode"])
+        model.set_rt_info(str(getattr(hf_config, "block_size", "")), ["dflash", "block_size"])
+        dflash_config = getattr(hf_config, "dflash_config", {})
+        if "mask_token_id" in dflash_config:
+            model.set_rt_info(str(dflash_config["mask_token_id"]), ["dflash", "mask_token_id"])
+        if "target_layer_ids" in dflash_config:
+            model.set_rt_info(",".join(map(str, dflash_config["target_layer_ids"])), ["dflash", "target_layer_ids"])
     except Exception:
         pass
 

@@ -231,9 +231,13 @@ MODEL_NAMES = {
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
+    "qwen3_coder_dflash": "z-lab/Qwen3-Coder-30B-A3B-DFlash",
 }
 
 EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7B")}
+DFLASH_MODELS = {
+    "qwen3_coder_dflash": ("z-lab/Qwen3-Coder-30B-A3B-DFlash", "Qwen/Qwen3-Coder-30B-A3B-Instruct")
+}
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "afmoe": {"model": 16},
@@ -414,6 +418,7 @@ REMOTE_CODE_MODELS = (
     "minicpm3",
     "deepseek",
     "qwen3_eagle3",
+    "qwen3_coder_dflash",
 )
 
 if is_transformers_version("<", "5"):
