@@ -215,7 +215,13 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
 
     @staticmethod
     def _has_cache_inputs(model: openvino.Model) -> bool:
-        return any("past_key_values" in key.get_any_name() for key in model.inputs)
+        # `cache_params` is used by SSM/hybrid architectures (e.g. mamba, qwen3_next, qwen3_5)
+        # whose language model exposes conv/recurrent/key/value caches under the `cache_params.*` namespace
+        # instead of the standard `past_key_values.*` one.
+        return any(
+            "past_key_values" in key.get_any_name() or "cache_params" in key.get_any_name()
+            for key in model.inputs
+        )
 
     @staticmethod
     def _get_model_with_updated_pkv_precision(model: openvino.Model, pkv_precision: Type) -> openvino.Model:
