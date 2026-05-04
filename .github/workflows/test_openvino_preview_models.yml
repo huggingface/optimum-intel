@@ -66,8 +66,7 @@ jobs:
           pytest tests/openvino/${{ matrix.test-pattern }} -m gemma4 --durations=0
 
       - name: Qwen3.5 and Qwen3.5-Moe Validation
-        if: ${{ matrix.test-pattern == '*seq2seq*' }}
         run: |
           uv pip install "transformers>=5.2,<5.3"
           uv pip install "openvino==2026.1.0" "openvino-tokenizers==2026.1.0.0" "openvino-genai==2026.1.0.0"
-          pytest tests/openvino/test_export.py tests/openvino/test_quantization.py tests/openvino/test_seq2seq.py -k "qwen3_5 or qwen3_5_moe" --durations=0
+          pytest tests/openvino/${{ matrix.test-pattern }} -k "qwen3_5 or qwen3_5_moe" --durations=0
