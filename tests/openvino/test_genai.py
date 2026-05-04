@@ -152,6 +152,10 @@ class LLMPipelineTestCase(unittest.TestCase):
         ALL_SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "opt")
         if is_transformers_version("<", "5"):
             ALL_SUPPORTED_ARCHITECTURES += ("phimoe",)
+        if is_transformers_version("<", "4.54.0"):
+            ALL_SUPPORTED_ARCHITECTURES += ("deepseek",)
+    if is_transformers_version(">=", "4.47.0") and is_transformers_version("<", "4.56.0"):
+        ALL_SUPPORTED_ARCHITECTURES += ("qwen",)
     if is_transformers_version(">=", "4.48.0"):
         ALL_SUPPORTED_ARCHITECTURES += ("cohere2",)
     if is_transformers_version(">=", "4.50"):
@@ -164,14 +168,14 @@ class LLMPipelineTestCase(unittest.TestCase):
         ALL_SUPPORTED_ARCHITECTURES += ("arcee",)
     if is_transformers_version(">=", "4.54.0") and is_transformers_version("<", "5"):
         ALL_SUPPORTED_ARCHITECTURES += ("exaone4",)
-    if is_transformers_version(">=", "4.55.0"):
+    if is_transformers_version(">=", "4.55.1"):
         ALL_SUPPORTED_ARCHITECTURES += ("gpt_oss",)
 
     # max versions
     if is_transformers_version("<", "4.54.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("minicpm", "minicpm3", "arctic", "deepseek")
+        ALL_SUPPORTED_ARCHITECTURES += ("minicpm", "minicpm3", "arctic")
     if is_transformers_version("<", "4.56.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("chatglm", "chatglm4", "qwen")
+        ALL_SUPPORTED_ARCHITECTURES += ("chatglm4",)
 
     if is_transformers_version("<", "5"):
         ALL_SUPPORTED_ARCHITECTURES += (
@@ -195,7 +199,6 @@ class LLMPipelineTestCase(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = NPU_SUPPORTED_ARCHITECTURES if OPENVINO_DEVICE == "NPU" else ALL_SUPPORTED_ARCHITECTURES
 
     REMOTE_CODE_MODELS = (
-        "chatglm",
         "minicpm",
         "jais",
         "qwen",
@@ -283,6 +286,13 @@ class LLMPipelineTestCase(unittest.TestCase):
         genai_ids = genai_model(
             ov.Tensor(inputs["input_ids"].numpy()), apply_chat_template=False, **self.GEN_KWARGS
         ).tokens[0]
+
+        del genai_model
+        del transformers_model
+        if OPENVINO_DEVICE != "NPU":
+            del optimum_model
+        gc.collect()
+
         self.assertEqual(
             transformers_ids.tolist(), genai_ids, "Transformers ids and OpenVINO GenAI ids are not the same"
         )
@@ -413,6 +423,12 @@ class VLMPipelineTestCase(unittest.TestCase):
             prompt, images=[ov.Tensor(np.array(image))], ignore_eos=True, apply_chat_template=True, **self.GEN_KWARGS
         ).texts[0]
 
+        del genai_model
+        del transformers_model
+        if OPENVINO_DEVICE != "NPU":
+            del optimum_model
+        gc.collect()
+
         # assert they are not empty
         self.assertTrue(transformers_output)
         self.assertTrue(genai_output)
@@ -476,6 +492,12 @@ class Speech2TextPipelineTestCase(unittest.TestCase):
             self.assertEqual(transformers_output, optimum_output)
 
         genai_output = genai_model.generate(inputs["input_features"].flatten().tolist(), **self.GEN_KWARGS).texts[0]
+
+        del genai_model
+        del transformers_model
+        if OPENVINO_DEVICE != "NPU":
+            del optimum_model
+        gc.collect()
 
         self.assertEqual(transformers_output, genai_output)
 
@@ -544,6 +566,11 @@ class Text2SpeechPipelineTestCase(unittest.TestCase):
 
         genai_output = genai_model.generate(text, **self.GEN_KWARGS).speeches[0]
         genai_output = torch.from_numpy(genai_output.data).squeeze(0)  # collapse batch dimension (if any)
+
+        del genai_model
+        del optimum_model
+        del transformers_model
+        gc.collect()
 
         torch.testing.assert_close(transformers_output, optimum_output, rtol=1e-2, atol=1e-3)
         torch.testing.assert_close(transformers_output, genai_output, rtol=1e-2, atol=1e-3)
