@@ -1089,9 +1089,13 @@ class OVWeightCompressionTest(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen3_5", False))
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen3_5_moe", False))
+
     if is_transformers_version(">=", "5.5.0"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "gemma4", True))
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "gemma4_moe", True))
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "gemma4", False))
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "gemma4_moe", False))
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
@@ -1360,37 +1364,6 @@ class OVWeightCompressionTest(unittest.TestCase):
         expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
         expected_ov_int8 = {k: {"int8": v} for k, v in expected_ov_int8.items()}
         check_compression_state_per_model(self, model.ov_models, expected_ov_int8)
-
-    @parameterized.expand(("qwen3_5", "qwen3_5_moe"))
-    def test_ovmodel_qwen3_5_load_with_compressed_weights(self, model_type):
-        if not (is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0")):
-            self.skipTest("Qwen3.5 preview tests require transformers 5.2.x")
-
-        try:
-            model = OVModelForVisualCausalLM.from_pretrained(
-                MODEL_NAMES[model_type],
-                export=True,
-                load_in_8bit=True,
-                stateful=True,
-            )
-        except ValueError as e:
-            if (
-                "use_cache" in str(e)
-                and is_openvino_version(">=", "2026.1.0")
-                and is_openvino_version("<", "2026.2.0")
-            ):
-                self.skipTest("Known OV 2026.1 use_cache compatibility issue for qwen3.5 VLM compression load")
-            raise
-        ref_config = OVWeightQuantizationConfig(bits=8, sym=True).to_dict()
-        actual_config = model._openvino_config.quantization_config.default_config.to_dict()
-        actual_config["tokenizer"] = actual_config["processor"] = None
-        self.assertEqual(actual_config, ref_config)
-
-        total_int8 = 0
-        for ov_model in model.ov_models.values():
-            _, num_weight_nodes = get_num_quantized_nodes(ov_model)
-            total_int8 += num_weight_nodes["int8"]
-        self.assertGreater(total_int8, 0)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
     def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_fake_nodes, expected_int8_nodes):
