@@ -9456,9 +9456,15 @@ class Qwen3_5MoeModelPatcher(Qwen3_5ModelPatcher):
                 sparse_moe_block.forward = types.MethodType(patched_qwen3_5_moe_sparse_moe_block, sparse_moe_block)
                 # TODO: remove `float()` casting when CVS-181449 is fixed
                 # now it is needed to have MoE optimizations to be applied
-                sparse_moe_block.gate_projs = sparse_moe_block.experts.gate_up_proj[:, :intermediate_dim, :].float()
-                sparse_moe_block.up_projs = sparse_moe_block.experts.gate_up_proj[:, intermediate_dim:, :].float()
-                sparse_moe_block.down_projs = sparse_moe_block.experts.down_proj.data.float()
+                # `.detach()` is required: slicing an `nn.Parameter` produces a non-leaf tensor
+                # that still requires grad, which cannot be inserted as a constant during tracing.
+                sparse_moe_block.gate_projs = (
+                    sparse_moe_block.experts.gate_up_proj[:, :intermediate_dim, :].detach().float()
+                )
+                sparse_moe_block.up_projs = (
+                    sparse_moe_block.experts.gate_up_proj[:, intermediate_dim:, :].detach().float()
+                )
+                sparse_moe_block.down_projs = sparse_moe_block.experts.down_proj.data.detach().float()
 
     def __exit__(self, exc_type, exc_value, traceback):
         from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import Qwen3_5MoeSparseMoeBlock

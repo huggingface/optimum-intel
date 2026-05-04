@@ -245,13 +245,6 @@ class ExportModelTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, model_type: str):
-        if (
-            model_type == "qwen3_5_moe"
-            and is_openvino_version(">=", "2026.1.0")
-            and is_openvino_version("<", "2026.2.0")
-        ):
-            self.skipTest("Known OV 2026.1 tracing dtype issue for qwen3_5_moe export")
-
         model_kwargs = None
         if model_type == "speecht5":
             model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
