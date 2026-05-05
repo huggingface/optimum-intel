@@ -16,6 +16,7 @@ import copy
 import functools
 import gc
 import inspect
+import json
 import logging
 import os
 from pathlib import Path
@@ -81,6 +82,9 @@ from .utils import (
 
 logger = logging.getLogger(__name__)
 
+HIDDEN_STATES_RT_INFO_KEY = "hidden_states_decoder_layers"
+HIDDEN_STATE_TENSOR_NAME_TEMPLATE = "ov.hidden_states.decoder_layer_{}"
+
 if is_torch_available():
     import torch.nn as nn
     from transformers.modeling_utils import PreTrainedModel
@@ -142,6 +146,86 @@ def _save_model(
     save_model(model, path, compress_to_fp16)
     del model
     gc.collect()
+
+
+def _can_annotate_hidden_states(model, config: "OnnxConfig") -> bool:
+    if "text-generation" not in getattr(config, "task", ""):
+        return False
+
+    model_config = getattr(model, "config", None)
+    if model_config is None or not hasattr(model_config, "num_hidden_layers"):
+        return False
+    if not hasattr(model_config, "output_hidden_states"):
+        return False
+
+    can_record_outputs = getattr(model, "_can_record_outputs", None)
+    if isinstance(can_record_outputs, dict) and not can_record_outputs.get("hidden_states", False):
+        return False
+
+    return True
+
+
+def _annotate_hidden_state_outputs(model: Model, public_output_names: List[str], num_hidden_layers: int):
+    public_output_names = set(public_output_names)
+    temporary_results = []
+    for result in model.get_results():
+        result_names = set(result.output(0).get_names())
+        if result_names & public_output_names:
+            continue
+        temporary_results.append(result)
+
+    if not temporary_results:
+        return
+
+    # HF hidden_states usually contains embeddings first, then one tensor after each decoder block.
+    offset = 1 if len(temporary_results) >= num_hidden_layers + 1 else 0
+    hidden_layer_results = temporary_results[offset : offset + num_hidden_layers]
+    if len(hidden_layer_results) == num_hidden_layers:
+        layers = {}
+        for layer_idx, result in enumerate(hidden_layer_results):
+            tensor_name = HIDDEN_STATE_TENSOR_NAME_TEMPLATE.format(layer_idx)
+            result.input_value(0).get_tensor().add_names({tensor_name})
+            layers[str(layer_idx)] = tensor_name
+
+        model.set_rt_info(
+            json.dumps({"version": 1, "layers": layers}),
+            HIDDEN_STATES_RT_INFO_KEY,
+        )
+    else:
+        logger.debug(
+            "Skipping hidden-state annotation: expected at least %s hidden-state outputs, got %s.",
+            num_hidden_layers,
+            len(temporary_results),
+        )
+
+    for result in temporary_results:
+        model.remove_result(result)
+    model.validate_nodes_and_infer_types()
+
+
+def _enable_hidden_states_in_config_outputs(config: "OnnxConfig", num_hidden_layers: int):
+    original_class = config.__class__
+
+    class ConfigWithHiddenStateOutputs(original_class):
+        @property
+        def outputs(self):
+            outputs = original_class.outputs.fget(self).copy()
+            for idx in range(num_hidden_layers + 1):
+                outputs[f"hidden_states.{idx}"] = {0: "batch_size", 1: "sequence_length"}
+            return outputs
+
+    config.__class__ = ConfigWithHiddenStateOutputs
+    return original_class
+
+
+def _flatten_hidden_states_outputs(outputs: Dict):
+    hidden_states = outputs.pop("hidden_states", None)
+    if hidden_states is None:
+        return outputs
+
+    for idx, hidden_state in enumerate(hidden_states):
+        outputs[f"hidden_states.{idx}"] = hidden_state
+    return outputs
 
 
 def export(
@@ -382,6 +466,17 @@ def export_pytorch(
 
         dummy_inputs = config.rename_ambiguous_inputs(dummy_inputs)
         dummy_inputs, dict_inputs = remove_none_from_dummy_inputs(dummy_inputs)
+        output_names = list(config.outputs.keys())
+        annotate_hidden_states = _can_annotate_hidden_states(model, config)
+        original_output_hidden_states = None
+        original_config_class = None
+        if annotate_hidden_states:
+            original_output_hidden_states = model.config.output_hidden_states
+            model.config.output_hidden_states = True
+            if hasattr(config, "_config") and hasattr(config._config, "output_hidden_states"):
+                config._config.output_hidden_states = True
+            original_config_class = _enable_hidden_states_in_config_outputs(config, model.config.num_hidden_layers)
+
         # TorchScript used behind OpenVINO conversion. Optimum supports only return_dict=True models for patching,
         # while TorchScript do not support dictionary with values of mixed types (e.g. Tensor and None) in model input/output
         # To handle it, additional wrapper on patcher forward applied.
@@ -406,6 +501,8 @@ def export_pytorch(
                 input_dict = dict(zip(keys, tuple_input))
                 kwargs[input_name] = input_dict
             outputs = patched_forward(**kwargs)
+            if annotate_hidden_states:
+                outputs = _flatten_hidden_states_outputs(outputs)
             return tuple([value if not isinstance(value, list) else tuple(value) for value in outputs.values()])
 
         patcher.patched_forward = ts_patched_forward
@@ -449,9 +546,14 @@ def export_pytorch(
                     extension=conversion_extensions,
                 )
 
+        if annotate_hidden_states:
+            config.__class__ = original_config_class
+            model.config.output_hidden_states = original_output_hidden_states
+            if hasattr(config, "_config") and hasattr(config._config, "output_hidden_states"):
+                config._config.output_hidden_states = original_output_hidden_states
+
         ov_model.validate_nodes_and_infer_types()  # TODO: remove as unnecessary validation?
 
-        output_names = list(config.outputs.keys())
         for idx, out_tensor in enumerate(ov_model.outputs):
             if idx < len(output_names):
                 out_tensor.get_tensor().set_names({output_names[idx]})
@@ -463,6 +565,9 @@ def export_pytorch(
 
         if stateful:
             patch_stateful(model.config, ov_model)
+
+        if annotate_hidden_states:
+            _annotate_hidden_state_outputs(ov_model, output_names, model.config.num_hidden_layers)
 
         library_name = _infer_library_from_model_or_model_class(model=model, library_name=library_name)
 
