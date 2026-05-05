@@ -17,7 +17,9 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import numpy as np
 import openvino as ov
+import torch
 from transformers import AutoModelForCausalLM
 from utils_tests import MODEL_NAMES
 
@@ -25,6 +27,22 @@ from optimum.exporters.openvino import export_from_model
 
 
 HIDDEN_STATES_RT_INFO_KEY = "hidden_states_decoder_layers"
+
+
+def _find_output_by_tensor_name(model, tensor_name):
+    for op in model.get_ops():
+        for output in op.outputs():
+            if tensor_name in output.get_names():
+                return output
+    raise AssertionError(f"Tensor {tensor_name} was not found in the OpenVINO graph")
+
+
+def _add_model_output(model, output, output_name):
+    output.get_tensor().add_names({output_name})
+    if hasattr(model, "add_output"):
+        model.add_output(output)
+    else:
+        model.add_outputs([output])
 
 
 class HiddenStateAnnotationExportTest(unittest.TestCase):
@@ -57,3 +75,59 @@ class HiddenStateAnnotationExportTest(unittest.TestCase):
                         graph_tensor_names.update(output.get_names())
                 for tensor_name in annotation["layers"].values():
                     self.assertIn(tensor_name, graph_tensor_names)
+
+    def test_annotated_hidden_state_output_matches_pytorch(self):
+        model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES["gpt2"])
+        model.eval()
+
+        with TemporaryDirectory() as tmpdirname:
+            export_from_model(
+                model=model,
+                output=Path(tmpdirname),
+                task="text-generation",
+                preprocessors=None,
+                stateful=False,
+            )
+
+            core = ov.Core()
+            ov_model = core.read_model(Path(tmpdirname) / "openvino_model.xml")
+            annotation = json.loads(ov_model.get_rt_info()[HIDDEN_STATES_RT_INFO_KEY].value)
+            layer_idx = 0
+            output_name = "decoder_layer_0_hidden_state"
+            hidden_state_output = _find_output_by_tensor_name(ov_model, annotation["layers"][str(layer_idx)])
+            _add_model_output(ov_model, hidden_state_output, output_name)
+
+            input_ids = torch.tensor([[0, 1, 2, 3]], dtype=torch.long)
+            attention_mask = torch.ones_like(input_ids)
+            with torch.no_grad():
+                torch_outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    output_hidden_states=True,
+                    use_cache=False,
+                    return_dict=True,
+                )
+
+            compiled_model = core.compile_model(ov_model, "CPU")
+            ov_inputs = {}
+            for input_port in compiled_model.inputs:
+                input_name = input_port.get_any_name()
+                if input_name == "input_ids":
+                    ov_inputs[input_name] = input_ids.numpy()
+                elif input_name == "attention_mask":
+                    ov_inputs[input_name] = attention_mask.numpy()
+                elif input_name == "position_ids":
+                    ov_inputs[input_name] = np.arange(input_ids.shape[1], dtype=np.int64).reshape(1, -1)
+                elif input_name == "token_type_ids":
+                    ov_inputs[input_name] = np.zeros(input_ids.shape, dtype=np.int64)
+                else:
+                    self.fail(f"Unexpected OpenVINO model input: {input_name}")
+
+            infer_result = compiled_model(ov_inputs)
+            ov_output_port = next(output for output in compiled_model.outputs if output_name in output.get_names())
+            np.testing.assert_allclose(
+                infer_result[ov_output_port],
+                torch_outputs.hidden_states[layer_idx + 1].detach().numpy(),
+                rtol=1e-4,
+                atol=1e-4,
+            )
