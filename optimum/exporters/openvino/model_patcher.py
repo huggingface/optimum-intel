@@ -9453,7 +9453,6 @@ class Qwen3_5MoeModelPatcher(Qwen3_5ModelPatcher):
         for decoder_layer in self._text_model.layers:
             if isinstance(decoder_layer.mlp, Qwen3_5MoeSparseMoeBlock):
                 sparse_moe_block = decoder_layer.mlp
-                intermediate_dim = sparse_moe_block.experts.intermediate_dim
                 sparse_moe_block._orig_forward = sparse_moe_block.forward
                 sparse_moe_block.forward = types.MethodType(patched_qwen3_5_moe_sparse_moe_block, sparse_moe_block)
 
