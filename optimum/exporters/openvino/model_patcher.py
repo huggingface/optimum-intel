@@ -9403,6 +9403,9 @@ class Qwen3_5VisionEmbMergerPatcher(ModelPatcher):
             block.attn.forward = block.attn._orig_forward
 
 
+# Patches the MoE block with a vectorized implementation.
+# The vectorized form is required to ensure correct torch.jit tracing for this component.
+# Original implementation: https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py#L823
 def patched_qwen3_5_moe_sparse_moe_block(self, hidden_states: torch.Tensor) -> torch.Tensor:
     num_experts = self.experts.num_experts
     batch_size, sequence_length, hidden_dim = hidden_states.shape
@@ -9422,10 +9425,9 @@ def patched_qwen3_5_moe_sparse_moe_block(self, hidden_states: torch.Tensor) -> t
     act_fn = self.experts.act_fn
 
     # compute experts outputs in a vectorized form using torch.bmm
-    gate = torch.bmm(hidden_states, self.gate_projs.transpose(1, 2))
-    up = torch.bmm(hidden_states, self.up_projs.transpose(1, 2))
+    gate, up = torch.bmm(hidden_states, self.experts.gate_up_proj.transpose(1, 2)).chunk(2, dim=-1)
     gate_up = act_fn(gate) * up
-    next_states = torch.bmm(gate_up, self.down_projs.transpose(1, 2))
+    next_states = torch.bmm(gate_up, self.experts.down_proj.transpose(1, 2))
     next_states = next_states.view(num_experts, batch_size, -1, hidden_dim)
     next_states = next_states * new_routing_weights.transpose(0, 1).view(num_experts, batch_size, -1)[..., None]
     next_states = next_states.sum(dim=0)
@@ -9454,17 +9456,6 @@ class Qwen3_5MoeModelPatcher(Qwen3_5ModelPatcher):
                 intermediate_dim = sparse_moe_block.experts.intermediate_dim
                 sparse_moe_block._orig_forward = sparse_moe_block.forward
                 sparse_moe_block.forward = types.MethodType(patched_qwen3_5_moe_sparse_moe_block, sparse_moe_block)
-                # TODO: remove `float()` casting when CVS-181449 is fixed
-                # now it is needed to have MoE optimizations to be applied
-                # `.detach()` is required: slicing an `nn.Parameter` produces a non-leaf tensor
-                # that still requires grad, which cannot be inserted as a constant during tracing.
-                sparse_moe_block.gate_projs = (
-                    sparse_moe_block.experts.gate_up_proj[:, :intermediate_dim, :].detach().float()
-                )
-                sparse_moe_block.up_projs = (
-                    sparse_moe_block.experts.gate_up_proj[:, intermediate_dim:, :].detach().float()
-                )
-                sparse_moe_block.down_projs = sparse_moe_block.experts.down_proj.data.detach().float()
 
     def __exit__(self, exc_type, exc_value, traceback):
         from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import Qwen3_5MoeSparseMoeBlock
@@ -9474,4 +9465,3 @@ class Qwen3_5MoeModelPatcher(Qwen3_5ModelPatcher):
             if isinstance(decoder_layer.mlp, Qwen3_5MoeSparseMoeBlock):
                 sparse_moe_block = decoder_layer.mlp
                 sparse_moe_block.forward = sparse_moe_block._orig_forward
-                del sparse_moe_block.gate_projs, sparse_moe_block.up_projs, sparse_moe_block.down_projs
