@@ -449,19 +449,25 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "group_size_fallback": "adjust",
     },
     "Qwen/Qwen3.5-35B-A3B": {
-        "lm_model": {
-            "patterns": [
-                ".*shared_expert.*",
-                ".*attn.*"
-            ],
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 128,
+            },
+            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+            "vision_embeddings_merger_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
     "Qwen/Qwen3.6-35B-A3B": {
-        "lm_model": {
-            "patterns": [
-                ".*shared_expert.*",
-                ".*attn.*"
-            ],
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 128,
+            },
+            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+            "vision_embeddings_merger_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
 }
