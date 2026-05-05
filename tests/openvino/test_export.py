@@ -15,6 +15,8 @@
 
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 from parameterized import parameterized
@@ -579,3 +581,149 @@ class WanConfigUnitTest(unittest.TestCase):
         self.assertIn("encoder_hidden_states_image", inputs)
         self.assertIn("pose_hidden_states", inputs)
         self.assertIn("face_pixel_values", inputs)
+
+
+class WanConvertAndPatcherUnitTest(unittest.TestCase):
+    def test_get_wan_models_for_export_builds_animate_components(self):
+        from optimum.exporters.openvino.convert import get_wan_models_for_export
+
+        class DummyEncoder(torch.nn.Module):
+            def forward(self, x):
+                return x + 1
+
+        class DummyQuant(torch.nn.Module):
+            def forward(self, x):
+                return x + 2
+
+        class DummyPostQuant(torch.nn.Module):
+            def forward(self, x):
+                return x * 2
+
+        class DummyDecoder(torch.nn.Module):
+            def forward(self, x):
+                return x + 3
+
+        class DummyVAE(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.config = SimpleNamespace(name="vae")
+                self.encoder = DummyEncoder()
+                self.quant_conv = DummyQuant()
+                self.post_quant_conv = DummyPostQuant()
+                self.decoder = DummyDecoder()
+
+        class DummyTransformer(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.config = SimpleNamespace(name="transformer")
+                self.motion_encoder = object()
+
+        class DummyTextEncoder(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.config = SimpleNamespace(name="text")
+
+        class DummyImageEncoder(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.config = SimpleNamespace(name="image")
+
+        pipeline = SimpleNamespace(
+            text_encoder=DummyTextEncoder(),
+            image_encoder=DummyImageEncoder(),
+            transformer=DummyTransformer(),
+            vae=DummyVAE(),
+        )
+        constructor_calls = []
+
+        def fake_constructor(**kwargs):
+            constructor_calls.append(kwargs)
+
+            def ctor(config, int_dtype=None, float_dtype=None):
+                return SimpleNamespace(config=config, runtime_options=None, int_dtype=int_dtype, float_dtype=float_dtype)
+
+            return ctor
+
+        with patch(
+            "optimum.exporters.openvino.convert.TasksManager.get_exporter_config_constructor",
+            side_effect=fake_constructor,
+        ):
+            models_for_export = get_wan_models_for_export(pipeline, "openvino", "int64", "fp32")
+
+        self.assertEqual(
+            list(models_for_export),
+            ["text_encoder", "image_encoder", "transformer", "vae_encoder", "vae_decoder"],
+        )
+        self.assertEqual(
+            [call["model_type"] for call in constructor_calls],
+            [
+                "t5-encoder-model",
+                "clip-vision-model",
+                "wan-animate-transformer",
+                "wan-vae-encoder",
+                "wan-vae-decoder",
+            ],
+        )
+        self.assertEqual(models_for_export["transformer"][1].runtime_options, {"ACTIVATIONS_SCALE_FACTOR": "8.0"})
+        self.assertEqual(models_for_export["vae_encoder"][1].runtime_options, {"ACTIVATIONS_SCALE_FACTOR": "8.0"})
+        self.assertEqual(models_for_export["vae_decoder"][1].runtime_options, {"ACTIVATIONS_SCALE_FACTOR": "8.0"})
+
+        vae_encoder_output = models_for_export["vae_encoder"][0].forward(torch.ones(1, 1, 1, 1, 1))
+        self.assertEqual(list(vae_encoder_output), ["latent_parameters"])
+        self.assertTrue(torch.equal(vae_encoder_output["latent_parameters"], torch.full((1, 1, 1, 1, 1), 4.0)))
+
+        vae_decoder_output = models_for_export["vae_decoder"][0].forward(torch.full((1, 1, 1, 1, 1), 10.0))
+        self.assertEqual(list(vae_decoder_output), ["sample"])
+        self.assertTrue(torch.equal(vae_decoder_output["sample"], torch.ones(1, 1, 1, 1, 1)))
+
+    def test_get_diffusion_models_for_export_ext_routes_wan_pipeline(self):
+        from optimum.exporters.openvino.convert import get_diffusion_models_for_export_ext
+
+        WanPipeline = type("WanPipeline", (), {})
+        pipeline = WanPipeline()
+        sentinel = {"transformer": (object(), object())}
+
+        with patch("optimum.exporters.openvino.convert.get_wan_models_for_export", return_value=sentinel) as mock_get_wan:
+            export_config, models_for_export = get_diffusion_models_for_export_ext(pipeline)
+
+        self.assertIsNone(export_config)
+        self.assertIs(models_for_export, sentinel)
+        mock_get_wan.assert_called_once_with(pipeline, "openvino", "int64", "fp32")
+
+    def test_get_diffusion_models_for_export_ext_routes_wan_animate_pipeline(self):
+        from optimum.exporters.openvino.convert import get_diffusion_models_for_export_ext
+
+        WanAnimatePipeline = type("WanAnimatePipeline", (), {})
+        pipeline = WanAnimatePipeline()
+        sentinel = {"transformer": (object(), object())}
+
+        with patch("optimum.exporters.openvino.convert.get_wan_models_for_export", return_value=sentinel) as mock_get_wan:
+            export_config, models_for_export = get_diffusion_models_for_export_ext(pipeline)
+
+        self.assertIsNone(export_config)
+        self.assertIs(models_for_export, sentinel)
+        mock_get_wan.assert_called_once_with(pipeline, "openvino", "int64", "fp32")
+
+    def test_wan_animate_transformer_patcher_exists(self):
+        from optimum.exporters.openvino.model_patcher import WanAnimateTransformerModelPatcher
+
+        self.assertIsNotNone(WanAnimateTransformerModelPatcher)
+
+    def test_wan_animate_transformer_patcher_sets_and_restores_motion_encoder_batch_size(self):
+        from optimum.exporters.openvino.model_patcher import WanAnimateTransformerModelPatcher
+
+        class DummyModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.config = SimpleNamespace(motion_encoder_batch_size=16)
+
+            def forward(self, *args, **kwargs):
+                return None
+
+        config = SimpleNamespace(PATCHING_SPECS=[])
+        model = DummyModel()
+
+        with WanAnimateTransformerModelPatcher(config, model):
+            self.assertEqual(model.config.motion_encoder_batch_size, 10000)
+
+        self.assertEqual(model.config.motion_encoder_batch_size, 16)
