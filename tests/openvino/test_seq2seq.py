@@ -1137,7 +1137,6 @@ class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
     AUTOMODEL_CLASS = transformers_auto_class
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
-
     IMAGE = Image.open(
         requests.get(
             "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/tasks/ai2d-demo.jpg",
