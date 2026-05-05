@@ -64,3 +64,8 @@ jobs:
         run: |
           uv pip install transformers==5.5.0
           pytest tests/openvino/${{ matrix.test-pattern }} -m gemma4 --durations=0
+
+      - name: Qwen3.5 and Qwen3.5-Moe Validation
+        run: |
+          uv pip install "transformers>=5.2,<5.3"
+          pytest tests/openvino/${{ matrix.test-pattern }} -k "qwen3_5 or qwen3_5_moe" --durations=0
