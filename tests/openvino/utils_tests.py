@@ -141,6 +141,7 @@ MODEL_NAMES = {
     "minicpmv": "optimum-intel-internal-testing/tiny-random-minicpmv-2_6",
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
+    "mistral3": "optimum-intel-internal-testing/tiny-random-mistral3",
     "mistral-nemo": "optimum-intel-internal-testing/tiny-random-mistral-nemo",
     "mixtral": "optimum-intel-internal-testing/tiny-mixtral",
     "mixtral_awq": "optimum-intel-internal-testing/tiny-mixtral-AWQ-4bit",
