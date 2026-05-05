@@ -737,6 +737,22 @@ def export_from_model(
             elif hasattr(subcomponent, "config") and hasattr(subcomponent.config, "save_pretrained"):
                 subcomponent.config.save_pretrained(output / model_name)
 
+        # For Flux2KleinPipeline, save the VAE batch-norm running statistics so that
+        # OVFlux2KleinPipeline can normalize latents correctly without the original model.
+        if getattr(model, "__class__", None) and model.__class__.__name__ == "Flux2KleinPipeline":
+            import numpy as _np
+
+            _vae = getattr(model, "vae", None)
+            if _vae is not None and hasattr(_vae, "bn"):
+                _bn_path = output / "vae_decoder" / "bn_stats.npz"
+                _bn_path.parent.mkdir(parents=True, exist_ok=True)
+                _np.savez(
+                    str(_bn_path),
+                    running_mean=_vae.bn.running_mean.float().numpy(),
+                    running_var=_vae.bn.running_var.float().numpy(),
+                )
+                logger.info(f"Saved VAE batch-norm statistics to {_bn_path}")
+
         files_subpaths = [os.path.join(name_dir, OV_XML_FILE_NAME) for name_dir in models_and_export_configs]
 
         # Saving the additional components needed to perform inference.
@@ -1011,7 +1027,8 @@ def get_diffusion_models_for_export_ext(
 ):
     is_sdxl = pipeline.__class__.__name__.startswith("StableDiffusionXL")
     is_sd3 = pipeline.__class__.__name__.startswith("StableDiffusion3")
-    is_flux = pipeline.__class__.__name__.startswith("Flux")
+    is_flux2_klein = pipeline.__class__.__name__ == "Flux2KleinPipeline"
+    is_flux = pipeline.__class__.__name__.startswith("Flux") and not is_flux2_klein
     is_sana = pipeline.__class__.__name__.startswith("Sana")
     is_ltx_video = pipeline.__class__.__name__.startswith("LTX")
     is_sd = pipeline.__class__.__name__.startswith("StableDiffusion") and not is_sd3
@@ -1033,6 +1050,8 @@ def get_diffusion_models_for_export_ext(
 
     elif is_sd3:
         models_for_export = get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+    elif is_flux2_klein:
+        models_for_export = get_flux2_klein_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_flux:
         models_for_export = get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_sana:
@@ -1366,6 +1385,124 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
         )
         export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
         models_for_export["text_encoder_2"] = (text_encoder_2, export_config)
+
+    return models_for_export
+
+
+import torch as _torch  # noqa: E402 — used by Qwen3TextEncoderForFlux2Klein
+
+
+class Qwen3TextEncoderForFlux2Klein(_torch.nn.Module):
+    """Wrapper around Qwen3ForCausalLM that stacks hidden states from specific
+    intermediate layers and returns the concatenated embeddings.
+
+    This matches the behaviour of ``Flux2KleinPipeline._get_qwen3_prompt_embeds``.
+    The output tensor has shape ``(batch, seq_len, num_layers * hidden_dim)`` and
+    is exported as ``last_hidden_state`` for compatibility with ``OVModelTextEncoder``.
+    """
+
+    HIDDEN_STATE_LAYERS = (9, 18, 27)
+
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        # Expose config so that the export tooling can inspect it
+        self.config = model.config
+
+    def forward(self, input_ids, attention_mask, **kwargs):
+        output = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            use_cache=False,
+        )
+        # Stack selected intermediate layers: shape (B, num_layers, seq_len, hidden_dim)
+        out = _torch.stack([output.hidden_states[k] for k in self.HIDDEN_STATE_LAYERS], dim=1)
+        batch_size, num_channels, seq_len, hidden_dim = out.shape
+        # Reshape to (B, seq_len, num_layers * hidden_dim)
+        return out.permute(0, 2, 1, 3).reshape(batch_size, seq_len, num_channels * hidden_dim)
+
+
+def get_flux2_klein_models_for_export(pipeline, exporter, int_dtype, float_dtype):
+    """Build the ``models_for_export`` dict for ``Flux2KleinPipeline``.
+
+    Handles three sub-models:
+    - ``text_encoder``: ``Qwen3ForCausalLM`` wrapped in
+      ``Qwen3TextEncoderForFlux2Klein`` so the hidden-state stacking is baked into
+      the exported IR.
+    - ``transformer``: ``Flux2Transformer2DModel``, exported with the
+      ``flux2-klein-transformer`` config.
+    - ``vae_encoder`` / ``vae_decoder``: ``AutoencoderKLFlux2``, exported with the
+      standard vae configs (same API as ``AutoencoderKL``).
+    """
+    models_for_export = {}
+
+    # --- Text encoder ---
+    text_encoder = getattr(pipeline, "text_encoder", None)
+    if text_encoder is not None:
+        wrapped_encoder = Qwen3TextEncoderForFlux2Klein(text_encoder)
+        text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=wrapped_encoder,
+            exporter=exporter,
+            library_name="diffusers",
+            task="feature-extraction",
+            model_type="qwen3-text-encoder",
+        )
+        text_encoder_export_config = text_encoder_config_constructor(
+            text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        text_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+        models_for_export["text_encoder"] = (wrapped_encoder, text_encoder_export_config)
+
+    # --- Transformer ---
+    transformer = pipeline.transformer
+    transformer.config.text_encoder_projection_dim = transformer.config.joint_attention_dim
+    transformer.config.requires_aesthetics_score = False
+    transformer.config.time_cond_proj_dim = None
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=transformer,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="flux2-klein-transformer",
+    )
+    transformer_export_config = export_config_constructor(
+        pipeline.transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    transformer_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["transformer"] = (transformer, transformer_export_config)
+
+    # --- VAE Encoder ---
+    vae_encoder = copy.deepcopy(pipeline.vae)
+    vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="vae-encoder",
+    )
+    vae_encoder_export_config = vae_config_constructor(
+        vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
+
+    # --- VAE Decoder ---
+    vae_decoder = copy.deepcopy(pipeline.vae)
+    vae_decoder.forward = lambda latent_sample: vae_decoder.decode(z=latent_sample)
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_decoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="vae-decoder",
+    )
+    vae_decoder_export_config = vae_config_constructor(
+        vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
 
     return models_for_export
 

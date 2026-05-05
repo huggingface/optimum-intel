@@ -204,6 +204,7 @@ from .model_patcher import (
     Qwen2MoEPatcher,
     Qwen2VLLanguageModelPatcher,
     Qwen2VLVisionEmbMergerPatcher,
+    Qwen3DiffusionTextEncoderModelPatcher,
     Qwen3MoeModelPatcher,
     Qwen3NextModelPatcher,
     Qwen3VLLanguageModelPatcher,
@@ -317,6 +318,11 @@ def init_model_configs():
     if is_diffusers_available() and "text-to-video" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"] = {}
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx-video"] = "LTXPipeline"
+
+    if is_diffusers_available() and "text-to-image" in TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS:
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["flux2-klein"] = "Flux2KleinPipeline"
+        if "text-to-image" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
+            TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["text-to-image"] = ("AutoPipelineForText2Image",)
 
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",
@@ -2785,6 +2791,104 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
         if getattr(self._normalized_config, "guidance_embeds", False):
             common_inputs["guidance"] = {0: "batch_size"}
         return common_inputs
+
+
+class DummyFlux2KleinTransformerInputGenerator(DummyFluxTransformerInputGenerator):
+    """Dummy input generator for Flux2Transformer2DModel.
+
+    Differences from standard FLUX:
+    - ``img_ids`` and ``txt_ids`` are 4D (T, H, W, L) instead of 3D (H, W, C).
+    - No ``pooled_projections`` input.
+    """
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "img_ids":
+            img_ids_height = self.height // 2
+            img_ids_width = self.width // 2
+            return self.random_int_tensor(
+                [self.batch_size, img_ids_height * img_ids_width, 4],
+                min_value=0,
+                max_value=min(img_ids_height, img_ids_width),
+                framework=framework,
+                dtype=float_dtype,
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyFlux2KleinTextInputGenerator(DummyFluxTextInputGenerator):
+    """Dummy input generator for Flux2Klein text inputs.
+
+    ``txt_ids`` has shape ``(batch, sequence_length, 4)`` instead of ``(sequence_length, 3)``.
+    """
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "txt_ids":
+            import torch
+
+            shape = [self.batch_size, self.sequence_length, 4]
+            dtype = DTYPE_MAPPER.pt(float_dtype)
+            return torch.full(shape, 0, dtype=dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+@register_in_tasks_manager("flux2-klein-transformer", *["semantic-segmentation"], library_name="diffusers")
+class Flux2KleinTransformerOpenVINOConfig(FluxTransformerOpenVINOConfig):
+    """Export config for Flux2Transformer2DModel used in Flux2KleinPipeline.
+
+    Key differences from standard FluxTransformerOpenVINOConfig:
+    - No ``pooled_projections`` input (Flux2Klein uses a single Qwen3 text encoder).
+    - ``img_ids`` and ``txt_ids`` are 4D tensors of shape ``(B, seq_len, 4)``.
+    """
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummyTransformerTimestpsInputGenerator,
+        DummyFlux2KleinTransformerInputGenerator,
+        DummyFlux2KleinTextInputGenerator,
+    )
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        image_size="sample_size",
+        num_channels="in_channels",
+        hidden_size="joint_attention_dim",
+        vocab_size="attention_head_dim",
+        allow_new=True,
+    )
+
+    @property
+    def inputs(self):
+        common_inputs = {}
+        common_inputs["hidden_states"] = {0: "batch_size", 1: "packed_height_width"}
+        common_inputs["encoder_hidden_states"] = {0: "batch_size", 1: "sequence_length"}
+        common_inputs["timestep"] = {0: "batch_size"}
+        common_inputs["txt_ids"] = {0: "batch_size", 1: "sequence_length"}
+        common_inputs["img_ids"] = {0: "batch_size", 1: "packed_height_width"}
+        if getattr(self._normalized_config, "guidance_embeds", False):
+            common_inputs["guidance"] = {0: "batch_size"}
+        return common_inputs
+
+
+@register_in_tasks_manager("qwen3-text-encoder", *["feature-extraction"], library_name="diffusers")
+class Qwen3TextEncoderForDiffusionOpenVINOConfig(CLIPTextOpenVINOConfig):
+    """Export config for Qwen3ForCausalLM used as text encoder in Flux2KleinPipeline.
+
+    The model is wrapped in a ``Qwen3TextEncoderForFlux2Klein`` instance that stacks
+    hidden states from layers 9, 18, and 27 and returns the concatenated embeddings
+    as ``last_hidden_state``.
+    """
+
+    _MODEL_PATCHER = Qwen3DiffusionTextEncoderModelPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+        }
 
 
 class LTXVaeDummyInputGenerator(DummyVisionInputGenerator):
