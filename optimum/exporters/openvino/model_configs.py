@@ -174,6 +174,8 @@ from .model_patcher import (
     KokoroModelPatcher,
     Lfm2ModelPatcher,
     Lfm2MoeModelPatcher,
+    LTX2ConnectorsPatcher,
+    LTX2TransformerPatcher,
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
     LlavaImageEmbeddingModelPatcher,
@@ -337,6 +339,7 @@ def init_model_configs():
     if is_diffusers_available() and "text-to-video" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"] = {}
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx-video"] = "LTXPipeline"
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx2-video"] = "LTX2Pipeline"
 
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",
@@ -2599,6 +2602,31 @@ class Gemma2TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
         }
 
 
+@register_in_tasks_manager("gemma3-text-encoder", *["feature-extraction"], library_name="diffusers")
+class Gemma3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        allow_new=True,
+        vocab_size="text_config.vocab_size",
+        sequence_length="text_config.max_position_embeddings",
+        num_layers="text_config.num_hidden_layers",
+    )
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        outputs = {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
+        num_layers = getattr(self._normalized_config, "num_hidden_layers", 48)
+        for i in range(num_layers + 1):
+            outputs[f"hidden_states.{i}"] = {0: "batch_size", 1: "sequence_length"}
+        return outputs
+
+
 class DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
     SUPPORTED_INPUT_NAMES = (
         "decoder_input_ids",
@@ -2944,6 +2972,235 @@ class LTXVideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {
             "out_sample": {0: "batch_size", 1: "video_sequence_length"},
+        }
+
+
+class LTX2VaeDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "pixel_mask", "sample", "latent_sample", "timestep")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        num_frames: int = 1,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        self.num_frames = num_frames
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name in ["sample", "latent_sample"]:
+            return self.random_float_tensor(
+                [self.batch_size, self.num_channels, self.num_frames, self.height, self.width]
+            )
+        if input_name == "timestep":
+            return self.random_int_tensor([1], max_value=20, min_value=1, framework=framework, dtype=int_dtype)
+
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+@register_in_tasks_manager("ltx2-vae-encoder", *["semantic-segmentation"], library_name="diffusers")
+class LTX2VaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTX2VaeDummyInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_parameters": {0: "batch_size", 2: "num_frames", 3: "height_latent", 4: "width_latent"},
+        }
+
+
+@register_in_tasks_manager("ltx2-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
+class LTX2VaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTX2VaeDummyInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+        }
+
+
+class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "hidden_states",
+        "audio_hidden_states",
+        "num_frames",
+        "height",
+        "width",
+        "fps",
+        "audio_num_frames",
+        "video_coords",
+        "audio_coords",
+        "audio_encoder_hidden_states",
+        "audio_encoder_attention_mask",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = 16,
+        height: int = 8,
+        num_frames: int = 2,
+        frame_rate: int = 24,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        self.num_frames = num_frames
+        self.frame_rate = frame_rate
+        self.vae_scale_factors = normalized_config.config.vae_scale_factors
+        self.audio_in_channels = normalized_config.config.audio_in_channels
+        self.audio_scale_factor = normalized_config.config.audio_scale_factor
+        self.cross_attention_dim = normalized_config.config.cross_attention_dim
+        self.caption_channels = normalized_config.config.caption_channels
+        self.encoder_seq_length = 128
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        import torch
+
+        if input_name == "hidden_states":
+            return self.random_float_tensor(
+                [self.batch_size, self.num_frames * self.height * self.width, self.num_channels]
+            )
+        if input_name == "audio_hidden_states":
+            audio_num_frames = max(1, self.num_frames)
+            audio_mel_bins = 64 // self.audio_scale_factor
+            return self.random_float_tensor(
+                [self.batch_size, audio_num_frames * audio_mel_bins, self.audio_in_channels]
+            )
+        if input_name == "width":
+            return torch.tensor(self.width)
+        if input_name == "height":
+            return torch.tensor(self.height)
+        if input_name == "num_frames":
+            return torch.tensor(self.num_frames)
+        if input_name == "fps":
+            return torch.tensor(float(self.frame_rate))
+        if input_name == "audio_num_frames":
+            return torch.tensor(max(1, self.num_frames))
+        if input_name == "video_coords":
+            return self.random_float_tensor([self.batch_size, 3, self.num_frames * self.height * self.width, 2])
+        if input_name == "audio_coords":
+            audio_num_frames = max(1, self.num_frames)
+            audio_mel_bins = 64 // self.audio_scale_factor
+            return self.random_float_tensor([self.batch_size, 1, audio_num_frames * audio_mel_bins, 2])
+        if input_name == "audio_encoder_hidden_states":
+            return self.random_float_tensor(
+                [self.batch_size, self.encoder_seq_length, self.caption_channels]
+            )
+        if input_name == "audio_encoder_attention_mask":
+            return self.random_float_tensor([self.batch_size, self.encoder_seq_length])
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class LTX2ConnectorsDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("text_encoder_hidden_states", "attention_mask")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = 128,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, **kwargs)
+        # Sequence length must be divisible by num_learnable_registers (128)
+        num_registers = getattr(normalized_config.config, "num_learnable_registers", 128)
+        self.sequence_length = max(sequence_length, num_registers)
+        self.sequence_length = (self.sequence_length // num_registers) * num_registers
+        self.caption_channels = normalized_config.config.caption_channels
+        text_proj_in_factor = getattr(normalized_config.config, "text_proj_in_factor", 1)
+        self.input_channels = self.caption_channels * text_proj_in_factor
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "text_encoder_hidden_states":
+            return self.random_float_tensor([self.batch_size, self.sequence_length, self.input_channels])
+        if input_name == "attention_mask":
+            return self.random_float_tensor([self.batch_size, 1, 1, self.sequence_length])
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+@register_in_tasks_manager("ltx2-connectors", *["semantic-segmentation"], library_name="diffusers")
+class LTX2ConnectorsOpenVINOConfig(VaeEncoderOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTX2ConnectorsDummyInputGenerator,)
+    _MODEL_PATCHER = LTX2ConnectorsPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "text_encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 3: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "video_text_embedding": {0: "batch_size", 1: "connector_sequence_length"},
+            "audio_text_embedding": {0: "batch_size", 1: "connector_sequence_length"},
+            "connector_attention_mask": {0: "batch_size", 1: "connector_sequence_length"},
+        }
+
+
+@register_in_tasks_manager("ltx2-video-transformer", *["semantic-segmentation"], library_name="diffusers")
+class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
+    _MODEL_PATCHER = LTX2TransformerPatcher
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        image_size="sample_size",
+        num_channels="in_channels",
+        hidden_size="caption_channels",
+        vocab_size="attention_head_dim",
+        allow_new=True,
+    )
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        LTX2TransformerDummyInputGenerator,
+        DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator,
+        DummySanaTimestepInputGenerator,
+    )
+
+    @property
+    def inputs(self):
+        return {
+            "hidden_states": {0: "batch_size", 1: "video_sequence_length"},
+            "audio_hidden_states": {0: "batch_size", 1: "audio_sequence_length"},
+            "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+            "audio_encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+            "encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
+            "audio_encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
+            "width": {},
+            "height": {},
+            "num_frames": {},
+            "fps": {},
+            "audio_num_frames": {},
+            "timestep": {0: "batch_size"},
+            "video_coords": {0: "batch_size", 2: "video_sequence_length"},
+            "audio_coords": {0: "batch_size", 2: "audio_sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "out_sample": {0: "batch_size", 1: "video_sequence_length"},
+            "audio_out_sample": {0: "batch_size", 1: "audio_sequence_length"},
         }
 
 

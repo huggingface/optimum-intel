@@ -1140,7 +1140,11 @@ def get_diffusion_models_for_export_ext(
     elif is_sana:
         models_for_export = get_sana_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_ltx_video:
-        models_for_export = get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+        is_ltx2 = pipeline.__class__.__name__.startswith("LTX2")
+        if is_ltx2:
+            models_for_export = get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+        else:
+            models_for_export = get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     else:
         raise ValueError(f"Unsupported pipeline type `{pipeline.__class__.__name__}` provided")
     return None, models_for_export
@@ -1212,6 +1216,138 @@ def get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
         model_type="ltx-vae-decoder",
     )
     vae_decoder_export_config = vae_config_constructor(
+        vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
+
+    return models_for_export
+
+
+def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
+    models_for_export = {}
+
+    # Text encoder (Gemma3) - wrap to always output hidden states
+    # Gemma3 internally creates causal masks via create_causal_mask/create_sliding_window_causal_mask,
+    # which get baked as constants during torch.jit.trace, causing NaN for different sequence lengths.
+    # The fix: pre-compute a 4D attention mask and pass it as a dict to bypass internal mask creation.
+    text_encoder = pipeline.text_encoder
+    text_encoder.config.output_hidden_states = True
+    orig_forward = text_encoder.forward
+
+    def text_encoder_forward(input_ids, attention_mask=None, **kwargs):
+        import torch
+
+        # Build a 4D causal mask from the 2D attention_mask that works with dynamic shapes.
+        # Gemma3 expects attention_mask as a dict with "full_attention" and "sliding_attention" keys;
+        # when it receives a dict, it skips its internal mask creation (which would bake shapes).
+        if attention_mask is not None and attention_mask.dim() == 2:
+            bsz, seq_len = attention_mask.shape
+            # Create a causal mask: [batch, 1, seq_len, seq_len]
+            # Start with the padding mask: 1 where valid, 0 where padding
+            causal_mask = attention_mask[:, None, None, :].to(dtype=torch.float32)
+            causal_mask = causal_mask.expand(bsz, 1, seq_len, seq_len)
+            # Apply causal (lower-triangular) pattern
+            causal_positions = torch.tril(torch.ones(seq_len, seq_len, device=attention_mask.device, dtype=torch.float32))
+            causal_mask = causal_mask * causal_positions[None, None, :, :]
+            # Convert to additive mask: 0 for attend, large negative for ignore
+            causal_mask = (1.0 - causal_mask) * torch.finfo(torch.float32).min
+            # Pass as dict to bypass Gemma3's internal mask creation
+            mask_dict = {"full_attention": causal_mask, "sliding_attention": causal_mask}
+            outputs = orig_forward(input_ids=input_ids, attention_mask=mask_dict, output_hidden_states=True)
+        else:
+            outputs = orig_forward(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
+        result = {"last_hidden_state": outputs.hidden_states[-1]}
+        for i, hs in enumerate(outputs.hidden_states):
+            result[f"hidden_states.{i}"] = hs
+        return result
+
+    text_encoder.forward = text_encoder_forward
+
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=text_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="feature-extraction",
+        model_type="gemma3-text-encoder",
+    )
+    export_config = export_config_constructor(
+        text_encoder.config,
+        int_dtype=int_dtype,
+        float_dtype=float_dtype,
+    )
+    export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["text_encoder"] = (text_encoder, export_config)
+
+    # Connectors
+    connectors = pipeline.connectors
+    connectors_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=connectors,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="ltx2-connectors",
+    )
+    connectors_export_config = connectors_config_constructor(
+        connectors.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    models_for_export["connectors"] = (connectors, connectors_export_config)
+
+    # Transformer
+    transformer = pipeline.transformer
+    transformer_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=transformer,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="ltx2-video-transformer",
+    )
+    transformer_export_config = transformer_config_constructor(
+        transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    models_for_export["transformer"] = (transformer, transformer_export_config)
+
+    # VAE Encoder
+    vae_encoder = copy.deepcopy(pipeline.vae)
+    if hasattr(pipeline.vae, "latents_mean") and pipeline.vae.latents_mean is not None:
+        vae_encoder.register_to_config(latents_mean_data=pipeline.vae.latents_mean.tolist())
+    if hasattr(pipeline.vae, "latents_std") and pipeline.vae.latents_std is not None:
+        vae_encoder.register_to_config(latents_std_data=pipeline.vae.latents_std.tolist())
+    vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="ltx2-vae-encoder",
+    )
+    vae_encoder_export_config = vae_config_constructor(
+        vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
+
+    # VAE Decoder
+    vae_decoder = copy.deepcopy(pipeline.vae)
+    if hasattr(pipeline.vae, "latents_mean") and pipeline.vae.latents_mean is not None:
+        vae_decoder.register_to_config(latents_mean_data=pipeline.vae.latents_mean.tolist())
+    if hasattr(pipeline.vae, "latents_std") and pipeline.vae.latents_std is not None:
+        vae_decoder.register_to_config(latents_std_data=pipeline.vae.latents_std.tolist())
+    if hasattr(pipeline, "audio_vae") and pipeline.audio_vae is not None:
+        if hasattr(pipeline.audio_vae, "latents_mean") and pipeline.audio_vae.latents_mean is not None:
+            vae_decoder.register_to_config(audio_latents_mean_data=pipeline.audio_vae.latents_mean.tolist())
+        if hasattr(pipeline.audio_vae, "latents_std") and pipeline.audio_vae.latents_std is not None:
+            vae_decoder.register_to_config(audio_latents_std_data=pipeline.audio_vae.latents_std.tolist())
+    vae_decoder.forward = lambda latent_sample: vae_decoder.decode(z=latent_sample)
+
+    vae_decoder_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_decoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="ltx2-vae-decoder",
+    )
+    vae_decoder_export_config = vae_decoder_config_constructor(
         vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
     )
     vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}

@@ -9521,3 +9521,216 @@ class KokoroModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model._orig_forward
+
+
+def _ltx2_connector_forward_patched(self, hidden_states, attention_mask=None, attn_mask_binarize_threshold=-9000.0):
+    """
+    Patched forward for LTX2ConnectorTransformer1d that replaces data-dependent indexing
+    with traceable vectorized operations.
+    """
+    batch_size, seq_len, hidden_dim = hidden_states.shape
+
+    if self.learnable_registers is not None:
+        num_register_repeats = seq_len // self.num_learnable_registers
+        registers = torch.tile(self.learnable_registers, (num_register_repeats, 1))  # [seq_len, dim]
+        registers = registers.unsqueeze(0).expand(batch_size, -1, -1)  # [B, seq_len, dim]
+
+        binary_attn_mask = (attention_mask >= attn_mask_binarize_threshold).to(torch.int64)
+        if binary_attn_mask.ndim == 4:
+            binary_attn_mask = binary_attn_mask.squeeze(1).squeeze(1)  # [B, L]
+
+        # Sort mask descending to left-align valid tokens
+        _, sort_indices = binary_attn_mask.sort(dim=1, descending=True, stable=True)
+        gather_indices = sort_indices.unsqueeze(-1).expand(-1, -1, hidden_dim)
+        padded_hidden_states = torch.gather(hidden_states, dim=1, index=gather_indices)  # [B, L, D] valid left-aligned
+
+        # Valid tokens are now left-aligned. Original code pads right then flips mask.
+        # flipped_mask has 1s at the end (where valid tokens should go) and 0s at beginning (registers)
+        valid_counts = binary_attn_mask.sum(dim=1)  # [B]
+        pos_indices = torch.arange(seq_len, device=hidden_states.device).unsqueeze(0)
+        # After flip, valid positions are at the end
+        flipped_valid_mask = (pos_indices >= (seq_len - valid_counts.unsqueeze(1))).unsqueeze(-1).to(padded_hidden_states.dtype)  # [B, L, 1]
+
+        # Flip padded_hidden_states so valid tokens move to the end
+        padded_hidden_states = padded_hidden_states.flip(dims=[1])
+        hidden_states = flipped_valid_mask * padded_hidden_states + (1 - flipped_valid_mask) * registers
+
+        attention_mask = torch.zeros_like(attention_mask)
+
+    rotary_emb = self.rope(batch_size, seq_len, device=hidden_states.device)
+
+    for block in self.transformer_blocks:
+        hidden_states = block(hidden_states, attention_mask=attention_mask, rotary_emb=rotary_emb)
+
+    hidden_states = self.norm_out(hidden_states)
+    return hidden_states, attention_mask
+
+
+class LTX2ConnectorsPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        # Patch both video_connector and audio_connector
+        for connector_name in ["video_connector", "audio_connector"]:
+            connector = getattr(self._model, connector_name, None)
+            if connector is not None:
+                connector._orig_forward = connector.forward
+                connector.forward = types.MethodType(_ltx2_connector_forward_patched, connector)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        for connector_name in ["video_connector", "audio_connector"]:
+            connector = getattr(self._model, connector_name, None)
+            if connector is not None and hasattr(connector, "_orig_forward"):
+                connector.forward = connector._orig_forward
+
+
+def _ltx2_apply_split_rotary_emb(x, freqs):
+    """Patched apply_split_rotary_emb that avoids data-dependent branching."""
+    cos, sin = freqs
+    x_dtype = x.dtype
+
+    if x.ndim == 3 and cos.ndim == 4:
+        b, h, t, _ = cos.shape
+        x = x.reshape(b, t, h, -1).swapaxes(1, 2)
+        needs_reshape = True
+    else:
+        needs_reshape = False
+
+    last = x.shape[-1]
+    r = last // 2
+
+    split_x = x.reshape(*x.shape[:-1], 2, r).float()
+    first_x = split_x[..., :1, :]
+    second_x = split_x[..., 1:, :]
+
+    cos_u = cos.unsqueeze(-2)
+    sin_u = sin.unsqueeze(-2)
+
+    first_out = first_x * cos_u - sin_u * second_x
+    second_out = second_x * cos_u + sin_u * first_x
+
+    out = torch.cat([first_out, second_out], dim=-2).reshape(*split_x.shape[:-2], last)
+
+    if needs_reshape:
+        out = out.swapaxes(1, 2).reshape(b, t, -1)
+
+    out = out.to(dtype=x_dtype)
+    return out
+
+
+def _ltx2_attn_processor_forward_patched(
+    self, attn, hidden_states, encoder_hidden_states=None, attention_mask=None, query_rotary_emb=None,
+    key_rotary_emb=None, **kwargs
+):
+    """Patched attention processor forward that uses only split rotary emb and avoids data-dependent branching."""
+    batch_size, sequence_length, _ = (
+        hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+    )
+
+    if encoder_hidden_states is None:
+        encoder_hidden_states = hidden_states
+
+    query = attn.to_q(hidden_states)
+    key = attn.to_k(encoder_hidden_states)
+    value = attn.to_v(encoder_hidden_states)
+
+    query = attn.norm_q(query)
+    key = attn.norm_k(key)
+
+    if query_rotary_emb is not None:
+        query = _ltx2_apply_split_rotary_emb(query, query_rotary_emb)
+        key = _ltx2_apply_split_rotary_emb(key, key_rotary_emb if key_rotary_emb is not None else query_rotary_emb)
+
+    query = query.unflatten(2, (attn.heads, -1))
+    key = key.unflatten(2, (attn.heads, -1))
+    value = value.unflatten(2, (attn.heads, -1))
+
+    query = query.transpose(1, 2)
+    key = key.transpose(1, 2)
+    value = value.transpose(1, 2)
+
+    hidden_states = torch.nn.functional.scaled_dot_product_attention(
+        query, key, value, attn_mask=attention_mask, scale=attn.scale
+    )
+    hidden_states = hidden_states.transpose(1, 2).flatten(2, 3)
+    hidden_states = hidden_states.to(query.dtype)
+
+    hidden_states = attn.to_out[0](hidden_states)
+    hidden_states = attn.to_out[1](hidden_states)
+
+    return hidden_states
+
+
+class LTX2TransformerPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        self._orig_forwards = {}
+
+        # Patch all attention processors to use split-only rotary emb
+        for name, module in self._model.named_modules():
+            if hasattr(module, 'processor') and hasattr(module.processor, '__call__'):
+                proc = module.processor
+                self._orig_forwards[name] = proc.__call__
+                proc.__call__ = types.MethodType(
+                    lambda self_proc, attn, hidden_states, **kw: _ltx2_attn_processor_forward_patched(
+                        self_proc, attn, hidden_states, **kw
+                    ),
+                    proc,
+                )
+
+        # Wrap forward to return dict (needed for output naming) and force return_dict=False internally
+        self._orig_model_forward = self._model.forward
+
+        import functools
+
+        @functools.wraps(self._orig_model_forward)
+        def patched_forward(
+            hidden_states,
+            audio_hidden_states,
+            encoder_hidden_states,
+            audio_encoder_hidden_states,
+            timestep,
+            encoder_attention_mask=None,
+            audio_encoder_attention_mask=None,
+            num_frames=None,
+            height=None,
+            width=None,
+            fps=24.0,
+            audio_num_frames=None,
+            video_coords=None,
+            audio_coords=None,
+            **kwargs,
+        ):
+            result = self._orig_model_forward(
+                hidden_states=hidden_states,
+                audio_hidden_states=audio_hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+                audio_encoder_hidden_states=audio_encoder_hidden_states,
+                timestep=timestep,
+                encoder_attention_mask=encoder_attention_mask,
+                audio_encoder_attention_mask=audio_encoder_attention_mask,
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                fps=fps,
+                audio_num_frames=audio_num_frames,
+                video_coords=video_coords,
+                audio_coords=audio_coords,
+                return_dict=False,
+                **kwargs,
+            )
+            if isinstance(result, tuple):
+                return {"out_sample": result[0], "audio_out_sample": result[1]}
+            return result
+
+        self._model.forward = patched_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._orig_model_forward
+
+        for name, module in self._model.named_modules():
+            if name in self._orig_forwards and hasattr(module, 'processor'):
+                module.processor.__call__ = self._orig_forwards[name]
