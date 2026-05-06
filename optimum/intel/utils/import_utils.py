@@ -60,23 +60,6 @@ if _torch_available:
         _torch_available = False
 
 
-_neural_compressor_available = importlib.util.find_spec("neural_compressor") is not None
-_neural_compressor_version = "N/A"
-if _neural_compressor_available:
-    try:
-        _neural_compressor_version = importlib_metadata.version("neural_compressor")
-    except importlib_metadata.PackageNotFoundError:
-        _neural_compressor_available = False
-
-
-_ipex_available = importlib.util.find_spec("intel_extension_for_pytorch") is not None
-_ipex_version = "N/A"
-if _ipex_available:
-    try:
-        _ipex_version = importlib_metadata.version("intel_extension_for_pytorch")
-    except importlib_metadata.PackageNotFoundError:
-        _ipex_available = False
-
 _openvino_available = importlib.util.find_spec("openvino") is not None
 _openvino_version = "N/A"
 if _openvino_available:
@@ -119,6 +102,13 @@ if _open_clip_available:
         pass
 
 
+_huggingface_hub_available = importlib.util.find_spec("huggingface_hub") is not None
+_huggingface_hub_version = "N/A"
+if _huggingface_hub_available:
+    try:
+        _huggingface_hub_version = importlib_metadata.version("huggingface_hub")
+    except importlib_metadata.PackageNotFoundError:
+        _huggingface_hub_available = False
 _kokoro_available = importlib.util.find_spec("kokoro") is not None
 
 _safetensors_version = "N/A"
@@ -207,14 +197,6 @@ def is_transformers_available():
 
 def is_tokenizers_available():
     return _tokenizers_available
-
-
-def is_neural_compressor_available():
-    return _neural_compressor_available
-
-
-def is_ipex_available():
-    return _ipex_available
 
 
 def is_openvino_available():
@@ -389,15 +371,6 @@ def is_optimum_version(operation: str, version: str):
     return compare_versions(parse(_optimum_version), operation, version)
 
 
-def is_neural_compressor_version(operation: str, version: str):
-    """
-    Compare the current Neural Compressor version to a given reference with an operation.
-    """
-    if not _neural_compressor_available:
-        return False
-    return compare_versions(parse(_neural_compressor_version), operation, version)
-
-
 def is_openvino_version(operation: str, version: str):
     """
     Compare the current OpenVINO version to a given reference with an operation.
@@ -456,15 +429,6 @@ def is_torch_version(operation: str, version: str):
     return compare_versions(parse(parse(torch.__version__).base_version), operation, version)
 
 
-def is_ipex_version(operation: str, version: str):
-    """
-    Compare the current ipex version to a given reference with an operation.
-    """
-    if not _ipex_available:
-        return False
-    return compare_versions(parse(_ipex_version), operation, version)
-
-
 def is_timm_version(operation: str, version: str):
     """
     Compare the current timm version to a given reference with an operation.
@@ -492,14 +456,18 @@ def is_sentence_transformers_version(operation: str, version: str):
     return compare_versions(parse(_sentence_transformers_version), operation, version)
 
 
+def is_huggingface_hub_version(operation: str, version: str):
+    """
+    Compare the current huggingface_hub version to a given reference with an operation.
+    """
+    if not _huggingface_hub_available:
+        return False
+    return compare_versions(parse(_huggingface_hub_version), operation, version)
+
+
 DIFFUSERS_IMPORT_ERROR = """
 {0} requires the diffusers library but it was not found in your environment. You can install it with pip:
 `pip install diffusers`. Please note that you may need to restart your runtime after installation.
-"""
-
-IPEX_IMPORT_ERROR = """
-{0} requires the ipex library but it was not found in your environment. You can install it with pip:
-`pip install intel_extension_for_pytorch`. Please note that you may need to restart your runtime after installation.
 """
 
 NNCF_IMPORT_ERROR = """
@@ -510,11 +478,6 @@ NNCF_IMPORT_ERROR = """
 OPENVINO_IMPORT_ERROR = """
 {0} requires the openvino library but it was not found in your environment. You can install it with pip:
 `pip install openvino`. Please note that you may need to restart your runtime after installation.
-"""
-
-NEURAL_COMPRESSOR_IMPORT_ERROR = """
-{0} requires the neural-compressor library but it was not found in your environment. You can install it with pip:
-`pip install neural-compressor`. Please note that you may need to restart your runtime after installation.
 """
 
 DATASETS_IMPORT_ERROR = """
@@ -541,10 +504,8 @@ SENTENCE_TRANSFORMERS_IMPORT_ERROR = """
 BACKENDS_MAPPING = OrderedDict(
     [
         ("diffusers", (is_diffusers_available, DIFFUSERS_IMPORT_ERROR)),
-        ("ipex", (is_ipex_available, IPEX_IMPORT_ERROR)),
         ("nncf", (is_nncf_available, NNCF_IMPORT_ERROR)),
         ("openvino", (is_openvino_available, OPENVINO_IMPORT_ERROR)),
-        ("neural_compressor", (is_neural_compressor_available, NEURAL_COMPRESSOR_IMPORT_ERROR)),
         ("accelerate", (is_accelerate_available, ACCELERATE_IMPORT_ERROR)),
         ("sentence_transformers", (is_sentence_transformers_available, SENTENCE_TRANSFORMERS_IMPORT_ERROR)),
     ]
