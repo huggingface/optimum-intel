@@ -5475,27 +5475,81 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
 
 
 class NemotronHNormalizedTextConfig(NormalizedTextConfig):
-    """Custom normalized config for NemotronH that maps 'layers_block_type' to 'layer_types' and 'expand' to 'mamba_expand'."""
+    """Custom normalized config for NemotronH that maps different attribute names.
+    
+    NemotronH uses different attribute names than standard Mamba/GraniteMoeHybrid config:
+    - mamba_expand -> expand
+    - mamba_d_conv -> conv_kernel
+    - mamba_d_state -> ssm_state_size
+    - mamba_ngroups -> n_groups
+    - mamba_headdim -> head_dim or mamba_head_dim
+    - mamba_nheads -> mamba_num_heads (or computed)
+    - mamba_d_ssm -> (computed or direct)
+    """
+    
+    @property
+    def layer_types(self):
+        if hasattr(self.config, "layers_block_type"):
+            return self.config.layers_block_type
+        return getattr(self.config, "layer_types", [])
+    
+    @property
+    def mamba_expand(self):
+        return getattr(self.config, "expand", 2)
+    
+    @property
+    def mamba_d_conv(self):
+        return getattr(self.config, "conv_kernel", 4)
+    
+    @property
+    def mamba_d_state(self):
+        return getattr(self.config, "ssm_state_size", 128)
+    
+    @property
+    def mamba_ngroups(self):
+        # Try n_groups first (Mamba-2 groups), fallback to n_group (singular), default to 1
+        return getattr(self.config, "n_groups", getattr(self.config, "n_group", 1))
+    
+    @property
+    def mamba_headdim(self):
+        # Try head_dim first, then mamba_head_dim, default to 64
+        return getattr(self.config, "head_dim", getattr(self.config, "mamba_head_dim", 64))
+    
+    @property
+    def mamba_nheads(self):
+        # NemotronH uses mamba_num_heads; compute if needed: (expand * hidden_size) / head_dim
+        if hasattr(self.config, "mamba_num_heads"):
+            return self.config.mamba_num_heads
+        
+        expand = getattr(self.config, "expand", 2)
+        hidden_size = getattr(self.config, "hidden_size", 1)
+        head_dim = getattr(self.config, "head_dim", getattr(self.config, "mamba_head_dim", 64))
+        
+        # Compute n_heads = (expand * hidden_size) / head_dim
+        return max(1, (expand * hidden_size) // max(head_dim, 1))
+    
+    @property
+    def mamba_d_ssm(self):
+        # d_ssm typically equals: expand * hidden_size / n_heads
+        # Or can be directly specified
+        if hasattr(self.config, "d_ssm"):
+            return self.config.d_ssm
+        
+        expand = getattr(self.config, "expand", 2)
+        hidden_size = getattr(self.config, "hidden_size", 1)
+        n_heads = self.mamba_nheads
+        
+        return max(1, (expand * hidden_size) // max(n_heads, 1))
+    
+    @property
+    def mamba_dt_rank(self):
+        # dt_rank is typically 64 or hidden_size // 16
+        if hasattr(self.config, "dt_rank"):
+            return self.config.dt_rank
+        return getattr(self.config, "hidden_size", 1024) // 16
     
     def __getattr__(self, attr_name):
-        """Override to map NemotronH attributes to standard Mamba attributes."""
-        # Map layer_types to layers_block_type
-        if attr_name == "layer_types":
-            if hasattr(self.config, "layers_block_type"):
-                return self.config.layers_block_type
-        # Map mamba_expand to expand (NemotronH uses 'expand', others use 'mamba_expand')
-        elif attr_name == "mamba_expand":
-            if hasattr(self.config, "expand"):
-                return self.config.expand
-        # Map mamba_d_conv to conv_kernel (NemotronH uses 'conv_kernel')
-        elif attr_name == "mamba_d_conv":
-            if hasattr(self.config, "conv_kernel"):
-                return self.config.conv_kernel
-        # Map mamba_d_state to ssm_state_size (NemotronH uses 'ssm_state_size')
-        elif attr_name == "mamba_d_state":
-            if hasattr(self.config, "ssm_state_size"):
-                return self.config.ssm_state_size
-        # Fallback to parent's __getattr__
+        """Fallback for any attributes not covered by properties."""
         return super().__getattr__(attr_name)
 
 
