@@ -184,6 +184,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             [
                 ("text-generation", "lfm2_moe"),
                 ("text-generation-with-past", "lfm2_moe"),
+                ("text-generation-with-past", "nemotron_h"),
             ]
         )
 
@@ -219,6 +220,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "exaone4": 2,
         "bitnet": 2,
         "granitemoehybrid": 2,
+        "nemotron_h": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {

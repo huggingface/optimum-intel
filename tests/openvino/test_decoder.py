@@ -205,6 +205,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mixtral": 2,
         "mpt": 5,
         "nemotron": 2,
+        "nemotron_h": 1,
         "olmo2": 2,
         "opt": 5 if is_transformers_version(">=", "4.46") else 0,
         "pegasus": 2,
