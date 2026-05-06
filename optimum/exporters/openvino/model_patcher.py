@@ -8183,9 +8183,8 @@ def nemotron_h_mamba_mixer_forward(
     y = y.reshape(batch_size, -1, self.num_heads, self.head_dim)
     y = y + D_residual
 
-    pad_mask = torch.tensor(pad_size > 0).to(torch.long)
-    y_new_len = y.size(1) * (1 - pad_mask) + seq_len * pad_mask
-    y = y[:, :y_new_len]
+    if pad_size > 0:
+        y = y[:, :seq_len]
     y_prefill = y.reshape(batch_size, seq_len, -1)
 
     if cache_params is not None:
@@ -8475,6 +8474,49 @@ class NemotronHModelPatcher(OVDecoderModelPatcher):
                 moe_layer = layer.mixer
                 moe_layer._orig_forward = moe_layer.forward
                 moe_layer.forward = types.MethodType(nemotron_h_moe_forward, moe_layer)
+
+        self._patch_cuda_stream_for_cpu()
+
+    def _patch_cuda_stream_for_cpu(self):
+        """Patch NemotronHBlock.forward to make torch.cuda.stream conditional on CPU."""
+        import contextlib
+        import torch
+        
+        for name, module in self._model.named_modules():
+            if type(module).__name__ == "NemotronHBlock":
+                # Store the original unbound method from the class
+                orig_fwd_unbound = type(module).forward
+                
+                # Create a wrapper that checks for CUDA
+                def _make_cpu_safe_forward(orig_method):
+                    def cpu_safe_forward(self_block, *args, **kwargs):
+                        # Check if inputs are on CUDA
+                        hidden_states = args[0] if args else kwargs.get("hidden_states")
+                        on_cuda = (hidden_states is not None and 
+                                  hasattr(hidden_states, "is_cuda") and 
+                                  hidden_states.is_cuda)
+                        
+                        if not on_cuda:
+                            # Temporarily patch torch.cuda methods on CPU
+                            _orig_stream = torch.cuda.stream
+                            _orig_default_stream = torch.cuda.default_stream
+                            torch.cuda.stream = lambda *a, **k: contextlib.nullcontext()
+                            torch.cuda.default_stream = lambda *a, **k: contextlib.nullcontext()
+                            try:
+                                # Call the original unbound method
+                                return orig_method(self_block, *args, **kwargs)
+                            finally:
+                                torch.cuda.stream = _orig_stream
+                                torch.cuda.default_stream = _orig_default_stream
+                        else:
+                            # On CUDA, just call the original method
+                            return orig_method(self_block, *args, **kwargs)
+                    
+                    return cpu_safe_forward
+                
+                # Replace the class method with the wrapped version
+                type(module).forward = _make_cpu_safe_forward(orig_fwd_unbound)
+
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
