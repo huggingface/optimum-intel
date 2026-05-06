@@ -5415,6 +5415,14 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
         return common_inputs
 
 
+@register_in_tasks_manager(
+    "nemotron_h", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class NemotronHOpenVINOConfig(TextDecoderOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator,) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
 @register_in_tasks_manager("audio-spectrogram-transformer", *["feature-extraction", "audio-classification"])
 class ASTOpenVINOConfig(ASTOnnxConfig):
     pass
