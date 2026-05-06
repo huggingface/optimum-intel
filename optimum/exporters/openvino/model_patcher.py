@@ -8183,8 +8183,7 @@ def nemotron_h_mamba_mixer_forward(
     y = y.reshape(batch_size, -1, self.num_heads, self.head_dim)
     y = y + D_residual
 
-    if pad_size > 0:
-        y = y[:, :seq_len]
+    y = torch.narrow(y, 1, 0, seq_len)
     y_prefill = y.reshape(batch_size, seq_len, -1)
 
     if cache_params is not None:
