@@ -20,12 +20,13 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import (
     AutoConfig,
     AutoImageProcessor,
+    AutoModel,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
     PreTrainedTokenizer,
 )
-from transformers.modeling_outputs import BaseModelOutputWithPooling
+from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPooling
 from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
 from transformers.utils import ModelOutput
 
@@ -4962,6 +4963,235 @@ class _OVLlama4ForCausalLM(OVModelForVisualCausalLM):
 #
 # and inheritance from Qwen3_5VisionModel is needed for accessing the following method:
 # rot_pos_emb()
+class _OVQwen3VLForFeatureExtraction(_OVQwen3VLForCausalLM):
+    export_feature = "feature-extraction"
+    auto_model_class = AutoModel
+
+    @classmethod
+    def _from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        config: PretrainedConfig,
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        local_files_only: bool = False,
+        load_in_8bit: bool = False,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        trust_remote_code: bool = False,
+        **kwargs,
+    ):
+        model_file_names = cls._all_ov_model_paths.copy()
+        for k in tuple(model_file_names):
+            model_file_names[f"{k}_bin"] = model_file_names[k].replace(".xml", ".bin")
+        compile_only = kwargs.get("compile_only", False)
+        if os.path.isdir(model_id):
+            model_save_dir = Path(model_id)
+            file_names = {k: os.path.join(model_id, model_file_names[k]) for k in model_file_names}
+        else:
+            file_names = {}
+            for name, file_name in model_file_names.items():
+                model_cache_path = hf_hub_download(
+                    repo_id=model_id,
+                    filename=file_name,
+                    token=token,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                )
+                file_names[name] = model_cache_path
+            model_save_dir = Path(model_cache_path).parent
+        if not compile_only:
+            language_model = cls.load_model(file_names["lm_model"])
+            text_embeddings = cls.load_model(file_names["text_embeddings_model"])
+            vision_embeddings = cls.load_model(file_names["vision_embeddings_model"])
+            for part in cls.additional_parts:
+                kwargs[part] = cls.load_model(file_names[f"{part}_model"])
+        else:
+            language_model = cls._compile_model(
+                file_names["lm_model"], kwargs.get("device", "CPU"), kwargs.get("ov_config"), model_save_dir
+            )
+            text_embeddings = cls._compile_model(
+                file_names["text_embeddings_model"],
+                kwargs.get("device", "CPU"),
+                kwargs.get("ov_config"),
+                model_save_dir,
+            )
+            vision_embeddings = cls._compile_model(
+                file_names["vision_embeddings_model"],
+                kwargs.get("device", "CPU"),
+                kwargs.get("ov_config"),
+                model_save_dir,
+            )
+            for part in cls.additional_parts:
+                kwargs[part] = cls._compile_model(
+                    file_names[f"{part}_model"], kwargs.get("device", "CPU"), kwargs.get("ov_config"), model_save_dir
+                )
+
+        compile_model = kwargs.pop("compile", True)
+        return cls(
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            compile=compile_model and not quantization_config,
+            **kwargs,
+        )
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = None,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        if dynamic_shapes is not None:
+            logger.warning(
+                f"`dynamic_shapes` was set to {dynamic_shapes}, but this value will be ignored as only dynamic shapes are supported."
+            )
+
+        self.is_dynamic = True
+        self.config = config
+        self.use_cache = False
+        self.model_save_dir = model_save_dir
+        self._device = device.upper()
+        self.ov_config = {} if ov_config is None else {**ov_config}
+        self.preprocessors = kwargs.get("preprocessors", [])
+        self._supports_cache_class = False
+        self.main_input_name = "input_ids"
+        self._compile_only = kwargs.get("compile_only", False)
+
+        for part in self.additional_parts:
+            setattr(self, f"{part}_model", kwargs.get(part))
+
+        enable_compilation = kwargs.get("compile", True)
+        self.generation_config = None
+        self._openvino_config = None
+        if quantization_config:
+            self._openvino_config = OVConfig(quantization_config=quantization_config)
+        self._set_ov_config_parameters()
+        self.language_model = OVModelWithEmbedForCausalLM(
+            language_model,
+            text_embeddings,
+            config=config,
+            device=device,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            use_cache=False,
+            compile=self._compile_only or enable_compilation,
+            compile_only=self._compile_only,
+        )
+        self.vision_embeddings = OVVisionEmbedding(vision_embeddings, self)
+        for part in self.additional_parts:
+            model_part = getattr(self, f"{part}_model", None)
+            if model_part is not None:
+                model_part = MODEL_PARTS_CLS_MAPPING[part](model_part, self)
+            setattr(self, part, model_part)
+
+        if enable_compilation and not self._compile_only:
+            self.compile()
+
+        AutoConfig.register(self.base_model_prefix, AutoConfig)
+        self.auto_model_class.register(AutoConfig, self.__class__)
+        self.rope_deltas = None
+        self._rotary_pos_emb = Qwen3VLVisionRotaryEmbedding(
+            self.config.vision_config.hidden_size // self.config.vision_config.num_heads // 2
+        )
+        self.num_grid_per_side = int(config.vision_config.num_position_embeddings**0.5)
+        self.spatial_merge_size = config.vision_config.spatial_merge_size
+        head_dim = config.vision_config.hidden_size // config.vision_config.num_heads
+        self.rotary_pos_emb = Qwen3VLVisionRotaryEmbedding(head_dim // 2)
+
+    def forward(
+        self,
+        input_ids,
+        pixel_values=None,
+        past_key_values=None,
+        inputs_embeds=None,
+        image_sizes=None,
+        attention_mask=None,
+        position_ids=None,
+        image_bound=None,
+        tgt_sizes=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        rope_deltas=None,
+        images=None,
+        second_per_grid_ts=None,
+        token_type_ids=None,
+        pixel_attention_mask=None,
+        input_image_embeds: Optional[torch.FloatTensor] = None,
+        image_pixel_values: Optional[torch.FloatTensor] = None,
+        image_attention_mask=None,
+        audio_input_features: Optional[torch.FloatTensor] = None,
+        input_audio_embeds: Optional[torch.FloatTensor] = None,
+        audio_embed_sizes=None,
+        audio_attention_mask=None,
+        input_mode=None,
+        **kwargs,
+    ):
+        if pixel_values is None:
+            pixel_values = images if images is not None else image_pixel_values
+        inputs_embeds, attention_mask, position_ids, *extra_outputs = self.get_multimodal_embeddings(
+            input_ids,
+            pixel_values,
+            inputs_embeds=inputs_embeds,
+            image_sizes=image_sizes,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            image_bound=image_bound,
+            tgt_sizes=tgt_sizes,
+            pixel_values_videos=pixel_values_videos,
+            image_grid_thw=image_grid_thw,
+            video_grid_thw=video_grid_thw,
+            rope_deltas=rope_deltas,
+            second_per_grid_ts=second_per_grid_ts,
+            pixel_attention_mask=pixel_attention_mask,
+            input_image_embeds=input_image_embeds,
+            image_attention_mask=image_attention_mask,
+            input_audio_embeds=input_audio_embeds if input_audio_embeds is not None else audio_input_features,
+            audio_embed_sizes=audio_embed_sizes,
+            audio_attention_mask=audio_attention_mask,
+            input_mode=input_mode,
+            **kwargs,
+        )
+
+        additional_inputs = {}
+        if extra_outputs:
+            additional_inputs["visual_pos_masks"] = extra_outputs[0]
+            additional_inputs["deepstack_visual_embeds"] = extra_outputs[1]
+
+        self.language_model.compile()
+        np_inputs = isinstance(inputs_embeds, np.ndarray)
+        inputs = self.language_model.prepare_inputs(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=None,
+            inputs_embeds=inputs_embeds,
+            token_type_ids=token_type_ids,
+            **additional_inputs,
+        )
+        self.language_model.request.start_async(inputs, share_inputs=True)
+        self.language_model.request.wait()
+        outputs = self.language_model.request.get_tensor("last_hidden_state").data
+        last_hidden_state = outputs if np_inputs else torch.from_numpy(outputs).clone().to(self.device)
+        return BaseModelOutput(last_hidden_state=last_hidden_state)
+
+
 class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM, Qwen3_5Model, Qwen3_5VisionModel):
     additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
 

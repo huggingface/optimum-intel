@@ -1478,6 +1478,20 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = OVSentenceTransformer.from_pretrained(tmpdir, compile=False, device=OPENVINO_DEVICE)
             self.assertFalse("last_hidden_state" in model.output_names)
 
+    @unittest.skipIf(is_transformers_version("<", "4.57.0"), reason="Qwen3-VL requires transformers >= 4.57.0")
+    def test_exporters_cli_qwen3_vl_feature_extraction(self):
+        model_id = MODEL_NAMES["qwen3_vl"]
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {model_id} --task feature-extraction {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = OVModelForFeatureExtraction.from_pretrained(tmpdir, compile=False, device=OPENVINO_DEVICE)
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            outputs = model(**tokenizer("A short multimodal embedding prompt", return_tensors="pt"))
+            self.assertTrue("last_hidden_state" in outputs)
+
     def test_exporters_cli_open_clip(self):
         model_id = MODEL_NAMES["open-clip"]
         with TemporaryDirectory() as tmpdir:
