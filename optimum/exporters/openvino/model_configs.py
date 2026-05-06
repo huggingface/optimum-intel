@@ -5163,9 +5163,10 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         )
 
         config = normalized_config.config
-        self.intermediate_size = int(config.mamba_expand * config.hidden_size)
-        self.conv_kernel_size = config.mamba_d_conv
-        self.mamba_d_state = config.mamba_d_state
+        # Use normalized_config to access mapped attributes (supports both raw and mapped attributes)
+        self.intermediate_size = int(normalized_config.mamba_expand * normalized_config.hidden_size)
+        self.conv_kernel_size = normalized_config.mamba_d_conv
+        self.mamba_d_state = normalized_config.mamba_d_state
         if config.model_type == "zamba2":
             self.n_mamba_heads = config.n_mamba_heads
             self.mamba_ngroups = config.mamba_ngroups
@@ -5181,13 +5182,14 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
                 "Optimizations and improved support will be available in a future OpenVINO release."
             )
         else:
-            # currently, this else-branch is applied for GraniteMoeHybrid models
-            self.n_mamba_heads = config.mamba_n_heads
-            self.mamba_ngroups = config.mamba_n_groups
-            self.mamba_headdim = config.mamba_d_head
+            # currently, this else-branch is applied for GraniteMoeHybrid and NemotronH models
+            # Use normalized_config to access layer_types which may be mapped
+            self.n_mamba_heads = getattr(config, "mamba_n_heads", getattr(config, "mamba_num_heads", 1))
+            self.mamba_ngroups = getattr(config, "mamba_n_groups", getattr(config, "mamba_num_heads", 1))
+            self.mamba_headdim = getattr(config, "mamba_d_head", getattr(config, "mamba_head_dim", 64))
             self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
-            self.num_attention_layers = config.layer_types.count("attention")
-            self.num_mamba_layers = config.layer_types.count("mamba")
+            self.num_attention_layers = normalized_config.layer_types.count("attention")
+            self.num_mamba_layers = normalized_config.layer_types.count("mamba")
             self.num_attention_heads = config.num_key_value_heads
             self.sequence_length = 0
 
@@ -5472,49 +5474,41 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
         return common_inputs
 
 
+class NemotronHNormalizedTextConfig(NormalizedTextConfig):
+    """Custom normalized config for NemotronH that maps 'layers_block_type' to 'layer_types' and 'expand' to 'mamba_expand'."""
+    
+    def __getattr__(self, attr_name):
+        """Override to map NemotronH attributes to standard Mamba attributes."""
+        # Map layer_types to layers_block_type
+        if attr_name == "layer_types":
+            if hasattr(self.config, "layers_block_type"):
+                return self.config.layers_block_type
+        # Map mamba_expand to expand (NemotronH uses 'expand', others use 'mamba_expand')
+        elif attr_name == "mamba_expand":
+            if hasattr(self.config, "expand"):
+                return self.config.expand
+        # Map mamba_d_conv to conv_kernel (NemotronH uses 'conv_kernel')
+        elif attr_name == "mamba_d_conv":
+            if hasattr(self.config, "conv_kernel"):
+                return self.config.conv_kernel
+        # Map mamba_d_state to ssm_state_size (NemotronH uses 'ssm_state_size')
+        elif attr_name == "mamba_d_state":
+            if hasattr(self.config, "ssm_state_size"):
+                return self.config.ssm_state_size
+        # Fallback to parent's __getattr__
+        return super().__getattr__(attr_name)
+
+
 @register_in_tasks_manager(
     "nemotron_h", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
-class NemotronHOpenVINOConfig(MambaOpenVINOConfig):
+class NemotronHOpenVINOConfig(GraniteMoeHybridOpenVINOConfig):
+    """OpenVINO export config for NemotronH (NVIDIA Nemotron Hybrid Mamba-2 + MoE)."""
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, NemotronHDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = NemotronHDummyPastKeyValuesGenerator
-    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    MIN_TRANSFORMERS_VERSION = "5.3.0"
+    NORMALIZED_CONFIG_CLASS = NemotronHNormalizedTextConfig
+    MIN_TRANSFORMERS_VERSION = "5.0.0"  # Older versions use the model_patcher LinearAttentionLayer fallback.
     _MODEL_PATCHER = NemotronHModelPatcher
-
-    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
-        if direction not in ["inputs", "outputs"]:
-            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
-
-        if direction == "inputs":
-            decoder_sequence_name = "past_sequence_length"
-            cache_name_prefix = "cache_params.past"
-        else:
-            decoder_sequence_name = "past_sequence_length + sequence_length"
-            cache_name_prefix = "cache_params.present"
-
-        num_mamba_layers = list(self._normalized_config.layers_block_type).count("mamba")
-        num_attention_layers = list(self._normalized_config.layers_block_type).count("attention")
-        for i in range(num_mamba_layers):
-            inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
-            inputs_or_outputs[f"{cache_name_prefix}.ssm.{i}"] = {0: "batch_size"}
-
-        for i in range(num_attention_layers):
-            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
-            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
-
-    @property
-    def inputs(self) -> Dict[str, Dict[int, str]]:
-        common_inputs = {
-            "input_ids": {0: "batch_size", 1: "sequence_length"},
-        }
-        if self.use_past_in_inputs:
-            common_inputs["attention_mask"] = {0: "batch_size", 1: "past_sequence_length + sequence_length"}
-            self.add_past_key_values(common_inputs, direction="inputs")
-        else:
-            common_inputs["attention_mask"] = {0: "batch_size", 1: "sequence_length"}
-        return common_inputs
-
 
 @register_in_tasks_manager("audio-spectrogram-transformer", *["feature-extraction", "audio-classification"])
 class ASTOpenVINOConfig(ASTOnnxConfig):

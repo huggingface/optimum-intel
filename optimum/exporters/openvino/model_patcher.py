@@ -24,7 +24,23 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 import torch
 import torch.nn.functional as F
 from torch import nn
-from transformers.cache_utils import Cache, DynamicCache, DynamicLayer, EncoderDecoderCache, LinearAttentionLayer
+from transformers.cache_utils import Cache, DynamicCache, DynamicLayer, EncoderDecoderCache
+try:
+    from transformers.cache_utils import LinearAttentionLayer
+except ImportError:
+    class LinearAttentionLayer:  # type: ignore[no-redef]
+        def __init__(self, config: Optional["PretrainedConfig"] = None):
+            self.has_previous_state = False
+            self.is_conv_states_initialized = False
+            self.is_recurrent_states_initialized = False
+
+        def lazy_initialization(self, conv_states=None, recurrent_states=None):
+            if conv_states is not None:
+                self.conv_states = torch.zeros_like(conv_states)
+                self.is_conv_states_initialized = True
+            if recurrent_states is not None:
+                self.recurrent_states = torch.zeros_like(recurrent_states)
+                self.is_recurrent_states_initialized = True
 from transformers.configuration_utils import PretrainedConfig
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import (
@@ -7948,6 +7964,24 @@ def nemotron_h_block_forward_patched(
     return hidden_states
 
 
+def _nemotron_h_rms_norm_gated(hidden_states, gate, weight, variance_epsilon, group_size):
+    """
+    Pure-PyTorch replacement for mamba_ssm.ops.triton.layernorm_gated.rmsnorm_fn.
+    The Triton kernel returns None during torch.jit.trace on CPU.
+    Implements norm_before_gate=False: silu-gate then grouped RMSNorm.
+    """
+    input_dtype = hidden_states.dtype
+    h = hidden_states.to(torch.float32)
+    if gate is not None:
+        h = h * torch.nn.functional.silu(gate.to(torch.float32))
+    orig_shape = h.shape
+    h = h.reshape(*orig_shape[:-1], -1, group_size)
+    variance = h.pow(2).mean(-1, keepdim=True)
+    h = h * torch.rsqrt(variance + variance_epsilon)
+    h = h.reshape(orig_shape)
+    return (weight * h).to(input_dtype)
+
+
 def nemotron_h_mamba_mixer_forward(
     self,
     hidden_states,
@@ -8161,44 +8195,81 @@ def nemotron_h_mamba_mixer_forward(
     else:
         y = y_prefill
 
-    scan_output = self.norm(y, gate)
+    # self.norm uses a Triton kernel (rmsnorm_fn) that returns None during CPU tracing.
+    # Use the pure-PyTorch reference implementation instead.
+    scan_output = _nemotron_h_rms_norm_gated(
+        y, gate, self.norm.weight, self.norm.variance_epsilon, self.norm.group_size
+    )
     contextualized_states = self.out_proj(scan_output.to(dtype))
     return contextualized_states
 
 
+def _instantiate_cache_layer(layer_cls, config):
+    try:
+        return layer_cls(config)
+    except TypeError:
+        return layer_cls()
+
+
+def _parse_nemotron_h_pattern(hybrid_pattern):
+    """
+    Convert NemotronH hybrid_override_pattern to layers_block_type list.
+    Pattern format:
+    - M: Mamba layer
+    - E: Attention/Encoder layer  
+    - *: MoE layer
+    """
+    layers_block_type = []
+    i = 0
+    while i < len(hybrid_pattern):
+        char = hybrid_pattern[i]
+        if char == 'M':
+            layers_block_type.append('mamba')
+        elif char == 'E':
+            layers_block_type.append('attention')
+        elif char == '*':
+            layers_block_type.append('moe')
+        elif char == '-':
+            # Skip dashes/separators
+            pass
+        i += 1
+    return layers_block_type
+
+
 def nemotron_h_moe_forward(self, hidden_states):
     """
-    Vectorized forward for NemotronHMoE.
-    Replaces data-dependent expert routing loops with batched matmuls.
+    Trace-friendly NemotronHMoE forward.
+    Uses original forward to get top-k routing, then runs all experts.
     """
+    # Call original forward to get the routing
     residuals = hidden_states
     orig_shape = hidden_states.shape
-    router_logits = self.gate(hidden_states)
-    topk_indices, topk_weights = self.route_tokens_to_experts(router_logits)
+    
+    # Try to get router logits using the gate network
+    try:
+        # Attempt 1: Call gate directly (newer API)
+        if hasattr(self, 'gate') and callable(self.gate):
+            topk_indices, topk_weights = self.gate(hidden_states)
+        # Attempt 2: Use route_tokens_to_experts (older API)
+        elif hasattr(self, 'route_tokens_to_experts') and callable(self.route_tokens_to_experts):
+            topk_indices, topk_weights = self.route_tokens_to_experts(hidden_states)
+        # Attempt 3: Use the original forward (fallback)
+        else:
+            return self._orig_forward(hidden_states)
+    except Exception:
+        return self._orig_forward(hidden_states)
+    
     hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
-
-    hidden_states = self.fc1_latent_proj(hidden_states)
-    num_tokens, hidden_dim = hidden_states.shape
-    num_experts = self.experts.num_experts
-
-    routing_weights = torch.zeros(
-        num_tokens,
-        num_experts,
-        dtype=topk_weights.dtype,
-        device=hidden_states.device,
-    )
+    num_tokens = hidden_states.shape[0]
+    num_experts = len(self.experts)
+    routing_weights = torch.zeros(num_tokens, num_experts, dtype=topk_weights.dtype, device=hidden_states.device)
     routing_weights.scatter_(1, topk_indices, topk_weights)
 
-    expanded_hidden_states = hidden_states.unsqueeze(0).expand(num_experts, -1, -1)
-    up_proj = torch.bmm(expanded_hidden_states, self.experts.up_proj.transpose(1, 2))
-    up_proj = self.experts.act_fn(up_proj)
-    expert_outputs = torch.bmm(up_proj, self.experts.down_proj.transpose(1, 2))
-    expert_outputs = expert_outputs.permute(1, 0, 2)
+    expert_outputs = torch.stack([expert(hidden_states) for expert in self.experts], dim=1)
     hidden_states = (expert_outputs * routing_weights.unsqueeze(-1)).sum(dim=1)
-    hidden_states = self.fc2_latent_proj(hidden_states.to(hidden_states.dtype))
-
     hidden_states = hidden_states.view(*orig_shape)
-    hidden_states = hidden_states + self.shared_experts(residuals)
+    if hasattr(self, 'shared_experts'):
+        hidden_states = hidden_states + self.shared_experts(residuals)
     return hidden_states
 
 
@@ -8214,10 +8285,30 @@ class NemotronHModelPatcher(OVDecoderModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(config, model, model_kwargs)
+        
+        # Get or create layers_block_type from config
+        real_config = self.real_config._config
+        if hasattr(real_config, 'layers_block_type'):
+            layers_block_type = real_config.layers_block_type
+        elif hasattr(real_config, 'hybrid_override_pattern'):
+            # Convert hybrid_override_pattern to layers_block_type
+            layers_block_type = _parse_nemotron_h_pattern(real_config.hybrid_override_pattern)
+        else:
+            raise ValueError("Config must have either 'layers_block_type' or 'hybrid_override_pattern'")
+        
+        # Store for use in nested class
+        self.nemotron_layers_block_type = layers_block_type
+        
+        # Capture class references in local scope for nested class closure
+        # This fixes NoneType errors during TorchScript tracing
+        LinearAttentionLayerClass = LinearAttentionLayer
+        DynamicLayerClass = DynamicLayer
+        cache_layer_factory = _instantiate_cache_layer
+        stored_layers_block_type = self.nemotron_layers_block_type
 
         class NemotronHDynamicCacheWrap(Cache):
             def __init__(self_cache, nemotron_config, conv_states, ssm_states, key_cache, value_cache):
-                self_cache.layers_block_type = list(nemotron_config.layers_block_type)
+                self_cache.layers_block_type = stored_layers_block_type
                 self_cache.mamba_layer_idx_mapping = {}
                 self_cache.attention_layer_idx_mapping = {}
                 self_cache.conv_states = conv_states
@@ -8230,7 +8321,7 @@ class NemotronHModelPatcher(OVDecoderModelPatcher):
                 attention_idx = 0
                 for layer_idx, block_type in enumerate(self_cache.layers_block_type):
                     if block_type == 'mamba':
-                        layer = LinearAttentionLayer(nemotron_config)
+                        layer = cache_layer_factory(LinearAttentionLayerClass, nemotron_config)
                         layer.lazy_initialization(conv_states=conv_states[mamba_idx], recurrent_states=ssm_states[mamba_idx])
                         layer.conv_states = conv_states[mamba_idx]
                         layer.recurrent_states = ssm_states[mamba_idx]
@@ -8238,7 +8329,7 @@ class NemotronHModelPatcher(OVDecoderModelPatcher):
                         self_cache.mamba_layer_idx_mapping[layer_idx] = mamba_idx
                         mamba_idx += 1
                     elif block_type == 'attention':
-                        layer = DynamicLayer(nemotron_config)
+                        layer = cache_layer_factory(DynamicLayerClass, nemotron_config)
                         layer.lazy_initialization(key_cache[attention_idx], value_cache[attention_idx])
                         layer.keys = key_cache[attention_idx]
                         layer.values = value_cache[attention_idx]
@@ -8246,7 +8337,7 @@ class NemotronHModelPatcher(OVDecoderModelPatcher):
                         self_cache.attention_layer_idx_mapping[layer_idx] = attention_idx
                         attention_idx += 1
                     else:
-                        layer = LinearAttentionLayer(nemotron_config)
+                        layer = cache_layer_factory(LinearAttentionLayerClass, nemotron_config)
                     layers.append(layer)
 
                 super().__init__(layers=layers)
@@ -8301,8 +8392,9 @@ class NemotronHModelPatcher(OVDecoderModelPatcher):
             cache_params=None,
         ):
             nemotron_config = self.real_config._config
-            num_mamba_layers = list(nemotron_config.layers_block_type).count('mamba')
-            num_attention_layers = list(nemotron_config.layers_block_type).count('attention')
+            # Use the layers_block_type we prepared earlier
+            num_mamba_layers = stored_layers_block_type.count('mamba')
+            num_attention_layers = stored_layers_block_type.count('attention')
             use_cache = False
             wrapped_cache_params = None
 
@@ -8333,20 +8425,20 @@ class NemotronHModelPatcher(OVDecoderModelPatcher):
             causal_lm_output = self.model_orig_forward(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                past_key_values=wrapped_cache_params,
+                cache_params=wrapped_cache_params,
                 use_cache=use_cache,
             )
             outputs = {'logits': causal_lm_output.logits}
 
             if use_cache:
-                past_key_values = causal_lm_output.past_key_values
+                cache_params = causal_lm_output.cache_params
                 present_key_values = []
                 for idx in range(num_mamba_layers):
-                    present_key_values.append(past_key_values.conv_states[idx])
-                    present_key_values.append(past_key_values.ssm_states[idx])
+                    present_key_values.append(cache_params.conv_states[idx])
+                    present_key_values.append(cache_params.ssm_states[idx])
                 for idx in range(num_attention_layers):
-                    present_key_values.append(past_key_values.key_cache[idx])
-                    present_key_values.append(past_key_values.value_cache[idx])
+                    present_key_values.append(cache_params.key_cache[idx])
+                    present_key_values.append(cache_params.value_cache[idx])
                 outputs['present_key_values'] = present_key_values
 
             return outputs
@@ -8359,12 +8451,27 @@ class NemotronHModelPatcher(OVDecoderModelPatcher):
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
-        for layer in self._model.model.layers:
-            if layer.block_type == 'mamba':
+        # Get or build layers_block_type for reference
+        for layer_idx, layer in enumerate(self._model.backbone.layers):
+            layer._orig_forward = layer.forward
+            layer.forward = types.MethodType(nemotron_h_block_forward_patched, layer)
+            
+            # Determine block type: either from layer.block_type or from stored_layers_block_type
+            if hasattr(layer, 'block_type'):
+                block_type = layer.block_type
+            elif layer_idx < len(self.nemotron_layers_block_type):
+                block_type = self.nemotron_layers_block_type[layer_idx]
+            else:
+                continue  # Skip if we can't determine block type
+            
+            # Store block_type on layer for future reference
+            layer.block_type = block_type
+            
+            if block_type == 'mamba':
                 mamba_layer = layer.mixer
                 mamba_layer._orig_forward = mamba_layer.forward
                 mamba_layer.forward = types.MethodType(nemotron_h_mamba_mixer_forward, mamba_layer)
-            elif layer.block_type == 'moe':
+            elif block_type == 'moe':
                 moe_layer = layer.mixer
                 moe_layer._orig_forward = moe_layer.forward
                 moe_layer.forward = types.MethodType(nemotron_h_moe_forward, moe_layer)
@@ -8373,7 +8480,8 @@ class NemotronHModelPatcher(OVDecoderModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
 
-        for layer in self._model.model.layers:
+        for layer in self._model.backbone.layers:
+            layer.forward = layer._orig_forward
             if layer.block_type in ('mamba', 'moe'):
                 layer.mixer.forward = layer.mixer._orig_forward
 
