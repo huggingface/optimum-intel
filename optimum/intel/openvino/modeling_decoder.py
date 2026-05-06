@@ -1118,6 +1118,19 @@ class OVCacheWithMambaStates(MambaCache):
             self.mamba_headdim = getattr(config, "mamba_d_head", None)
             self.num_mamba_layers = layer_types.count("mamba")
             self.num_attn_layers = layer_types.count("attention")
+        elif config.model_type == "nemotron_h":
+            layer_types = getattr(config, "layer_types", getattr(config, "layers_block_type", None))
+            self.num_key_value_heads = getattr(config, "num_key_value_heads", None)
+            self.head_dim = getattr(config, "head_dim", None)
+            self.mamba_ngroups = getattr(config, "n_groups", None)
+            self.n_mamba_heads = getattr(config, "mamba_num_heads", None)
+            self.ssm_state_size = getattr(config, "ssm_state_size", None)
+            self.mamba_headdim = getattr(config, "mamba_head_dim", None)
+            self.mamba_d_conv = getattr(config, "conv_kernel", None)
+            self.mamba_expand = getattr(config, "expand", None)
+            self.mamba_d_state = getattr(config, "ssm_state_size", None)
+            self.num_mamba_layers = layer_types.count("mamba")
+            self.num_attn_layers = layer_types.count("attention")
         else:
             # Mamba 2 specific parameters
             hybrid_layer_ids = getattr(config, "hybrid_layer_ids", None)
@@ -1141,7 +1154,13 @@ class OVCacheWithMambaStates(MambaCache):
         if self.conv_states is None:
             self.conv_states = []
             for _ in range(self.num_mamba_layers):
-                if (
+                if config.model_type == "nemotron_h":
+                    conv_state_shape = (
+                        self.max_batch_size,
+                        self.n_mamba_heads * self.mamba_headdim + 2 * self.mamba_ngroups * self.mamba_d_state,
+                        self.mamba_d_conv,
+                    )
+                elif (
                     self.mamba_ngroups
                     and self.mamba_d_state
                     and self.mamba_d_conv
@@ -1163,27 +1182,26 @@ class OVCacheWithMambaStates(MambaCache):
 
         self.ssm_states = ssm_states
         if self.ssm_states is None:
-            self.ssm_states: List[torch.Tensor] = []
-            if config.model_type in ["lfm2_moe", "lfm2"]:
-                for _ in range(self.num_mamba_layers):
-                    if self.n_mamba_heads and self.mamba_headdim:
-                        # Mamba2 block
-                        ssm_state_shape = (
-                            self.max_batch_size,
-                            self.n_mamba_heads,
-                            self.mamba_headdim,
-                            self.ssm_state_size,
-                        )
-                    else:
-                        # Mamba block
-                        ssm_state_shape = (self.max_batch_size, self.intermediate_size, self.ssm_state_size)
-
-                    ssm_state: torch.Tensor = torch.zeros(
-                        ssm_state_shape,
-                        device=self.device,
-                        dtype=dtype,
+            self.ssm_states = []
+            for _ in range(self.num_mamba_layers):
+                if self.n_mamba_heads and self.mamba_headdim:
+                    # Mamba2 block
+                    ssm_state_shape = (
+                        self.max_batch_size,
+                        self.n_mamba_heads,
+                        self.mamba_headdim,
+                        self.ssm_state_size,
                     )
-                    self.ssm_states.append(ssm_state)
+                else:
+                    # Mamba block
+                    ssm_state_shape = (self.max_batch_size, self.intermediate_size, self.ssm_state_size)
+
+                ssm_state: torch.Tensor = torch.zeros(
+                    ssm_state_shape,
+                    device=self.device,
+                    dtype=dtype,
+                )
+                self.ssm_states.append(ssm_state)
 
         self.key_cache = key_cache
         if self.key_cache is None:
@@ -1457,13 +1475,8 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         # Overwitten -- uses `cache_params` as opposed to `past_key_values`
 
         if self.use_cache:
-            # `cache_position` should have been initialized in `generate`
             if cache_position is None:
-                raise ValueError(
-                    "`cache_position` should not be None as it should have been initialized in "
-                    "`model.generate`, you are responsible for passing in a valid `cache_position` if "
-                    "you are calling `prepare_inputs_for_generation` directly with `use_cache=True`"
-                )
+                cache_position = torch.arange(0, self.conv_kernel, device=input_ids.device)
             if cache_position[0] > 0:
                 # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)
@@ -1472,6 +1485,7 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                     "lfm2",
                     "lfm2_moe",
                     "granitemoehybrid",
+                    "nemotron_h",
                     "qwen3_next",
                     "qwen3_5_text",
                     "qwen3_5_moe_text",

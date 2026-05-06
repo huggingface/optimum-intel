@@ -162,6 +162,7 @@ from .model_patcher import (
     GptNeoxModelPatcher,
     GptOssModelPatcher,
     GraniteMoeHybridModelPatcher,
+    NemotronHModelPatcher,
     GraniteMoEModelPatcher,
     IBertModelPatcher,
     Idefics3ImageEmbeddingsModelPatcher,
@@ -5214,6 +5215,62 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         return past_key_values
 
 
+class NemotronHDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    """
+    Generates dummy cache_params inputs for NemotronH.
+    Cache layout is flat: all Mamba conv/ssm states first, then all attention key/value states.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("cache_params",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+        config = normalized_config.config
+        self.conv_dim = config.mamba_num_heads * config.mamba_head_dim + 2 * config.n_groups * config.ssm_state_size
+        self.conv_kernel_size = config.conv_kernel
+        self.ssm_state_size = config.ssm_state_size
+        self.num_mamba_heads = config.mamba_num_heads
+        self.mamba_head_dim = config.mamba_head_dim
+        self.n_groups = config.n_groups
+        self.num_key_value_heads = config.num_key_value_heads
+        self.head_dim = config.head_dim
+        self.num_mamba_layers = list(config.layers_block_type).count("mamba")
+        self.num_attention_layers = list(config.layers_block_type).count("attention")
+        self.sequence_length = 0
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        past_key_values = []
+        for _ in range(self.num_mamba_layers):
+            conv_state_shape = (self.batch_size, self.conv_dim, self.conv_kernel_size)
+            conv_state = self.random_float_tensor(conv_state_shape, framework=framework, dtype=float_dtype)
+            past_key_values.append(conv_state)
+            ssm_state_shape = (self.batch_size, self.num_mamba_heads, self.mamba_head_dim, self.ssm_state_size)
+            ssm_state = self.random_float_tensor(ssm_state_shape, framework=framework, dtype=float_dtype)
+            past_key_values.append(ssm_state)
+
+        for _ in range(self.num_attention_layers):
+            kv_shape = (self.batch_size, self.num_key_value_heads, self.sequence_length, self.head_dim)
+            k = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            v = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            past_key_values.append(k)
+            past_key_values.append(v)
+
+        return past_key_values
+
+
 @register_in_tasks_manager("zamba2", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
     PAD_ATTENTION_MASK_TO_PAST = False
@@ -5418,9 +5475,45 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
 @register_in_tasks_manager(
     "nemotron_h", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
-class NemotronHOpenVINOConfig(TextDecoderOnnxConfig):
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator,) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
+class NemotronHOpenVINOConfig(MambaOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, NemotronHDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = NemotronHDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    MIN_TRANSFORMERS_VERSION = "5.3.0"
+    _MODEL_PATCHER = NemotronHModelPatcher
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            cache_name_prefix = "cache_params.past"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            cache_name_prefix = "cache_params.present"
+
+        num_mamba_layers = list(self._normalized_config.layers_block_type).count("mamba")
+        num_attention_layers = list(self._normalized_config.layers_block_type).count("attention")
+        for i in range(num_mamba_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
+            inputs_or_outputs[f"{cache_name_prefix}.ssm.{i}"] = {0: "batch_size"}
+
+        for i in range(num_attention_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            common_inputs["attention_mask"] = {0: "batch_size", 1: "past_sequence_length + sequence_length"}
+            self.add_past_key_values(common_inputs, direction="inputs")
+        else:
+            common_inputs["attention_mask"] = {0: "batch_size", 1: "sequence_length"}
+        return common_inputs
 
 
 @register_in_tasks_manager("audio-spectrogram-transformer", *["feature-extraction", "audio-classification"])

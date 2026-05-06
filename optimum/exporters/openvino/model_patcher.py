@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 import torch
 import torch.nn.functional as F
 from torch import nn
-from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache
+from transformers.cache_utils import Cache, DynamicCache, DynamicLayer, EncoderDecoderCache, LinearAttentionLayer
 from transformers.configuration_utils import PretrainedConfig
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import (
@@ -7914,6 +7914,468 @@ def granite_moe_hybrid_update_causal_mask(
             causal_mask = new_causal_mask
 
     return causal_mask
+
+
+
+def nemotron_h_block_forward_patched(
+    self,
+    hidden_states,
+    cache_params=None,
+    cache_position=None,
+    attention_mask=None,
+):
+    """NemotronHBlock forward without torch.cuda.stream context manager (for CPU-based OV tracing)."""
+    residual = hidden_states
+    hidden_states = self.norm(hidden_states.to(dtype=self.norm.weight.dtype))
+    if self.residual_in_fp32:
+        residual = residual.to(torch.float32)
+
+    if self.block_type == "mamba":
+        hidden_states = self.mixer(
+            hidden_states, cache_params=cache_params, cache_position=cache_position
+        )
+    elif self.block_type == "attention":
+        hidden_states = self.mixer(
+            hidden_states, cache_position=cache_position
+        )
+        hidden_states = hidden_states[0]
+    elif self.block_type in ["mlp", "moe"]:
+        hidden_states = self.mixer(hidden_states)
+    else:
+        raise ValueError(f"Invalid block_type: {self.block_type}")
+
+    hidden_states = residual + hidden_states
+    return hidden_states
+
+
+def nemotron_h_mamba_mixer_forward(
+    self,
+    hidden_states,
+    cache_params=None,
+    cache_position=None,
+    attention_mask=None,
+):
+    """
+    Patched forward for NemotronHMamba2Mixer.
+    Both prefill and decode paths computed and blended to avoid data-dependent branching.
+    """
+    def pad_tensor_by_size(input_tensor, pad_size):
+        pad_shape = (0, 0, 0, 0, 0, pad_size, 0, 0) if len(input_tensor.shape) == 4 else (0, 0, 0, pad_size, 0, 0)
+        return torch.nn.functional.pad(input_tensor, pad_shape, mode="constant", value=0)
+
+    def reshape_into_chunks(input_tensor, pad_size, chunk_size):
+        input_tensor = pad_tensor_by_size(input_tensor, pad_size)
+        if len(input_tensor.shape) == 3:
+            return input_tensor.reshape(input_tensor.shape[0], -1, chunk_size, input_tensor.shape[2])
+        else:
+            return input_tensor.reshape(
+                input_tensor.shape[0], -1, chunk_size, input_tensor.shape[2], input_tensor.shape[3]
+            )
+
+    def segment_sum(input_tensor):
+        chunk_size = input_tensor.size(-1)
+        input_tensor = input_tensor[..., None].expand(*input_tensor.size(), chunk_size)
+        mask = torch.tril(
+            torch.ones(chunk_size, chunk_size, device=input_tensor.device, dtype=torch.bool), diagonal=-1
+        )
+        input_tensor = input_tensor.masked_fill(~mask, 0)
+        tensor_segsum = torch.cumsum(input_tensor, dim=-2)
+        mask = torch.tril(torch.ones(chunk_size, chunk_size, device=input_tensor.device, dtype=torch.bool), diagonal=0)
+        tensor_segsum = tensor_segsum.masked_fill(~mask, -torch.inf)
+        return tensor_segsum
+
+    input_states = hidden_states
+    layer_idx = self.layer_idx
+    if cache_params is not None and hasattr(cache_params, "mamba_layer_idx_mapping"):
+        layer_idx = cache_params.mamba_layer_idx_mapping[layer_idx]
+
+    batch_size, seq_len, _ = input_states.shape
+    dtype = input_states.dtype
+
+    is_decoding = torch.tensor(seq_len == 1).to(dtype)
+
+    if attention_mask is not None:
+        input_states_prefill = (input_states * attention_mask[:, :seq_len, None]).to(dtype)
+    else:
+        input_states_prefill = input_states.to(dtype)
+    input_states_dec = input_states
+    input_states = input_states_dec * is_decoding + input_states_prefill * (1.0 - is_decoding)
+    projected_states = self.in_proj(input_states)
+
+    d_mlp = (
+        projected_states.shape[-1]
+        - 2 * self.intermediate_size
+        - 2 * self.n_groups * self.ssm_state_size
+        - self.num_heads
+    ) // 2
+    _, _, gate, hidden_states, dt = projected_states.split(
+        [d_mlp, d_mlp, self.intermediate_size, self.conv_dim, self.num_heads], dim=-1
+    )
+
+    if cache_params is not None:
+        conv_state_dec = cache_params.conv_states[layer_idx]
+        conv_state_dec = torch.roll(conv_state_dec, shifts=-1, dims=-1)
+        conv_state_dec[:, :, -1] = hidden_states[:, 0, :] if hidden_states.ndim == 3 else hidden_states
+
+        hidden_states_dec = torch.sum(conv_state_dec.to(projected_states.device) * self.conv1d.weight[:, 0, :], dim=-1)
+        if self.use_conv_bias:
+            hidden_states_dec = hidden_states_dec + self.conv1d.bias
+        hidden_states_dec = self.act(hidden_states_dec).to(dtype)[:, None, ...]
+
+        hidden_states_prefill = hidden_states.transpose(1, 2)
+        conv_state_prefill = torch.nn.functional.pad(
+            hidden_states_prefill, (self.conv_kernel_size - hidden_states_prefill.shape[-1], 0)
+        )
+        hidden_states_prefill = self.act(self.conv1d(hidden_states_prefill).transpose(1, 2))[:, :seq_len, :]
+        if attention_mask is not None:
+            hidden_states_prefill = (hidden_states_prefill * attention_mask[:, :seq_len, None]).to(dtype)
+
+        conv_state = conv_state_prefill * (1.0 - is_decoding) + conv_state_dec * is_decoding
+        cache_params.conv_states[layer_idx].copy_(conv_state)
+    else:
+        hidden_states_prefill = self.act(self.conv1d(hidden_states.transpose(1, 2))[..., :seq_len].transpose(1, 2))
+        hidden_states_dec = hidden_states_prefill[:, :1]
+
+    hidden_states_prefill, B_prefill, C_prefill = torch.split(
+        hidden_states_prefill,
+        [self.intermediate_size, self.n_groups * self.ssm_state_size, self.n_groups * self.ssm_state_size],
+        dim=-1,
+    )
+    hidden_states_dec, B_dec, C_dec = torch.split(
+        hidden_states_dec,
+        [self.intermediate_size, self.n_groups * self.ssm_state_size, self.n_groups * self.ssm_state_size],
+        dim=-1,
+    )
+
+    A = -torch.exp(self.A_log.float())
+
+    if cache_params is not None:
+        dt_dec = dt
+        dt_dec = dt_dec.reshape(dt_dec.shape[0], -1, dt_dec.shape[-1])[:, :1, :]
+        dt_dec = dt_dec.transpose(1, 2).expand(batch_size, dt_dec.shape[-1], self.head_dim)
+        dt_bias_dec = self.dt_bias
+        dt_bias_dec = dt_bias_dec.reshape(dt_bias_dec.shape[0], -1).expand(dt_bias_dec.shape[0], self.head_dim)
+        dt_dec = torch.nn.functional.softplus(dt_dec + dt_bias_dec)
+        dt_dec = torch.clamp(dt_dec, self.time_step_min)
+
+        A_dec = A[..., None, None].expand(self.num_heads, self.head_dim, self.ssm_state_size).to(dtype=torch.float32)
+        dA = torch.exp(dt_dec[..., None] * A_dec)
+
+        B_dec = B_dec.reshape(batch_size, -1)[:, : self.n_groups * self.ssm_state_size]
+        B_dec = B_dec.reshape(batch_size, self.n_groups, -1)[..., None, :]
+        B_dec = B_dec.expand(batch_size, self.n_groups, self.num_heads // self.n_groups, B_dec.shape[-1]).contiguous()
+        B_dec = B_dec.reshape(batch_size, -1, B_dec.shape[-1])
+        dB = dt_dec[..., None] * B_dec[..., None, :]
+
+        hidden_states_dec = hidden_states_dec.reshape(batch_size, -1, self.head_dim)
+        dBx = dB * hidden_states_dec[..., None]
+
+        new_ssm_state_dec = cache_params.ssm_states[layer_idx] * dA + dBx
+
+        C_dec = C_dec.reshape(batch_size, -1)[:, : self.n_groups * self.ssm_state_size]
+        C_dec = C_dec.reshape(batch_size, self.n_groups, -1)[..., None, :]
+        C_dec = C_dec.expand(batch_size, self.n_groups, self.num_heads // self.n_groups, C_dec.shape[-1]).contiguous()
+        C_dec = C_dec.reshape(batch_size, -1, C_dec.shape[-1])
+
+        ssm_states_dec = new_ssm_state_dec.to(C_dec.dtype)
+        ssm_states_reshaped = ssm_states_dec.view(batch_size * self.num_heads, self.head_dim, self.ssm_state_size)
+        C_reshaped = C_dec.view(batch_size * self.num_heads, self.ssm_state_size, 1)
+        y_dec = torch.bmm(ssm_states_reshaped, C_reshaped)
+        y_dec = y_dec.view(batch_size, self.num_heads, self.head_dim)
+
+        D_dec = self.D
+        D_dec = D_dec[..., None].expand(D_dec.shape[0], self.head_dim)
+        y_dec = (y_dec + hidden_states_dec * D_dec).to(y_dec.dtype)
+        y_dec = y_dec.reshape(batch_size, -1)[:, None, ...]
+
+    dt = torch.nn.functional.softplus(dt + self.dt_bias)
+    dt = torch.clamp(dt, self.time_step_min)
+
+    hidden_states_prefill = hidden_states_prefill.reshape(batch_size, seq_len, -1, self.head_dim).float()
+    B_prefill = B_prefill.reshape(batch_size, seq_len, -1, self.ssm_state_size).float()
+    C_prefill = C_prefill.reshape(batch_size, seq_len, -1, self.ssm_state_size).float()
+    B_prefill = B_prefill.repeat_interleave(self.num_heads // self.n_groups, dim=2, output_size=self.num_heads)
+    C_prefill = C_prefill.repeat_interleave(self.num_heads // self.n_groups, dim=2, output_size=self.num_heads)
+    pad_size = (self.chunk_size - seq_len % self.chunk_size) % self.chunk_size
+
+    D_residual = self.D[..., None] * pad_tensor_by_size(hidden_states_prefill, pad_size)
+
+    hidden_states_prefill = hidden_states_prefill * dt[..., None]
+    A = A.to(hidden_states_prefill.dtype) * dt
+
+    hidden_states_prefill, A, B_prefill, C_prefill = [
+        reshape_into_chunks(t, pad_size, self.chunk_size) for t in (hidden_states_prefill, A, B_prefill, C_prefill)
+    ]
+
+    A = A.permute(0, 3, 1, 2)
+    A_cumsum = torch.cumsum(A, dim=-1)
+    L = torch.exp(segment_sum(A))
+
+    G_intermediate = C_prefill[:, :, :, None, :, :] * B_prefill[:, :, None, :, :, :]
+    G = G_intermediate.sum(dim=-1)
+
+    M_intermediate = G[..., None] * L.permute(0, 2, 3, 4, 1)[..., None]
+    M = M_intermediate.sum(dim=-1)
+
+    Y_diag = (M[..., None] * hidden_states_prefill[:, :, None]).sum(3)
+
+    decay_states = torch.exp(A_cumsum[:, :, :, -1:] - A_cumsum)
+    B_decay_contraction = B_prefill * decay_states.permute(0, 2, 3, 1)[..., None]
+
+    states = (
+        (
+            B_decay_contraction.permute(0, 1, 3, 2, 4)[..., None]
+            * hidden_states_prefill.permute(0, 1, 3, 2, 4)[..., None, :]
+        )
+        .sum(dim=3)
+        .permute(0, 1, 2, 4, 3)
+    )
+    previous_states = torch.zeros_like(states[:, :1])
+
+    states = torch.cat([previous_states, states], dim=1)
+    decay_chunk = torch.exp(segment_sum(torch.nn.functional.pad(A_cumsum[:, :, :, -1], (1, 0))))
+
+    states_permuted = states.permute(0, 2, 1, 3, 4)
+    result = (decay_chunk[..., None, None] * states_permuted[:, :, None, ...]).sum(dim=2)
+    new_states = result.permute(0, 2, 1, 3, 4)
+    states, new_ssm_state_prefill = new_states[:, :-1], new_states[:, -1]
+
+    state_decay_out = torch.exp(A_cumsum)
+    C_times_states = C_prefill[..., None, :] * states[:, :, None, ...]
+    state_decay_out_permuted = state_decay_out.permute(0, 2, 3, 1)
+    Y_off = C_times_states.sum(-1) * state_decay_out_permuted[..., None]
+
+    y = Y_diag + Y_off
+    y = y.reshape(batch_size, -1, self.num_heads, self.head_dim)
+    y = y + D_residual
+
+    pad_mask = torch.tensor(pad_size > 0).to(torch.long)
+    y_new_len = y.size(1) * (1 - pad_mask) + seq_len * pad_mask
+    y = y[:, :y_new_len]
+    y_prefill = y.reshape(batch_size, seq_len, -1)
+
+    if cache_params is not None:
+        y = y_prefill[:, :seq_len] * (1.0 - is_decoding) + y_dec * is_decoding
+        ssm_state = new_ssm_state_prefill * (1.0 - is_decoding) + new_ssm_state_dec * is_decoding
+        cache_params.ssm_states[layer_idx].copy_(ssm_state)
+    else:
+        y = y_prefill
+
+    scan_output = self.norm(y, gate)
+    contextualized_states = self.out_proj(scan_output.to(dtype))
+    return contextualized_states
+
+
+def nemotron_h_moe_forward(self, hidden_states):
+    """
+    Vectorized forward for NemotronHMoE.
+    Replaces data-dependent expert routing loops with batched matmuls.
+    """
+    residuals = hidden_states
+    orig_shape = hidden_states.shape
+    router_logits = self.gate(hidden_states)
+    topk_indices, topk_weights = self.route_tokens_to_experts(router_logits)
+    hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+
+    hidden_states = self.fc1_latent_proj(hidden_states)
+    num_tokens, hidden_dim = hidden_states.shape
+    num_experts = self.experts.num_experts
+
+    routing_weights = torch.zeros(
+        num_tokens,
+        num_experts,
+        dtype=topk_weights.dtype,
+        device=hidden_states.device,
+    )
+    routing_weights.scatter_(1, topk_indices, topk_weights)
+
+    expanded_hidden_states = hidden_states.unsqueeze(0).expand(num_experts, -1, -1)
+    up_proj = torch.bmm(expanded_hidden_states, self.experts.up_proj.transpose(1, 2))
+    up_proj = self.experts.act_fn(up_proj)
+    expert_outputs = torch.bmm(up_proj, self.experts.down_proj.transpose(1, 2))
+    expert_outputs = expert_outputs.permute(1, 0, 2)
+    hidden_states = (expert_outputs * routing_weights.unsqueeze(-1)).sum(dim=1)
+    hidden_states = self.fc2_latent_proj(hidden_states.to(hidden_states.dtype))
+
+    hidden_states = hidden_states.view(*orig_shape)
+    hidden_states = hidden_states + self.shared_experts(residuals)
+    return hidden_states
+
+
+class NemotronHModelPatcher(OVDecoderModelPatcher):
+    """
+    Model patcher for NemotronH (nemotron_h) hybrid Mamba-2 + MoE + attention models.
+    """
+
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        class NemotronHDynamicCacheWrap(Cache):
+            def __init__(self_cache, nemotron_config, conv_states, ssm_states, key_cache, value_cache):
+                self_cache.layers_block_type = list(nemotron_config.layers_block_type)
+                self_cache.mamba_layer_idx_mapping = {}
+                self_cache.attention_layer_idx_mapping = {}
+                self_cache.conv_states = conv_states
+                self_cache.ssm_states = ssm_states
+                self_cache.key_cache = key_cache
+                self_cache.value_cache = value_cache
+
+                layers = []
+                mamba_idx = 0
+                attention_idx = 0
+                for layer_idx, block_type in enumerate(self_cache.layers_block_type):
+                    if block_type == 'mamba':
+                        layer = LinearAttentionLayer(nemotron_config)
+                        layer.lazy_initialization(conv_states=conv_states[mamba_idx], recurrent_states=ssm_states[mamba_idx])
+                        layer.conv_states = conv_states[mamba_idx]
+                        layer.recurrent_states = ssm_states[mamba_idx]
+                        layer.has_previous_state = True
+                        self_cache.mamba_layer_idx_mapping[layer_idx] = mamba_idx
+                        mamba_idx += 1
+                    elif block_type == 'attention':
+                        layer = DynamicLayer(nemotron_config)
+                        layer.lazy_initialization(key_cache[attention_idx], value_cache[attention_idx])
+                        layer.keys = key_cache[attention_idx]
+                        layer.values = value_cache[attention_idx]
+                        layer.is_initialized = True
+                        self_cache.attention_layer_idx_mapping[layer_idx] = attention_idx
+                        attention_idx += 1
+                    else:
+                        layer = LinearAttentionLayer(nemotron_config)
+                    layers.append(layer)
+
+                super().__init__(layers=layers)
+
+            def update(
+                self_cache,
+                key_states: torch.Tensor,
+                value_states: torch.Tensor,
+                layer_idx: int,
+                cache_kwargs: Optional[dict[str, Any]] = None,
+            ) -> tuple[torch.Tensor, torch.Tensor]:
+                attention_idx = self_cache.attention_layer_idx_mapping[layer_idx]
+                if self_cache.key_cache[attention_idx].shape[-2] == 0:
+                    self_cache.key_cache[attention_idx] = key_states
+                    self_cache.value_cache[attention_idx] = value_states
+                else:
+                    self_cache.key_cache[attention_idx] = torch.cat([self_cache.key_cache[attention_idx], key_states], dim=2)
+                    self_cache.value_cache[attention_idx] = torch.cat(
+                        [self_cache.value_cache[attention_idx], value_states], dim=2
+                    )
+
+                layer = self_cache.layers[layer_idx]
+                layer.keys = self_cache.key_cache[attention_idx]
+                layer.values = self_cache.value_cache[attention_idx]
+                layer.is_initialized = True
+                return layer.keys, layer.values
+
+            def __getitem__(self_cache, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+                attention_idx = self_cache.attention_layer_idx_mapping[layer_idx]
+                return self_cache.key_cache[attention_idx], self_cache.value_cache[attention_idx]
+
+            def get_seq_length(self_cache, layer_idx: Optional[int] = 0) -> int:
+                if not self_cache.attention_layer_idx_mapping:
+                    return 0
+                if layer_idx not in self_cache.attention_layer_idx_mapping:
+                    layer_idx = next(iter(self_cache.attention_layer_idx_mapping))
+                attention_idx = self_cache.attention_layer_idx_mapping[layer_idx]
+                if len(self_cache.key_cache) <= attention_idx or self_cache.key_cache[attention_idx].numel() == 0:
+                    return 0
+                return self_cache.key_cache[attention_idx].shape[-2]
+
+            def has_previous_state(self_cache, layer_idx: int | None = None) -> bool:
+                if layer_idx is None:
+                    return any(layer.has_previous_state for idx, layer in enumerate(self_cache.layers) if idx in self_cache.mamba_layer_idx_mapping)
+                if layer_idx not in self_cache.mamba_layer_idx_mapping:
+                    return False
+                return self_cache.layers[layer_idx].has_previous_state
+
+        def patched_forward(
+            input_ids,
+            attention_mask=None,
+            cache_params=None,
+        ):
+            nemotron_config = self.real_config._config
+            num_mamba_layers = list(nemotron_config.layers_block_type).count('mamba')
+            num_attention_layers = list(nemotron_config.layers_block_type).count('attention')
+            use_cache = False
+            wrapped_cache_params = None
+
+            if cache_params is not None:
+                use_cache = True
+                conv_states = []
+                ssm_states = []
+                key_cache = []
+                value_cache = []
+
+                for idx in range(num_mamba_layers):
+                    conv_states.append(cache_params[2 * idx])
+                    ssm_states.append(cache_params[2 * idx + 1])
+
+                offset = 2 * num_mamba_layers
+                for idx in range(num_attention_layers):
+                    key_cache.append(cache_params[offset + 2 * idx])
+                    value_cache.append(cache_params[offset + 2 * idx + 1])
+
+                wrapped_cache_params = NemotronHDynamicCacheWrap(
+                    nemotron_config,
+                    conv_states,
+                    ssm_states,
+                    key_cache,
+                    value_cache,
+                )
+
+            causal_lm_output = self.model_orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                past_key_values=wrapped_cache_params,
+                use_cache=use_cache,
+            )
+            outputs = {'logits': causal_lm_output.logits}
+
+            if use_cache:
+                past_key_values = causal_lm_output.past_key_values
+                present_key_values = []
+                for idx in range(num_mamba_layers):
+                    present_key_values.append(past_key_values.conv_states[idx])
+                    present_key_values.append(past_key_values.ssm_states[idx])
+                for idx in range(num_attention_layers):
+                    present_key_values.append(past_key_values.key_cache[idx])
+                    present_key_values.append(past_key_values.value_cache[idx])
+                outputs['present_key_values'] = present_key_values
+
+            return outputs
+
+        self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+    def __enter__(self):
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
+        for layer in self._model.model.layers:
+            if layer.block_type == 'mamba':
+                mamba_layer = layer.mixer
+                mamba_layer._orig_forward = mamba_layer.forward
+                mamba_layer.forward = types.MethodType(nemotron_h_mamba_mixer_forward, mamba_layer)
+            elif layer.block_type == 'moe':
+                moe_layer = layer.mixer
+                moe_layer._orig_forward = moe_layer.forward
+                moe_layer.forward = types.MethodType(nemotron_h_moe_forward, moe_layer)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+
+        for layer in self._model.model.layers:
+            if layer.block_type in ('mamba', 'moe'):
+                layer.mixer.forward = layer.mixer._orig_forward
 
 
 class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):

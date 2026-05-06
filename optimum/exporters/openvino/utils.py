@@ -315,6 +315,7 @@ SSM_MODELS = [
     "lfm2",
     "lfm2_moe",
     "granitemoehybrid",
+    "nemotron_h",
     "qwen3_next",
     "qwen3_5_text",
     "qwen3_5_moe_text",
