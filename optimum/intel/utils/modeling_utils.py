@@ -535,17 +535,41 @@ class _KokoroForTextToSpeech:
         **kwargs,
     ):
         try:
-            from kokoro import KPipeline
+            from kokoro import KPipeline, KModel
         except ImportError:
             raise ImportError(
                 "To load a Kokoro TTS model, the `kokoro` package is required. "
                 "Please install it with `pip install kokoro`."
             )
 
-        pipeline = KPipeline(lang_code="a", repo_id=str(model_name_or_path))
-        model = pipeline.model
-        model._kokoro_model = True
-        model._kokoro_repo_id = str(model_name_or_path)
+        # Check if model_name_or_path is a local directory
+        model_path = Path(model_name_or_path)
+        is_local_dir = model_path.is_dir()
+
+        if is_local_dir:
+            # For local directories, load KModel directly from local artifacts.
+            config_file = model_path / "config.json"
+            if not config_file.exists():
+                raise FileNotFoundError(f"config.json not found in {model_path}")
+
+            # Find the model file (.pth) in the local directory
+            model_files = list(model_path.glob("*.pth"))
+            if not model_files:
+                raise FileNotFoundError(f"No .pth model file found in {model_path}")
+            local_model = KModel(
+                repo_id=str(model_name_or_path),
+                config=str(config_file),
+                model=str(model_files[0]),
+            )
+            model = local_model.to("cpu").eval()
+            model._kokoro_model = True
+            model._kokoro_repo_id = str(model_name_or_path)
+        else:
+            # For remote models, use standard KPipeline
+            pipeline = KPipeline(lang_code="a", repo_id=str(model_name_or_path))
+            model = pipeline.model
+            model._kokoro_model = True
+            model._kokoro_repo_id = str(model_name_or_path)
 
         # Load config.json and create a PretrainedConfig-like object
         config_path = Path(model_name_or_path)
