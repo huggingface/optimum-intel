@@ -153,7 +153,7 @@ MODEL_NAMES = {
     "mt5": "optimum-intel-internal-testing/mt5-tiny-random",
     "llava-qwen2": "optimum-intel-internal-testing/tiny-random-nanollava",
     "nanollava_vision_tower": "optimum-intel-internal-testing/tiny-random-siglip",
-    "nemotron_h": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+    "nemotron_h": "onnx-internal-testing/tiny-random-NemotronHForCausalLM",
     "nystromformer": "optimum-intel-internal-testing/tiny-random-NystromformerModel",
     "olmo": "optimum-intel-internal-testing/tiny-random-olmo-hf",
     "orion": "optimum-intel-internal-testing/tiny-random-orion",

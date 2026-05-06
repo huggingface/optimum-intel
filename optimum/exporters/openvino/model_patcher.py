@@ -8446,6 +8446,14 @@ class NemotronHModelPatcher(OVDecoderModelPatcher):
         self.orig_forward = patched_forward
 
     def __enter__(self):
+        # NemotronHForCausalLM uses .backbone instead of .model (Mamba-style structure)
+        # Add temporary alias so parent class OVDecoderModelPatcher works correctly
+        if not hasattr(self._model, "model") and hasattr(self._model, "backbone"):
+            self._model.model = self._model.backbone
+            self._nemotron_model_alias_added = True
+        else:
+            self._nemotron_model_alias_added = False
+
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
@@ -8525,6 +8533,13 @@ class NemotronHModelPatcher(OVDecoderModelPatcher):
             layer.forward = layer._orig_forward
             if layer.block_type in ('mamba', 'moe'):
                 layer.mixer.forward = layer.mixer._orig_forward
+
+        # Remove temporary alias
+        if getattr(self, "_nemotron_model_alias_added", False):
+            try:
+                delattr(self._model, "model")
+            except (AttributeError, TypeError):
+                pass
 
 
 class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):

@@ -5486,6 +5486,8 @@ class NemotronHNormalizedTextConfig(NormalizedTextConfig):
     - mamba_nheads -> mamba_num_heads (or computed)
     - mamba_d_ssm -> (computed or direct)
     """
+    # Declare support for tasks with past
+    SUPPORTS_PAST = True
     
     @property
     def layer_types(self):
