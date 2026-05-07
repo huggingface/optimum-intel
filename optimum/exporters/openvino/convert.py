@@ -556,6 +556,7 @@ def _save_kokoro_config_and_assets(model, output: Path):
     """Save Kokoro model config.json and export voice embeddings."""
     import json
     import tempfile
+    import urllib.request
 
     import numpy as np
     from huggingface_hub import hf_hub_download, list_repo_files
@@ -571,23 +572,8 @@ def _save_kokoro_config_and_assets(model, output: Path):
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config_dict, f, indent=2)
 
-    if repo_id is None:
-        return
-
-    # Export voice embeddings to .bin format
-    voices_dir = output / "voices"
-    voices_dir.mkdir(parents=True, exist_ok=True)
-
-    try:
-        repo_files = list_repo_files(repo_id=repo_id)
-    except Exception:
-        logger.warning(f"Could not list files for {repo_id}. Skipping voice export.")
-        return
-
     # Save misaki data files from GitHub to data dir of output directory
     try:
-        import urllib.request
-
         MISAKI_DATA_URL = "https://raw.githubusercontent.com/hexgrad/misaki/main/misaki/data"
         MISAKI_DATA_FILES = [
             "gb_gold.json", "gb_silver.json",
@@ -607,6 +593,19 @@ def _save_kokoro_config_and_assets(model, output: Path):
                 logger.warning(f"Failed to download {fname} from {url}: {e}")
     except Exception as e:
         logger.warning(f"Could not download misaki data files: {e}")
+
+    if repo_id is None:
+        return
+
+    # Export voice embeddings to .bin format
+    voices_dir = output / "voices"
+    voices_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        repo_files = list_repo_files(repo_id=repo_id)
+    except Exception:
+        logger.warning(f"Could not list files for {repo_id}. Skipping voice export.")
+        return
 
     voice_pt_files = sorted(path for path in repo_files if path.startswith("voices/") and path.endswith(".pt"))
     if not voice_pt_files:
