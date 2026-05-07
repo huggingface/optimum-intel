@@ -746,6 +746,10 @@ def export_from_model(
         if feature_extractor is not None:
             feature_extractor.save_pretrained(output.joinpath("feature_extractor"))
 
+        processor = getattr(model, "processor", None)
+        if processor is not None:
+            processor.save_pretrained(output.joinpath("processor"))
+
         tokenizer = getattr(model, "tokenizer", None)
         if tokenizer is not None:
             tokenizer.save_pretrained(output.joinpath("tokenizer"))
@@ -1012,6 +1016,7 @@ def get_diffusion_models_for_export_ext(
     is_sdxl = pipeline.__class__.__name__.startswith("StableDiffusionXL")
     is_sd3 = pipeline.__class__.__name__.startswith("StableDiffusion3")
     is_flux = pipeline.__class__.__name__.startswith("Flux")
+    is_qwen_image_edit = pipeline.__class__.__name__.startswith("QwenImageEdit")
     is_sana = pipeline.__class__.__name__.startswith("Sana")
     is_ltx_video = pipeline.__class__.__name__.startswith("LTX")
     is_sd = pipeline.__class__.__name__.startswith("StableDiffusion") and not is_sd3
@@ -1035,6 +1040,8 @@ def get_diffusion_models_for_export_ext(
         models_for_export = get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_flux:
         models_for_export = get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+    elif is_qwen_image_edit:
+        models_for_export = get_qwen_image_edit_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_sana:
         models_for_export = get_sana_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_ltx_video:
@@ -1369,6 +1376,121 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
 
     return models_for_export
 
+
+class _QwenImageTransformerExportWrapper(nn.Module):
+    def __init__(self, transformer):
+        super().__init__()
+        self.transformer = transformer
+        self.config = transformer.config
+
+    def forward(self, hidden_states, encoder_hidden_states, encoder_hidden_states_mask, timestep, img_shapes, guidance=None):
+        img_shapes_list = [tuple(int(v) for v in shape.tolist()) for shape in img_shapes]
+        outputs = self.transformer(
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_hidden_states_mask=encoder_hidden_states_mask,
+            timestep=timestep,
+            img_shapes=img_shapes_list,
+            guidance=guidance,
+            return_dict=False,
+        )
+        return {"sample": outputs[0]}
+
+
+class _QwenImageVaeEncoderExportWrapper(nn.Module):
+    def __init__(self, vae):
+        super().__init__()
+        self.vae = vae
+        self.config = vae.config
+
+    def forward(self, sample):
+        return {"latent_parameters": self.vae.encode(x=sample).latent_dist.parameters}
+
+
+class _QwenImageVaeDecoderExportWrapper(nn.Module):
+    def __init__(self, vae):
+        super().__init__()
+        self.vae = vae
+        self.config = vae.config
+
+    def forward(self, latent_sample):
+        return {"sample": self.vae.decode(z=latent_sample).sample}
+
+
+class _QwenImageTextEncoderExportWrapper(nn.Module):
+    def __init__(self, text_encoder):
+        super().__init__()
+        self.text_encoder = text_encoder
+        self.config = text_encoder.config
+
+    def forward(self, input_ids, attention_mask, pixel_values, image_grid_thw):
+        outputs = self.text_encoder(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            pixel_values=pixel_values,
+            image_grid_thw=image_grid_thw,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+        return {"last_hidden_state": outputs.hidden_states[-1]}
+
+
+def get_qwen_image_edit_models_for_export(pipeline, exporter, int_dtype, float_dtype):
+    models_for_export = {}
+
+    transformer = _QwenImageTransformerExportWrapper(pipeline.transformer)
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=transformer,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="qwen-image-transformer",
+    )
+    transformer_export_config = export_config_constructor(
+        pipeline.transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    transformer_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["transformer"] = (transformer, transformer_export_config)
+
+    vae_encoder = _QwenImageVaeEncoderExportWrapper(pipeline.vae)
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="qwen-image-vae-encoder",
+    )
+    vae_encoder_export_config = vae_config_constructor(pipeline.vae.config, int_dtype=int_dtype, float_dtype=float_dtype)
+    vae_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
+
+    vae_decoder = _QwenImageVaeDecoderExportWrapper(pipeline.vae)
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_decoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="qwen-image-vae-decoder",
+    )
+    vae_decoder_export_config = vae_config_constructor(pipeline.vae.config, int_dtype=int_dtype, float_dtype=float_dtype)
+    vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
+
+    text_encoder = getattr(pipeline, "text_encoder", None)
+    if text_encoder is not None:
+        text_encoder_wrapper = _QwenImageTextEncoderExportWrapper(text_encoder)
+        export_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=text_encoder_wrapper,
+            exporter=exporter,
+            library_name="transformers",
+            task="feature-extraction",
+            model_type="qwen-image-text-encoder",
+        )
+        export_config = export_config_constructor(text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype)
+        export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+        models_for_export["text_encoder"] = (text_encoder_wrapper, export_config)
+
+    return models_for_export
 
 def _get_encoder_decoder_stateful_models_for_export(
     model: "PreTrainedModel",

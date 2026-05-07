@@ -126,6 +126,11 @@ if is_diffusers_version(">=", "0.35.0"):
 else:
     CacheMixin = object
 
+if is_diffusers_version(">=", "0.38.0"):
+    from diffusers import QwenImageEditPipeline
+else:
+    QwenImageEditPipeline = object
+
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
 DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER = "text_encoder_3"
 
@@ -171,6 +176,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         tokenizer_2: Optional[CLIPTokenizer] = None,
         tokenizer_3: Optional[CLIPTokenizer] = None,
         feature_extractor: Optional[CLIPImageProcessor] = None,
+        processor: Optional[Any] = None,
         # stable diffusion xl specific arguments
         force_zeros_for_empty_prompt: bool = True,
         requires_aesthetics_score: bool = False,
@@ -250,6 +256,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         self.tokenizer_2 = tokenizer_2
         self.tokenizer_3 = tokenizer_3
         self.feature_extractor = feature_extractor
+        self.processor = processor
 
         # we allow passing these as torch models for now
         self.image_encoder = kwargs.pop("image_encoder", None)  # TODO: maybe mplement OVModelImageEncoder
@@ -269,6 +276,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "tokenizer_2": self.tokenizer_2,
             "tokenizer_3": self.tokenizer_3,
             "feature_extractor": self.feature_extractor,
+            "processor": self.processor,
             "requires_aesthetics_score": requires_aesthetics_score,
             "force_zeros_for_empty_prompt": force_zeros_for_empty_prompt,
             "add_watermarker": add_watermarker,
@@ -356,6 +364,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             self.tokenizer_3.save_pretrained(save_directory / "tokenizer_3")
         if self.feature_extractor is not None:
             self.feature_extractor.save_pretrained(save_directory / "feature_extractor")
+        if getattr(self, "processor", None) is not None:
+            self.processor.save_pretrained(save_directory / "processor")
         if getattr(self, "safety_checker", None) is not None:
             self.safety_checker.save_pretrained(save_directory / "safety_checker")
 
@@ -466,6 +476,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "tokenizer_2": None,
             "tokenizer_3": None,
             "feature_extractor": None,
+            "processor": None,
             "safety_checker": None,
             "image_encoder": None,
         }
@@ -1163,12 +1174,17 @@ class OVModelTextEncoder(OVPipelinePart):
         attention_mask: Optional[Union[np.ndarray, torch.Tensor]] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: bool = False,
+        **kwargs,
     ):
         self.compile()
         model_inputs = {"input_ids": input_ids}
 
         if "attention_mask" in self.input_names:
             model_inputs["attention_mask"] = attention_mask
+
+        for name, value in kwargs.items():
+            if value is not None and name in self.input_names:
+                model_inputs[name] = value
 
         ov_outputs = self.request(model_inputs, share_inputs=True)
         main_out = ov_outputs[0]
@@ -1185,6 +1201,8 @@ class OVModelTextEncoder(OVPipelinePart):
         ):
             hidden_states = [torch.from_numpy(ov_outputs[out_name]) for out_name in self.hidden_states_output_names]
             model_outputs["hidden_states"] = hidden_states
+        elif output_hidden_states and "last_hidden_state" in model_outputs:
+            model_outputs["hidden_states"] = [model_outputs["last_hidden_state"]]
 
         if return_dict:
             return model_outputs
@@ -1258,6 +1276,8 @@ class OVModelTransformer(OVPipelinePart):
         block_controlnet_hidden_states: List = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         encoder_attention_mask: torch.LongTensor = None,
+        encoder_hidden_states_mask: torch.LongTensor = None,
+        img_shapes: Optional[Union[torch.Tensor, List[Tuple[int, int, int]]]] = None,
         num_frames: Optional[int] = None,
         height: Optional[int] = None,
         width: Optional[int] = None,
@@ -1267,6 +1287,7 @@ class OVModelTransformer(OVPipelinePart):
         return_dict: bool = True,
     ):
         self.compile()
+        input_names = {inp.get_any_name() for inp in self.model.inputs}
 
         model_inputs = {
             "hidden_states": hidden_states,
@@ -1283,8 +1304,17 @@ class OVModelTransformer(OVPipelinePart):
         if guidance is not None:
             model_inputs["guidance"] = guidance
 
-        if encoder_attention_mask is not None:
+        if encoder_attention_mask is not None and "encoder_attention_mask" in input_names:
             model_inputs["encoder_attention_mask"] = encoder_attention_mask
+        if encoder_hidden_states_mask is not None:
+            if "encoder_hidden_states_mask" in input_names:
+                model_inputs["encoder_hidden_states_mask"] = encoder_hidden_states_mask
+            elif "encoder_attention_mask" in input_names:
+                model_inputs["encoder_attention_mask"] = encoder_hidden_states_mask
+        if img_shapes is not None and "img_shapes" in input_names:
+            if not isinstance(img_shapes, torch.Tensor):
+                img_shapes = torch.tensor(img_shapes)
+            model_inputs["img_shapes"] = img_shapes
         if num_frames is not None:
             model_inputs["num_frames"] = num_frames
         if height is not None:
@@ -1663,6 +1693,12 @@ class OVLTXPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTXPipel
     auto_model_class = LTXPipeline
 
 
+class OVQwenImageEditPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, QwenImageEditPipeline):
+    main_input_name = "image"
+    export_feature = "image-to-image"
+    auto_model_class = QwenImageEditPipeline
+
+
 SUPPORTED_OV_PIPELINES = [
     OVStableDiffusionPipeline,
     OVStableDiffusionImg2ImgPipeline,
@@ -1747,6 +1783,10 @@ if is_diffusers_version(">=", "0.32.0"):
 if is_diffusers_version(">=", "0.33.0"):
     SUPPORTED_OV_PIPELINES.append(OVSanaSprintPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana-sprint"] = OVSanaSprintPipeline
+
+if is_diffusers_version(">=", "0.38.0"):
+    SUPPORTED_OV_PIPELINES.append(OVQwenImageEditPipeline)
+    OV_IMAGE2IMAGE_PIPELINES_MAPPING["qwen-image-edit"] = OVQwenImageEditPipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,

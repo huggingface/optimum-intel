@@ -9464,3 +9464,36 @@ class Qwen3_5MoeModelPatcher(Qwen3_5ModelPatcher):
             if isinstance(decoder_layer.mlp, Qwen3_5MoeSparseMoeBlock):
                 sparse_moe_block = decoder_layer.mlp
                 sparse_moe_block.forward = sparse_moe_block._orig_forward
+
+
+
+def _qwen_image_causal_conv3d_forward_patched(self, x, cache_x=None):
+    padding = list(self._padding)
+    if cache_x is None and self._padding[4] > 0:
+        cache_x = x.new_zeros(x.shape[0], x.shape[1], self._padding[4], x.shape[3], x.shape[4])
+
+    if cache_x is not None and self._padding[4] > 0:
+        x = torch.cat([cache_x.to(x.device), x], dim=2)
+        padding[4] = max(padding[4] - cache_x.shape[2], 0)
+
+    x = F.pad(x, padding)
+    return nn.Conv3d.forward(self, x)
+
+
+class QwenImageVAEPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        self._original_forwards = {}
+        for name, module in self._model.named_modules():
+            if type(module).__name__ == 'QwenImageCausalConv3d':
+                self._original_forwards[name] = module.forward
+                module.forward = types.MethodType(_qwen_image_causal_conv3d_forward_patched, module)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        for name, module in self._model.named_modules():
+            if name in getattr(self, '_original_forwards', {}):
+                module.forward = self._original_forwards[name]
+        if hasattr(self, '_original_forwards'):
+            self._original_forwards.clear()
+        super().__exit__(exc_type, exc_value, traceback)
