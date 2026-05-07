@@ -163,6 +163,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             [
                 ("text-generation-with-past", "granitemoehybrid"),
                 ("text-generation-with-past", "smollm3"),
+                ("text-classification", "smollm3"),
+                ("feature-extraction", "smollm3"),
             ]
         )
 

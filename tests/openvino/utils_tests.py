@@ -389,6 +389,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 10,
         "text_embeddings_per_layer_model": 0,
     },
+    "smollm3": {"model": 30},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
