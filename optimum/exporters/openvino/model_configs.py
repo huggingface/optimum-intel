@@ -5999,7 +5999,7 @@ class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
     DUMMY_PKV_GENERATOR_CLASS = Qwen3_5DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     MIN_TRANSFORMERS_VERSION = "5.2.0"
-    MAX_TRANSFORMERS_VERSION = "5.2.99"
+    MAX_TRANSFORMERS_VERSION = "5.99.99"
     _MODEL_PATCHER = Qwen3_5ModelPatcher
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
@@ -6060,6 +6060,18 @@ class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
                     f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model ONNX config.'
                 )
 
+        if self.use_past_in_inputs and self.num_full_attn_layers > 0 and "attention_mask" in dummy_inputs:
+            past_present_length = (
+                dummy_inputs["input_ids"].shape[1]
+                + dummy_inputs["cache_params"][2 * self.num_linear_attn_layers].shape[2]
+            )
+            dummy_inputs["attention_mask"] = DummyInputGenerator.pad_input_on_dim(
+                dummy_inputs["attention_mask"],
+                desired_length=past_present_length,
+                dim=1,
+                dtype=dummy_inputs["attention_mask"].dtype,
+            )
+
         return dummy_inputs
 
 
@@ -6072,7 +6084,7 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
     MIN_TRANSFORMERS_VERSION = "5.2.0"
-    MAX_TRANSFORMERS_VERSION = "5.2.99"
+    MAX_TRANSFORMERS_VERSION = "5.99.99"
 
     def __init__(
         self,

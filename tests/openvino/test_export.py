@@ -324,6 +324,23 @@ class ExportModelTest(unittest.TestCase):
                     ov_model.model.get_rt_info()["optimum"]["transformers_version"], _transformers_version
                 )
 
+    @unittest.skipUnless(is_transformers_version(">=", "5.2.0"), "Qwen3.5 export requires Transformers >= 5.2.0")
+    def test_main_export_qwen3_5_text_generation(self):
+        model_name = MODEL_NAMES["qwen3_5"]
+
+        with TemporaryDirectory() as tmpdirname:
+            main_export(
+                model_name_or_path=model_name,
+                output=Path(tmpdirname),
+                task="text-generation-with-past",
+                model_loading_kwargs={"attn_implementation": "eager"},
+            )
+
+            ov_model = OVModelForCausalLM.from_pretrained(tmpdirname, use_cache=True)
+            self.assertIsInstance(ov_model, OVBaseModel)
+            self.assertEqual(ov_model.config.model_type, "qwen3_5_text")
+            self.assertTrue(ov_model.use_cache)
+
     def test_compare_openvino_onnx_supported_architectures(self):
         onnx_architectures = set()
         openvino_architectures = set()

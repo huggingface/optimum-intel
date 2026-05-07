@@ -335,6 +335,20 @@ def main_export(
             patch_qwenvl_configs()
 
         model_type = config.model_type
+        if (
+            task.startswith("text-generation")
+            and model_type in {"qwen3_5", "qwen3_5_moe"}
+            and hasattr(config, "text_config")
+            and getattr(config.text_config, "model_type", None) in TasksManager._SUPPORTED_MODEL_TYPE
+        ):
+            text_model_type = config.text_config.model_type
+            text_model_tasks = TasksManager.get_supported_tasks_for_model_type(
+                text_model_type, exporter="openvino", library_name=library_name
+            )
+            if task in text_model_tasks:
+                loading_kwargs.setdefault("config", config.text_config)
+                model_type = text_model_type
+
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             if custom_export_configs is None:
                 raise ValueError(

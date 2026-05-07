@@ -1429,12 +1429,17 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         self, outputs: ModelOutput, model_kwargs: Dict[str, Any], num_new_tokens: int = 1, **kwargs
     ) -> Dict[str, Any]:
         model_kwargs["cache_params"] = outputs.get("cache_params", None)
-        if (
-            model_kwargs.get("use_cache", True)
-            and "cache_position" in model_kwargs
-            and model_kwargs["cache_position"] is not None
-        ):
-            model_kwargs["cache_position"] = model_kwargs["cache_position"][-1:] + num_new_tokens
+        if model_kwargs.get("use_cache", True):
+            cache_position = model_kwargs.get("cache_position")
+            if cache_position is not None:
+                model_kwargs["cache_position"] = cache_position[-1:] + num_new_tokens
+            elif "attention_mask" in model_kwargs:
+                attention_mask = model_kwargs["attention_mask"]
+                model_kwargs["cache_position"] = torch.tensor(
+                    [attention_mask.shape[-1] + num_new_tokens - 1],
+                    device=attention_mask.device,
+                    dtype=torch.long,
+                )
 
         if "attention_mask" in model_kwargs:
             attention_mask = model_kwargs["attention_mask"]
@@ -1457,14 +1462,15 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         # Overwitten -- uses `cache_params` as opposed to `past_key_values`
 
         if self.use_cache:
-            # `cache_position` should have been initialized in `generate`
+            cache_has_previous_state = False
+            if cache_params is not None and hasattr(cache_params, "has_previous_state"):
+                cache_has_previous_state = cache_params.has_previous_state()
+
             if cache_position is None:
-                raise ValueError(
-                    "`cache_position` should not be None as it should have been initialized in "
-                    "`model.generate`, you are responsible for passing in a valid `cache_position` if "
-                    "you are calling `prepare_inputs_for_generation` directly with `use_cache=True`"
-                )
-            if cache_position[0] > 0:
+                prompt_length = attention_mask.shape[-1] if attention_mask is not None else input_ids.shape[-1]
+                cache_position = torch.arange(prompt_length, device=input_ids.device, dtype=torch.long)
+
+            if cache_position[0] > 0 or cache_has_previous_state:
                 # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)
 
@@ -1473,8 +1479,6 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                     "lfm2_moe",
                     "granitemoehybrid",
                     "qwen3_next",
-                    "qwen3_5_text",
-                    "qwen3_5_moe_text",
                 ]:
                     # LFM2, GraniteMoeHybrid (Granite-4.0), and Qwen3-Next require the attention mask
                     # to be the length of the full context, so default mask from OVModelForCausalLM needs to be used.
@@ -1482,7 +1486,7 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                     # for the decoding step after the first token so use attention mask of ones.
                     attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
 
-            else:
+            elif "cache_position" in self.input_names:
                 # we initialize the `cache_position` to full size of `conv_states` at prefill stage
                 # considering padding will be applied when input length is shorter, and truncation
                 # will be applied when it is longer, so it will be equivalent to always have it match

@@ -8602,7 +8602,9 @@ def qwen3_next_gated_delta_net_forward(
         # NOTE: attention mask is a 2D boolean tensor
         if attention_mask is not None and attention_mask.shape[1] > 1 and attention_mask.shape[0] > 1:
             dtype = hidden_states.dtype
-            hidden_states = (hidden_states * attention_mask[:, :, None]).to(dtype)
+            # Use unsqueeze instead of fancy indexing [:, :, None] to avoid OpenVINO conversion issues
+            # The fancy indexing creates complex Gather operations that fail with dynamic shapes
+            hidden_states = (hidden_states * attention_mask.unsqueeze(-1)).to(dtype)
 
         return hidden_states
 
@@ -8644,9 +8646,9 @@ def qwen3_next_gated_delta_net_forward(
         ],
         dim=-1,
     )
-    query = query.reshape(query.shape[0], query.shape[1], -1, self.head_k_dim)
-    key = key.reshape(key.shape[0], key.shape[1], -1, self.head_k_dim)
-    value = value.reshape(value.shape[0], value.shape[1], -1, self.head_v_dim)
+    query = query.reshape(batch_size, seq_len, -1, self.head_k_dim)
+    key = key.reshape(batch_size, seq_len, -1, self.head_k_dim)
+    value = value.reshape(batch_size, seq_len, -1, self.head_v_dim)
 
     beta = b.sigmoid()
     # If the model is loaded in fp16, without the .float() here, A might be -inf
@@ -8772,13 +8774,13 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextDynamicCache
+        from transformers.cache_utils import DynamicCache
 
         from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
 
         super().__init__(config, model, model_kwargs)
 
-        class Qwen3NextDynamicCacheWrap(Qwen3NextDynamicCache):
+        class Qwen3NextDynamicCacheWrap(DynamicCache):
             def __init__(self, config, conv_states, recurrent_states, key_cache, value_cache):
                 # Call parent constructor with all required arguments
                 super().__init__(config=config)
@@ -8789,15 +8791,19 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
                 self.value_cache = value_cache
                 self.full_attn_mapping = {}
                 self.linear_attn_mapping = {}
+                self.transformer_layers = list(range(len(config.layer_types)))
+                self.last_linear_layer = None
+                
                 full_attn_layer_idx = 0
                 linear_attn_layer_idx = 0
                 for i in range(len(config.layer_types)):
-                    if self.layer_types[i] == "full_attention":
+                    if config.layer_types[i] == "full_attention":
                         self.full_attn_mapping[i] = full_attn_layer_idx
                         full_attn_layer_idx += 1
-                    elif self.layer_types[i] == "linear_attention":
+                    elif config.layer_types[i] == "linear_attention":
                         self.linear_attn_mapping[i] = linear_attn_layer_idx
                         linear_attn_layer_idx += 1
+                        self.last_linear_layer = i
 
             def update(
                 self,
@@ -8821,12 +8827,18 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
                 """Returns the sequence length of the cached states. A layer index can be optionally passed."""
                 # take any layer that contains cache and not empty tensor
                 layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
+                # Find first full attention layer
+                if layer_idx not in self.full_attn_mapping:
+                    # If the given layer is not a full attention layer, find the first full attention layer
+                    for idx in self.transformer_layers:
+                        if idx in self.full_attn_mapping:
+                            layer_idx = idx
+                            break
                 layer_idx = self.full_attn_mapping[layer_idx]
                 if len(self.key_cache) <= layer_idx or self.key_cache[layer_idx] is None:
                     return 0
                 return self.key_cache[layer_idx].shape[-2]
 
-            @property
             def has_previous_state(self):
                 """We have a previous state if the last linear (conv) layer was already updated."""
                 layer_idx = self.linear_attn_mapping[self.last_linear_layer]
@@ -8898,10 +8910,6 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
         self.conversion_extensions = [
             ConversionExtension("RecurrentAttentionCellOp", convert_recurrent_attention_cell),
         ]
-
-        from transformers.models.qwen3_5 import modeling_qwen3_5
-
-        self._orig_qwen3_5_create_causal_mask = modeling_qwen3_5.create_causal_mask
 
     def __enter__(self):
         from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextSparseMoeBlock
@@ -9171,7 +9179,9 @@ def qwen3_5_gated_delta_net_forward(
         # NOTE: attention mask is a 2D boolean tensor
         if attention_mask is not None and attention_mask.shape[1] > 1 and attention_mask.shape[0] > 1:
             dtype = hidden_states.dtype
-            hidden_states = (hidden_states * attention_mask[:, :, None]).to(dtype)
+            # Use unsqueeze instead of fancy indexing [:, :, None] to avoid OpenVINO conversion issues
+            # The fancy indexing creates complex Gather operations that fail with dynamic shapes
+            hidden_states = (hidden_states * attention_mask.unsqueeze(-1)).to(dtype)
 
         return hidden_states
 
@@ -9214,9 +9224,9 @@ def qwen3_5_gated_delta_net_forward(
         ],
         dim=-1,
     )
-    query = query.reshape(query.shape[0], query.shape[1], -1, self.head_k_dim)
-    key = key.reshape(key.shape[0], key.shape[1], -1, self.head_k_dim)
-    value = value.reshape(value.shape[0], value.shape[1], -1, self.head_v_dim)
+    query = query.reshape(batch_size, seq_len, -1, self.head_k_dim)
+    key = key.reshape(batch_size, seq_len, -1, self.head_k_dim)
+    value = value.reshape(batch_size, seq_len, -1, self.head_v_dim)
 
     beta = b.sigmoid()
     # If the model is loaded in fp16, without the .float() here, A might be -inf
@@ -9258,7 +9268,7 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DynamicCache
+        from transformers.cache_utils import DynamicCache
 
         from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
 
@@ -9275,7 +9285,7 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
             self._text_model = self._model.model
             self._text_config = self._model.model.config
 
-        class Qwen3_5DynamicCacheWrap(Qwen3_5DynamicCache):
+        class Qwen3_5DynamicCacheWrap(DynamicCache):
             def __init__(self, config, conv_states, recurrent_states, key_cache, value_cache):
                 # Call parent constructor with all required arguments
                 super().__init__(config=config)
@@ -9286,15 +9296,19 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
                 self.value_cache = value_cache
                 self.full_attn_mapping = {}
                 self.linear_attn_mapping = {}
+                self.transformer_layers = list(range(len(config.layer_types)))
+                self.last_linear_layer = None
+
                 full_attn_layer_idx = 0
                 linear_attn_layer_idx = 0
                 for i in range(len(config.layer_types)):
-                    if self.layer_types[i] == "full_attention":
+                    if config.layer_types[i] == "full_attention":
                         self.full_attn_mapping[i] = full_attn_layer_idx
                         full_attn_layer_idx += 1
-                    elif self.layer_types[i] == "linear_attention":
+                    elif config.layer_types[i] == "linear_attention":
                         self.linear_attn_mapping[i] = linear_attn_layer_idx
                         linear_attn_layer_idx += 1
+                        self.last_linear_layer = i
 
             def update(
                 self,
@@ -9318,15 +9332,26 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
                 """Returns the sequence length of the cached states. A layer index can be optionally passed."""
                 # take any layer that contains cache and not empty tensor
                 layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
+                # Find first full attention layer
+                if layer_idx not in self.full_attn_mapping:
+                    # If the given layer is not a full attention layer, find the first full attention layer
+                    for idx in self.transformer_layers:
+                        if idx in self.full_attn_mapping:
+                            layer_idx = idx
+                            break
                 layer_idx = self.full_attn_mapping[layer_idx]
                 if len(self.key_cache) <= layer_idx or self.key_cache[layer_idx] is None:
                     return 0
                 return self.key_cache[layer_idx].shape[-2]
 
-            @property
-            def has_previous_state(self):
-                """We have a previous state if the last linear (conv) layer was already updated."""
-                layer_idx = self.linear_attn_mapping[self.last_linear_layer]
+            def get_mask_sizes(self, query_length: int, layer_idx: int) -> tuple[int, int]:
+                return self.get_seq_length(layer_idx) + query_length, 0
+
+            def has_previous_state(self, layer_idx: Optional[int] = None):
+                """We have a previous state if the requested linear layer cache is already populated."""
+                if layer_idx is None:
+                    layer_idx = self.last_linear_layer
+                layer_idx = self.linear_attn_mapping[layer_idx]
                 return self.conv_states[layer_idx] is not None
 
         # the patch is needed to include KV-cache, Conv, and SSM states in the inputs and outputs.
@@ -9379,6 +9404,7 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
                 causal_lm_output = self.model_orig_forward(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
+                    position_ids=position_ids,
                     past_key_values=wrapped_cache_params,
                     use_cache=use_cache,
                 )
@@ -9412,6 +9438,10 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
         self.conversion_extensions = [
             ConversionExtension("RecurrentAttentionCellOp", convert_recurrent_attention_cell),
         ]
+
+        from transformers.models.qwen3_5 import modeling_qwen3_5
+
+        self._orig_qwen3_5_create_causal_mask = modeling_qwen3_5.create_causal_mask
 
     def __enter__(self):
         super().__enter__()
