@@ -1254,6 +1254,32 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
     main_input_name = "input_features"
     export_feature = "automatic-speech-recognition"
 
+    def _prepare_decoder_input_ids_for_generation(self, batch_size, model_input_name, model_kwargs, decoder_start_token_id, device=None):
+        """
+        For qwen3_asr: skip prepending decoder_start_token_id since the full prompt
+        (including chat template tokens) is already provided as decoder_input_ids.
+        This matches the PyTorch model behavior where input_ids is used as-is.
+        """
+        if getattr(self.config, "model_type", None) == "qwen3_asr":
+            if model_kwargs is not None and "decoder_input_ids" in model_kwargs:
+                decoder_input_ids = model_kwargs.pop("decoder_input_ids")
+            elif "input_ids" in model_kwargs and model_input_name != "input_ids":
+                decoder_input_ids = model_kwargs.pop("input_ids")
+            else:
+                decoder_input_ids = None
+
+            if decoder_input_ids is None:
+                # Fallback to default behavior if no decoder_input_ids provided
+                return super()._prepare_decoder_input_ids_for_generation(
+                    batch_size, model_input_name, model_kwargs, decoder_start_token_id, device
+                )
+            # Return decoder_input_ids as-is without prepending decoder_start_token_id
+            return decoder_input_ids, model_kwargs
+
+        return super()._prepare_decoder_input_ids_for_generation(
+            batch_size, model_input_name, model_kwargs, decoder_start_token_id, device
+        )
+
     def prepare_inputs_for_generation(
         self,
         decoder_input_ids,

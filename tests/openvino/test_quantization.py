@@ -1063,6 +1063,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelOpenCLIPForZeroShotImageClassification, "open-clip", False),
         (OVModelForVisualCausalLM, "llava", False),
         (OVModelForVisualCausalLM, "qwen2_vl", False),
+        (OVModelForSpeechSeq2Seq, "qwen3_asr", True),
     ]
 
     if is_transformers_version("<", "4.54.0"):
@@ -1337,11 +1338,14 @@ class OVWeightCompressionTest(unittest.TestCase):
         name_func=lambda testcase_func, param_num, params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[1])}",
     )
     def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type, trust_remote_code):
+
+        # Qwn3-ASR fails with stateful=False
+        stateful = False if model_type != "qwen3_asr" else True
         model = model_cls.from_pretrained(
             MODEL_NAMES[model_type],
             export=True,
             load_in_8bit=True,
-            stateful=False,
+            stateful=stateful,
             trust_remote_code=trust_remote_code,
         )
         ref_config = OVWeightQuantizationConfig(bits=8, sym=isinstance(model, OVModelForVisualCausalLM)).to_dict()

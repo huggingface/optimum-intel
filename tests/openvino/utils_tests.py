@@ -178,6 +178,7 @@ MODEL_NAMES = {
     "qwen3_next": "optimum-intel-internal-testing/tiny-random-qwen3-next",
     "qwen3_5": "optimum-intel-internal-testing/tiny-random-qwen3.5",
     "qwen3_5_moe": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
+    "qwen3_asr": "optimum-intel-internal-testing/tiny-random-qwen3-asr",
     "rembert": "optimum-intel-internal-testing/tiny-random-rembert",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",
     "roberta": "optimum-intel-internal-testing/tiny-random-roberta",
@@ -404,6 +405,10 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 10,
         "text_embeddings_per_layer_model": 0,
     },
+    "qwen3_asr": {
+        "encoder": 36,
+        "decoder": 30,
+    }
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -430,6 +435,7 @@ REMOTE_CODE_MODELS = (
     "minicpm3",
     "deepseek",
     "qwen3_eagle3",
+    "qwen3_asr",
 )
 
 if is_transformers_version("<", "5"):

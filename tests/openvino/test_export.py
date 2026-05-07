@@ -79,6 +79,7 @@ class ExportModelTest(unittest.TestCase):
         "roberta": OVModelForTokenClassification,
         "wav2vec2": OVModelForAudioClassification,
         "whisper": OVModelForSpeechSeq2Seq,
+        "qwen3_asr": OVModelForSpeechSeq2Seq,
         "blenderbot": OVModelForFeatureExtraction,
         "stable-diffusion": OVStableDiffusionPipeline,
         "stable-diffusion-xl": OVStableDiffusionXLPipeline,
@@ -164,6 +165,10 @@ class ExportModelTest(unittest.TestCase):
             model = MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
                 model_name, **loading_kwargs
             )
+        elif model_type == "qwen3_asr":
+            from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
+            model = Qwen3ASRForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
+            task = (task + "-with-past") if "automatic-speech-recognition" in task else (task,)
         else:
             model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
 
