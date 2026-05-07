@@ -1684,14 +1684,17 @@ class OVWeightCompressionTest(unittest.TestCase):
         )
         self.assertTrue(all(len(sample["input_ids"][0]) == 64 for sample in dataset["model"].get_data()))
 
-    @unittest.skipUnless(is_transformers_version(">=", "5.5.0"), "transformers >= 5.5.0 is required")
     @parameterized.expand(
         [
-            (MODEL_NAMES["gemma4"],),
-            (MODEL_NAMES["gemma4_moe"],),
+            ("gemma4",),
+            ("gemma4_moe",),
         ]
+        if is_transformers_version(">=", "5.5.0")
+        else [],
+        name_func=lambda testcase_func, param_num, params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[0])}",
     )
-    def test_build_dataset(self, model_id):
+    def test_build_dataset(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
         model = OVModelForVisualCausalLM.from_pretrained(model_id, export=True, load_in_8bit=False)
         dataset_builder = OVCalibrationDatasetBuilder(model)
         dataset = dataset_builder.build_from_quantization_config(
