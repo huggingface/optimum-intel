@@ -1691,6 +1691,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         ]
         if is_transformers_version(">=", "5.5.0")
         else [],
+        skip_on_empty=True,
         name_func=lambda testcase_func, param_num, params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[0])}",
     )
     def test_build_dataset(self, model_arch):
