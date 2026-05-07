@@ -8505,9 +8505,14 @@ def patched_recurrent_gated_delta_rule(
         last_recurrent_state,  # (B, H, D1, D2)
     )
 
-    num_elems = value.numel()
-    core_attn_out = output_cell[:num_elems].reshape(value.shape)
-    last_recurrent_state = output_cell[num_elems:].reshape(last_recurrent_state.shape)
+    # output_cell has shape (B, H, T+D1, D2) where D1=k_head_dim is a static Python int.
+    # Use static negative indexing to split without any reshape operation:
+    #   core_attn_out:        output_cell[:, :, :-D1, :] -> (B, H, T,  D2)
+    #   last_recurrent_state: output_cell[:, :, -D1:,  :] -> (B, H, D1, D2)
+    # This avoids the previously invalid reshape([-1, H, -1, D2]) with two dynamic dims.
+    head_k_dim = k_head_dim
+    core_attn_out = output_cell[:, :, :-head_k_dim, :]
+    last_recurrent_state = output_cell[:, :, -head_k_dim:, :]
 
     if not output_final_state:
         last_recurrent_state = None
@@ -8694,7 +8699,11 @@ class RecurrentAttentionCell(torch.nn.Module):
         # This is a workaround to ensure a single output from the torch.nn.Module.
         # The OpenVINO ModuleExtension mechanism has a limitation and expects
         # the module to produce only one output.
-        output_cell = torch.cat([core_attn_out.flatten(), last_recurrent_state.flatten()], dim=0)
+        # Concatenate along dim 2 (sequence/key-head-dim axis) rather than flattening
+        # to 1D. This avoids downstream reshape with two dynamic dims (batch + seq).
+        # core_attn_out: (B, H, T, D2), last_recurrent_state: (B, H, D1, D2)
+        # Combined: (B, H, T+D1, D2) - split downstream using static -D1 indexing.
+        output_cell = torch.cat([core_attn_out, last_recurrent_state], dim=2)
         return output_cell
 
 

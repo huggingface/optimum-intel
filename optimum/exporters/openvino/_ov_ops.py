@@ -104,10 +104,13 @@ def convert_recurrent_attention_cell(context):
     core_attn_out_new = loop.get_iter_value(core_attn_out_res.output(0), -1)
     last_recurrent_state_new = loop.get_iter_value(last_recurrent_state_res.output(0), -1)
 
-    flatten_shape = ops.constant([-1], dtype=np.int32)
-    core_attn_out_new = ops.reshape(core_attn_out_new, flatten_shape, False)
-    last_recurrent_state_new = ops.reshape(last_recurrent_state_new, flatten_shape, False)
-
-    final_output = ops.concat([core_attn_out_new, last_recurrent_state_new], 0)
+    # Concatenate along axis 2 (seq/key-head-dim axis) instead of flattening to 1D.
+    # core_attn_out_new: (B, H, T, D2), last_recurrent_state_new: (B, H, D1, D2)
+    # Combined output: (B, H, T+D1, D2)
+    #
+    # This avoids flattening+reshape which would require a reshape with two dynamic
+    # dimensions (batch and seq) — invalid in OpenVINO (only one -1 allowed per reshape).
+    # The downstream code splits using static negative indexing with the known D1=head_k_dim.
+    final_output = ops.concat([core_attn_out_new, last_recurrent_state_new], 2)
 
     return [final_output.output(0)]
