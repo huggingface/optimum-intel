@@ -162,6 +162,64 @@ def patch_update_causal_mask(
             inner_model._update_causal_mask = types.MethodType(patch_fn, inner_model)
 
 
+def _create_causal_mask_ov_compatible(
+    config=None,
+    input_embeds=None,
+    inputs_embeds=None,
+    attention_mask=None,
+    cache_position=None,
+    past_key_values=None,
+    position_ids=None,
+    **kwargs,
+):
+    inputs_embeds = inputs_embeds if inputs_embeds is not None else input_embeds
+    if inputs_embeds is None:
+        raise ValueError("inputs_embeds or input_embeds must be provided")
+
+    batch_size, sequence_length = inputs_embeds.shape[:2]
+    dtype, device = inputs_embeds.dtype, inputs_embeds.device
+    min_dtype = torch.tensor(torch.finfo(torch.float16).min, device=device, dtype=dtype)
+
+    if cache_position is None:
+        if position_ids is not None:
+            if position_ids.ndim == 3:
+                cache_position = position_ids[0]
+            else:
+                cache_position = position_ids
+        else:
+            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+            cache_position = torch.arange(
+                past_seen_tokens, past_seen_tokens + sequence_length, device=device, dtype=torch.long
+            )
+
+    if cache_position.ndim == 1:
+        cache_position = cache_position.unsqueeze(0).expand(batch_size, -1)
+    elif cache_position.ndim == 3:
+        cache_position = cache_position[0]
+
+    past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+    target_length = (
+        attention_mask.shape[-1] if isinstance(attention_mask, torch.Tensor) else past_seen_tokens + sequence_length
+    )
+
+    key_positions = torch.arange(target_length, device=device, dtype=cache_position.dtype).view(1, 1, -1)
+    query_positions = cache_position[:, :, None]
+    blocked = key_positions > query_positions
+    causal_mask = torch.where(
+        blocked[:, None, :, :],
+        min_dtype,
+        torch.zeros((batch_size, 1, sequence_length, target_length), dtype=dtype, device=device),
+    )
+
+    if attention_mask is not None:
+        if attention_mask.shape[-1] < target_length:
+            attention_mask = F.pad(attention_mask, (0, target_length - attention_mask.shape[-1]), value=0)
+        padding_mask = attention_mask[:, None, None, :target_length].to(torch.bool)
+        causal_mask = torch.where(padding_mask, causal_mask, min_dtype)
+
+    return causal_mask
+
+
 # adopted from https://github.com/huggingface/transformers/blob/f4014e75db0190792b3feeccfc5dc5b5f9f0ce7b/src/transformers/models/llama/modeling_llama.py#L1036
 def _update_causal_mask_patched(
     self,
@@ -8841,6 +8899,10 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
             ConversionExtension("RecurrentAttentionCellOp", convert_recurrent_attention_cell),
         ]
 
+        from transformers.models.qwen3_5 import modeling_qwen3_5
+
+        self._orig_qwen3_5_create_causal_mask = modeling_qwen3_5.create_causal_mask
+
     def __enter__(self):
         from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextSparseMoeBlock
 
@@ -9355,6 +9417,10 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
+        from transformers.models.qwen3_5 import modeling_qwen3_5
+
+        modeling_qwen3_5.create_causal_mask = _create_causal_mask_ov_compatible
+
         for idx, decoder_layer in enumerate(self._text_model.layers):
             layer_type = self._text_config.layer_types[idx]
             if layer_type == "linear_attention":
@@ -9367,6 +9433,11 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+
+        from transformers.models.qwen3_5 import modeling_qwen3_5
+
+        modeling_qwen3_5.create_causal_mask = self._orig_qwen3_5_create_causal_mask
+
         for idx, decoder_layer in enumerate(self._text_model.layers):
             layer_type = self._text_config.layer_types[idx]
             if layer_type == "linear_attention":
