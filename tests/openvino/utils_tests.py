@@ -349,7 +349,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_pos_model": 1,
     },
     "qwen3_5_moe": {
-        "lm_model": 102,
+        "lm_model": 110,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 1,
         "vision_embeddings_merger_model": 10,

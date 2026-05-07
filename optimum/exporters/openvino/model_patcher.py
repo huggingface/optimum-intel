@@ -9425,7 +9425,9 @@ def patched_qwen3_5_moe_sparse_moe_block(self, hidden_states: torch.Tensor) -> t
     act_fn = self.experts.act_fn
 
     # compute experts outputs in a vectorized form using torch.bmm
-    gate, up = torch.bmm(hidden_states, self.experts.gate_up_proj.transpose(1, 2)).chunk(2, dim=-1)
+    gate_proj, up_proj = self.experts.gate_up_proj.chunk(2, dim=-2)
+    gate = torch.bmm(hidden_states, gate_proj.transpose(1, 2))
+    up = torch.bmm(hidden_states, up_proj.transpose(1, 2))
     gate_up = act_fn(gate) * up
     next_states = torch.bmm(gate_up, self.experts.down_proj.transpose(1, 2))
     next_states = next_states.view(num_experts, batch_size, -1, hidden_dim)
