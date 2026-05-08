@@ -157,7 +157,10 @@ class LLMPipelineTestCase(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_outputs(self, model_arch):
-        if model_arch in ("xglm",) and is_openvino_version(">=", "2026.1.0"):
+        if model_arch in (
+            "xglm",
+            "persimmon",
+        ) and is_openvino_version(">=", "2026.1.0"):
             self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
         if (
             model_arch in ("mixtral", "qwen2_moe", "qwen3_moe", "gpt_oss")

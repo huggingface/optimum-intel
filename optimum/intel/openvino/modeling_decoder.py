@@ -31,15 +31,21 @@ from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
 from transformers.generation.utils import GenerateOutput, GenerationMode
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
-from transformers.models.mamba.modeling_mamba import MambaCache
 from transformers.utils.hub import PushToHubMixin
+
+from ..utils.import_utils import compare_versions, is_transformers_version
+
+
+if is_transformers_version("<", "5.5"):
+    from transformers.models.mamba.modeling_mamba import MambaCache
+else:
+    MambaCache = object
 
 from optimum.utils.normalized_config import NormalizedConfigManager
 
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
 from ...exporters.openvino.utils import SSM_MODELS
-from ..utils.import_utils import compare_versions
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import (
     OVConfig,
@@ -209,7 +215,12 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
 
     @staticmethod
     def _has_cache_inputs(model: openvino.Model) -> bool:
-        return any("past_key_values" in key.get_any_name() for key in model.inputs)
+        # `cache_params` is used by SSM/hybrid architectures (e.g. mamba, qwen3_next, qwen3_5)
+        # whose language model exposes conv/recurrent/key/value caches under the `cache_params.*` namespace
+        # instead of the standard `past_key_values.*` one.
+        return any(
+            "past_key_values" in key.get_any_name() or "cache_params" in key.get_any_name() for key in model.inputs
+        )
 
     @staticmethod
     def _get_model_with_updated_pkv_precision(model: openvino.Model, pkv_precision: Type) -> openvino.Model:
@@ -1457,7 +1468,14 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                 # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)
 
-                if self.config.model_type not in ["lfm2", "lfm2_moe", "granitemoehybrid", "qwen3_next"]:
+                if self.config.model_type not in [
+                    "lfm2",
+                    "lfm2_moe",
+                    "granitemoehybrid",
+                    "qwen3_next",
+                    "qwen3_5_text",
+                    "qwen3_5_moe_text",
+                ]:
                     # LFM2, GraniteMoeHybrid (Granite-4.0), and Qwen3-Next require the attention mask
                     # to be the length of the full context, so default mask from OVModelForCausalLM needs to be used.
                     # Other models like Mamba typically do not require an attention_mask

@@ -87,6 +87,8 @@ MODEL_NAMES = {
     "got_ocr2": "optimum-intel-internal-testing/tiny-random-got-ocr2-hf",
     "gemma3_text": "optimum-intel-internal-testing/tiny-random-gemma3-text",
     "gemma3": "optimum-intel-internal-testing/tiny-random-gemma3",
+    "gemma4": "optimum-intel-internal-testing/tiny-random-gemma4",
+    "gemma4_moe": "optimum-intel-internal-testing/tiny-random-gemma4-moe",
     "falcon": "optimum-intel-internal-testing/really-tiny-falcon-testing",
     "falcon-40b": "optimum-intel-internal-testing/tiny-random-falcon-40b",
     "falcon_mamba": "optimum-intel-internal-testing/tiny-falcon-mamba",
@@ -174,6 +176,8 @@ MODEL_NAMES = {
     "qwen3_moe": "optimum-intel-internal-testing/tiny-random-qwen3moe",
     "qwen3_vl": "optimum-intel-internal-testing/tiny-random-qwen3-vl",
     "qwen3_next": "optimum-intel-internal-testing/tiny-random-qwen3-next",
+    "qwen3_5": "optimum-intel-internal-testing/tiny-random-qwen3.5",
+    "qwen3_5_moe": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
     "rembert": "optimum-intel-internal-testing/tiny-random-rembert",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",
     "roberta": "optimum-intel-internal-testing/tiny-random-roberta",
@@ -343,6 +347,20 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 5,
         "vision_projection_model": 2,
     },
+    "qwen3_5": {
+        "lm_model": 70,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 10,
+        "vision_embeddings_pos_model": 1,
+    },
+    "qwen3_5_moe": {
+        "lm_model": 110,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 10,
+        "vision_embeddings_pos_model": 1,
+    },
     "sana": {
         "transformer": 58,
         "vae_decoder": 28,
@@ -381,6 +399,18 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "hunyuan_v1_dense": {"model": 32},
     "qwen3_eagle3": {"model": 20},
     "qwen3_next": {"model": 100},
+    "gemma4": {
+        "lm_model": 54,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 10,
+        "text_embeddings_per_layer_model": 1,
+    },
+    "gemma4_moe": {
+        "lm_model": 48,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 10,
+        "text_embeddings_per_layer_model": 0,
+    },
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"

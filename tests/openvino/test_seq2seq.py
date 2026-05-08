@@ -615,6 +615,12 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         # remote code models incompatible after transformers v5
         SUPPORTED_ARCHITECTURES += ["internvl_chat", "minicpmv"]
 
+    if is_transformers_version(">=", "5.5"):
+        SUPPORTED_ARCHITECTURES += ["gemma4", "gemma4_moe"]
+
+    if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
+        SUPPORTED_ARCHITECTURES += ["qwen3_5", "qwen3_5_moe"]
+
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("llava_next_video",)
@@ -650,6 +656,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "smolvlm",
             "llama4",
             "qwen3_vl",
+            "qwen3_5",
+            "qwen3_5_moe",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -820,6 +828,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         ov_model.generation_config.do_sample = False
         # minicpmo diverges after 20 tokens
         tokens_to_generate = 20 if model_arch == "minicpmo" else 30
+
         gen_config = GenerationConfig(
             max_new_tokens=tokens_to_generate,
             min_new_tokens=tokens_to_generate,

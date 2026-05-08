@@ -866,12 +866,16 @@ class OVCalibrationDatasetBuilder:
                     **inputs
                 )
 
-                language_model_inputs = self.model.language_model.prepare_inputs(
-                    input_ids=None,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    inputs_embeds=inputs_embeds,
-                )
+                prepare_inputs_kwargs = {
+                    "input_ids": None,
+                    "attention_mask": attention_mask,
+                    "position_ids": position_ids,
+                    "inputs_embeds": inputs_embeds,
+                }
+                if self.model.language_model.config.model_type == "gemma4":
+                    prepare_inputs_kwargs["per_layer_inputs"] = extra_outputs[0]
+
+                language_model_inputs = self.model.language_model.prepare_inputs(**prepare_inputs_kwargs)
 
                 collected_inputs["lm_model"].append(language_model_inputs)
 
