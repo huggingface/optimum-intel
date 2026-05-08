@@ -989,7 +989,7 @@ IMAGE_TO_IMAGE_EXAMPLE = r"""
     >>> from optimum.intel import {model_class}
     >>> processor = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
-    >>> pipe = pipeline("image-to-image", model=model, image_processor=processor)
+    >>> pipe = pipeline("image-to-image", model=model, feature_extractor=processor)
     >>> url = "https://huggingface.co/datasets/hf-internal-testing/dummy_image/resolve/main/colorful_cat.png"
     >>> image = Image.open(requests.get(url, stream=True).raw)
     >>> outputs = pipe(image)

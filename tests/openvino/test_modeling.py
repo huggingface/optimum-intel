@@ -35,7 +35,6 @@ from sentence_transformers import SentenceTransformer
 from transformers import (
     AutoImageProcessor,
     AutoFeatureExtractor,
-    AutoImageProcessor,
     AutoModel,
     AutoModelForAudioClassification,
     AutoModelForAudioFrameClassification,
@@ -1295,9 +1294,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
 
 
 class OVModelForImageToImageIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ("swin2sr",)
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(("swin2sr",))
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -1328,7 +1325,7 @@ class OVModelForImageToImageIntegrationTest(unittest.TestCase):
         del ov_model
         gc.collect()
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(("swin2sr",))
     def test_save_and_infer(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         ov_model = OVModelForImageToImage.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
