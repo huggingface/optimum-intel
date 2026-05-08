@@ -116,6 +116,7 @@ def _get_input_info(
                 else:
                     symbol = Symbol()
                     name_to_symbol[dim_name] = symbol
+                dim = Dimension(-1)
                 if isinstance(orig_dim_name, tuple):
                     dim = Dimension(min_value, max_value)
                 else:
