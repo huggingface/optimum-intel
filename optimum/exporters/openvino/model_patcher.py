@@ -3407,6 +3407,51 @@ def maira_vision_embed_forward(self, pixel_values):
     return self.get_image_features(pixel_values, vision_feature_layer, vision_feature_select_strategy)
 
 
+def mistral3_vision_embed_forward(self, pixel_values):
+    import torch
+
+    batch_size = pixel_values.shape[0]
+    image_sizes = torch.tensor(
+        [[pixel_values.shape[-2], pixel_values.shape[-1]]] * batch_size, dtype=torch.int64, device=pixel_values.device
+    )
+    outputs = self.get_image_features(pixel_values=pixel_values, image_sizes=image_sizes, return_dict=True)
+    return outputs.pooler_output if hasattr(outputs, "pooler_output") else outputs
+
+
+def mistral3_patch_merger_forward(self, image_features: torch.Tensor, image_sizes: torch.Tensor) -> torch.Tensor:
+    image_size = image_sizes[0]
+    h = image_size[0] // self.patch_size
+    w = image_size[1] // self.patch_size
+    d = image_features.shape[-1]
+    image_grid = image_features.view(h, w, d).permute(2, 0, 1).unsqueeze(0)
+    grid = torch.nn.functional.unfold(image_grid, kernel_size=self.spatial_merge_size, stride=self.spatial_merge_size)
+    grid = grid.view(d * self.spatial_merge_size**2, -1).t()
+    return self.merging_layer(grid)
+
+
+class Mistral3ImageEmbeddingsModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(mistral3_vision_embed_forward, model)
+        model.model.multi_modal_projector.patch_merger.__orig_forward = model.model.multi_modal_projector.patch_merger.forward
+        model.model.multi_modal_projector.patch_merger.forward = types.MethodType(
+            mistral3_patch_merger_forward, model.model.multi_modal_projector.patch_merger
+        )
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        self._model.model.multi_modal_projector.patch_merger.forward = (
+            self._model.model.multi_modal_projector.patch_merger.__orig_forward
+        )
+
+
 class LlavaImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,

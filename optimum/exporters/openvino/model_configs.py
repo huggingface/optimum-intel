@@ -185,6 +185,7 @@ from .model_patcher import (
     MiniCPMModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
+    Mistral3ImageEmbeddingsModelPatcher,
     MistralModelPatcher,
     MixtralModelPatcher,
     MPTModelPatcher,
@@ -1460,6 +1461,21 @@ class MistralOpenVINOConfig(MistralOnnxConfig):
     ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
     DUMMY_PKV_GENERATOR_CLASS = OVMistralDummyPastKeyValuesGenerator
     _MODEL_PATCHER = MistralModelPatcher
+
+
+@register_in_tasks_manager(
+    "ministral3",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class Ministral3OpenVINOConfig(MistralOpenVINOConfig):
+    pass
 
 
 @register_in_tasks_manager(
@@ -4297,6 +4313,46 @@ class GotOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+
+@register_in_tasks_manager(
+    "mistral3", *["image-text-to-text", "text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "5.0.0"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return Mistral3ImageEmbeddingsModelPatcher(self, model, model_kwargs)
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs) -> Dict:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and self._config.model_type == "pixtral":
+            kwargs["batch_size"] = 1
+        return super().generate_dummy_inputs(framework, **kwargs)
 
 
 @register_in_tasks_manager("gemma3", *["image-text-to-text"], library_name="transformers")
