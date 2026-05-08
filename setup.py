@@ -33,8 +33,8 @@ INSTALL_REQUIRE = [
     "setuptools",
     "huggingface-hub>=0.23.2,<2.0",
     "nncf>=2.19.0",
-    "openvino>=2025.3.0,<2026.1",
-    "openvino-tokenizers>=2025.3.0,<2026.1",
+    "openvino>=2026.0",
+    "openvino-tokenizers>=2026.0",
 ]
 
 TESTS_REQUIRE = [
@@ -70,7 +70,7 @@ QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 
 EXTRAS_REQUIRE = {
     "nncf": ["nncf>=2.19.0"],
-    "openvino": ["nncf>=2.19.0", "openvino>=2025.3.0,<2026.1", "openvino-tokenizers>=2025.3.0,<2026.1"],
+    "openvino": ["nncf>=2.19.0", "openvino>=2026.0", "openvino-tokenizers>=2026.0"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,

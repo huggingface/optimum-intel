@@ -25,6 +25,7 @@ from utils_tests import (
 from optimum.exporters.openvino.model_configs import (
     BitnetOpenVINOConfig,
     DeepseekOpenVINOConfig,
+    LFM2MoeOpenVINOConfig,
     LFM2OpenVINOConfig,
     Qwen3VLOpenVINOConfig,
 )
@@ -34,7 +35,7 @@ from optimum.exporters.tasks import TasksManager
 from optimum.intel import OVModelForCausalLM, OVModelForSequenceClassification
 from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import is_transformers_version
+from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 
 
 if is_transformers_version(">=", "4.55"):
@@ -97,6 +98,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
         SUPPORTED_SSM_ARCHITECTURES += ("qwen3_next",)
+
+    if is_transformers_version(">=", "5.0"):
+        SUPPORTED_SSM_ARCHITECTURES += ("lfm2_moe",)
 
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
@@ -191,6 +195,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neo": 4,
         "gpt_neox": 5,
         "lfm2": 1,
+        "lfm2_moe": 2,
         "llama": 2,
         "llama4": 5,
         "marian": 2,
@@ -308,7 +313,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             supported_architectures -= {"bitnet"}
         if is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"lfm2"}
-
+        if is_transformers_version("<", str(LFM2MoeOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"lfm2_moe"}
         # qwen3_vl_text a part of qwen3_vl architecture and is tested in seq2seq group
         if is_transformers_version(">=", str(Qwen3VLOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"qwen3_vl_text"}
@@ -336,6 +342,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     # TODO: remove gptq/awq from here
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
+        if model_arch in (
+            "xglm",
+            "zamba2",
+            "granitemoehybrid",
+            "llama4",
+            "afmoe",
+            "opt",
+            "pegasus",
+        ) and is_openvino_version(">=", "2026.1.0"):
+            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
         self.mock_torch_compile(model_arch)
         model_id = MODEL_NAMES[model_arch]
 
@@ -372,7 +388,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 self.assertIsInstance(ov_outputs.cache_params.conv_states, list)
                 self.assertIsInstance(ov_outputs.cache_params.ssm_states, list)
                 self.assertTrue(len(ov_outputs.cache_params.conv_states) > 0)
-                if model_arch != "lfm2":
+                if model_arch not in ["lfm2", "lfm2_moe"]:
                     self.assertTrue(len(ov_outputs.cache_params.ssm_states) > 0)
         else:
             self.assertTrue("past_key_values" in ov_outputs)
@@ -688,6 +704,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_beam_search(self, model_arch):
+        if model_arch in ("opt", "pegasus", "xglm") and is_openvino_version(">=", "2026.1.0"):
+            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
         self.mock_torch_compile(model_arch)
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
@@ -702,10 +720,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in ["qwen", "chatglm", "chatglm4"]:
             return
 
-        # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
-        # CVS-177964 GraniteMoeHybrid fails due to lack support of Beam search for hybrid models in OpenVINO
-        # For this support, we expect changes in IRs to have connected beam_idx with Mamba/Linear attention states
-        if model_arch in ["lfm2", "granitemoehybrid"]:
+        # LFM2, LFM2-MoE and GraniteMoeHybrid generate wrong output with beam search, ticket: CVS-185664
+        if model_arch in ["lfm2", "lfm2_moe", "granitemoehybrid"]:
             return
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49

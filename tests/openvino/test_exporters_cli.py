@@ -133,6 +133,14 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "5.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation", "lfm2_moe"),
+                ("text-generation-with-past", "lfm2_moe"),
+            ]
+        )
+
     if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.extend(
             [
@@ -181,22 +189,6 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
-    def test_transformers_image_to_image_head_mapping(self):
-        self.assertEqual(_HEAD_TO_AUTOMODELS["image-to-image"], "OVModelForImageToImage")
-        self.assertEqual(OVModelForImageToImage.export_feature, "image-to-image")
-
-    def test_exporters_cli_transformers_image_to_image_inference(self):
-        with TemporaryDirectory() as tmpdir:
-            subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES['swin2sr']} --task image-to-image {tmpdir}",
-                shell=True,
-                check=True,
-            )
-            model = OVModelForImageToImage.from_pretrained(tmpdir, device=OPENVINO_DEVICE)
-            outputs = model(pixel_values=torch.zeros((1, 3, 16, 16)))
-            self.assertIn("reconstruction", outputs)
-            self.assertIsInstance(outputs.reconstruction, torch.Tensor)
-
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
         "t5": 2,
@@ -215,6 +207,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "lfm2": 2
         if is_openvino_version(">=", "2026.0")
         else 0,  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
+        "lfm2_moe": 2,
         "llava": 2,
         "sana": 2,
         "ltx-video": 2,
@@ -880,6 +873,22 @@ class OVCLIExportTestCase(unittest.TestCase):
         filtered_model_type = {config[1] for config in cls.SUPPORTED_4BIT_CONFIGURATIONS}
         skipped = all_model_type - filtered_model_type
         cls.assertEqual(skipped, expected)
+
+    def test_transformers_image_to_image_head_mapping(self):
+        self.assertEqual(_HEAD_TO_AUTOMODELS["image-to-image"], "OVModelForImageToImage")
+        self.assertEqual(OVModelForImageToImage.export_feature, "image-to-image")
+
+    def test_exporters_cli_transformers_image_to_image_inference(self):
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES['swin2sr']} --task image-to-image {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = OVModelForImageToImage.from_pretrained(tmpdir, device=OPENVINO_DEVICE)
+            outputs = model(pixel_values=torch.zeros((1, 3, 16, 16)))
+            self.assertIn("reconstruction", outputs)
+            self.assertIsInstance(outputs.reconstruction, torch.Tensor)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, task: str, model_type: str):
