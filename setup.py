@@ -35,6 +35,7 @@ INSTALL_REQUIRE = [
     "nncf>=2.19.0",
     "openvino>=2026.0",
     "openvino-tokenizers>=2026.0",
+    "requests>=2.33,<3.0",
 ]
 
 TESTS_REQUIRE = [
