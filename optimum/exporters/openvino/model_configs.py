@@ -5368,6 +5368,7 @@ class ZayaOpenVINOConfig(MambaOpenVINOConfig):
         }
         if self.use_past_in_inputs:
             common_inputs["attention_mask"] = {0: "batch_size", 1: "past_sequence_length + sequence_length"}
+            common_inputs["position_ids"] = {0: "batch_size", 1: "sequence_length"}
             self.add_past_key_values(common_inputs, direction="inputs")
         else:
             common_inputs["attention_mask"] = {0: "batch_size", 1: "sequence_length"}
@@ -5391,6 +5392,8 @@ class ZayaOpenVINOConfig(MambaOpenVINOConfig):
                             dummy_input_gen.sequence_length = 1
                         elif input_name == "attention_mask":
                             dummy_input_gen.sequence_length = sequence_length + 1
+                        elif input_name == "position_ids":
+                            dummy_input_gen.sequence_length = 1
                         dummy_inputs[input_name] = dummy_input_gen.generate(
                             input_name,
                             framework=framework,

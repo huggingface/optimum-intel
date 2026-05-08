@@ -7838,6 +7838,14 @@ class ZayaModelPatcher(OVDecoderModelPatcher):
                 for layer_idx, key_state, value_state in zip(attention_layer_ids, key_cache, value_cache):
                     self.update(key_state, value_state, layer_idx)
 
+            @property
+            def key_cache(self):
+                return [layer.keys for layer in self.layers]
+
+            @property
+            def value_cache(self):
+                return [layer.values for layer in self.layers]
+
             def get_seq_length(self, layer_idx: int = 0) -> int:
                 if layer_idx not in self.attention_layer_ids:
                     layer_idx = self.attention_layer_ids[0]
@@ -7846,6 +7854,7 @@ class ZayaModelPatcher(OVDecoderModelPatcher):
         def patched_forward(
             input_ids,
             attention_mask=None,
+            position_ids=None,
             cache_params=None,
         ):
             num_layers = self.real_config._config.num_hidden_layers
@@ -7883,6 +7892,7 @@ class ZayaModelPatcher(OVDecoderModelPatcher):
             causal_lm_output = self.model_orig_forward(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
+                position_ids=position_ids,
                 past_key_values=wrapped_cache_params,
                 use_cache=use_cache,
             )
@@ -7896,9 +7906,8 @@ class ZayaModelPatcher(OVDecoderModelPatcher):
                     present_key_values.append(past_key_values.prev_hs[idx].to(cache_params[2 * idx + 1].dtype))
 
                 for idx, layer_idx in enumerate(attention_layer_ids):
-                    cache_layer = past_key_values.layers[layer_idx]
-                    present_key_values.append(cache_layer.keys.to(cache_params[2 * num_layers + 2 * idx].dtype))
-                    present_key_values.append(cache_layer.values.to(cache_params[2 * num_layers + 2 * idx + 1].dtype))
+                    present_key_values.append(past_key_values.key_cache[layer_idx].to(cache_params[2 * num_layers + 2 * idx].dtype))
+                    present_key_values.append(past_key_values.value_cache[layer_idx].to(cache_params[2 * num_layers + 2 * idx + 1].dtype))
 
                 outputs["present_key_values"] = present_key_values
 
