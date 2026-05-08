@@ -15,7 +15,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import openvino
@@ -706,24 +706,44 @@ class _OVModelForKokoroTextToSpeech(OVBaseModel):
 
     def generate(
         self,
-        input_ids: Union[torch.Tensor, np.ndarray],
+        input_ids: Optional[Union[torch.Tensor, np.ndarray]] = None,
         voice: Optional[str] = None,
         ref_s: Optional[Union[torch.Tensor, np.ndarray]] = None,
         speed: float = 1.0,
+        segments: Optional[List[Dict[str, Any]]] = None,
         **kwargs,
     ) -> torch.FloatTensor:
         """
-        Generate audio waveform from token IDs.
+        Generate audio waveform from token IDs or preprocessed segments.
 
         Args:
             input_ids: Token IDs of shape [batch_size, sequence_length].
             voice: Name of a voice preset (e.g., "af_heart"). Ignored if ref_s is provided.
             ref_s: Voice style embedding. If None, loaded from voice preset.
             speed: Speed factor (default 1.0).
+            segments: Optional list produced by ``preprocess_input`` for chunked
+                long-text/multilingual synthesis. If provided, each segment is
+                synthesized and the resulting waveforms are concatenated.
 
         Returns:
             Audio waveform tensor.
         """
+        if segments is not None:
+            waveforms = []
+            for segment in segments:
+                segment_result = self.forward(
+                    input_ids=segment["input_ids"],
+                    ref_s=segment["ref_s"],
+                    speed=segment.get("speed", speed),
+                )
+                waveforms.append(segment_result.waveform)
+            if not waveforms:
+                raise ValueError("No valid segments were provided for Kokoro generation.")
+            return torch.cat(waveforms, dim=-1)
+
+        if input_ids is None:
+            raise ValueError("`input_ids` must be provided when `segments` are not supplied.")
+
         if ref_s is None:
             if voice is None:
                 voice = "af_heart"
@@ -756,6 +776,8 @@ class _OVModelForKokoroTextToSpeech(OVBaseModel):
         voice: str = "af_heart",
         speed: float = 1.0,
         lang_code: str = "a",
+        split_pattern: Optional[str] = r"\n+",
+        speaker_embedding: Optional[Union["openvino.Tensor", torch.Tensor, np.ndarray]] = None,
         **kwargs,
     ) -> dict:
         """
@@ -766,13 +788,26 @@ class _OVModelForKokoroTextToSpeech(OVBaseModel):
 
         Args:
             text: The input text to synthesize.
-            voice: Name of a voice preset (e.g., ``"af_heart"``).
+            voice: Name of a voice preset (e.g., ``"af_heart"``). Ignored if
+                   ``speaker_embedding`` is provided.
             speed: Speed factor (default 1.0).
             lang_code: Language code for G2P (default ``"a"`` for American English).
+            speaker_embedding: Pre-selected speaker/style embedding. Accepts an
+                ``openvino.Tensor``, ``torch.Tensor``, or ``numpy.ndarray`` of shape
+                ``[style_dim]`` or ``[1, style_dim]``. When provided, the ``voice``
+                argument is ignored and no voice-pack indexing is performed. This
+                mirrors the ``speaker_embedding`` argument of
+                ``openvino_genai.Text2SpeechPipeline.generate()``.
 
         Returns:
-            Dictionary with ``input_ids``, ``ref_s``, and ``speed`` ready for
-            ``generate()`` or ``forward()``.
+            Dictionary with either:
+            - ``segments`` for multi-chunk inputs, or
+            - ``input_ids``/``ref_s``/``speed`` plus ``segments`` for single-chunk inputs.
+
+        Note:
+            Chunking and language-specific G2P are delegated to ``KPipeline.__call__``
+            (quiet mode, ``model=False``), so this wrapper does not duplicate
+            Kokoro chunking/G2P internals.
         """
         try:
             from kokoro import KPipeline
@@ -787,24 +822,73 @@ class _OVModelForKokoroTextToSpeech(OVBaseModel):
             raise ValueError("Model config does not contain 'vocab'. Cannot tokenize phonemes.")
 
         pipeline = KPipeline(lang_code=lang_code, model=False)
+        segments = list(pipeline(text=text, split_pattern=split_pattern))
+        if not segments:
+            raise ValueError(f"G2P produced no phoneme segments for input text: {text!r}")
 
-        # G2P: text -> phoneme tokens -> phoneme string
-        _, tokens = pipeline.g2p(text)
-        phonemes = KPipeline.tokens_to_ps(tokens)
-        if not phonemes:
-            raise ValueError(f"G2P produced no phonemes for input text: {text!r}")
+        if speaker_embedding is not None:
+            # Convert to numpy regardless of source type
+            if hasattr(speaker_embedding, "data"):  # openvino.Tensor
+                shape = (
+                    tuple(speaker_embedding.get_shape())
+                    if hasattr(speaker_embedding, "get_shape")
+                    else tuple(speaker_embedding.shape)
+                )
+                speaker_embedding_data = np.array(speaker_embedding.data, dtype=np.float32).reshape(shape)
+            elif isinstance(speaker_embedding, torch.Tensor):
+                speaker_embedding_data = speaker_embedding.detach().cpu().numpy()
+            else:
+                speaker_embedding_data = np.asarray(speaker_embedding, dtype=np.float32)
+        else:
+            speaker_embedding_data = None
+            voice_pack = pipeline.load_voice(voice)
 
-        # Tokenize: phoneme string -> token IDs (with BOS/EOS)
-        input_ids = [vocab.get(p) for p in phonemes]
-        input_ids = [i for i in input_ids if i is not None]
-        input_ids = torch.LongTensor([[0, *input_ids, 0]])
+        preprocessed_segments = []
+        for segment in segments:
+            phonemes = segment.phonemes
+            if not phonemes:
+                continue
 
-        # Load voice embedding indexed by phoneme length
-        voice_pack = pipeline.load_voice(voice)
-        ref_s = voice_pack[len(phonemes) - 1]
+            # Tokenize: phoneme string -> token IDs (with BOS/EOS)
+            token_ids = [vocab.get(p) for p in phonemes]
+            token_ids = [i for i in token_ids if i is not None]
+            input_ids = torch.LongTensor([[0, *token_ids, 0]])
+
+            if speaker_embedding_data is not None:
+                if speaker_embedding_data.ndim == 3:
+                    idx = min(len(phonemes) - 1, speaker_embedding_data.shape[0] - 1)
+                    ref_s = speaker_embedding_data[idx]  # -> [1, style_dim]
+                elif speaker_embedding_data.ndim == 1:
+                    ref_s = speaker_embedding_data.reshape(1, -1)
+                else:
+                    ref_s = speaker_embedding_data
+            else:
+                # Voice packs have one embedding per phoneme-sequence length.
+                ref_s = voice_pack[min(len(phonemes) - 1, voice_pack.shape[0] - 1)]
+
+            preprocessed_segments.append(
+                {
+                    "input_ids": input_ids,
+                    "ref_s": ref_s,
+                    "speed": speed,
+                    "phonemes": phonemes,
+                    "graphemes": segment.graphemes,
+                }
+            )
+
+        if not preprocessed_segments:
+            raise ValueError(f"No valid phoneme segments were produced for input text: {text!r}")
+
+        if len(preprocessed_segments) == 1:
+            single = preprocessed_segments[0]
+            return {
+                "input_ids": single["input_ids"],
+                "ref_s": single["ref_s"],
+                "speed": single["speed"],
+                "segments": preprocessed_segments,
+            }
 
         return {
-            "input_ids": input_ids,
-            "ref_s": ref_s,
+            "segments": preprocessed_segments,
             "speed": speed,
         }
