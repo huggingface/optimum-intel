@@ -139,7 +139,6 @@ from ...intel.utils.import_utils import (
 from .model_patcher import (
     AfmoeModelPatcher,
     AquilaModelPatcher,
-    KokoroModelPatcher,
     ArcticModelPatcher,
     BaichuanModelPatcher,
     BigBirdPegasusModelPatcher,
@@ -172,6 +171,7 @@ from .model_patcher import (
     InternVL2ChatLangModelPatcher,
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
+    KokoroModelPatcher,
     Lfm2ModelPatcher,
     Lfm2MoeModelPatcher,
     Llama4ImageEmbeddingsModelPatcher,
@@ -6246,7 +6246,9 @@ class DummyKokoroInputGenerator(DummyInputGenerator):
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "input_ids":
             shape = [self.batch_size, self.sequence_length]
-            input_ids_value = self.random_int_tensor(shape=shape, min_value=0, max_value=178, framework=framework, dtype=int_dtype)
+            input_ids_value = self.random_int_tensor(
+                shape=shape, min_value=0, max_value=178, framework=framework, dtype=int_dtype
+            )
             input_ids_value[:, 0] = 0
             input_ids_value[:, -1] = 0
             return input_ids_value
@@ -6256,9 +6258,7 @@ class DummyKokoroInputGenerator(DummyInputGenerator):
                 shape=shape, min_value=-1, max_value=1, framework=framework, dtype=float_dtype
             )
         elif input_name == "speed":
-            return self.random_int_tensor(
-                shape=[1], min_value=1, max_value=10, framework=framework, dtype=float_dtype
-            )
+            return self.random_int_tensor(shape=[1], min_value=1, max_value=10, framework=framework, dtype=float_dtype)
         else:
             raise ValueError(f"Unsupported input {input_name} for DummyKokoroInputGenerator")
 

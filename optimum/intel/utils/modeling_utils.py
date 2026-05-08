@@ -431,7 +431,7 @@ class _KokoroForTextToSpeech:
         **kwargs,
     ):
         try:
-            from kokoro import KPipeline, KModel
+            from kokoro import KModel, KPipeline
         except ImportError:
             raise ImportError(
                 "To load a Kokoro TTS model, the `kokoro` package is required. "

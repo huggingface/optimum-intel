@@ -576,9 +576,13 @@ def _save_kokoro_config_and_assets(model, output: Path):
     try:
         MISAKI_DATA_URL = "https://raw.githubusercontent.com/hexgrad/misaki/main/misaki/data"
         MISAKI_DATA_FILES = [
-            "gb_gold.json", "gb_silver.json",
-            "us_gold.json", "us_silver.json",
-            "vi_acronyms.json", "vi_symbols.json", "vi_teencode.json",
+            "gb_gold.json",
+            "gb_silver.json",
+            "us_gold.json",
+            "us_silver.json",
+            "vi_acronyms.json",
+            "vi_symbols.json",
+            "vi_teencode.json",
             "ja_words.txt",
         ]
         data_out = output / "data"
