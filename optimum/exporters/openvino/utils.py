@@ -138,7 +138,15 @@ def _get_dynamic_shapes_info(
 
     for name, named_dims in inputs.items():
         info = {}
+        example_input = dummy_inputs.get(name)
         for idx, dim_name in named_dims.items():
+            if (
+                getattr(config, "use_past_in_inputs", False)
+                and dim_name == "sequence_length"
+                and isinstance(example_input, torch.Tensor)
+                and example_input.shape[idx] == 1
+            ):
+                continue
             if dim_name in name_to_symbol:
                 symbol = name_to_symbol[dim_name]
             else:
@@ -148,6 +156,14 @@ def _get_dynamic_shapes_info(
         if name in signature:
             input_info[name] = info
         else:
+            prefix = name.split(".", 1)[0]
+            nested_input = dummy_inputs.get(prefix)
+            if prefix in signature and isinstance(nested_input, (list, tuple)) and all(
+                not isinstance(item, (list, tuple, dict)) for item in nested_input
+            ):
+                input_info.setdefault(prefix, []).append(info)
+                continue
+
             pattern = r"^([a-zA-Z_]+)\.(\d+)\.(key|value)$"
             match = re.match(pattern, name)
 

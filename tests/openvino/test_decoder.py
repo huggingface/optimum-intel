@@ -28,6 +28,7 @@ from optimum.exporters.openvino.model_configs import (
     LFM2MoeOpenVINOConfig,
     LFM2OpenVINOConfig,
     Qwen3VLOpenVINOConfig,
+    ZayaOpenVINOConfig,
 )
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
@@ -285,6 +286,50 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 )
         tokenizer.padding_side = "left"
         return tokenizer
+
+    def test_zaya_uses_dynamo_export(self):
+        self.assertTrue(ZayaOpenVINOConfig.force_dynamo_export)
+
+    def test_zaya_cache_uses_bfloat16_defaults(self):
+        from optimum.intel.openvino.modeling_decoder import OVCacheWithMambaStates
+
+        config = PretrainedConfig()
+        config.model_type = "zaya"
+        config.hidden_size = 16
+        config.num_hidden_layers = 4
+        config.num_attention_heads = 4
+        config.num_key_value_heads = 2
+        config.num_query_groups = 2
+        config.head_dim = 4
+        config.torch_dtype = "bfloat16"
+
+        cache = OVCacheWithMambaStates(config, batch_size=1)
+
+        self.assertEqual(cache.dtype, torch.bfloat16)
+        self.assertTrue(all(state.dtype == torch.bfloat16 for state in cache.conv_states))
+        self.assertTrue(all(state.dtype == torch.bfloat16 for state in cache.ssm_states))
+        self.assertTrue(all(state.dtype == torch.bfloat16 for state in cache.key_cache))
+        self.assertTrue(all(state.dtype == torch.bfloat16 for state in cache.value_cache))
+
+    def test_cache_name_sort_key_sorts_numeric_suffixes(self):
+        from optimum.intel.openvino.modeling_decoder import _cache_name_sort_key
+
+        names = [
+            "cache_params.present.key.0",
+            "cache_params.present.key.1",
+            "cache_params.present.key.10",
+            "cache_params.present.key.2",
+        ]
+
+        self.assertEqual(
+            sorted(names, key=_cache_name_sort_key),
+            [
+                "cache_params.present.key.0",
+                "cache_params.present.key.1",
+                "cache_params.present.key.2",
+                "cache_params.present.key.10",
+            ],
+        )
 
     def test_find_untested_architectures(self):
         if len(self.SUPPORTED_ARCHITECTURES) != len(set(self.SUPPORTED_ARCHITECTURES)):

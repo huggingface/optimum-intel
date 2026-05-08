@@ -5320,6 +5320,7 @@ class ZayaDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
 @register_in_tasks_manager("zaya", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class ZayaOpenVINOConfig(MambaOpenVINOConfig):
     PAD_ATTENTION_MASK_TO_PAST = False
+    force_dynamo_export = True
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, ZayaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = ZayaDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig

@@ -1093,6 +1093,28 @@ class OVGPTBigCodeForCausalLM(OVModelForCausalLM):
             return tuple(np.take(layer_past, beam_idx, 0) for layer_past in past_key_values)
 
 
+def _cache_name_sort_key(name: str):
+    prefix, _, suffix = name.rpartition(".")
+    if suffix.isdigit():
+        return prefix, 0, int(suffix)
+    return prefix, 1, suffix
+
+
+def _normalize_cache_dtype(config: PretrainedConfig, dtype: Optional[torch.dtype]) -> torch.dtype:
+    if isinstance(dtype, str):
+        dtype = getattr(torch, dtype.removeprefix("torch."), None)
+    if dtype is not None:
+        return dtype
+
+    config_dtype = getattr(config, "torch_dtype", None)
+    if isinstance(config_dtype, str):
+        config_dtype = getattr(torch, config_dtype.removeprefix("torch."), None)
+
+    if config.model_type == "zaya":
+        return config_dtype or torch.bfloat16
+    return config_dtype or torch.float32
+
+
 class OVCacheWithMambaStates(MambaCache):
     """
     Hybrid cache for Mamba and transformer blocks
@@ -1103,8 +1125,8 @@ class OVCacheWithMambaStates(MambaCache):
         batch_size (`int`):
             The batch size with which the model will be used. Note that a new instance must be instantiated if a
             smaller batch size is used.
-        dtype (`torch.dtype`, *optional*, defaults to `torch.float16`):
-            The default `dtype` to use when initializing the layer.
+        dtype (`torch.dtype`, *optional*):
+            The `dtype` to use when initializing the layer. Defaults to `config.torch_dtype` when available.
         device (`torch.device` or `str`, *optional*):
             The device on which the cache should be initialized. Should be the same as the layer.
         max_batch_size (`int`):
@@ -1123,7 +1145,7 @@ class OVCacheWithMambaStates(MambaCache):
         self,
         config: "PretrainedConfig",
         batch_size: int = None,
-        dtype: torch.dtype = torch.float32,
+        dtype: Optional[torch.dtype] = None,
         device: Optional[Union[torch.device, str]] = None,
         max_batch_size: Optional[int] = None,
         conv_states: Optional[List[torch.Tensor]] = None,
@@ -1131,6 +1153,7 @@ class OVCacheWithMambaStates(MambaCache):
         key_cache: Optional[List[torch.Tensor]] = None,
         value_cache: Optional[List[torch.Tensor]] = None,
     ):
+        dtype = _normalize_cache_dtype(config, dtype)
         self.dtype = dtype
         self.max_batch_size = batch_size or max_batch_size
         self.device = torch.device(device) if device is not None else torch.device("cpu")
@@ -1334,17 +1357,31 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
             **kwargs,
         )
 
-        self.key_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.key" in key])
-        self.value_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.value" in key])
-        self.ssm_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.ssm" in key])
-        self.conv_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.conv" in key])
-
-        self.key_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.key" in key])
-        self.value_cache_output_names = sorted(
-            [key for key in self.output_names if "cache_params.present.value" in key]
+        self.key_cache_input_names = sorted(
+            [key for key in self.input_names if "cache_params.past.key" in key], key=_cache_name_sort_key
         )
-        self.ssm_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.ssm" in key])
-        self.conv_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.conv" in key])
+        self.value_cache_input_names = sorted(
+            [key for key in self.input_names if "cache_params.past.value" in key], key=_cache_name_sort_key
+        )
+        self.ssm_cache_input_names = sorted(
+            [key for key in self.input_names if "cache_params.past.ssm" in key], key=_cache_name_sort_key
+        )
+        self.conv_cache_input_names = sorted(
+            [key for key in self.input_names if "cache_params.past.conv" in key], key=_cache_name_sort_key
+        )
+
+        self.key_cache_output_names = sorted(
+            [key for key in self.output_names if "cache_params.present.key" in key], key=_cache_name_sort_key
+        )
+        self.value_cache_output_names = sorted(
+            [key for key in self.output_names if "cache_params.present.value" in key], key=_cache_name_sort_key
+        )
+        self.ssm_cache_output_names = sorted(
+            [key for key in self.output_names if "cache_params.present.ssm" in key], key=_cache_name_sort_key
+        )
+        self.conv_cache_output_names = sorted(
+            [key for key in self.output_names if "cache_params.present.conv" in key], key=_cache_name_sort_key
+        )
 
         if hasattr(config, "conv_kernel") and config.conv_kernel is not None:
             self.conv_kernel = config.conv_kernel
@@ -1364,10 +1401,10 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                     self.ssm_cache_names.append(state.name)
                 elif "cache_params.present.conv" in state.name:
                     self.conv_cache_names.append(state.name)
-            self.key_cache_names = sorted(self.key_cache_names)
-            self.value_cache_names = sorted(self.value_cache_names)
-            self.ssm_cache_names = sorted(self.ssm_cache_names)
-            self.conv_cache_names = sorted(self.conv_cache_names)
+            self.key_cache_names = sorted(self.key_cache_names, key=_cache_name_sort_key)
+            self.value_cache_names = sorted(self.value_cache_names, key=_cache_name_sort_key)
+            self.ssm_cache_names = sorted(self.ssm_cache_names, key=_cache_name_sort_key)
+            self.conv_cache_names = sorted(self.conv_cache_names, key=_cache_name_sort_key)
 
     @staticmethod
     def _has_cache_inputs(model: openvino.Model) -> bool:
