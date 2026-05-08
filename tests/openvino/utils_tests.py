@@ -11,10 +11,14 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import importlib.util
+import json
 import os
+import tempfile
 import time
 import unittest
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Dict, Optional
 
 import numpy as np
@@ -23,6 +27,124 @@ import torch
 
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import is_transformers_version
+
+
+def _create_tiny_kokoro_model():
+    """Generate a tiny random Kokoro TTS model for testing and return its local path.
+
+    Falls back to the original Hub id if the `kokoro` package is not installed.
+    Result is cached on disk under the system temp dir, so subsequent calls are cheap.
+    """
+    fallback_id = "hexgrad/Kokoro-82M"
+    if importlib.util.find_spec("kokoro") is None:
+        return fallback_id
+
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_kokoro"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "tiny-kokoro-random.pth"
+    voice_file = output_dir / "voices" / "tiny_voice.pt"
+    if config_file.exists() and weights_file.exists() and voice_file.exists():
+        return str(output_dir)
+
+    from kokoro.istftnet import Decoder
+    from kokoro.modules import CustomAlbert, ProsodyPredictor, TextEncoder
+    from transformers import AlbertConfig
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    symbols = (
+        ";:,.!?-—()'\"/ "
+        "0123456789"
+        "abcdefghijklmnopqrstuvwxyz"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "əɚɝɪʊʌæɑɔɛɜɒɹɾθðŋʃʒʤʧˈˌ"
+        "àáâãäåèéêëìíîïòóôõöùúûüýÿ"
+    )
+    deduped = []
+    seen = set()
+    for ch in symbols:
+        if ch not in seen:
+            deduped.append(ch)
+            seen.add(ch)
+        if len(deduped) >= 177:
+            break
+    vocab = {ch: i + 1 for i, ch in enumerate(deduped)}
+
+    config = {
+        "model_type": "kokoro",
+        "export_model_type": "kokoro",
+        "hidden_dim": 512,
+        "style_dim": 128,
+        "n_token": 178,
+        "n_layer": 1,
+        "dim_in": 512,
+        "n_mels": 80,
+        "max_dur": 50,
+        "dropout": 0.2,
+        "text_encoder_kernel_size": 3,
+        "plbert": {
+            "hidden_size": 128,
+            "num_attention_heads": 2,
+            "intermediate_size": 256,
+            "max_position_embeddings": 512,
+            "num_hidden_layers": 2,
+            "dropout": 0.1,
+        },
+        "istftnet": {
+            "upsample_kernel_sizes": [20, 12],
+            "upsample_rates": [10, 6],
+            "gen_istft_hop_size": 5,
+            "gen_istft_n_fft": 20,
+            "resblock_dilation_sizes": [[1, 3, 5], [1, 3, 5], [1, 3, 5]],
+            "resblock_kernel_sizes": [3, 7, 11],
+            "upsample_initial_channel": 512,
+        },
+        "vocab": vocab,
+        "multispeaker": True,
+        "max_conv_dim": 512,
+    }
+
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+
+    bert = CustomAlbert(AlbertConfig(vocab_size=config["n_token"], **config["plbert"]))
+    bert_encoder = torch.nn.Linear(config["plbert"]["hidden_size"], config["hidden_dim"])
+    predictor = ProsodyPredictor(
+        style_dim=config["style_dim"],
+        d_hid=config["hidden_dim"],
+        nlayers=config["n_layer"],
+        max_dur=config["max_dur"],
+        dropout=config["dropout"],
+    )
+    text_encoder = TextEncoder(
+        channels=config["hidden_dim"],
+        kernel_size=config["text_encoder_kernel_size"],
+        depth=config["n_layer"],
+        n_symbols=config["n_token"],
+    )
+    decoder = Decoder(
+        dim_in=config["hidden_dim"],
+        style_dim=config["style_dim"],
+        dim_out=config["n_mels"],
+        **config["istftnet"],
+    )
+
+    torch.save(
+        {
+            "bert": bert.state_dict(),
+            "bert_encoder": bert_encoder.state_dict(),
+            "predictor": predictor.state_dict(),
+            "text_encoder": text_encoder.state_dict(),
+            "decoder": decoder.state_dict(),
+        },
+        weights_file,
+    )
+
+    voices_dir = output_dir / "voices"
+    voices_dir.mkdir(parents=True, exist_ok=True)
+    torch.save(torch.randn(256, dtype=torch.float32), voice_file)
+
+    return str(output_dir)
 
 
 SEED = 42
@@ -116,7 +238,7 @@ MODEL_NAMES = {
     "internlm2": "optimum-intel-internal-testing/tiny-random-internlm2",
     "internvl_chat": "optimum-intel-internal-testing/tiny-random-internvl2",
     "jais": "optimum-intel-internal-testing/tiny-random-jais",
-    "kokoro": "hexgrad/Kokoro-82M",
+    "kokoro": _create_tiny_kokoro_model(),
     "levit": "optimum-intel-internal-testing/tiny-random-LevitModel",
     "lfm2": "optimum-intel-internal-testing/tiny-random-lfm2",
     "lfm2_moe": "optimum-intel-internal-testing/tiny-random-lfm2-moe",

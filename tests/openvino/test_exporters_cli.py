@@ -14,6 +14,7 @@
 import json
 import subprocess
 import unittest
+import importlib.util
 from pathlib import Path
 from typing import Dict
 from unittest.mock import Mock
@@ -187,6 +188,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
+    if importlib.util.find_spec("kokoro") is not None:
+        SUPPORTED_ARCHITECTURES.append(("text-to-audio", "kokoro"))
+
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
         "t5": 2,
@@ -211,6 +215,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "ltx-video": 2,
         "sam": 0,  # no tokenizer
         "speecht5": 2,
+        "kokoro": 0,  # uses g2p, no tokenizer
         "clip": 2,
         "mamba": 2,
         "falcon_mamba": 2,
