@@ -336,6 +336,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llama4",
     "minicpmo",
     "videochat_flash_qwen",
+    "mistral3",
 ]
 
 SSM_MODELS = [

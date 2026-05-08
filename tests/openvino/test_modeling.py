@@ -216,6 +216,24 @@ class OVModelIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
+    @unittest.skipIf(is_transformers_version("<", "5.0.0"), reason="Mistral3 requires transformers>=5.0.0")
+    def test_export_and_infer_mistral3_visual_language_model(self):
+        model_id = MODEL_NAMES["mistral3"]
+        processor = AutoProcessor.from_pretrained(model_id)
+        image = Image.new("RGB", (32, 32), color="white")
+        prompt = "What is shown in this image?"
+
+        model = OVModelForVisualCausalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        self.assertIsInstance(model, MODEL_TYPE_TO_CLS_MAPPING["mistral3"])
+        self.assertIsInstance(model.config, PretrainedConfig)
+
+        inputs = model.preprocess_inputs(text=prompt, image=image, processor=processor)
+        outputs = model.generate(**inputs, max_new_tokens=1, do_sample=False)
+        self.assertGreater(outputs.shape[-1], inputs["input_ids"].shape[-1])
+
+        del model
+        gc.collect()
+
     def test_load_from_hub_and_save_visual_language_model(self):
         model_ids = [self.OV_VLM_MODEL_ID]
         if is_transformers_version(">=", "4.51") and is_transformers_version("<", "4.57"):
