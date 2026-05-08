@@ -5323,7 +5323,7 @@ class ZayaOpenVINOConfig(MambaOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, ZayaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = ZayaDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    MIN_TRANSFORMERS_VERSION = "5.8.0.dev0"
+    MIN_TRANSFORMERS_VERSION = "4.57.1"
     MAX_TRANSFORMERS_VERSION = "5.99.0"
     _MODEL_PATCHER = ZayaModelPatcher
 

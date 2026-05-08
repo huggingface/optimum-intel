@@ -7674,6 +7674,146 @@ def zaya_block_forward_patched(
     return expert_output, None, prev_router_hidden_states
 
 
+def zaya_cca_forward_patched(
+    self,
+    hidden_states: torch.Tensor,
+    past_key_values,
+    cca_mask,
+):
+    """
+    Patched version of CCA.forward() that fixes two bugs when has_previous_state=True:
+
+    Bug 1 (shape mismatch): hs_d = prev_hs.unsqueeze(0) → [1, B, H] always.
+    For prefill with S>1, val_proj2(hs_d)=[1,B,128] while val_proj1(hs)=[S,B,128],
+    causing torch.cat([v1, v2]) shape mismatch.
+    Fix: hs_d = cat([prev_hs.unsqueeze(0), hs[:-1]], dim=0) → [S, B, H] for any S.
+
+    Bug 2 (stale conv state): update_conv_state stores only the first token (new_conv_state[:,0,:])
+    for S>1, leaving wrong tokens in the conv window.
+    Fix: store qk_packed0_cat[:, :, -conv_kernel_size:] (last 2 columns).
+    """
+    if cca_mask is not None and hidden_states.shape[1] > 1:
+        dtype = hidden_states.dtype
+        hidden_states = (hidden_states * cca_mask[:, :, None]).to(dtype)
+
+    # Switch to [S, B, H]
+    hs = hidden_states.transpose(0, 1).contiguous()  # [S, B, H]
+    # Default time-shifted stream (overridden below when has_previous_state=True)
+    hs_d = F.pad(hs[:-1], pad=(0, 0, 0, 0, 1, 0))  # [S, B, H]
+
+    # Q/K projections
+    q = self.linear_q(hs)  # [S, B, latent_q_dim]
+    k = self.linear_k(hs)  # [S, B, latent_k_dim]
+    qk_packed0 = torch.cat([q, k], dim=-1)  # [S, B, latent_q + latent_k]
+
+    # Pre-mean tensors for residual mixing
+    query_pre = qk_packed0[..., : self.latent_q_dim].view(
+        *qk_packed0.shape[:2], self.num_q_heads, self.head_dim
+    )  # [S, B, qh, dh]
+    key_pre = qk_packed0[..., self.latent_q_dim :].view(
+        *qk_packed0.shape[:2], self.num_kv_heads, self.head_dim
+    )  # [S, B, kh, dh]
+    key_pre = (
+        key_pre.unsqueeze(-2)
+        .repeat(1, 1, 1, self.gqa_groups, 1)
+        .view(*qk_packed0.shape[:2], self.num_q_heads, self.head_dim)
+    )  # [S, B, qh, dh]
+    qk_mean_q = (query_pre + key_pre) / 2
+    qk_mean_k = qk_mean_q.view(
+        *qk_mean_q.shape[:2], self.num_kv_heads, self.gqa_groups, -1
+    ).mean(dim=-2)
+
+    if past_key_values is not None:
+        if past_key_values.has_previous_state:
+            # Fix Bug 1: hs_d shape [S, B, H] for any S (not just S=1)
+            # S=1 (decode):  cat([1,B,H], hs[:-1]=[0,B,H]) = [1,B,H] ✓
+            # S>1 (prefill): cat([1,B,H], hs[:-1]=[S-1,B,H]) = [S,B,H] ✓
+            hs_d_single = past_key_values.prev_hs[self.layer_number].clone()  # [B, H]
+            hs_d = torch.cat([hs_d_single.unsqueeze(0), hs[:-1]], dim=0)  # [S, B, H]
+
+            # Conv computation - works for any S
+            qk_packed0_t = qk_packed0.transpose(0, 1)  # [B, S, H]
+            qk_packed0_cached = past_key_values.conv_states[self.layer_number]  # [B, H, 2]
+            qk_packed0_cat = torch.cat(
+                [qk_packed0_cached, qk_packed0_t.transpose(1, 2)], dim=-1
+            )  # [B, H, 2+S]
+            qk_packed3 = self.conv_qk(qk_packed0_cat).permute(2, 0, 1)  # [S, B, E]
+
+            # Fix Bug 2: store last conv_kernel_size tokens (not just the first)
+            conv_kernel_size = qk_packed0_cached.shape[-1]  # 2
+            past_key_values.conv_states[self.layer_number] = (
+                qk_packed0_cat[:, :, -conv_kernel_size:].detach()
+            )
+        else:
+            # Prefill path (no previous state) - unchanged from original
+            qk_packed0_transposed = qk_packed0.permute(1, 2, 0)  # [B, E, S]
+            conv_states = F.pad(
+                qk_packed0_transposed,
+                (past_key_values.conv_kernel_size - qk_packed0_transposed.shape[-1], 0),
+            )
+            past_key_values.update_conv_state(
+                layer_idx=self.layer_number, new_conv_state=conv_states
+            )
+            qk_packed1 = qk_packed0.permute(1, 2, 0)  # [B, E, S]
+            qk_packed2 = F.pad(qk_packed1, (self.total_padding, 0))
+            qk_packed3 = self.conv_qk(qk_packed2).permute(2, 0, 1)  # [S, B, E]
+    else:
+        # No cache - unchanged from original
+        qk_packed1 = qk_packed0.permute(1, 2, 0)  # [B, E, S]
+        qk_packed2 = F.pad(qk_packed1, (self.total_padding, 0))
+        qk_packed3 = self.conv_qk(qk_packed2).permute(2, 0, 1)  # [S, B, E]
+
+    # Build queries/keys from conv output + residual means
+    query = (
+        qk_packed3[..., : self.latent_q_dim].view(
+            *qk_packed3.shape[:2], self.num_q_heads, self.head_dim
+        )
+        + qk_mean_q
+    )  # [S, B, qh, dh]
+    key = (
+        qk_packed3[..., self.latent_q_dim :].view(
+            *qk_packed3.shape[:2], self.num_kv_heads, self.head_dim
+        )
+        + qk_mean_k
+    )  # [S, B, kh, dh]
+
+    # Values from the two time streams
+    v1 = self.val_proj1(hs)  # [S, B, latent_k_dim/2]
+    if past_key_values is not None:
+        past_key_values.prev_hs[self.layer_number].copy_(hs[-1, :, :])
+    v2 = self.val_proj2(hs_d)  # [S, B, latent_k_dim/2] - now always same shape as v1
+
+    value = (
+        torch.cat([v1, v2], dim=-1)
+        .contiguous()
+        .view(*hs.shape[:2], self.num_kv_heads, self.head_dim)
+    )  # [S, B, kh, dh]
+
+    # L2-normalize per head, then scale
+    query_norm = query.norm(p=2, dim=-1, keepdim=True)
+    key_norm = key.norm(p=2, dim=-1, keepdim=True)
+    key = (key * (self.sqrt_head_dim / key_norm)) * self.temp[None, None].unsqueeze(-1)
+    query = query * (self.sqrt_head_dim / query_norm)
+
+    # Flatten head axis, return to HF layout [B, S, ...]
+    query = (
+        query.view(*query.shape[:2], self.num_q_heads * self.head_dim)
+        .transpose(0, 1)
+        .contiguous()
+    )
+    key = (
+        key.view(*key.shape[:2], self.num_kv_heads * self.head_dim)
+        .transpose(0, 1)
+        .contiguous()
+    )
+    value = (
+        value.view(*value.shape[:2], self.num_kv_heads * self.head_dim)
+        .transpose(0, 1)
+        .contiguous()
+    )
+    return query, key, value
+
+
 class ZayaModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
@@ -7783,6 +7923,9 @@ class ZayaModelPatcher(OVDecoderModelPatcher):
                         continue
                     proj._orig_forward = proj.forward
                     proj.forward = types.MethodType(zaya_linear_forward_patched, proj)
+                # Patch CCA.forward to fix hs_d shape mismatch when has_previous_state=True
+                qkv._orig_forward = qkv.forward
+                qkv.forward = types.MethodType(zaya_cca_forward_patched, qkv)
             if not isinstance(layer, ZayaDecoderMLPLayer):
                 continue
 
@@ -7823,6 +7966,8 @@ class ZayaModelPatcher(OVDecoderModelPatcher):
                     if proj is None or not hasattr(proj, "_orig_forward"):
                         continue
                     proj.forward = proj._orig_forward
+                if hasattr(qkv, "_orig_forward"):
+                    qkv.forward = qkv._orig_forward  # Restore zaya_cca_forward_patched
             if not isinstance(layer, ZayaDecoderMLPLayer):
                 continue
 
