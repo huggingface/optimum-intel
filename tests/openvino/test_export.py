@@ -68,8 +68,8 @@ logger = logging.get_logger()
 
 
 @unittest.skipUnless(
-    is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"),
-    "Zaya is supported with Transformers 4.57.x",
+    is_transformers_version(">=", "5.8.0.dev0"),
+    "Zaya is supported with Transformers 5.8+",
 )
 class ZayaExportSupportTest(unittest.TestCase):
     def _create_tiny_zaya_model(self, save_dir: str):
