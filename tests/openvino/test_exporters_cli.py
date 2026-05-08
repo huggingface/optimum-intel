@@ -192,6 +192,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "clip": 2,
         "mamba": 2,
         "falcon_mamba": 2,
+        "mistral3": 2,
         "qwen3": 2,
         "qwen3_omni_moe": 2,
         "zamba2": 2,
@@ -823,6 +824,16 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 5},
                 "vision_projection_model": {"int8": 2},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "mistral3",
+            "int4 --group-size 4",
+            {
+                "lm_model": {"int8": 2, "int4": 28},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 19},
             },
         ),
     ]

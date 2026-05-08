@@ -232,6 +232,7 @@ class ExportModelTest(unittest.TestCase):
                     preprocessors=preprocessors,
                     stateful=stateful,
                     model_kwargs=model_kwargs,
+                    patch_16bit_model=patch_16bit_model,
                 )
 
                 # Models with a Multi-Token Prediction head export it as a separate submodel;
@@ -307,7 +308,8 @@ class ExportModelTest(unittest.TestCase):
         model_kwargs = None
         if model_type == "speecht5":
             model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
-        self._openvino_export(model_type, model_kwargs=model_kwargs)
+        patch_16bit_model = model_type == "mistral3"
+        self._openvino_export(model_type, model_kwargs=model_kwargs, patch_16bit_model=patch_16bit_model)
 
     @parameterized.expand(GENERATIVE_MODELS)
     def test_export_with_custom_gen_config(self, model_type):
