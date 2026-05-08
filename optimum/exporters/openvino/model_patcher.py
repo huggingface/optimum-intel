@@ -7623,6 +7623,215 @@ class Zamba2ModelPatcher(ModelPatcher):
             mamba_layer.forward = mamba_layer._orig_forward
 
 
+def zaya_linear_forward_patched(self, input: torch.Tensor):
+    output = F.linear(input.to(self.weight.dtype), self.weight, self.bias)
+    return output.to(input.dtype)
+
+
+def zaya_block_forward_patched(
+    self,
+    hidden_states: torch.Tensor,
+    prev_router_hidden_states: Optional[torch.Tensor] = None,
+    past_router_states: Optional[torch.Tensor] = None,
+    use_cache: bool = False,
+    cca_mask: Optional[torch.Tensor] = None,
+):
+    route_prob, expert_choice, prev_router_hidden_states = self.router(
+        hidden_states, router_states=prev_router_hidden_states
+    )
+    batch_size, seq_length, hidden_dim = hidden_states.shape
+    hidden_states_flat = hidden_states.view(batch_size * seq_length, hidden_dim)
+
+    hidden_states_expanded = hidden_states_flat.unsqueeze(0).expand(self.experts.num_local_experts, -1, -1)
+    fc1 = torch.bmm(hidden_states_expanded, self.experts.fc1_weights.transpose(1, 2))
+    if self.experts.fc1_bias is not None:
+        fc1 = fc1 + self.experts.fc1_bias[:, None, :]
+
+    if self.config.gated_linear_unit:
+        gate, up = torch.chunk(fc1, 2, dim=-1)
+        if self.config.activation_func == "swiglu":
+            expert_hidden_states = F.silu(gate) * up
+        else:
+            expert_hidden_states = self.experts.act_fn(gate) * up
+    else:
+        expert_hidden_states = self.experts.act_fn(fc1)
+
+    expert_hidden_states = torch.bmm(expert_hidden_states, self.experts.fc2_weights.transpose(1, 2))
+    if self.experts.fc2_bias is not None:
+        expert_hidden_states = expert_hidden_states + self.experts.fc2_bias[:, None, :]
+
+    all_expert_outputs = expert_hidden_states
+    if self.config.zaya_use_mod:
+        all_expert_outputs = torch.cat([all_expert_outputs, hidden_states_flat.unsqueeze(0)], dim=0)
+
+    selected_experts = expert_choice.view(-1)
+    routing_weights = route_prob.view(-1).to(hidden_states.dtype)
+    expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=all_expert_outputs.shape[0]).transpose(0, 1)
+    expert_output = (all_expert_outputs * expert_mask.unsqueeze(-1).to(all_expert_outputs.dtype)).sum(dim=0)
+    expert_output = expert_output.view(batch_size, seq_length, hidden_dim)
+    expert_output = expert_output * routing_weights.view(batch_size, seq_length, 1)
+
+    return expert_output, None, prev_router_hidden_states
+
+
+class ZayaModelPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from transformers.models.zaya.modeling_zaya import ZayaDynamicCache
+
+        super().__init__(config, model, model_kwargs)
+
+        class ZayaDynamicCacheWrap(ZayaDynamicCache):
+            def __init__(self, config, batch_size: int, conv_states, prev_hs, attention_layer_ids, key_cache, value_cache):
+                dtype = conv_states[0].dtype
+                device = conv_states[0].device
+                super().__init__(config=config, batch_size=batch_size, dtype=dtype, device=device)
+                self.conv_states = torch.stack(conv_states, dim=0)
+                self.prev_hs = torch.stack(prev_hs, dim=0)
+                self.attention_layer_ids = attention_layer_ids
+                self.has_previous_state = True
+
+                for layer_idx, key_state, value_state in zip(attention_layer_ids, key_cache, value_cache):
+                    self.update(key_state, value_state, layer_idx)
+
+            def get_seq_length(self, layer_idx: int = 0) -> int:
+                if layer_idx not in self.attention_layer_ids:
+                    layer_idx = self.attention_layer_ids[0]
+                return super().get_seq_length(layer_idx)
+
+        def patched_forward(
+            input_ids,
+            attention_mask=None,
+            cache_params=None,
+        ):
+            num_layers = self.real_config._config.num_hidden_layers
+            attention_layer_ids = [idx for idx in range(num_layers) if idx % 2 == 0]
+            num_attention_layers = len(attention_layer_ids)
+
+            use_cache = False
+            wrapped_cache_params = None
+            if cache_params is not None:
+                use_cache = True
+                conv_states = []
+                prev_hs = []
+                key_cache = []
+                value_cache = []
+
+                batch_size = cache_params[0].size(0)
+                for idx in range(num_layers):
+                    conv_states.append(cache_params[2 * idx])
+                    prev_hs.append(cache_params[2 * idx + 1])
+
+                for idx in range(num_attention_layers):
+                    key_cache.append(cache_params[2 * num_layers + 2 * idx])
+                    value_cache.append(cache_params[2 * num_layers + 2 * idx + 1])
+
+                wrapped_cache_params = ZayaDynamicCacheWrap(
+                    self.real_config._config,
+                    batch_size,
+                    conv_states,
+                    prev_hs,
+                    attention_layer_ids,
+                    key_cache,
+                    value_cache,
+                )
+
+            causal_lm_output = self.model_orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                past_key_values=wrapped_cache_params,
+                use_cache=use_cache,
+            )
+            outputs = {"logits": causal_lm_output.logits}
+
+            if use_cache:
+                past_key_values = causal_lm_output.past_key_values
+                present_key_values = []
+                for idx in range(num_layers):
+                    present_key_values.append(past_key_values.conv_states[idx].to(cache_params[2 * idx].dtype))
+                    present_key_values.append(past_key_values.prev_hs[idx].to(cache_params[2 * idx + 1].dtype))
+
+                for idx, layer_idx in enumerate(attention_layer_ids):
+                    cache_layer = past_key_values.layers[layer_idx]
+                    present_key_values.append(cache_layer.keys.to(cache_params[2 * num_layers + 2 * idx].dtype))
+                    present_key_values.append(cache_layer.values.to(cache_params[2 * num_layers + 2 * idx + 1].dtype))
+
+                outputs["present_key_values"] = present_key_values
+
+            return outputs
+
+        self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+    def __enter__(self):
+        from transformers.models.zaya.modeling_zaya import ZayaDecoderMLPLayer
+
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
+        for layer in self._model.model.layers:
+            if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "qkv"):
+                qkv = layer.self_attn.qkv
+                for proj_name in ("val_proj1", "val_proj2"):
+                    proj = getattr(qkv, proj_name, None)
+                    if proj is None:
+                        continue
+                    proj._orig_forward = proj.forward
+                    proj.forward = types.MethodType(zaya_linear_forward_patched, proj)
+            if not isinstance(layer, ZayaDecoderMLPLayer):
+                continue
+
+            zaya_block = layer.zaya_block
+            experts = zaya_block.experts
+            num_experts = experts.num_local_experts
+            experts.fc1_weights = torch.cat(
+                tuple(experts.local_experts[i].linear_fc1.weight.unsqueeze(0) for i in range(num_experts)), dim=0
+            )
+            experts.fc2_weights = torch.cat(
+                tuple(experts.local_experts[i].linear_fc2.weight.unsqueeze(0) for i in range(num_experts)), dim=0
+            )
+            experts.fc1_bias = None
+            experts.fc2_bias = None
+            if experts.local_experts[0].linear_fc1.bias is not None:
+                experts.fc1_bias = torch.cat(
+                    tuple(experts.local_experts[i].linear_fc1.bias.unsqueeze(0) for i in range(num_experts)), dim=0
+                )
+            if experts.local_experts[0].linear_fc2.bias is not None:
+                experts.fc2_bias = torch.cat(
+                    tuple(experts.local_experts[i].linear_fc2.bias.unsqueeze(0) for i in range(num_experts)), dim=0
+                )
+            experts.act_fn = experts.local_experts[0].activation_func
+            zaya_block._orig_forward = zaya_block.forward
+            zaya_block.forward = types.MethodType(zaya_block_forward_patched, zaya_block)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        from transformers.models.zaya.modeling_zaya import ZayaDecoderMLPLayer
+
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+
+        for layer in self._model.model.layers:
+            if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "qkv"):
+                qkv = layer.self_attn.qkv
+                for proj_name in ("val_proj1", "val_proj2"):
+                    proj = getattr(qkv, proj_name, None)
+                    if proj is None or not hasattr(proj, "_orig_forward"):
+                        continue
+                    proj.forward = proj._orig_forward
+            if not isinstance(layer, ZayaDecoderMLPLayer):
+                continue
+
+            zaya_block = layer.zaya_block
+            zaya_block.forward = zaya_block._orig_forward
+            experts = zaya_block.experts
+            del experts.fc1_weights, experts.fc2_weights, experts.fc1_bias, experts.fc2_bias, experts.act_fn
+
+
 # Unified torch representation of the CausalConv1d operation
 # This representation is used across all models with CausalConv1d.
 # The resulting OV graph for this function can be fused into the internal CausalConv1d operation.

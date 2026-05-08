@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from transformers import AutoImageProcessor, PretrainedConfig
 from transformers.utils import is_torch_available
 
-from openvino import Dimension, PartialShape, Symbol
+from openvino import Dimension, PartialShape, Symbol, Type
 from openvino.utils.types import get_element_type
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.tasks import TasksManager
@@ -103,7 +103,10 @@ def _get_input_info(
     for i in range(len(ordered_input_names)):
         name = ordered_input_names[i]
         example = flatten_inputs[i]
-        type = get_element_type(example.cpu().numpy().dtype)
+        if is_torch_available() and isinstance(example, torch.Tensor) and example.dtype == torch.bfloat16:
+            type = Type.bf16
+        else:
+            type = get_element_type(example.cpu().numpy().dtype)
         shape = PartialShape(example.shape)
         if name in inputs:
             named_dims = inputs[name]
@@ -312,6 +315,7 @@ SSM_MODELS = [
     "mamba",
     "falcon_mamba",
     "zamba2",
+    "zaya",
     "lfm2",
     "lfm2_moe",
     "granitemoehybrid",

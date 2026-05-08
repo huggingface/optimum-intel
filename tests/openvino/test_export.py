@@ -29,6 +29,7 @@ from utils_tests import (
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.onnx.model_configs import BertOnnxConfig
 from optimum.exporters.openvino import export_from_model, main_export
+from optimum.exporters.openvino.__main__ import infer_task
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVFluxPipeline,
@@ -64,6 +65,68 @@ from optimum.utils.save_utils import maybe_load_preprocessors
 
 
 logger = logging.get_logger()
+
+
+@unittest.skipUnless(
+    is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"),
+    "Zaya is supported with Transformers 4.57.x",
+)
+class ZayaExportSupportTest(unittest.TestCase):
+    def _create_tiny_zaya_model(self, save_dir: str):
+        from transformers.models.zaya import ZayaConfig, ZayaForCausalLM
+
+        config = ZayaConfig(
+            architectures=["ZayaForCausalLM"],
+            vocab_size=128,
+            hidden_size=128,
+            ffn_hidden_size=256,
+            num_hidden_layers=4,
+            num_attention_heads=2,
+            num_key_value_heads=1,
+            num_query_groups=1,
+            head_dim=32,
+            kv_channels=32,
+            num_experts=2,
+            zaya_mlp_expansion=64,
+            max_position_embeddings=256,
+        )
+        model = ZayaForCausalLM(config)
+        model.save_pretrained(save_dir)
+        config.save_pretrained(save_dir)
+        return model, config
+
+    def test_infer_task_auto_for_local_zaya_model(self):
+        with TemporaryDirectory() as tmp_dir:
+            self._create_tiny_zaya_model(tmp_dir)
+            task = infer_task("auto", tmp_dir, library_name="transformers")
+
+        self.assertEqual(task, "text-generation-with-past")
+
+    def test_zaya_dummy_cache_inputs_match_attention_layout(self):
+        with TemporaryDirectory() as tmp_dir:
+            model, config = self._create_tiny_zaya_model(save_dir=tmp_dir)
+            export_config_constructor = TasksManager.get_exporter_config_constructor(
+                model=model, exporter="openvino", task="text-generation-with-past", library_name="transformers"
+            )
+            export_config = export_config_constructor(config, int_dtype="int64", float_dtype="fp32")
+            export_config.use_past = True
+            export_config.use_past_in_inputs = True
+            dummy_inputs = export_config.generate_dummy_inputs(framework="pt")
+
+        attention_layers = len([idx for idx in range(config.num_hidden_layers) if idx % 2 == 0])
+        cache_params = dummy_inputs["cache_params"]
+        batch_size = dummy_inputs["input_ids"].shape[0]
+        past_sequence_length = dummy_inputs["attention_mask"].shape[1] - dummy_inputs["input_ids"].shape[1]
+        self.assertEqual(len(cache_params), config.num_hidden_layers * 2 + attention_layers * 2)
+        self.assertEqual(cache_params[0].shape, (batch_size, 96, 2))
+        self.assertEqual(cache_params[1].shape, (batch_size, config.hidden_size))
+        self.assertEqual(
+            cache_params[-2].shape, (batch_size, config.num_key_value_heads, past_sequence_length, config.head_dim)
+        )
+        self.assertEqual(
+            cache_params[-1].shape, (batch_size, config.num_key_value_heads, past_sequence_length, config.head_dim)
+        )
+        self.assertEqual(cache_params[0].dtype, torch.bfloat16)
 
 
 class ExportModelTest(unittest.TestCase):

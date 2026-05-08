@@ -1104,10 +1104,11 @@ class OVCacheWithMambaStates(MambaCache):
         self.mamba_d_conv = getattr(config, "mamba_d_conv", None)
         self.mamba_expand = getattr(config, "mamba_expand", None)
         self.mamba_d_state = getattr(config, "mamba_d_state", None)
-        self.intermediate_size = config.intermediate_size
+        self.intermediate_size = getattr(config, "intermediate_size", getattr(config, "hidden_size", None))
         self.conv_kernel_size = getattr(
             config, "conv_kernel", getattr(config, "mamba_d_conv", getattr(config, "conv_L_cache", None))
         )
+        self.zaya_in_out_ch = None
         if config.model_type == "granitemoehybrid":
             layer_types = getattr(config, "layer_types", None)
             self.num_key_value_heads = getattr(config, "num_key_value_heads", None)
@@ -1118,6 +1119,17 @@ class OVCacheWithMambaStates(MambaCache):
             self.mamba_headdim = getattr(config, "mamba_d_head", None)
             self.num_mamba_layers = layer_types.count("mamba")
             self.num_attn_layers = layer_types.count("attention")
+        elif config.model_type == "zaya":
+            self.num_key_value_heads = getattr(config, "num_key_value_heads", None)
+            self.head_dim = getattr(config, "head_dim", None)
+            self.mamba_ngroups = None
+            self.n_mamba_heads = None
+            self.ssm_state_size = getattr(config, "hidden_size", None)
+            self.mamba_headdim = None
+            self.num_mamba_layers = config.num_hidden_layers
+            self.num_attn_layers = (config.num_hidden_layers + 1) // 2
+            self.conv_kernel_size = 2
+            self.zaya_in_out_ch = (config.num_query_groups + config.num_attention_heads) * self.head_dim
         else:
             # Mamba 2 specific parameters
             hybrid_layer_ids = getattr(config, "hybrid_layer_ids", None)
@@ -1155,6 +1167,8 @@ class OVCacheWithMambaStates(MambaCache):
                         intermediate_size + 2 * self.mamba_ngroups * self.mamba_d_state,
                         self.mamba_d_conv,
                     )
+                elif config.model_type == "zaya":
+                    conv_state_shape = (self.max_batch_size, self.zaya_in_out_ch, self.conv_kernel_size)
                 else:
                     # Mamba block
                     conv_state_shape = (self.max_batch_size, self.intermediate_size, self.conv_kernel_size)
@@ -1164,7 +1178,15 @@ class OVCacheWithMambaStates(MambaCache):
         self.ssm_states = ssm_states
         if self.ssm_states is None:
             self.ssm_states: List[torch.Tensor] = []
-            if config.model_type in ["lfm2_moe", "lfm2"]:
+            if config.model_type == "zaya":
+                for _ in range(self.num_mamba_layers):
+                    ssm_state: torch.Tensor = torch.zeros(
+                        (self.max_batch_size, self.hidden_size),
+                        device=self.device,
+                        dtype=dtype,
+                    )
+                    self.ssm_states.append(ssm_state)
+            elif config.model_type in ["lfm2_moe", "lfm2"]:
                 for _ in range(self.num_mamba_layers):
                     if self.n_mamba_heads and self.mamba_headdim:
                         # Mamba2 block
@@ -1457,13 +1479,11 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         # Overwitten -- uses `cache_params` as opposed to `past_key_values`
 
         if self.use_cache:
-            # `cache_position` should have been initialized in `generate`
             if cache_position is None:
-                raise ValueError(
-                    "`cache_position` should not be None as it should have been initialized in "
-                    "`model.generate`, you are responsible for passing in a valid `cache_position` if "
-                    "you are calling `prepare_inputs_for_generation` directly with `use_cache=True`"
-                )
+                if self.config.model_type == "zaya":
+                    cache_position = torch.arange(0, input_ids.shape[1], dtype=torch.long, device=input_ids.device)
+                else:
+                    cache_position = torch.zeros(1, dtype=torch.long, device=input_ids.device)
             if cache_position[0] > 0:
                 # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)
@@ -1475,6 +1495,7 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                     "qwen3_next",
                     "qwen3_5_text",
                     "qwen3_5_moe_text",
+                    "zaya",
                 ]:
                     # LFM2, GraniteMoeHybrid (Granite-4.0), and Qwen3-Next require the attention mask
                     # to be the length of the full context, so default mask from OVModelForCausalLM needs to be used.

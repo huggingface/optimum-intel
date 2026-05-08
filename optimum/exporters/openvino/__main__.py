@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
-from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
+from transformers import AutoConfig, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
 from transformers.utils import is_torch_available
 
 from openvino import Core, Type, save_model
@@ -96,12 +96,14 @@ def infer_task(
                     token=token,
                     library_name=library_name,
                 )
-            except KeyError as e:
+            except (KeyError, RuntimeError) as e:
                 try:
                     config = AutoConfig.from_pretrained(model_name_or_path)
-                    with_past_arch_list = ["MistralForCausalLM", "Zamba2ForCausalLM"]
+                    with_past_arch_list = ["MistralForCausalLM", "Zamba2ForCausalLM", "ZayaForCausalLM"]
                     if any(arch in config.architectures for arch in with_past_arch_list):
                         task = "text-generation-with-past"
+                    else:
+                        raise
                 except Exception:
                     raise KeyError(
                         f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
@@ -335,6 +337,64 @@ def main_export(
             patch_qwenvl_configs()
 
         model_type = config.model_type
+        if model_type == "zaya":
+            from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, _compute_linear_scaling_rope_parameters
+            from transformers.models.zaya.modeling_zaya import ZayaForCausalLM, ZayaRotaryEmbedding
+
+            ROPE_INIT_FUNCTIONS.setdefault("default", _compute_linear_scaling_rope_parameters)
+            loading_kwargs["config"] = config
+            loading_kwargs["torch_dtype"] = torch.float32
+            dtype = torch.float32
+
+            if not hasattr(ZayaRotaryEmbedding, "compute_default_rope_parameters"):
+                def compute_default_rope_parameters(self, config=None, device=None, seq_len=None, layer_type=None):
+                    config = config if config is not None else self.config
+                    base = getattr(config, "rope_theta", 10000.0)
+                    partial_rotary_factor = getattr(config, "partial_rotary_factor", 1.0)
+                    head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+                    dim = int(head_dim * partial_rotary_factor)
+                    inv_freq = 1.0 / (
+                        base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
+                    )
+                    return inv_freq, 1.0
+
+                ZayaRotaryEmbedding.compute_default_rope_parameters = compute_default_rope_parameters
+
+            if not getattr(PreTrainedModel, "_ov_tied_keys_patched", False):
+                orig_get_expanded_tied_weights_keys = getattr(PreTrainedModel, "get_expanded_tied_weights_keys", None)
+
+                def get_expanded_tied_weights_keys_patched(self, all_submodels=True):
+                    tied_mapping = getattr(self, "_tied_weights_keys", None)
+                    if isinstance(tied_mapping, list):
+                        if not getattr(self.config, "tie_word_embeddings", False):
+                            return {}
+                        if len(tied_mapping) == 1 and tied_mapping[0] == "lm_head.weight" and hasattr(self, "model"):
+                            return {"lm_head.weight": "model.embed_tokens.weight"}
+                        return {key: key for key in tied_mapping}
+                    if orig_get_expanded_tied_weights_keys is None:
+                        return {}
+                    return orig_get_expanded_tied_weights_keys(self, all_submodels=all_submodels)
+
+                PreTrainedModel.get_expanded_tied_weights_keys = get_expanded_tied_weights_keys_patched
+                PreTrainedModel._ov_tied_keys_patched = True
+
+            if not getattr(ZayaForCausalLM, "_ov_post_init_patched", False):
+                zaya_orig_init = ZayaForCausalLM.__init__
+
+                def zaya_init_patched(self, config, **kwargs):
+                    zaya_orig_init(self, config, **kwargs)
+                    if not hasattr(self, "all_tied_weights_keys"):
+                        self.all_tied_weights_keys = {}
+                        if getattr(config, "tie_word_embeddings", False):
+                            self.all_tied_weights_keys["lm_head.weight"] = "model.embed_tokens.weight"
+                    if not hasattr(self, "_named_pretrained_submodules"):
+                        self._named_pretrained_submodules = [
+                            (name, module) for name, module in self.named_modules() if isinstance(module, PreTrainedModel)
+                        ]
+
+                ZayaForCausalLM.__init__ = zaya_init_patched
+                ZayaForCausalLM._ov_post_init_patched = True
+
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             if custom_export_configs is None:
                 raise ValueError(
@@ -563,7 +623,10 @@ def main_export(
 
         # TODO: Remove GPT-OSS workaround when possible
         quantization_config = None if ov_config is None else ov_config.quantization_config
-        if not quantization_config or isinstance(quantization_config, _GPTOSSQuantizationConfig):
+        if (
+            (not quantization_config or isinstance(quantization_config, _GPTOSSQuantizationConfig))
+            and getattr(config, "model_type", None) != "zaya"
+        ):
             _apply_model_size_based_quantization(submodel_paths, ov_config, output)
     finally:
         # Unpatch modules after quantized model export
