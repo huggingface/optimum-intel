@@ -35,10 +35,6 @@ def _create_tiny_kokoro_model():
     Falls back to the original Hub id if the `kokoro` package is not installed.
     Result is cached on disk under the system temp dir, so subsequent calls are cheap.
     """
-    fallback_id = "hexgrad/Kokoro-82M"
-    if importlib.util.find_spec("kokoro") is None:
-        return fallback_id
-
     output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_kokoro"
     config_file = output_dir / "config.json"
     weights_file = output_dir / "tiny-kokoro-random.pth"
