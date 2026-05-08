@@ -13,7 +13,6 @@
 # limitations under the License.
 
 
-import importlib.util
 import unittest
 from pathlib import Path
 
@@ -94,6 +93,7 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-3": OVStableDiffusion3Pipeline,
         "flux": OVFluxPipeline,
         "ltx-video": OVLTXPipeline,
+        "kokoro": OVModelForTextToSpeechSeq2Seq,
     }
 
     if is_transformers_version(">=", "4.48.0"):
@@ -164,6 +164,13 @@ class ExportModelTest(unittest.TestCase):
         elif model_type == "llava":
             model = MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
                 model_name, **loading_kwargs
+            )
+        elif model_type == "kokoro":
+            model = TasksManager.get_model_from_task(
+                task=task,
+                model_name_or_path=model_name,
+                framework="pt",
+                library_name="kokoro",
             )
         else:
             model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
@@ -408,22 +415,3 @@ class CustomExportModelTest(unittest.TestCase):
         ov_outputs = ov_model(**tokens)
         self.assertTrue(torch.allclose(ov_outputs.token_embeddings, model_outputs.token_embeddings, atol=1e-4))
         self.assertTrue(torch.allclose(ov_outputs.sentence_embedding, model_outputs.sentence_embedding, atol=1e-4))
-
-
-@unittest.skipUnless(
-    importlib.util.find_spec("kokoro") is not None,
-    "kokoro package is not installed",
-)
-class KokoroExportModelTest(unittest.TestCase):
-    def test_kokoro_export(self):
-        model_id = MODEL_NAMES["kokoro"]
-        with TemporaryDirectory() as tmpdirname:
-            main_export(
-                model_name_or_path=model_id,
-                output=Path(tmpdirname),
-                task="text-to-audio",
-            )
-            output_path = Path(tmpdirname)
-            self.assertTrue((output_path / "openvino_model.xml").exists())
-            self.assertTrue((output_path / "openvino_model.bin").exists())
-            self.assertTrue((output_path / "config.json").exists())

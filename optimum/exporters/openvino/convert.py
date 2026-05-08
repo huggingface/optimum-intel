@@ -41,6 +41,7 @@ from optimum.exporters.utils import (
 )
 from optimum.intel.utils.import_utils import (
     _diffusers_version,
+    _kokoro_version,
     _nncf_version,
     _open_clip_version,
     _optimum_intel_version,
@@ -67,6 +68,7 @@ from .utils import (
     OV_XML_FILE_NAME,
     _get_dynamic_shapes_info,
     _get_input_info,
+    _get_kokoro_submodels_fn_and_export_configs,
     _get_model_dtype,
     _get_open_clip_submodels_fn_and_export_configs,
     _normalize_dummy_inputs,
@@ -752,16 +754,9 @@ def export_from_model(
 
     if library_name == "kokoro":
         custom_architecture = True
-        export_config_constructor = TasksManager.get_exporter_config_constructor(
-            model=model, exporter="openvino", task=task, library_name="kokoro"
+        custom_export_configs, fn_get_submodels = _get_kokoro_submodels_fn_and_export_configs(
+            model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
         )
-        kokoro_export_config = export_config_constructor(model.config, task=task)
-        custom_export_configs = {"model": kokoro_export_config}
-
-        def _get_kokoro_submodels(model):
-            return {"model": model}
-
-        fn_get_submodels = _get_kokoro_submodels
 
     if library_name == "diffusers":
         export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
@@ -994,6 +989,8 @@ def _add_version_info_to_model(model: Model, library_name: Optional[str] = None)
             model.set_rt_info(_timm_version, ["optimum", "timm_version"])
         elif library_name == "open_clip":
             model.set_rt_info(_open_clip_version, ["optimum", "open_clip_version"])
+        elif library_name == "kokoro":
+            model.set_rt_info(_kokoro_version, ["optimum", "kokoro_version"])
         rt_info = model.get_rt_info()
         if "nncf" in rt_info:
             model.set_rt_info(_nncf_version, ["optimum", "nncf_version"])

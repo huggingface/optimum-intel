@@ -290,6 +290,28 @@ def _get_open_clip_submodels_fn_and_export_configs(
     return custom_export, fn_get_submodels
 
 
+def _get_kokoro_submodels_fn_and_export_configs(
+    model,
+    library_name: str = "kokoro",
+    task: Optional[str] = None,
+    preprocessors: List = None,
+    custom_export_configs: Dict[str, "OnnxConfig"] = None,
+    fn_get_submodels: Callable = None,
+):
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=model, exporter="openvino", task=task, library_name="kokoro"
+    )
+    kokoro_export_config = export_config_constructor(model.config, task=task)
+    custom_export_configs = {"model": kokoro_export_config}
+
+    def _get_kokoro_submodels(model):
+        return {"model": model}
+
+    fn_get_submodels = _get_kokoro_submodels
+
+    return custom_export_configs, fn_get_submodels
+
+
 MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llava",
     "llava_next",

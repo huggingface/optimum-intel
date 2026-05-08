@@ -265,6 +265,19 @@ def init_model_configs():
         TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["open_clip"] = {}
     if "kokoro" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
         TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["kokoro"] = {}
+    if "kokoro" not in TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP:
+        from optimum.intel.utils.modeling_utils import _KokoroForTextToSpeech
+
+        try:
+            import kokoro as _kokoro_module
+
+            if not hasattr(_kokoro_module, "_KokoroForTextToSpeech"):
+                _kokoro_module._KokoroForTextToSpeech = _KokoroForTextToSpeech
+            TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP["kokoro"] = {
+                "text-to-audio": "_KokoroForTextToSpeech",
+            }
+        except ImportError:
+            pass
 
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "image-text-to-text")] = ("transformers", "AutoModelForCausalLM")
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "automatic-speech-recognition")] = (
