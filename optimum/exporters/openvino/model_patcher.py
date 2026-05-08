@@ -3407,6 +3407,121 @@ def maira_vision_embed_forward(self, pixel_values):
     return self.get_image_features(pixel_values, vision_feature_layer, vision_feature_select_strategy)
 
 
+
+def _mistral3_vision_embed_forward(self, pixel_values):
+    """
+    Full vision pipeline for Mistral3 export: vision_tower + multi_modal_projector.
+    Inlines PixtralVisionModel + PatchMerger to keep all shapes derived from
+    pixel_values.shape, ensuring dynamic dimensions in the OpenVINO IR.
+    """
+    vision_tower = self.model.vision_tower
+    patch_size = vision_tower.patch_size
+    max_width = vision_tower.config.image_size // patch_size
+    patch_conv_dtype = vision_tower.patch_conv.weight.dtype
+    if pixel_values.dtype != patch_conv_dtype:
+        pixel_values = pixel_values.to(patch_conv_dtype)
+
+    patch_embeds = vision_tower.patch_conv(pixel_values)
+    h_patches = patch_embeds.shape[2]
+    w_patches = patch_embeds.shape[3]
+
+    patch_embeds = patch_embeds.flatten(2).transpose(1, 2)
+    patch_embeds = vision_tower.ln_pre(patch_embeds)
+
+    h_idx = torch.arange(h_patches, device=pixel_values.device)
+    w_idx = torch.arange(w_patches, device=pixel_values.device)
+    mesh_h, mesh_w = torch.meshgrid(h_idx, w_idx, indexing="ij")
+    position_ids = mesh_h.reshape(-1) * max_width + mesh_w.reshape(-1)
+
+    position_embeddings = vision_tower.patch_positional_embedding(patch_embeds, position_ids)
+
+    transformer_out = vision_tower.transformer(
+        patch_embeds,
+        attention_mask=None,
+        position_embeddings=position_embeddings,
+        output_hidden_states=True,
+        return_dict=True,
+    )
+
+    vision_feature_layer = self.config.vision_feature_layer
+    if isinstance(vision_feature_layer, int):
+        selected_image_feature = transformer_out.hidden_states[vision_feature_layer]
+    else:
+        hs_pool = [transformer_out.hidden_states[layer_idx] for layer_idx in vision_feature_layer]
+        selected_image_feature = torch.cat(hs_pool, dim=-1)
+
+    projector = self.model.multi_modal_projector
+    image_features = projector.norm(selected_image_feature.squeeze(0))
+
+    spatial_merge = projector.patch_merger.spatial_merge_size
+    d = image_features.shape[-1]
+
+    image_grid = image_features.view(h_patches, w_patches, d).permute(2, 0, 1).unsqueeze(0)
+    grid = torch.nn.functional.unfold(image_grid, kernel_size=spatial_merge, stride=spatial_merge)
+    grid = grid.view(d * spatial_merge**2, -1).t()
+
+    image_features = projector.patch_merger.merging_layer(grid)
+    image_features = projector.linear_1(image_features)
+    image_features = projector.act(image_features)
+    image_features = projector.linear_2(image_features)
+
+    return image_features
+
+
+class Mistral3ImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(_mistral3_vision_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Mistral3LanguageModelPatcher(OVDecoderModelPatcher):
+    """
+    Patcher for the language model part of Mistral3 VLM.
+    Fixes sliding_window=None crash — MinistralModel.forward unconditionally creates
+    sliding window masks even when all layers use full_attention.
+    """
+
+    def _get_lang_model(self):
+        if hasattr(self._model, "model") and hasattr(self._model.model, "language_model"):
+            return self._model.model.language_model
+        if hasattr(self._model, "language_model"):
+            return self._model.language_model
+        if hasattr(self._model, "model") and hasattr(self._model.model, "config"):
+            return self._model.model
+        return None
+
+    def __enter__(self):
+        super().__enter__()
+        lang_model = self._get_lang_model()
+
+        if lang_model is not None and hasattr(lang_model, "config"):
+            cfg = lang_model.config
+            self._orig_sliding_window = getattr(cfg, "sliding_window", None)
+            if self._orig_sliding_window is None:
+                max_pos = getattr(cfg, "max_position_embeddings", 32768)
+                cfg.sliding_window = max_pos
+
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        lang_model = self._get_lang_model()
+
+        if lang_model is not None and hasattr(lang_model, "config"):
+            lang_model.config.sliding_window = self._orig_sliding_window
+
+        super().__exit__(exc_type, exc_value, traceback)
+
+
 class LlavaImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
