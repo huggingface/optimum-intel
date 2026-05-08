@@ -496,6 +496,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "postnet": 10,
         "vocoder": 80,
     },
+    "kokoro": {"model": 352},
     "clip": {"model": 130},
     "mamba": {"model": 324 if is_transformers_version("==", "5.0") else 322},
     "falcon_mamba": {"model": 164 if is_transformers_version("==", "5.0") else 162},

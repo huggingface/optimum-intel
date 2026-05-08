@@ -115,6 +115,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
+        ("text-to-audio", "kokoro"),
     ]
 
     if is_transformers_version(">=", "4.48.0"):
@@ -187,9 +188,6 @@ class OVCLIExportTestCase(unittest.TestCase):
                 ("text-generation-with-past", "lfm2_moe"),
             ]
         )
-
-    if importlib.util.find_spec("kokoro") is not None:
-        SUPPORTED_ARCHITECTURES.append(("text-to-audio", "kokoro"))
 
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
