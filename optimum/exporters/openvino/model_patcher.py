@@ -7780,7 +7780,7 @@ def zaya_cca_forward_patched(
     # Values from the two time streams
     v1 = self.val_proj1(hs)  # [S, B, latent_k_dim/2]
     if past_key_values is not None:
-        past_key_values.prev_hs[self.layer_number].copy_(hs[-1, :, :])
+        past_key_values.prev_hs[self.layer_number] = hs[-1, :, :].detach()
     v2 = self.val_proj2(hs_d)  # [S, B, latent_k_dim/2] - now always same shape as v1
 
     value = (
