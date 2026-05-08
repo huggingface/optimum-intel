@@ -160,6 +160,26 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
         self.num_pkv = 2
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
+        # Handle hybrid models (e.g., ZAYA) that export KV-cache with mixed naming:
+        # even-numbered attention layers use "past_key_values.X.key/value" as inputs
+        # odd-numbered attention layers use "present.X.key/value" as BOTH inputs AND outputs.
+        # In this case, key_value_input_names is incomplete (misses the "present.X" inputs),
+        # so we rebuild it in the same order as key_value_output_names for correct zip() pairing.
+        if self.key_value_output_names and len(self.key_value_input_names) < len(self.key_value_output_names):
+            input_names_set = set(self.input_names)
+            kv_in_by_out = {}
+            for out_name in self.key_value_output_names:
+                # Try canonical rename: present.X.key -> past_key_values.X.key
+                canonical_in = out_name.replace("present.", "past_key_values.", 1)
+                if canonical_in in input_names_set:
+                    kv_in_by_out[out_name] = canonical_in
+                elif out_name in input_names_set:
+                    # same name used for both input and output (e.g. present.1.key)
+                    kv_in_by_out[out_name] = out_name
+            if len(kv_in_by_out) > len(self.key_value_input_names):
+                self.key_value_input_names = [
+                    kv_in_by_out[k] for k in self.key_value_output_names if k in kv_in_by_out
+                ]
         # Keeping the original model for serialization
         self._pkv_precision = Type.f32
         self.next_beam_idx = None
@@ -414,6 +434,11 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
                     shapes[inputs][1] = -1
                 else:
                     shapes[inputs][2] = -1
+            elif input_name.startswith("present.") and len(inputs.partial_shape) == 4:
+                # Hybrid-naming models (e.g. ZAYA): odd-layer KV inputs are named
+                # "present.X.key/value" (same as outputs).  They are KV-cache inputs
+                # and the dynamic axis is seq (dim 2), not num_heads (dim 1).
+                shapes[inputs][2] = -1
             elif input_name.startswith("beam_idx") or input_name.startswith("cache_position"):
                 shapes[inputs][0] = -1
             else:
@@ -899,7 +924,17 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         elif model_type == "gpt_bigcode":
             init_cls = OVGPTBigCodeForCausalLM
         elif model_type in SSM_MODELS:
-            init_cls = OVModelWithMambaForCausalLM
+            # OVModelWithMambaForCausalLM requires cache_params.* input naming.
+            # Some SSM models (e.g. ZAYA) may be exported with the standard
+            # past_key_values/present naming instead. In that case, fall back to
+            # the standard OVModelForCausalLM which handles that naming correctly.
+            _has_cache_params_inputs = any(
+                "cache_params" in inp.get_any_name() for inp in model.inputs
+            )
+            if _has_cache_params_inputs:
+                init_cls = OVModelWithMambaForCausalLM
+            else:
+                init_cls = cls
         else:
             init_cls = cls
 
