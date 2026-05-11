@@ -4183,7 +4183,8 @@ class WhisperOpenVINOConfig(WhisperOnnxConfig):
 
 
 class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummySeq2SeqPastKeyValuesGenerator):
-    """Custom KV cache generator for Qwen3-ASR with GQA (num_key_value_heads != num_attention_heads)."""
+    """Custom KV cache generator for Qwen3-ASR with GQA (num_key_value_heads != num_attention_heads).
+    Qwen3-ASR has no cross-attention, so only self-attention KV cache is generated (2 per layer)."""
 
     def __init__(self, task, normalized_config, **kwargs):
         super().__init__(task, normalized_config, **kwargs)
@@ -4195,24 +4196,17 @@ class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummySeq2SeqPastKeyValuesGenera
 
     def generate(self, input_name, framework="pt", int_dtype="int64", float_dtype="fp32"):
         if input_name == "past_key_values":
-            encoder_shape = (
-                self.batch_size,
-                self.encoder_num_attention_heads,
-                self.encoder_sequence_length,
-                self.encoder_hidden_size // self.encoder_num_attention_heads,
-            )
             decoder_shape = (
                 self.batch_size,
                 self.decoder_num_attention_heads,
                 self.sequence_length,
                 self.decoder_head_dim,
             )
+            # Qwen3-ASR has no cross-attention, only self-attention KV cache
             return [
                 (
                     self.random_float_tensor(decoder_shape, framework=framework, dtype=float_dtype),
                     self.random_float_tensor(decoder_shape, framework=framework, dtype=float_dtype),
-                    self.random_float_tensor(encoder_shape, framework=framework, dtype=float_dtype),
-                    self.random_float_tensor(encoder_shape, framework=framework, dtype=float_dtype),
                 )
                 for _ in range(self.decoder_num_layers)
             ]
@@ -4228,7 +4222,8 @@ class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummySeq2SeqPastKeyValuesGenera
     library_name="transformers",
 )
 class Qwen3ASROpenVINOConfig(AudioToTextOnnxConfig):
-    """OpenVINO export config for Qwen3-ASR model."""
+    """OpenVINO export config for Qwen3-ASR model.
+    Qwen3-ASR has no cross-attention, so encoder KV cache is excluded."""
 
     DUMMY_INPUT_GENERATOR_CLASSES = (
         DummyAudioInputGenerator,
@@ -4288,6 +4283,22 @@ class Qwen3ASROpenVINOConfig(AudioToTextOnnxConfig):
             preprocessors=preprocessors,
             **kwargs,
         )
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        """Override to exclude encoder KV cache since Qwen3-ASR has no cross-attention."""
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_decoder_sequence_length"
+            name = "past_key_values"
+        else:
+            decoder_sequence_name = "past_decoder_sequence_length + decoder_sequence_length"
+            name = "present"
+
+        for i in range(self._normalized_config.decoder_num_layers):
+            inputs_or_outputs[f"{name}.{i}.decoder.key"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
 
 
 @register_in_tasks_manager(

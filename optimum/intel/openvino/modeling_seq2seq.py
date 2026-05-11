@@ -927,7 +927,9 @@ class OVDecoder(OVModelPart):
             self.num_pkv = 2
         else:
             self.use_past = False
-            self.num_pkv = 4
+            # Determine num_pkv from output structure: if encoder KV is present, 4 per layer; otherwise 2
+            has_encoder_kv = any("encoder" in name for name in self.key_value_output_names)
+            self.num_pkv = 4 if has_encoder_kv else 2
 
         self.request = None if not self._compile_only else self.model.create_infer_request()
 
@@ -1007,11 +1009,20 @@ class OVDecoder(OVModelPart):
                     out_past_key_values[i : i + self.num_pkv] for i in range(0, len(out_past_key_values), self.num_pkv)
                 )
             else:
-                # grab the cross attention key/values from the inputs
-                out_past_key_values = tuple(
-                    out_past_key_values[i : i + self.num_pkv] + past_key_values[2 * i + 2 : 2 * i + 2 + self.num_pkv]
-                    for i in range(0, len(out_past_key_values), self.num_pkv)
-                )
+                has_encoder_kv_inputs = any("encoder" in name for name in self.key_value_input_names)
+                if has_encoder_kv_inputs:
+                    # grab the cross attention key/values from the inputs
+                    out_past_key_values = tuple(
+                        out_past_key_values[i : i + self.num_pkv]
+                        + past_key_values[2 * i + 2 : 2 * i + 2 + self.num_pkv]
+                        for i in range(0, len(out_past_key_values), self.num_pkv)
+                    )
+                else:
+                    # No cross-attention (e.g., Qwen3-ASR): just group self-attention KV
+                    out_past_key_values = tuple(
+                        out_past_key_values[i : i + self.num_pkv]
+                        for i in range(0, len(out_past_key_values), self.num_pkv)
+                    )
 
         return Seq2SeqLMOutput(logits=logits, past_key_values=out_past_key_values)
 

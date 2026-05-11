@@ -1338,14 +1338,11 @@ class OVWeightCompressionTest(unittest.TestCase):
         name_func=lambda testcase_func, param_num, params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[1])}",
     )
     def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type, trust_remote_code):
-
-        # Qwn3-ASR fails with stateful=False
-        stateful = False if model_type != "qwen3_asr" else True
         model = model_cls.from_pretrained(
             MODEL_NAMES[model_type],
             export=True,
             load_in_8bit=True,
-            stateful=stateful,
+            stateful=False,
             trust_remote_code=trust_remote_code,
         )
         ref_config = OVWeightQuantizationConfig(bits=8, sym=isinstance(model, OVModelForVisualCausalLM)).to_dict()

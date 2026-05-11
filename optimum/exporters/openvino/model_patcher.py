@@ -9594,6 +9594,7 @@ class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
         """
         Patch full model forward for decoder export.
         Maps seq2seq inputs (encoder_outputs, decoder_input_ids) to the thinker's interface.
+        Returns a flat tuple of tensors (logits + KV cache) for TorchScript tracing compatibility.
         """
         model = self._model
         thinker = model.thinker
@@ -9616,6 +9617,7 @@ class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
             Decoder forward that accepts seq2seq-style inputs.
             encoder_outputs: pre-computed audio features from encoder (batch, enc_seq_len, hidden_dim)
             decoder_input_ids: text token ids (batch, dec_seq_len)
+            Returns a flat tuple: (logits, k0, v0, k1, v1, ...) for TorchScript compatibility.
             """
             # Convert past_key_values from legacy list format to DynamicCache
             if past_key_values is not None and isinstance(past_key_values, (list, tuple)):
@@ -9624,6 +9626,10 @@ class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
                     if len(layer_past) >= 2:
                         cache.update(layer_past[0], layer_past[1], len(cache))
                 past_key_values = cache
+            elif past_key_values is None:
+                # Pre-create DynamicCache so that thinker.model uses it even during
+                # torch.jit.trace (the model skips cache creation when tracing).
+                past_key_values = DynamicCache()
 
             input_ids = decoder_input_ids
             inputs_embeds = thinker.get_input_embeddings()(input_ids)
@@ -9644,7 +9650,6 @@ class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
                 audio_cumsum = special_audio_mask.long().cumsum(dim=-1) - 1  # [batch, seq]
                 # Clamp to valid range for gather (non-audio positions will be masked out anyway)
                 audio_cumsum = audio_cumsum.clamp(min=0)
-                # Pad audio_features to at least max possible index + 1
                 # Expand to [batch, seq, hidden] by gathering from audio_features
                 gather_indices = audio_cumsum.unsqueeze(-1).expand(-1, -1, inputs_embeds.shape[-1])  # [batch, seq, hidden]
                 # audio_features is [total_audio_tokens, hidden], expand for batch gather
@@ -9686,11 +9691,20 @@ class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
             logits = thinker.lm_head(outputs[0])
 
             past_kv = outputs.past_key_values
-            # Convert DynamicCache to legacy tuple format for TorchScript tracing
+            # Convert DynamicCache to flat tuple of tensors for TorchScript tracing
+            # Output format: (logits, k0, v0, k1, v1, ...)
+            flat_output = [logits]
             if isinstance(past_kv, DynamicCache):
-                past_kv = past_kv.to_legacy_cache()
+                for layer in past_kv.layers:
+                    flat_output.append(layer.keys)
+                    flat_output.append(layer.values)
+            elif past_kv is not None:
+                legacy = past_kv if isinstance(past_kv, (list, tuple)) else past_kv.to_legacy_cache()
+                for layer_kv in legacy:
+                    flat_output.append(layer_kv[0])
+                    flat_output.append(layer_kv[1])
 
-            return (logits, past_kv)
+            return tuple(flat_output)
 
         model.forward = patched_decoder_forward
 
