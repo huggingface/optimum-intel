@@ -200,9 +200,7 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
         elif getattr(config, "architectures", None) and "SpeechT5ForTextToSpeech" in config.architectures:
             return _OVModelForSpeechT5ForTextToSpeech._from_pretrained(model_id, config, **kwargs)
         else:
-            raise ValueError(
-                f"{getattr(config, 'model_type')} are not supported text-to-audio model using OpenVINO"
-            )
+            raise ValueError(f"{getattr(config, 'model_type')} are not supported text-to-audio model using OpenVINO")
 
     def reshape(self, *args, **kwargs):
         logger.warning("Static shapes are not supported for this model.")
