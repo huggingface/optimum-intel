@@ -492,9 +492,7 @@ class Qwen3ASRTest(unittest.TestCase):
         )
 
         # Load and infer with PyTorch model
-        transformers_model = Qwen3ASRForConditionalGeneration.from_pretrained(
-            model_id, trust_remote_code=True
-        )
+        transformers_model = Qwen3ASRForConditionalGeneration.from_pretrained(model_id, trust_remote_code=True)
         transformers_model.eval()
 
         gen_kwargs = {
@@ -542,7 +540,6 @@ class Qwen3ASRTest(unittest.TestCase):
         del transformers_model
         del ov_model
         gc.collect()
-
 
 
 class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):

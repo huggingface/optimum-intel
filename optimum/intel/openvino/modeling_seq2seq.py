@@ -1265,7 +1265,9 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
     main_input_name = "input_features"
     export_feature = "automatic-speech-recognition"
 
-    def _prepare_decoder_input_ids_for_generation(self, batch_size, model_input_name, model_kwargs, decoder_start_token_id, device=None):
+    def _prepare_decoder_input_ids_for_generation(
+        self, batch_size, model_input_name, model_kwargs, decoder_start_token_id, device=None
+    ):
         """
         For qwen3_asr: skip prepending decoder_start_token_id since the full prompt
         (including chat template tokens) is already provided as decoder_input_ids.
@@ -1342,7 +1344,11 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
         **kwargs,
     ) -> Seq2SeqLMOutput:
         # For qwen3_asr: adjust decoder_input_ids to match encoder output audio feature count
-        if getattr(self.config, "model_type", None) == "qwen3_asr" and decoder_input_ids is not None and past_key_values is None:
+        if (
+            getattr(self.config, "model_type", None) == "qwen3_asr"
+            and decoder_input_ids is not None
+            and past_key_values is None
+        ):
             # Get encoder outputs (may already be computed by generate())
             if encoder_outputs is None and input_features is not None:
                 encoder_outputs = self.encoder(input_ids=input_features, attention_mask=attention_mask)
@@ -1352,7 +1358,11 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
                 if audio_token_id is None:
                     audio_token_id = getattr(getattr(self.config, "thinker_config", None), "audio_token_id", None)
                 if audio_token_id is not None:
-                    enc_hidden = encoder_outputs.last_hidden_state if hasattr(encoder_outputs, "last_hidden_state") else encoder_outputs[0]
+                    enc_hidden = (
+                        encoder_outputs.last_hidden_state
+                        if hasattr(encoder_outputs, "last_hidden_state")
+                        else encoder_outputs[0]
+                    )
                     num_encoder_features = enc_hidden.shape[1]
                     current_audio_count = (decoder_input_ids == audio_token_id).sum(dim=-1).max().item()
                     if current_audio_count > 0 and current_audio_count != num_encoder_features:
@@ -1408,7 +1418,7 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
         max_len = max(t.shape[0] for t in result_ids)
         padded = torch.zeros(len(result_ids), max_len, dtype=decoder_input_ids.dtype, device=decoder_input_ids.device)
         for i, t in enumerate(result_ids):
-            padded[i, :t.shape[0]] = t
+            padded[i, : t.shape[0]] = t
         return padded
 
     @classmethod

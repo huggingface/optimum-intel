@@ -167,6 +167,7 @@ class ExportModelTest(unittest.TestCase):
             )
         elif model_type == "qwen3_asr":
             from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
+
             model = Qwen3ASRForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
         else:
             model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)

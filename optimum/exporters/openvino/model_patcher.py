@@ -9465,6 +9465,7 @@ class Qwen3_5MoeModelPatcher(Qwen3_5ModelPatcher):
                 sparse_moe_block = decoder_layer.mlp
                 sparse_moe_block.forward = sparse_moe_block._orig_forward
 
+
 class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
     """
     Model patcher for Qwen3-ASR encoder-decoder export.
@@ -9501,22 +9502,36 @@ class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
         for layer in encoder.layers:
             layer.self_attn.config._attn_implementation = "eager"
 
-        # Patch each attention layer to accept 3D batched input (batch, seq, dim)
-        for layer in encoder.layers:
+            # Patch each attention layer to accept 3D batched input (batch, seq, dim)
             attn = layer.self_attn
             attn._orig_forward = attn.forward
 
             def make_patched_attn_forward(attn_module):
+                # Original code: https://github.com/QwenLM/Qwen3-ASR/blob/c17a131fe028b2e428b6e80a33d30bb4fa57b8df/qwen_asr/core/transformers_backend/modeling_qwen3_asr.py#L477
                 def patched_attn_forward(hidden_states, cu_seqlens=None, attention_mask=None, **kwargs):
                     # hidden_states: (batch, seq_len, dim) - standard 3D batched
                     bsz, seq_length, _ = hidden_states.size()
 
-                    query_states = attn_module.q_proj(hidden_states).reshape(bsz, seq_length, attn_module.num_heads, -1).transpose(1, 2)
-                    key_states = attn_module.k_proj(hidden_states).reshape(bsz, seq_length, attn_module.num_heads, -1).transpose(1, 2)
-                    value_states = attn_module.v_proj(hidden_states).reshape(bsz, seq_length, attn_module.num_heads, -1).transpose(1, 2)
+                    query_states = (
+                        attn_module.q_proj(hidden_states)
+                        .reshape(bsz, seq_length, attn_module.num_heads, -1)
+                        .transpose(1, 2)
+                    )
+                    key_states = (
+                        attn_module.k_proj(hidden_states)
+                        .reshape(bsz, seq_length, attn_module.num_heads, -1)
+                        .transpose(1, 2)
+                    )
+                    value_states = (
+                        attn_module.v_proj(hidden_states)
+                        .reshape(bsz, seq_length, attn_module.num_heads, -1)
+                        .transpose(1, 2)
+                    )
 
                     attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) * attn_module.scaling
-                    attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+                    attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(
+                        query_states.dtype
+                    )
 
                     attn_output = torch.matmul(attn_weights, value_states)
                     attn_output = attn_output.transpose(1, 2).contiguous().reshape(bsz, seq_length, -1)
@@ -9527,11 +9542,11 @@ class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
 
             attn.forward = make_patched_attn_forward(attn)
 
-        # Patch each encoder layer to accept 3D input and skip cu_seqlens
-        for layer in encoder.layers:
+            # Patch each encoder layer to accept 3D input and skip cu_seqlens
             layer._orig_forward = layer.forward
 
             def make_patched_layer_forward(enc_layer):
+                # Original code:https://github.com/QwenLM/Qwen3-ASR/blob/c17a131fe028b2e428b6e80a33d30bb4fa57b8df/qwen_asr/core/transformers_backend/modeling_qwen3_asr.py#L536
                 def patched_layer_forward(hidden_states, cu_seqlens=None, attention_mask=None, **kwargs):
                     residual = hidden_states
                     hidden_states = enc_layer.self_attn_layer_norm(hidden_states)
@@ -9552,6 +9567,7 @@ class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
         # Save original forward
         encoder._orig_forward = encoder.forward
 
+        # Original code: https://github.com/QwenLM/Qwen3-ASR/blob/c17a131fe028b2e428b6e80a33d30bb4fa57b8df/qwen_asr/core/transformers_backend/modeling_qwen3_asr.py#L669
         def patched_audio_forward(input_features, feature_lens=None, aftercnn_lens=None, **kwargs):
             """
             Simplified audio encoder forward for OV export.
@@ -9605,6 +9621,7 @@ class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
         # Save original forward
         model._orig_forward = model.forward
 
+        # Original code: https://github.com/QwenLM/Qwen3-ASR/blob/c17a131fe028b2e428b6e80a33d30bb4fa57b8df/qwen_asr/core/transformers_backend/modeling_qwen3_asr.py#L1159
         def patched_decoder_forward(
             encoder_outputs=None,
             decoder_input_ids=None,
@@ -9645,15 +9662,19 @@ class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
                 audio_features = audio_features.to(inputs_embeds.device, inputs_embeds.dtype)
 
                 # Use cumsum-based indexing + torch.where for OV-friendly dynamic shapes
-                special_audio_mask = (input_ids == thinker.config.audio_token_id)  # [batch, seq]
+                special_audio_mask = input_ids == thinker.config.audio_token_id  # [batch, seq]
                 # cumsum gives 1-based index of audio tokens; subtract 1 for 0-based
                 audio_cumsum = special_audio_mask.long().cumsum(dim=-1) - 1  # [batch, seq]
                 # Clamp to valid range for gather (non-audio positions will be masked out anyway)
                 audio_cumsum = audio_cumsum.clamp(min=0)
                 # Expand to [batch, seq, hidden] by gathering from audio_features
-                gather_indices = audio_cumsum.unsqueeze(-1).expand(-1, -1, inputs_embeds.shape[-1])  # [batch, seq, hidden]
+                gather_indices = audio_cumsum.unsqueeze(-1).expand(
+                    -1, -1, inputs_embeds.shape[-1]
+                )  # [batch, seq, hidden]
                 # audio_features is [total_audio_tokens, hidden], expand for batch gather
-                audio_features_expanded = audio_features.unsqueeze(0).expand(inputs_embeds.shape[0], -1, -1)  # [batch, total, hidden]
+                audio_features_expanded = audio_features.unsqueeze(0).expand(
+                    inputs_embeds.shape[0], -1, -1
+                )  # [batch, total, hidden]
                 gathered_audio = torch.gather(audio_features_expanded, 1, gather_indices)  # [batch, seq, hidden]
                 # Use where to select: audio feature at audio positions, original embed elsewhere
                 mask_3d = special_audio_mask.unsqueeze(-1)  # [batch, seq, 1]

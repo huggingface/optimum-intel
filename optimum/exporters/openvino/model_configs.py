@@ -21,8 +21,12 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import torch
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
-from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
-from optimum.exporters.onnx.config import AudioToTextOnnxConfig
+from optimum.exporters.onnx.config import (
+    AudioToTextOnnxConfig,
+    OnnxConfig,
+    TextDecoderOnnxConfig,
+    TextDecoderWithPositionIdsOnnxConfig,
+)
 from optimum.exporters.onnx.model_configs import (
     AlbertOnnxConfig,
     ASTOnnxConfig,
@@ -207,10 +211,10 @@ from .model_patcher import (
     Qwen2MoEPatcher,
     Qwen2VLLanguageModelPatcher,
     Qwen2VLVisionEmbMergerPatcher,
-    Qwen3ASRModelPatcher,
     Qwen3_5ModelPatcher,
     Qwen3_5MoeModelPatcher,
     Qwen3_5VisionEmbMergerPatcher,
+    Qwen3ASRModelPatcher,
     Qwen3MoeModelPatcher,
     Qwen3NextModelPatcher,
     Qwen3VLLanguageModelPatcher,
@@ -4265,9 +4269,7 @@ class Qwen3ASROpenVINOConfig(AudioToTextOnnxConfig):
             config.num_hidden_layers = text_config.num_hidden_layers
             config.hidden_size = text_config.hidden_size
             config.num_attention_heads = text_config.num_attention_heads
-            config.num_key_value_heads = getattr(
-                text_config, "num_key_value_heads", text_config.num_attention_heads
-            )
+            config.num_key_value_heads = getattr(text_config, "num_key_value_heads", text_config.num_attention_heads)
             config.head_dim = getattr(
                 text_config, "head_dim", text_config.hidden_size // text_config.num_attention_heads
             )
