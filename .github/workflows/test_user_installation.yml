@@ -40,6 +40,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip uv
+          # test user installation
           uv pip install .
 
       - name: Login with fork PRs CI token
@@ -50,5 +51,5 @@ jobs:
       - name: Test Model Exporting
         run: |
           optimum-cli export openvino \
-            -m Qwen/Qwen3-VL-2B-Instruct \
+            -m google/gemma-3-270m \
             temp_model
