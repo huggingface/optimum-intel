@@ -1684,6 +1684,35 @@ class OVWeightCompressionTest(unittest.TestCase):
         )
         self.assertTrue(all(len(sample["input_ids"][0]) == 64 for sample in dataset["model"].get_data()))
 
+    @parameterized.expand(
+        [
+            ("gemma4",),
+            ("gemma4_moe",),
+        ]
+        if is_transformers_version(">=", "5.5.0")
+        else [],
+        skip_on_empty=True,
+        name_func=lambda testcase_func, param_num, params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[0])}",
+    )
+    def test_build_dataset(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForVisualCausalLM.from_pretrained(model_id, export=True, load_in_8bit=False)
+        dataset_builder = OVCalibrationDatasetBuilder(model)
+        dataset = dataset_builder.build_from_quantization_config(
+            OVPipelineQuantizationConfig(
+                quantization_configs={
+                    "lm_model": OVWeightQuantizationConfig(
+                        bits=4,
+                        group_size=64,
+                        num_samples=1,
+                        scale_estimation=True,
+                        dataset="contextual",
+                        processor=model_id,
+                    )
+                }
+            ),
+        )
+
 
 class OVPipelineQuantizationTest(unittest.TestCase):
     maxDiff = None
