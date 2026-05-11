@@ -4251,7 +4251,7 @@ class M2M100OpenVINOConfig(BartOpenVINOConfig):
 class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.53.0"
     # TODO: add v5 support
-    MAX_TRANSFORMERS_VERSION = "4.57.6"
+    MAX_TRANSFORMERS_VERSION = "4.57.99"
     _MODEL_PATCHER = DeepseekPatcher
 
 
