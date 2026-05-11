@@ -51,5 +51,5 @@ jobs:
       - name: Test Model Exporting
         run: |
           optimum-cli export openvino \
-            -m google/gemma-3-270m \
+            -m Qwen/Qwen2.5-0.5B \
             temp_model
