@@ -124,7 +124,7 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.update({"qwen3_next": OVModelForCausalLM})
 
-    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "4.57.6"):
+    if is_transformers_version(">=", "4.49") and is_transformers_version("<=", "4.57.6"):
         SUPPORTED_ARCHITECTURES.update({"videochat_flash_qwen": OVModelForVisualCausalLM})
 
     if is_transformers_version(">=", "5.0"):
