@@ -201,7 +201,7 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
             return _OVModelForSpeechT5ForTextToSpeech._from_pretrained(model_id, config, **kwargs)
         else:
             raise ValueError(
-                f"{getattr(config, 'architectures', None)} are not supported text-to-audio model using OpenVINO"
+                f"{getattr(config, 'model_type')} are not supported text-to-audio model using OpenVINO"
             )
 
     def reshape(self, *args, **kwargs):
