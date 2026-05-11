@@ -1,4 +1,4 @@
-name: Test Installation
+name: Test User Installation
 
 on:
   workflow_dispatch:
@@ -40,14 +40,14 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip uv
-          uv pip install -e .
+          uv pip install .
 
       - name: Login with fork PRs CI token
         if: ${{ env.HF_TOKEN == '' }}
         run: |
           python tests/scripts/login_with_ci_token.py
 
-      - name: Test installation
+      - name: Test Model Exporting
         run: |
           optimum-cli export openvino \
             -m Qwen/Qwen3-VL-2B-Instruct \
