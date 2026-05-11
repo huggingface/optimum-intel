@@ -97,7 +97,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip uv
-          uv pip install .[tests] librosa diffusers
+          uv pip install .[tests] librosa diffusers qwen-asr
 
       - if: ${{ matrix.openvino-version == 'openvino-nightly' }}
         name: Install OpenVINO Nightly

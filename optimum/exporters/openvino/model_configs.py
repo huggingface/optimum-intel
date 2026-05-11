@@ -4222,8 +4222,7 @@ class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummySeq2SeqPastKeyValuesGenera
     library_name="transformers",
 )
 class Qwen3ASROpenVINOConfig(AudioToTextOnnxConfig):
-    """OpenVINO export config for Qwen3-ASR model.
-    Qwen3-ASR has no cross-attention, so encoder KV cache is excluded."""
+    """OpenVINO export config for Qwen3-ASR model."""
 
     DUMMY_INPUT_GENERATOR_CLASSES = (
         DummyAudioInputGenerator,
