@@ -79,7 +79,6 @@ class ExportModelTest(unittest.TestCase):
         "roberta": OVModelForTokenClassification,
         "wav2vec2": OVModelForAudioClassification,
         "whisper": OVModelForSpeechSeq2Seq,
-        "qwen3_asr": OVModelForSpeechSeq2Seq,
         "blenderbot": OVModelForFeatureExtraction,
         "stable-diffusion": OVStableDiffusionPipeline,
         "stable-diffusion-xl": OVStableDiffusionXLPipeline,
@@ -110,6 +109,9 @@ class ExportModelTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "4.58.0"):
         SUPPORTED_ARCHITECTURES.update({"afmoe": OVModelForCausalLM})
+
+    if is_transformers_version("==", "4.57.6"):
+        SUPPORTED_ARCHITECTURES.update({"qwen3_asr": OVModelForSpeechSeq2Seq})
 
     if is_transformers_version(">=", "5.5.0"):
         SUPPORTED_ARCHITECTURES.update({"gemma4": OVModelForVisualCausalLM})

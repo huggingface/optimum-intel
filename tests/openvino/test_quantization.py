@@ -1063,7 +1063,6 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelOpenCLIPForZeroShotImageClassification, "open-clip", False),
         (OVModelForVisualCausalLM, "llava", False),
         (OVModelForVisualCausalLM, "qwen2_vl", False),
-        (OVModelForSpeechSeq2Seq, "qwen3_asr", True),
     ]
 
     if is_transformers_version("<", "4.54.0"):
@@ -1081,6 +1080,9 @@ class OVWeightCompressionTest(unittest.TestCase):
     if is_transformers_version(">=", "4.57.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen3_vl", False))
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "hunyuan_v1_dense", False))
+
+    if is_transformers_version("==", "4.57.6"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForSpeechSeq2Seq, "qwen3_asr", True))
 
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.extend(

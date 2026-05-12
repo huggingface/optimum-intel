@@ -464,6 +464,10 @@ class Qwen3ASRTest(unittest.TestCase):
         audio_data = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
         return audio_data, sample_rate
 
+    @pytest.mark.skipif(
+        is_transformers_version("!=", "4.57.6"),
+        reason="requires transformers==4.57.6.",
+    )
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
