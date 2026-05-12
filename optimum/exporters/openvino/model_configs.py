@@ -270,6 +270,14 @@ def init_model_configs():
         "transformers",
         "AutoModelForCausalLM",
     )
+    TasksManager._CUSTOM_CLASSES[("pt", "mistral3", "text-generation")] = (
+        "transformers",
+        "AutoModelForImageTextToText",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "mistral3", "text-generation-with-past")] = (
+        "transformers",
+        "AutoModelForImageTextToText",
+    )
 
     # since transformers v4.46, model can be loaded using default AutoModelForImageTextToText
     # https://github.com/huggingface/transformers/blob/v4.46.0/src/transformers/models/auto/modeling_auto.py#L776
@@ -2144,7 +2152,7 @@ class Mistral3MultiModalProjectorOpenVINOConfig(OnnxConfig):
         return {"hidden_states": {0: "num_patches"}}
 
 
-@register_in_tasks_manager("mistral3", *["image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("mistral3", *["image-text-to-text", "text-generation", "text-generation-with-past"], library_name="transformers")
 class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Mistral3ConfigBehavior]
