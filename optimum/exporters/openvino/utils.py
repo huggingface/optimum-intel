@@ -307,6 +307,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llama4",
     "minicpmo",
     "videochat_flash_qwen",
+    "qwen3_omni_moe",
 ]
 
 SSM_MODELS = [
@@ -458,6 +459,33 @@ def save_preprocessors(
                 processor.save_pretrained(output)
             except Exception as ex:
                 logger.error(f"Saving {type(processor)} failed with {ex}")
+
+        if model_type in ("qwen3_omni_moe", "qwen3_omni", "qwen2_vl"):
+            try:
+                import shutil
+                from huggingface_hub import try_to_load_from_cache
+
+                dest_preprocessor = Path(output) / "preprocessor_config.json"
+                source_preprocessor = Path(model_name_or_path) / "preprocessor_config.json"
+
+                # Try local path first, then Hub cache
+                if source_preprocessor.exists():
+                    shutil.copy2(source_preprocessor, dest_preprocessor)
+                    logger.info(f"Copied preprocessor_config.json from local model")
+                else:
+                    # Try to load from HuggingFace cache if model_name_or_path is a Hub ID
+                    cached_config = try_to_load_from_cache(model_name_or_path, "preprocessor_config.json")
+                    if cached_config is not None and cached_config is not True:
+                        shutil.copy2(cached_config, dest_preprocessor)
+                        logger.info(f"Copied preprocessor_config.json from Hub cache")
+                    else:
+                        logger.warning(
+                            f"preprocessor_config.json not found for {model_name_or_path}. "
+                            f"The exported model may not work correctly."
+                        )
+            except Exception as ex:
+                logger.warning(f"Failed to copy preprocessor_config.json: {ex}")
+
         # phi4mm does not allow loading chat template in processor, it uses chat_template from tokenizer
         if model_type == "phi4mm" and (Path(output) / "chat_template.json").exists():
             (Path(output) / "chat_template.json").unlink()

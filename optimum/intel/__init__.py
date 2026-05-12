@@ -20,8 +20,34 @@ from .utils import (
     is_diffusers_available,
     is_nncf_available,
     is_sentence_transformers_available,
+    is_transformers_version,
 )
 from .version import __version__
+
+
+# Patch Transformers 5.0 Qwen3OmniMoeTalkerCodePredictorConfig bug
+# Bug: __init__ references self.use_sliding_window and self.max_window_layers before they're set
+# TODO: Narrow to specific broken versions once upstream fix is released (expected in 5.1+)
+if is_transformers_version(">=", "5.0") and is_transformers_version("<", "5.1"):
+    try:
+        from transformers.models.qwen3_omni_moe.configuration_qwen3_omni_moe import (
+            Qwen3OmniMoeTalkerCodePredictorConfig,
+        )
+
+        _original_code_predictor_init = Qwen3OmniMoeTalkerCodePredictorConfig.__init__
+
+        def _patched_code_predictor_init(self, *args, use_sliding_window=False, max_window_layers=28, **kwargs):
+            # Set these attributes before calling original __init__ which references them
+            self.use_sliding_window = use_sliding_window
+            self.max_window_layers = max_window_layers
+            _original_code_predictor_init(
+                self, *args, use_sliding_window=use_sliding_window, max_window_layers=max_window_layers, **kwargs
+            )
+
+        Qwen3OmniMoeTalkerCodePredictorConfig.__init__ = _patched_code_predictor_init
+    except (ImportError, AttributeError):
+        # Model not available or already fixed in newer Transformers version
+        pass
 
 
 _import_structure = {
@@ -42,6 +68,7 @@ _import_structure = {
         "OVModelForMaskedLM",
         "OVModelForPix2Struct",
         "OVModelForQuestionAnswering",
+        "OVModelForOmni",
         "OVModelForSeq2SeqLM",
         "OVModelForSpeechSeq2Seq",
         "OVModelForTextToSpeechSeq2Seq",
@@ -166,6 +193,7 @@ if TYPE_CHECKING:
         OVModelForFeatureExtraction,
         OVModelForImageClassification,
         OVModelForMaskedLM,
+        OVModelForOmni,
         OVModelForQuestionAnswering,
         OVModelForSeq2SeqLM,
         OVModelForSequenceClassification,

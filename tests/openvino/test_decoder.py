@@ -330,6 +330,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "exaone4",
                 "qwen3_next",
             }
+        # qwen3_omni_moe_text and qwen3_omni_moe_talker_text are parts of qwen3_omni_moe architecture, tested in seq2seq group
+        supported_architectures -= {"qwen3_omni_moe_text", "qwen3_omni_moe_talker_text"}
 
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
         untested_architectures = supported_architectures - tested_architectures
