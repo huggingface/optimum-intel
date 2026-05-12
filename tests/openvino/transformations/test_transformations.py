@@ -17,6 +17,7 @@ import re
 
 from parameterized import parameterized
 from utils_tests import MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS
+from arch_to_model_class import ARCH_TO_MODEL_CLASS
 
 # Maps architecture name -> list of  transformation needed to be applied , as per expected_transformations.txt
 def _load_expected_transformations(path):
@@ -39,16 +40,16 @@ _CONFIG_PATH = os.path.join(
 ARCH_TO_EXPECTED_TRANSFORMATIONS = _load_expected_transformations(_CONFIG_PATH)
 
 
-def _capture_stderr_during(model_id, OPENVINO_DEVICE, trust_remote_code):
+def _capture_stderr_during(model_id, OPENVINO_DEVICE, trust_remote_code, model_class="OVModelForCausalLM"):
     #  Runs model loading in a subprocess to reliably capture OpenVINO C++ logs.
 
     code = textwrap.dedent(f"""
         import os
         os.environ["OV_ENABLE_PROFILE_PASS"] = "1"
 
-        from optimum.intel import OVModelForCausalLM
+        from optimum.intel import {model_class}
 
-        OVModelForCausalLM.from_pretrained(
+        {model_class}.from_pretrained(
             "{model_id}",
             export=True,
             compile=True,
@@ -130,11 +131,13 @@ class OVTransformationTest(unittest.TestCase):
     ):
         model_id = MODEL_NAMES[model_arch]
         trust_remote_code = model_arch in REMOTE_CODE_MODELS
+        model_class = ARCH_TO_MODEL_CLASS.get(model_arch)
 
         log_output = _capture_stderr_during(
             model_id,
             OPENVINO_DEVICE,
-            trust_remote_code
+            trust_remote_code,
+            model_class,
         )
 
         result = check_failed_transformations(
