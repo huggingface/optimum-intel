@@ -99,11 +99,6 @@ jobs:
           pip install --upgrade pip uv
           uv pip install .[tests] librosa diffusers
 
-      - if: ${{ matrix.transformers-version == '4.57.6' }}
-        name: Install qwen-asr package
-        run: |
-          uv pip install qwen-asr
-
       - if: ${{ matrix.openvino-version == 'openvino-nightly' }}
         name: Install OpenVINO Nightly
         run: |

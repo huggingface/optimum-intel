@@ -54,7 +54,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip uv
-          uv pip install .[tests] librosa diffusers qwen-asr
+          uv pip install .[tests] librosa diffusers
 
       - if: ${{ matrix.test-pattern == '*modeling*' || matrix.test-pattern == '*quantization*' }}
         name: Install OpenVINO
