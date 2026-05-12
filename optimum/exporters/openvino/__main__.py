@@ -314,7 +314,10 @@ def main_export(
             trust_remote_code=trust_remote_code,
         )
         quantization_config = getattr(config, "quantization_config", None)
-        quant_method = quantization_config.get("quant_method", None) if quantization_config else None
+        if isinstance(quantization_config, dict):
+            quant_method = quantization_config.get("quant_method", None)
+        else:
+            quant_method = getattr(quantization_config, "quant_method", None)
 
         # update config to load eagle3 models
         archs = getattr(config, "architectures", None)
@@ -366,6 +369,18 @@ def main_export(
             if "activation_checkpointing" in config.audio_processor["config"]:
                 config.audio_processor["config"]["activation_checkpointing"] = ""
             config._attn_implementation = "sdpa"
+            loading_kwargs["config"] = config
+
+        # Mistral3 FP8 checkpoints are dequantized to BF16 for OpenVINO export.
+        if model_type == "mistral3" and quant_method == "fp8":
+            logger.info(
+                "Detected FP8 weights in the Mistral3 checkpoint; dequantizing them before exporting the model "
+                "to OpenVINO."
+            )
+            if isinstance(quantization_config, dict):
+                quantization_config["dequantize"] = True
+            else:
+                quantization_config.dequantize = True
             loading_kwargs["config"] = config
         # there are some difference between remote and in library representation of past key values for some models,
         # for avoiding confusion we disable remote code for them
