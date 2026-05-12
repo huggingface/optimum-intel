@@ -452,11 +452,6 @@ class Qwen3ASRTest(unittest.TestCase):
 
     SUPPORTED_ARCHITECTURES = ("qwen3_asr",)
 
-    @classmethod
-    def setUpClass(cls):
-        # qwen_asr must be imported to register model with AutoConfig/AutoModel
-        import qwen_asr  # noqa: F401
-
     def _generate_audio_data(self):
         np.random.seed(SEED)
         sample_rate = 16000
@@ -464,12 +459,13 @@ class Qwen3ASRTest(unittest.TestCase):
         audio_data = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
         return audio_data, sample_rate
 
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.skipif(
         is_transformers_version("!=", "4.57.6"),
         reason="requires transformers==4.57.6.",
     )
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
+        import qwen_asr
         from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
 
         model_id = MODEL_NAMES[model_arch]
