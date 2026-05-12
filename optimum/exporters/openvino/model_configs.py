@@ -4243,6 +4243,8 @@ class Qwen3ASROpenVINOConfig(AudioToTextOnnxConfig):
         feature_size="num_mel_bins",
         allow_new=True,
     )
+    MIN_TRANSFORMERS_VERSION = "4.57.6"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
     _MODEL_PATCHER = Qwen3ASRModelPatcher
 
     def __init__(
