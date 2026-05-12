@@ -2,5 +2,5 @@
 # Format: arch_name: Transformation1, Transformation2
 
 
-afmoe: MoEMatMulsFusion,ConvertToCPUSpecificOpset
+afmoe: MoEMatMulsFusion,FullyConnectedBiasFusion
 gpt2: ConvertToCPUSpecificOpset,MatMulToFCFusion

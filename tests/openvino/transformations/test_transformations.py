@@ -2,23 +2,21 @@ import os
 import sys
 import unittest
 
-
+#This code is for eliminating unnecessary code text from the output
+import pytest
+@pytest.fixture(autouse=True, scope="session")
+def set_tb_style(pytestconfig):
+    pytestconfig.option.tbstyle = "line"
 
 # we are adding this , so the parent directory (tests/openvino/) is in the python search path for utils_test.py to be imported
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-
 import subprocess
 import textwrap
 import re
-from difflib import get_close_matches
 
 from parameterized import parameterized
 from utils_tests import MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS
-
-
-
-
 
 # Maps architecture name -> list of  transformation needed to be applied , as per expected_transformations.txt
 def _load_expected_transformations(path):
@@ -74,7 +72,7 @@ def normalize(name: str) -> str:
     return re.sub(r'[\s_\-]', '', name).lower()
 
 
-# Extract transformation name — always last token before NUMBERms +/-
+# Extract transformation name — always last token before NUMBER ms +/-
 def extract_transform_name(line: str) -> str | None:
     match = re.search(
         r'([A-Za-z][A-Za-z0-9_]*)\s+\d+ms\s*[+-]\s*$',
@@ -85,48 +83,43 @@ def extract_transform_name(line: str) -> str | None:
 
 # Algo to identify tranformations present with '+' in the log.
 def check_failed_transformations(log: str, words: list[str]) -> dict:
-    applied_raw = []
-    applied_norm = []
+    applied_norm_plus = []
+    applied_norm_minus = []
+    found_not_applied=[]
 
     for line in log.splitlines():
         stripped = line.strip()
 
         if not stripped:
             continue
-
-        if not stripped.endswith('+'):  #  neglect '-' because those transformations are not applied
-            continue
-
         name = extract_transform_name(stripped)
+        
         if name:
-            applied_raw.append(name)
-            applied_norm.append(normalize(name))
+            if stripped.endswith('+'):
+                applied_norm_plus.append(normalize(name))
+            elif stripped.endswith('-'):
+                applied_norm_minus.append(normalize(name))
 
     remaining = {normalize(w): w for w in words}
 
     for key in list(remaining.keys()):
-        if key in applied_norm:
+        if key in applied_norm_plus:
+            del remaining[key]
+        elif key in applied_norm_minus:
+            found_not_applied.append(remaining[key])
             del remaining[key]
 
-    hints = {}
-    for key, original in remaining.items():
-        matches = get_close_matches(key, applied_norm, n=2, cutoff=0.8)
-
-        if matches:
-            readable = [
-                applied_raw[applied_norm.index(m)]
-                for m in matches
-            ]
-            hints[original] = readable
+   
 
     return {
         "not_found": list(remaining.values()),
-        "hints": hints
+        "not_applied":found_not_applied
     }
 
 
-class OVTransformationTest(unittest.TestCase):
 
+class OVTransformationTest(unittest.TestCase):
+    
     @parameterized.expand(
         list(ARCH_TO_EXPECTED_TRANSFORMATIONS.items())
     )
@@ -149,25 +142,32 @@ class OVTransformationTest(unittest.TestCase):
             expected_transforms
         )
 
-        if result["not_found"]:
-            not_found = ", ".join(result["not_found"])
-            hints = result["hints"]
-
-            hint_lines = ""
-
-            if hints:
-                hint_lines = (
-                    "\nPossible matches in log:\n"
-                    + "\n".join(
-                        f"  '{wrong}' → did you mean '{', '.join(suggestions)}'?"
-                        for wrong, suggestions in hints.items()
-                    )
-                )
-
-            raise AssertionError(
-                f"The following transformations were not applied for '{model_arch}' architecture: "
-                f"{not_found}{hint_lines}"
-            )
+        errors=[]
+        not_found = ", ".join(result["not_found"])
+        not_applied = ", ".join(result["not_applied"])
+        if not_applied:
+            err = (
+               f"These transformations were not 'applied' for '{model_arch}' architecture: "
+                + not_applied
+                  )
+            errors.append(err)
+           
+        if not_found:
+            err=   (
+                       f"These transformations were not 'found' in the '{model_arch}'  transformation set: "
+                          + not_found
+                      )
+            errors.append(err)
+        
+        RED = "\033[91m"
+        RESET = "\033[0m"
+        if errors:
+            # raise AssertionError("\n".join(errors))
+            raise AssertionError(f"{RED}" + "\n".join(errors) + f"{RESET}")
+    
+    
+            
+   
 
 
 if __name__ == "__main__":
