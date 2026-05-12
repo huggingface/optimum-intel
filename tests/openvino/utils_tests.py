@@ -231,7 +231,7 @@ MODEL_NAMES = {
     "sana": "optimum-intel-internal-testing/tiny-random-sana",
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
-    "ltx-video-0.9.1": "creeper-hat/tiny-random-ltx-video-0.9.1",
+    "ltx-video-0.9.1": "optimum-intel-internal-testing/tiny-random-ltx-video-0.9.1",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
 }
