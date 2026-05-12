@@ -847,9 +847,11 @@ def export_tokenizer(
     if output.exists():
         tokenizer = maybe_convert_tokenizer_to_fast(tokenizer, output)
 
+    # Left-padding is required for decoder-only models (text-generation and VLM language models)
+    # Note: ASR/text-to-audio tasks in this repo currently only apply to decoder-only Qwen3-Omni VLMs
     if (
         task is not None
-        and (task.startswith("text-generation") or any(t in task for t in _VLM_LANGUAGE_MODEL_TASKS))
+        and (task.startswith("text-generation") or task in ("image-text-to-text", "text-to-audio"))
         and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0")
     ):
         logger.info(f"Set tokenizer padding side to left for `{task}` task.")

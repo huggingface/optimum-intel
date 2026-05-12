@@ -4159,7 +4159,7 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
             else:
                 logger.warning(
                     "code_predictor_codec_embedding.npy not found — "
-                    "CodePredictor will use degraded fallback for token embedding"
+                    "Audio generation will fail if requested. Re-export the model to include this file."
                 )
 
         thinker_config = getattr(config, "thinker_config", config)
@@ -4430,8 +4430,10 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
             raise ValueError("Video input is not supported")
         if isinstance(audio, (list, tuple)) and len(audio) == 1:
             audio = audio[0]
-        if isinstance(audio, tuple):
-            audio = audio[0]
+        if isinstance(audio, tuple) and len(audio) == 2:
+            # Preserve sampling rate from (samples, rate) tuple format
+            audio_array, sampling_rate = audio
+            audio = {"array": audio_array, "sampling_rate": sampling_rate}
 
         conversation = [{"role": "user", "content": [{"type": "text", "text": text}]}]
         if image is not None:
@@ -4731,8 +4733,17 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
 
                 for cp_step in range(num_code_groups - 1):
                     cp_next_logits = cp_logits[:, -1, :]
-                    cp_probs = torch.nn.functional.softmax(cp_next_logits, dim=-1)
-                    cp_token = torch.multinomial(cp_probs, num_samples=1).squeeze(-1)
+                    # Apply same decoding policy as first token
+                    if temperature > 0:
+                        if temperature != 1.0:
+                            cp_next_logits = cp_next_logits / temperature
+                        if top_k > 0:
+                            indices_to_remove = cp_next_logits < torch.topk(cp_next_logits, top_k)[0][..., -1, None]
+                            cp_next_logits[indices_to_remove] = float("-inf")
+                        cp_probs = torch.nn.functional.softmax(cp_next_logits, dim=-1)
+                        cp_token = torch.multinomial(cp_probs, num_samples=1).squeeze(-1)
+                    else:
+                        cp_token = cp_next_logits.argmax(dim=-1)
                     step_codes.append(cp_token.item())
 
                     cp_embed = self._embed_cp_token(cp_token.unsqueeze(0), cp_step)
