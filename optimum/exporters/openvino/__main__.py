@@ -651,6 +651,8 @@ def _main_quantize(
     # which is returned as the inferred task. As a result, we try to load the exported model using the
     # OVModelForSpeechSeq2Seq class instead of the OVModelForVisualCausalLM class when the task is not specified
     # explicitly. Because of this, we get an error.
+    # Qwen3-Omni-MoE registers multiple tasks (text-to-audio, ASR, image-text-to-text) but always loads
+    # through OVModelForVisualCausalLM, so redirect unconditionally regardless of inferred or explicit task.
     if original_task == "auto" and library_name == "transformers":
         config = AutoConfig.from_pretrained(
             model_name_or_path,
@@ -661,7 +663,7 @@ def _main_quantize(
             trust_remote_code=trust_remote_code,
         )
         model_type = config.model_type
-        if model_type in ["phi4mm", "phi4_multimodal"]:
+        if model_type in ["phi4mm", "phi4_multimodal", "qwen3_omni_moe"]:
             task = "image-text-to-text"
 
     # Step 1. Obtain the correct OpenVINO model class

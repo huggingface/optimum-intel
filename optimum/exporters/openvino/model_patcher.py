@@ -76,6 +76,12 @@ if is_transformers_version(">=", "4.56"):
 if is_transformers_version(">=", "5"):
     from transformers.modeling_rope_utils import RotaryEmbeddingConfigMixin
 
+if is_transformers_version(">=", "4.57"):
+    from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
+        Qwen3OmniMoeTalkerTextSparseMoeBlock,
+        Qwen3OmniMoeThinkerTextSparseMoeBlock,
+    )
+
 if TYPE_CHECKING:
     from transformers.cache_utils import Cache
     from transformers.modeling_utils import PreTrainedModel
@@ -280,6 +286,17 @@ def patch_cos_sin_cached_fp32(model):
 def eager_mask_without_vmap(*args, **kwargs) -> Optional[torch.Tensor]:
     kwargs.pop("allow_is_causal_skip", None)
     dtype = kwargs.get("dtype", torch.float32)
+    # transformers 5.x passes q_length/q_offset instead of cache_position; synthesize it as a tensor
+    # so the underlying optimum-onnx helper (which still consumes cache_position) keeps working
+    # without freezing dynamic shape info into Python ints during tracing.
+    if "cache_position" not in kwargs and "q_length" in kwargs:
+        q_length = kwargs.pop("q_length")
+        q_offset = kwargs.pop("q_offset", 0)
+        device = kwargs.get("device")
+        q_arange = torch.arange(q_length, dtype=torch.long, device=device)
+        if isinstance(q_offset, torch.Tensor):
+            q_offset = q_offset.to(q_arange.device)
+        kwargs["cache_position"] = q_arange + q_offset
     mask = sdpa_mask_without_vmap(*args, allow_is_causal_skip=False, **kwargs)
     # we use torch.finfo(torch.float16).min instead torch.finfo(dtype).min to avoid an overflow but not
     # sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
@@ -2389,7 +2406,7 @@ def _persimmon_self_attn_sdpa_forward(
     fused_qkv = self.query_key_value(hidden_states)
 
     # 3 x [batch_size, seq_length, num_heads, head_dim]
-    (query_states, key_states, value_states) = self._split_heads(fused_qkv)
+    query_states, key_states, value_states = self._split_heads(fused_qkv)
 
     if self.qk_layernorm:
         query_states = self.q_layernorm(query_states)
@@ -4243,6 +4260,21 @@ class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
+# Replacement for _deepstack_process that avoids `hidden_states[mask]` boolean indexing —
+# the data-dependent shape breaks OpenVINO tracing. Uses cumsum + index_select + masked add instead.
+def _deepstack_process_patched(self, hidden_states, visual_pos_masks, visual_embeds):
+    visual_pos_masks = visual_pos_masks.to(hidden_states.device)
+    visual_embeds = visual_embeds.to(hidden_states.device, hidden_states.dtype)
+    batch, seq_len, dim = hidden_states.shape
+    flat_mask = visual_pos_masks.reshape(-1)
+    indices = torch.cumsum(flat_mask.long(), dim=0) - 1
+    indices = torch.clamp(indices, min=0)
+    full_visual = torch.index_select(visual_embeds, 0, indices).reshape(batch, seq_len, dim)
+    mask_3d = flat_mask.to(hidden_states.dtype).reshape(batch, seq_len, 1)
+    hidden_states = hidden_states + full_visual * mask_3d
+    return hidden_states
+
+
 class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
@@ -4284,11 +4316,18 @@ class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
 
         model.__orig_forward = model.forward
         model.forward = types.MethodType(lm_forward, model)
+
+        language_model = model.model.language_model
+        language_model.__orig_deepstack_process = language_model._deepstack_process
+        language_model._deepstack_process = types.MethodType(_deepstack_process_patched, language_model)
+
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
+        language_model = self._model.model.language_model
+        language_model._deepstack_process = language_model.__orig_deepstack_process
 
 
 def patch_qwen2vl_vision_blocks(model, force_new_behaviour=False):
@@ -4545,6 +4584,304 @@ class Qwen3VLVisionEmbMergerPatcher(ModelPatcher):
         for block in self._model.blocks:
             block.forward = block._orig_forward
             block.attn.forward = block.attn._orig_forward
+
+
+class Qwen3OmniMoeVisionMergerPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def image_embed_forward(
+            self,
+            hidden_states: torch.Tensor,
+            pos_embeds: torch.Tensor,
+            attention_mask: torch.Tensor,
+            rotary_pos_emb: torch.Tensor,
+        ) -> torch.Tensor:
+            hidden_states = self.patch_embed(hidden_states)
+            hidden_states = hidden_states + pos_embeds
+            deepstack_feature_lists = []
+            for layer_num, blk in enumerate(self.blocks):
+                hidden_states = blk(hidden_states, attention_mask=attention_mask, rotary_pos_emb=rotary_pos_emb)
+                if layer_num in self.deepstack_visual_indexes:
+                    deepstack_feature = self.merger_list[self.deepstack_visual_indexes.index(layer_num)](hidden_states)
+                    deepstack_feature_lists.append(deepstack_feature)
+            last_hidden_state = self.merger(hidden_states)
+            return last_hidden_state, torch.stack(deepstack_feature_lists, dim=0)
+
+        model.forward = types.MethodType(image_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        patch_qwen2vl_vision_blocks(self._model)
+        super().__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        for block in self._model.blocks:
+            block.forward = block._orig_forward
+            block.attn.forward = block.attn._orig_forward
+
+
+class Qwen3OmniMoeAudioEncoderPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def audio_forward(
+            self,
+            padded_feature: torch.Tensor,
+            padded_mask_after_cnn: torch.Tensor,
+            aftercnn_lens: torch.Tensor,
+            cu_seqlens: torch.Tensor,
+        ) -> torch.Tensor:
+            padded_feature = padded_feature.unsqueeze(1)
+            padded_embed = torch.nn.functional.gelu(self.conv2d1(padded_feature))
+            padded_embed = torch.nn.functional.gelu(self.conv2d2(padded_embed))
+            padded_embed = torch.nn.functional.gelu(self.conv2d3(padded_embed))
+            b, c, f, t = padded_embed.size()
+            padded_embed = self.conv_out(padded_embed.permute(0, 3, 1, 2).contiguous().view(b, t, c * f))
+
+            positional_embedding = (
+                self.positional_embedding.positional_embedding[: padded_embed.shape[1], :]
+                .unsqueeze(0)
+                .to(padded_embed.dtype)
+            )
+            padded_embed = padded_embed + positional_embedding
+
+            # Flatten rather than boolean-index: the latter bakes a data-dependent shape that OV can't trace.
+            # Encoder layers run with eager attention during export, so cu_seqlens don't affect the output.
+            b, t, d = padded_embed.shape
+            hidden_states = padded_embed.reshape(b * t, d)
+
+            for encoder_layer in self.layers:
+                layer_outputs = encoder_layer(hidden_states, cu_seqlens)
+                hidden_states = layer_outputs[0]
+
+            hidden_states = self.ln_post(hidden_states)
+            hidden_states = self.proj1(hidden_states)
+            hidden_states = self.act(hidden_states)
+            hidden_states = self.proj2(hidden_states)
+
+            hidden_states = hidden_states.reshape(b, t, -1)
+            hidden_states = hidden_states * padded_mask_after_cnn.to(hidden_states.dtype).unsqueeze(-1)
+            return hidden_states
+
+        model.forward = types.MethodType(audio_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class _Qwen3OmniMoeLMPatcherMixin:
+    # Subclasses assign `_moe_block_cls` and `_patched_moe_forward` in their own __init__
+    # before calling super().__init__ — referenced class-body values wouldn't resolve because
+    # the transformers MoE block classes live behind a version gate and the patched forward
+    # functions are defined later in this module.
+
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "4.57"):
+            # For both 4.x and 5.x, patch the MoE forward to avoid .nonzero() which breaks tracing
+            self._original_moe_forward = self._moe_block_cls.forward
+            self._moe_block_cls.forward = self._patched_moe_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if is_transformers_version(">=", "4.57"):
+            self._moe_block_cls.forward = self._original_moe_forward
+        super().__exit__(exc_type, exc_value, traceback)
+
+
+class Qwen3OmniMoeLanguageModelPatcher(_Qwen3OmniMoeLMPatcherMixin, OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        self._moe_block_cls = Qwen3OmniMoeThinkerTextSparseMoeBlock
+        self._patched_moe_forward = qwen3_moe_forward_patched
+
+        # Talker consumes one intermediate layer's hidden state; layer index comes from talker_config.
+        talker_config = getattr(model.config, "talker_config", None)
+        accept_hidden_layer = getattr(talker_config, "accept_hidden_layer", None)
+
+        def lm_forward(
+            self,
+            attention_mask,
+            position_ids,
+            past_key_values,
+            inputs_embeds,
+            visual_pos_masks,
+            deepstack_visual_embeds,
+            use_cache=True,
+        ):
+            if is_transformers_version("<", "5"):
+                pkv = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                pkv = DynamicCache(past_key_values)
+            outputs = self.thinker.model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                use_cache=use_cache,
+                past_key_values=pkv,
+                visual_pos_masks=visual_pos_masks,
+                deepstack_visual_embeds=deepstack_visual_embeds,
+                output_hidden_states=accept_hidden_layer is not None,
+            )
+            hidden_states = outputs[0]
+            logits = self.thinker.lm_head(hidden_states)
+            legacy_pkv = postprocess_past_key_values(outputs.past_key_values)
+            if accept_hidden_layer is not None:
+                intermediate_hidden_states = outputs.hidden_states[accept_hidden_layer]
+                return (logits, hidden_states, intermediate_hidden_states, legacy_pkv)
+            return (logits, hidden_states, legacy_pkv)
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(lm_forward, model)
+
+        thinker_model = model.thinker.model
+        thinker_model.__orig_deepstack_process = thinker_model._deepstack_process
+        thinker_model._deepstack_process = types.MethodType(_deepstack_process_patched, thinker_model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        thinker_model = self._model.thinker.model
+        thinker_model._deepstack_process = thinker_model.__orig_deepstack_process
+
+
+class Qwen3OmniMoeTalkerLanguageModelPatcher(_Qwen3OmniMoeLMPatcherMixin, OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        self._moe_block_cls = Qwen3OmniMoeTalkerTextSparseMoeBlock
+        self._patched_moe_forward = qwen3_omni_moe_talker_sparse_forward_patched
+
+        def lm_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values, use_cache=True):
+            if is_transformers_version("<", "5"):
+                pkv = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                pkv = DynamicCache(past_key_values)
+            outputs = self.talker.model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                use_cache=use_cache,
+                past_key_values=pkv,
+            )
+            hidden_states = outputs[0]
+            logits = self.talker.codec_head(hidden_states)
+            return (logits, hidden_states, postprocess_past_key_values(outputs.past_key_values))
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(lm_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Qwen3OmniMoeCodePredictorPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        code_predictor = model.talker.code_predictor
+        # Dummy inputs are float32; upcasting the module avoids dtype mismatches during tracing.
+        code_predictor.float()
+
+        # Per-step lm_head selection via integer index needs a stacked weight tensor for tracing.
+        stacked_heads = torch.stack([head.weight for head in code_predictor.lm_head])
+
+        def cp_forward(
+            self,
+            inputs_embeds,
+            attention_mask,
+            position_ids,
+            past_key_values,
+            generation_steps,
+            use_cache=True,
+        ):
+            if is_transformers_version("<", "5"):
+                pkv = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                pkv = DynamicCache(past_key_values)
+            outputs = self.talker.code_predictor.model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                use_cache=use_cache,
+                past_key_values=pkv,
+            )
+            hidden_states = outputs[0]
+            head_weight = stacked_heads[generation_steps]
+            logits = torch.nn.functional.linear(hidden_states, head_weight)
+            return (logits, hidden_states, postprocess_past_key_values(outputs.past_key_values))
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(cp_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Qwen3OmniMoeCode2WavPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs=model_kwargs or {})
+        self._orig_get_extra_padding = None
+
+    def __enter__(self):
+        super().__enter__()
+        # Override Qwen3OmniMoeCausalConvNet._get_extra_padding_for_conv1d: the original uses math.ceil
+        # on dynamic shapes which can't be traced. For every Code2Wav conv config, extra_padding == 0.
+        import transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe as qwen3_omni_moe_module
+
+        self._orig_get_extra_padding = qwen3_omni_moe_module.Qwen3OmniMoeCausalConvNet._get_extra_padding_for_conv1d
+        qwen3_omni_moe_module.Qwen3OmniMoeCausalConvNet._get_extra_padding_for_conv1d = lambda self, hidden_state: 0
+        # Code2Wav extends ModelPatcher (not OVDecoderModelPatcher), so the 5.x-safe mask wrappers
+        # that handle the transformers 5.x `q_length`/`q_offset` signature are not registered by the
+        # base class. Register them here so the Code2Wav attention layers trace under 5.x.
+        if is_transformers_version(">=", "4.53.0"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if self._orig_get_extra_padding is not None:
+            import transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe as qwen3_omni_moe_module
+
+            qwen3_omni_moe_module.Qwen3OmniMoeCausalConvNet._get_extra_padding_for_conv1d = (
+                self._orig_get_extra_padding
+            )
 
 
 # copied from https://github.com/huggingface/transformers/blob/v4.47.1/src/transformers/models/granitemoe/modeling_granitemoe.py#L321
@@ -5801,6 +6138,7 @@ class Qwen2MoEPatcher(OVDecoderModelPatcher):
 
             modulewise_patch(self._model, Qwen2MoeSparseMoeBlock, _qwen2moe_sparse_block_forward)
 
+        # For Transformers 5.0+, use batched_mm as our Transformers 4.x patch still uses torch.where
         if is_transformers_version(">=", "5"):
             self._model.set_experts_implementation("batched_mm")
 
@@ -7132,57 +7470,100 @@ def qwen3_moe_forward_patched(self, hidden_states: torch.Tensor) -> torch.Tensor
     batch_size, sequence_length, hidden_dim = hidden_states.shape
     hidden_states = hidden_states.view(-1, hidden_dim)
     # router_logits: (batch * sequence_length, n_experts)
-    router_logits = self.gate(hidden_states)
+    gate_output = self.gate(hidden_states)
 
-    routing_weights = torch.nn.functional.softmax(router_logits, dim=1, dtype=torch.float)
-    routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
-    if self.norm_topk_prob:  # only diff with mixtral sparse moe block!
-        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-    # we cast back to the input dtype
-    routing_weights = routing_weights.to(hidden_states.dtype)
+    # In Transformers 5.0, gate returns (router_logits, router_scores, router_indices)
+    # and experts are parameter tensors accessed via self.experts.gate_up_proj[expert_idx].
+    # In Transformers 4.x, gate returns just router_logits and experts are individual modules
+    # accessed via self.experts[expert_idx].
+    if isinstance(gate_output, tuple):
+        router_logits, routing_weights, selected_experts = gate_output
+        # Transformers 5.0: Reimplement Experts logic without .nonzero() for tracing
+        # Experts are stored as parameters in self.experts.gate_up_proj and self.experts.down_proj
+        final_hidden_states = torch.zeros_like(hidden_states)
+        expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.gate.num_experts)
+        expert_mask = expert_mask.permute(2, 1, 0)
 
-    final_hidden_states = torch.zeros(
-        (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
-    )
+        # Static expert processing for torch.jit.trace compatibility
+        # Process ALL tokens through each expert - routing weights naturally zero out non-selected tokens
+        # Based on Transformers PR #40114 pattern for MoE export
+        for expert_idx in range(self.gate.num_experts):
+            # Process all tokens through this expert (no dynamic indexing)
+            gate, up = torch.nn.functional.linear(hidden_states, self.experts.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+            expert_output = self.experts.act_fn(gate) * up
+            expert_output = torch.nn.functional.linear(expert_output, self.experts.down_proj[expert_idx])
 
-    # One hot encode the selected experts to create an expert mask
-    # this will be used to easily index which expert is going to be sollicitated
-    expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
+            # Apply routing weights for this expert
+            # expert_mask[expert_idx]: (top_k, num_tokens) - 1 where expert is selected, 0 otherwise
+            # routing_weights: (num_tokens, top_k) - weights for each top-k position
+            # For each token, multiply by the weight if this expert was selected
+            expert_mask_for_expert = expert_mask[expert_idx].float()  # (top_k, num_tokens)
+            weighted_mask = expert_mask_for_expert * routing_weights.t()  # (top_k, num_tokens)
+            token_weights = weighted_mask.sum(dim=0)  # (num_tokens,) - sum over top_k positions
 
-    # TODO: we loop over all possible experts instead of hitted ones to avoid issues in graph execution.
-    # expert_hitted = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-    # Loop over all available experts in the model and perform the computation on each expert
-    for expert_idx in range(self.num_experts):
-        expert_layer = self.experts[expert_idx]
-        idx, top_x = torch.where(expert_mask[expert_idx].squeeze(0))
+            # Weight the expert output (zeros for non-selected tokens)
+            weighted_output = expert_output * token_weights.unsqueeze(-1)
 
-        # Index the correct hidden states and compute the expert hidden state for
-        # the current expert. We need to make sure to multiply the output hidden
-        # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-        current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
-        current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+            # Add to final output
+            final_hidden_states = final_hidden_states + weighted_output
 
-        # However `index_add_` only support torch tensors for indexing so we'll use
-        # the `top_x` tensor here.
-        final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
-    final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
-    return final_hidden_states, router_logits
+        final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
+        return final_hidden_states
+    else:
+        router_logits = gate_output
+        num_experts = self.num_experts
+        top_k = self.top_k
+        norm_topk_prob = self.norm_topk_prob
+        routing_weights = torch.nn.functional.softmax(router_logits, dim=1, dtype=torch.float)
+        routing_weights, selected_experts = torch.topk(routing_weights, top_k, dim=-1)
+        if norm_topk_prob:  # only diff with mixtral sparse moe block!
+            routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+        # we cast back to the input dtype
+        routing_weights = routing_weights.to(hidden_states.dtype)
+
+        final_hidden_states = torch.zeros(
+            (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
+        )
+
+        # One hot encode the selected experts to create an expert mask
+        # this will be used to easily index which expert is going to be sollicitated
+        expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=num_experts).permute(2, 1, 0)
+
+        # TODO: we loop over all possible experts instead of hitted ones to avoid issues in graph execution.
+        # expert_hitted = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
+        # Loop over all available experts in the model and perform the computation on each expert
+        for expert_idx in range(num_experts):
+            expert_layer = self.experts[expert_idx]
+            idx, top_x = torch.where(expert_mask[expert_idx].squeeze(0))
+
+            # Index the correct hidden states and compute the expert hidden state for
+            # the current expert. We need to make sure to multiply the output hidden
+            # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
+            current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
+            current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+
+            # However `index_add_` only support torch tensors for indexing so we'll use
+            # the `top_x` tensor here.
+            final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
+
+        final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
+        return final_hidden_states, router_logits
 
 
 class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        if is_transformers_version(">=", "4.53") and is_transformers_version("<", "5"):
+        # Apply static MoE patching for both Transformers 4.x and 5.0+
+        # The qwen3_moe_forward_patched function handles both versions
+        if is_transformers_version(">=", "4.53"):
             self.original_moe_forward = Qwen3MoeSparseMoeBlock.forward
             Qwen3MoeSparseMoeBlock.forward = qwen3_moe_forward_patched
-        if is_transformers_version(">=", "5"):
-            self._model.set_experts_implementation("batched_mm")
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if is_transformers_version(">=", "4.53") and is_transformers_version("<", "5"):
+        if is_transformers_version(">=", "4.53"):
             Qwen3MoeSparseMoeBlock.forward = self.original_moe_forward
 
 
@@ -7864,6 +8245,7 @@ class GptOssModelPatcher(OVDecoderModelPatcher):
             self.original_gpt_oss_forward = GptOssExperts.forward
             GptOssExperts.forward = gpt_oss_forward
 
+        # For Transformers 5.0+, use batched_mm
         if is_transformers_version(">=", "5"):
             self._model.set_experts_implementation("batched_mm")
 
@@ -9504,3 +9886,84 @@ class Qwen3_5MoeModelPatcher(Qwen3_5ModelPatcher):
             if isinstance(decoder_layer.mlp, Qwen3_5MoeSparseMoeBlock):
                 sparse_moe_block = decoder_layer.mlp
                 sparse_moe_block.forward = sparse_moe_block._orig_forward
+
+
+# Adopted from qwen3_moe_forward_patched above, extended with shared expert computation.
+# https://github.com/huggingface/transformers/blob/v4.57.0/src/transformers/models/qwen3_omni_moe/modeling_qwen3_omni_moe.py#L2703
+def qwen3_omni_moe_talker_sparse_forward_patched(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    batch_size, sequence_length, hidden_dim = hidden_states.shape
+    hidden_states = hidden_states.view(-1, hidden_dim)
+    gate_output = self.gate(hidden_states)
+
+    # In Transformers 5.0, gate returns (router_logits, router_scores, router_indices)
+    # and experts are parameter tensors accessed via self.experts.gate_up_proj[expert_idx].
+    # In Transformers 4.x, gate returns just router_logits and experts are individual modules
+    # accessed via self.experts[expert_idx].
+    if isinstance(gate_output, tuple):
+        router_logits, routing_weights, selected_experts = gate_output
+        # Transformers 5.0: manual loop using expert parameter tensors (avoid .nonzero())
+        final_hidden_states = torch.zeros_like(hidden_states)
+        expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.gate.num_experts)
+        expert_mask = expert_mask.permute(2, 1, 0)
+
+        # Static expert processing for torch.jit.trace compatibility
+        # Process ALL tokens through each expert - routing weights naturally zero out non-selected tokens
+        for expert_idx in range(self.gate.num_experts):
+            # Process all tokens through this expert (no dynamic indexing)
+            gate, up = torch.nn.functional.linear(hidden_states, self.experts.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+            expert_output = self.experts.act_fn(gate) * up
+            expert_output = torch.nn.functional.linear(expert_output, self.experts.down_proj[expert_idx])
+
+            # Apply routing weights for this expert
+            expert_mask_for_expert = expert_mask[expert_idx].float()  # (top_k, num_tokens)
+            weighted_mask = expert_mask_for_expert * routing_weights.t()  # (top_k, num_tokens)
+            token_weights = weighted_mask.sum(dim=0)  # (num_tokens,) - sum over top_k positions
+
+            # Weight the expert output (zeros for non-selected tokens)
+            weighted_output = expert_output * token_weights.unsqueeze(-1)
+
+            # Add to final output
+            final_hidden_states = final_hidden_states + weighted_output
+    else:
+        router_logits = gate_output
+        num_experts = self.num_experts
+        top_k = self.top_k
+        norm_topk_prob = self.norm_topk_prob
+        routing_weights = torch.nn.functional.softmax(router_logits, dim=1, dtype=torch.float)
+        routing_weights, selected_experts = torch.topk(routing_weights, top_k, dim=-1)
+        if norm_topk_prob:
+            routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+        routing_weights = routing_weights.to(hidden_states.dtype)
+
+        final_hidden_states = torch.zeros(
+            (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
+        )
+
+        expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=num_experts).permute(2, 1, 0)
+
+        # Static expert processing for torch.jit.trace compatibility (Transformers 4.x)
+        for expert_idx in range(num_experts):
+            expert_layer = self.experts[expert_idx]
+
+            gate, up = expert_layer.gate_proj(hidden_states), expert_layer.up_proj(hidden_states)
+            expert_output = expert_layer.act_fn(gate) * up
+            expert_output = expert_layer.down_proj(expert_output)
+
+            expert_mask_for_expert = expert_mask[expert_idx].squeeze(0).float()  # (top_k, num_tokens)
+            weighted_mask = expert_mask_for_expert * routing_weights.t()  # (top_k, num_tokens)
+            token_weights = weighted_mask.sum(dim=0)  # (num_tokens,)
+
+            weighted_output = expert_output * token_weights.unsqueeze(-1)
+
+            final_hidden_states = final_hidden_states + weighted_output
+
+    shared_expert_output = self.shared_expert(hidden_states)
+    shared_expert_output = torch.nn.functional.sigmoid(self.shared_expert_gate(hidden_states)) * shared_expert_output
+    final_hidden_states = final_hidden_states + shared_expert_output
+
+    final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
+    # Transformers 5.0 only returns hidden_states, not (hidden_states, router_logits)
+    if isinstance(gate_output, tuple):
+        return final_hidden_states
+    else:
+        return final_hidden_states, router_logits
