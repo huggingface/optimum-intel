@@ -465,7 +465,6 @@ class Qwen3ASRTest(unittest.TestCase):
         reason="requires transformers==4.57.6.",
     )
     def test_compare_to_transformers(self, model_arch):
-        import qwen_asr
         from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
 
         model_id = MODEL_NAMES[model_arch]
