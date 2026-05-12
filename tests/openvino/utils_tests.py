@@ -351,6 +351,7 @@ MODEL_NAMES = {
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
+    "videochat_flash_qwen": "optimum-intel-internal-testing/tiny-videochat-flash-qwen",
 }
 
 EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7B")}
@@ -458,6 +459,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_merger_model": 32,
         "vision_embeddings_pos_model": 1,
     },
+    "videochat_flash_qwen": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 5,
+        "vision_projection_model": 2,
+    },
     "qwen3_5": {
         "lm_model": 70,
         "text_embeddings_model": 1,
@@ -549,6 +556,7 @@ REMOTE_CODE_MODELS = (
     "minicpm3",
     "deepseek",
     "qwen3_eagle3",
+    "videochat_flash_qwen",
 )
 
 if is_transformers_version("<", "5"):

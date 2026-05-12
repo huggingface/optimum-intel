@@ -836,6 +836,17 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "resampler_model": {"int8": 6},
             },
         ),
+        (
+            "image-text-to-text",
+            "videochat_flash_qwen",
+            "int4 --group-size 8 --ratio 0.8 --trust-remote-code",
+            {
+                "lm_model": {"int8": 12, "int4": 18},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 5},
+                "vision_projection_model": {"int8": 2},
+            },
+        ),
     ]
 
     # filter models type depending on min max transformers version
@@ -866,6 +877,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             expected = {"qwen3_vl"}
         else:
             expected = {"llava-qwen2", "phi3_v", "phi4mm", "minicpmo"}
+        if is_transformers_version("<", "4.49") or is_transformers_version(">", "4.57.6"):
+            expected.add("videochat_flash_qwen")
         if is_transformers_version(">=", "5"):
             expected.update({"llama4", "llava_next_video", "minicpmv", "internvl_chat"})
 
