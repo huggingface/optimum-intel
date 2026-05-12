@@ -5881,6 +5881,7 @@ class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
             preprocessors=preprocessors,
         )
         self._orig_config = config
+        self._model_config_prepared = False
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -5935,6 +5936,18 @@ class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
     def get_model_for_behavior(self, model, behavior: Union[str, VideoChatFlashQwenConfigBehavior]):
         if isinstance(behavior, str) and not isinstance(behavior, VideoChatFlashQwenConfigBehavior):
             behavior = VideoChatFlashQwenConfigBehavior(behavior)
+
+        if not self._model_config_prepared:
+            vision_tower = model.get_vision_tower()
+            model.config.mm_num_attention_heads = vision_tower.config.num_attention_heads
+            # num_tome_tokens=64 comes from the upstream projector_type "tome16_mlp_hd64", which uses a fixed 64-token output.
+            # Source: https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L135-L146
+            model.config.mm_projector_num_tome_tokens = 64
+            model.config.patch_size = vision_tower.config.patch_size
+            model.config.image_size = vision_tower.config.image_size
+            model.config.image_mean = vision_tower.image_processor.image_mean
+            model.config.image_std = vision_tower.image_processor.image_std
+            self._model_config_prepared = True
 
         if behavior == VideoChatFlashQwenConfigBehavior.VISION_PROJECTION:
             vision_projector = model.get_model().mm_projector.mlp

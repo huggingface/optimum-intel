@@ -937,16 +937,6 @@ def _get_multi_modal_submodels_and_export_configs(
         model.config.glb_GN = model.model.embed_tokens_extend.image_embed.global_img_feature_extensor.tolist()
         model.config.sub_GN = model.model.embed_tokens_extend.image_embed.sub_img_feature_extensor.tolist()
         model.config.num_img_tokens = model.model.embed_tokens_extend.image_embed.num_img_tokens
-    if model_type == "videochat_flash_qwen":
-        model.config.mm_num_attention_heads = model.model.get_vision_tower().config.num_attention_heads
-        # num_tome_tokens=64 comes from the upstream projector_type "tome16_mlp_hd64", which uses a fixed 64-token output.
-        # Source: https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L135-L146
-        model.config.mm_projector_num_tome_tokens = 64
-        model.config.patch_size = model.model.get_vision_tower().config.patch_size
-        model.config.image_size = model.model.get_vision_tower().config.image_size
-        model.config.image_mean = model.model.get_vision_tower().image_processor.image_mean
-        model.config.image_std = model.model.get_vision_tower().image_processor.image_std
-
     if hasattr(model, "image_newline"):
         model.config.image_newline = model.image_newline.tolist()
     if hasattr(model, "model") and hasattr(model.model, "image_newline"):
