@@ -496,7 +496,6 @@ class Qwen3ASRTest(unittest.TestCase):
 
         gen_kwargs = {
             "max_new_tokens": 10,
-            "eos_token_id": [151643, 151645],
         }
 
         with torch.no_grad():
