@@ -2358,11 +2358,14 @@ class LlavaQwen2OpenVINOConfig(BaseVLMOpenVINOConfig):
         behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
         use_past: bool = False,
+        trust_remote_code: bool = False,
+        **kwargs,
     ):
         self._behavior = behavior
         self._orig_config = config
-        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
-            config = AutoConfig.from_pretrained(config.mm_vision_tower, trust_remote_code=True)
+        self._trust_remote_code = trust_remote_code
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "mm_vision_tower"):
+            config = AutoConfig.from_pretrained(config.mm_vision_tower, trust_remote_code=self._trust_remote_code)
             if hasattr(config, "vision_config"):
                 config = config.vision_config
         super().__init__(
@@ -2431,6 +2434,7 @@ class LlavaQwen2OpenVINOConfig(BaseVLMOpenVINOConfig):
                 float_dtype=self.float_dtype,
                 behavior=behavior,
                 preprocessors=self._preprocessors,
+                trust_remote_code=self._trust_remote_code,
             )
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
@@ -3245,6 +3249,8 @@ class Phi3VisionOpenVINOConfig(BaseVLMOpenVINOConfig):
         float_dtype: str = "fp32",
         behavior: Phi3VisionConfigBehavior = Phi3VisionConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
+        trust_remote_code: bool = False,
+        **kwargs,
     ):
         super().__init__(
             config=config,
@@ -3255,9 +3261,10 @@ class Phi3VisionOpenVINOConfig(BaseVLMOpenVINOConfig):
         )
         self._behavior = behavior
         self._orig_config = config
+        self._trust_remote_code = trust_remote_code
         if self._behavior == Phi3VisionConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "img_processor"):
             self._config = AutoConfig.from_pretrained(
-                config.img_processor["model_name"], trust_remote_code=True
+                config.img_processor["model_name"], trust_remote_code=self._trust_remote_code
             ).vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
@@ -3306,6 +3313,7 @@ class Phi3VisionOpenVINOConfig(BaseVLMOpenVINOConfig):
                 float_dtype=self.float_dtype,
                 behavior=behavior,
                 preprocessors=self._preprocessors,
+                trust_remote_code=self._trust_remote_code,
             )
         if behavior == Phi3VisionConfigBehavior.VISION_PROJECTION:
             return self.__class__(
