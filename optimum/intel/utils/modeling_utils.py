@@ -141,6 +141,30 @@ def _find_files_matching_pattern(
     return files
 
 
+def _is_kokoro_model(
+    model_name_or_path: Union[str, Path],
+    all_files: list,
+    cache_dir: str = HUGGINGFACE_HUB_CACHE,
+    token: Optional[Union[bool, str]] = None,
+) -> bool:
+    """Detect Kokoro TTS models by checking for 'istftnet' key in config.json."""
+    if "config.json" not in all_files:
+        return False
+    try:
+        config_path = Path(model_name_or_path)
+        if config_path.is_dir():
+            config_file = config_path / "config.json"
+        else:
+            config_file = hf_hub_download(
+                repo_id=str(model_name_or_path), filename="config.json", cache_dir=cache_dir, token=token
+            )
+        with open(config_file, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        return "istftnet" in config and "plbert" in config
+    except Exception:
+        return False
+
+
 def _infer_library_from_model_name_or_path(
     model_name_or_path: Union[str, Path],
     subfolder: str = "",
@@ -153,6 +177,8 @@ def _infer_library_from_model_name_or_path(
     )
     if "open_clip_config.json" in all_files or "open_clip_pytorch_model.bin" in all_files:
         library_name = "open_clip"
+    elif _is_kokoro_model(model_name_or_path, all_files, cache_dir=cache_dir, token=token):
+        library_name = "kokoro"
     else:
         library_name = TasksManager._infer_library_from_model_name_or_path(
             model_name_or_path=model_name_or_path, cache_dir=cache_dir
@@ -169,6 +195,8 @@ def _infer_library_from_model_or_model_class(
         return library_name
     if model.__module__.startswith("open_clip"):
         library_name = "open_clip"
+    elif model.__module__.startswith("kokoro") or getattr(model, "_kokoro_model", False):
+        library_name = "kokoro"
     elif model.__module__.startswith("optimum"):
         # for wrapped models like timm in optimum.intel.openvino.modeling_timm
         library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
@@ -389,3 +417,74 @@ class _OpenClipForZeroShotImageClassification(PreTrainedModel):
                 setattr(model.config, "export_model_type", "clip")
 
             return model
+
+
+class _KokoroForTextToSpeech:
+    """Wrapper for loading Kokoro TTS model with a config conforming to optimum-intel expectations."""
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_name_or_path: Union[str, Path],
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        token: Optional[Union[bool, str]] = None,
+        **kwargs,
+    ):
+        try:
+            from kokoro import KModel, KPipeline
+        except ImportError:
+            raise ImportError(
+                "To load a Kokoro TTS model, the `kokoro` package is required. "
+                "Please install it with `pip install kokoro`."
+            )
+
+        # Check if model_name_or_path is a local directory
+        model_path = Path(model_name_or_path)
+        is_local_dir = model_path.is_dir()
+
+        if is_local_dir:
+            # For local directories, load KModel directly from local artifacts.
+            config_file = model_path / "config.json"
+            if not config_file.exists():
+                raise FileNotFoundError(f"config.json not found in {model_path}")
+
+            # Find the model file (.pth) in the local directory
+            model_files = list(model_path.glob("*.pth"))
+            if not model_files:
+                raise FileNotFoundError(f"No .pth model file found in {model_path}")
+            local_model = KModel(
+                repo_id=str(model_name_or_path),
+                config=str(config_file),
+                model=str(model_files[0]),
+            )
+            model = local_model.to("cpu").eval()
+            model._kokoro_model = True
+            model._kokoro_repo_id = str(model_name_or_path)
+        else:
+            # For remote models, use standard KPipeline
+            pipeline = KPipeline(lang_code="a", repo_id=str(model_name_or_path))
+            model = pipeline.model
+            model._kokoro_model = True
+            model._kokoro_repo_id = str(model_name_or_path)
+
+        # Load config.json and create a PretrainedConfig-like object
+        config_path = Path(model_name_or_path)
+        if config_path.is_dir():
+            config_file = config_path / "config.json"
+        else:
+            config_file = hf_hub_download(
+                repo_id=str(model_name_or_path), filename="config.json", cache_dir=cache_dir, token=token
+            )
+
+        with open(config_file, "r", encoding="utf-8") as f:
+            config_dict = json.load(f)
+
+        config = PretrainedConfig()
+        config.model_type = "kokoro"
+        config.export_model_type = "kokoro"
+        for key, value in config_dict.items():
+            setattr(config, key, value)
+
+        model.config = config
+
+        return model

@@ -1158,6 +1158,51 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         del processor
         gc.collect()
 
+    def test_compare_to_kokoro(self):
+        from optimum.exporters.openvino import export_from_model
+        from optimum.exporters.tasks import TasksManager
+        from optimum.intel.openvino.modeling_text2speech import _OVModelForKokoroTextToSpeech
+
+        set_seed(SEED)
+        model_id = MODEL_NAMES["kokoro"]
+
+        ref_model = TasksManager.get_model_from_task(
+            task="text-to-audio",
+            model_name_or_path=model_id,
+            framework="pt",
+            library_name="kokoro",
+        )
+        ref_model.eval()
+
+        input_ids = torch.tensor([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0]], dtype=torch.long)
+        ref_s = torch.randn(1, 256, dtype=torch.float32)
+
+        with torch.no_grad():
+            ref_waveform, ref_phonemes = ref_model.forward_with_tokens(input_ids, ref_s, 1.0)
+
+        with TemporaryDirectory() as tmpdir:
+            export_from_model(model=ref_model, output=tmpdir, task="text-to-audio", stateful=True)
+            ov_model = self.OVMODEL_CLASS.from_pretrained(tmpdir, device=OPENVINO_DEVICE)
+
+            self.assertIsInstance(ov_model, _OVModelForKokoroTextToSpeech)
+            self.assertIsInstance(ov_model.config, PretrainedConfig)
+            self.assertEqual(getattr(ov_model.config, "model_type", None), "kokoro")
+            self.assertIsInstance(ov_model.model, openvino.Model)
+
+            ov_outputs = ov_model.forward(input_ids=input_ids, ref_s=ref_s, speed=1.0)
+            self.assertTrue(hasattr(ov_outputs, "waveform"))
+            self.assertTrue(hasattr(ov_outputs, "phonemes"))
+            self.assertEqual(ov_outputs.waveform.shape, ref_waveform.shape)
+            self.assertEqual(ov_outputs.phonemes.shape, ref_phonemes.shape)
+            self.assertTrue(torch.equal(ov_outputs.phonemes, ref_phonemes))
+
+            ov_generated = ov_model.generate(input_ids=input_ids, ref_s=ref_s, speed=1.0)
+            self.assertEqual(ov_generated.shape, ref_waveform.shape)
+
+        del ref_model
+        del ov_model
+        gc.collect()
+
 
 class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ["pix2struct"]
