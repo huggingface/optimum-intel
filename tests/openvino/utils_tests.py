@@ -350,6 +350,7 @@ MODEL_NAMES = {
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
+    "zaya": "optimum-intel-internal-testing/tiny-random-ZayaForCausalLM",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
     "videochat_flash_qwen": "optimum-intel-internal-testing/tiny-videochat-flash-qwen",
 }

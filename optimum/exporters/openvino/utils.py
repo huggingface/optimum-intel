@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from transformers import AutoImageProcessor, PretrainedConfig
 from transformers.utils import is_torch_available
 
-from openvino import Dimension, PartialShape, Symbol
+from openvino import Dimension, PartialShape, Symbol, Type
 from openvino.utils.types import get_element_type
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.tasks import TasksManager
@@ -103,7 +103,10 @@ def _get_input_info(
     for i in range(len(ordered_input_names)):
         name = ordered_input_names[i]
         example = flatten_inputs[i]
-        type = get_element_type(example.cpu().numpy().dtype)
+        if is_torch_available() and isinstance(example, torch.Tensor) and example.dtype == torch.bfloat16:
+            type = Type.bf16
+        else:
+            type = get_element_type(example.cpu().numpy().dtype)
         shape = PartialShape(example.shape)
         if name in inputs:
             named_dims = inputs[name]
@@ -142,7 +145,15 @@ def _get_dynamic_shapes_info(
 
     for name, named_dims in inputs.items():
         info = {}
+        example_input = dummy_inputs.get(name)
         for idx, dim_name in named_dims.items():
+            if (
+                getattr(config, "use_past_in_inputs", False)
+                and dim_name == "sequence_length"
+                and isinstance(example_input, torch.Tensor)
+                and example_input.shape[idx] == 1
+            ):
+                continue
             if dim_name in name_to_symbol:
                 symbol = name_to_symbol[dim_name]
             else:
@@ -152,6 +163,14 @@ def _get_dynamic_shapes_info(
         if name in signature:
             input_info[name] = info
         else:
+            prefix = name.split(".", 1)[0]
+            nested_input = dummy_inputs.get(prefix)
+            if prefix in signature and isinstance(nested_input, (list, tuple)) and all(
+                not isinstance(item, (list, tuple, dict)) for item in nested_input
+            ):
+                input_info.setdefault(prefix, []).append(info)
+                continue
+
             pattern = r"^([a-zA-Z_]+)\.(\d+)\.(key|value)$"
             match = re.match(pattern, name)
 
@@ -342,6 +361,7 @@ SSM_MODELS = [
     "mamba",
     "falcon_mamba",
     "zamba2",
+    "zaya",
     "lfm2",
     "lfm2_moe",
     "granitemoehybrid",

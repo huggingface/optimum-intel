@@ -160,6 +160,26 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
         self.num_pkv = 2
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
+        # Handle hybrid models (e.g., ZAYA) that export KV-cache with mixed naming:
+        # even-numbered attention layers use "past_key_values.X.key/value" as inputs
+        # odd-numbered attention layers use "present.X.key/value" as BOTH inputs AND outputs.
+        # In this case, key_value_input_names is incomplete (misses the "present.X" inputs),
+        # so we rebuild it in the same order as key_value_output_names for correct zip() pairing.
+        if self.key_value_output_names and len(self.key_value_input_names) < len(self.key_value_output_names):
+            input_names_set = set(self.input_names)
+            kv_in_by_out = {}
+            for out_name in self.key_value_output_names:
+                # Try canonical rename: present.X.key -> past_key_values.X.key
+                canonical_in = out_name.replace("present.", "past_key_values.", 1)
+                if canonical_in in input_names_set:
+                    kv_in_by_out[out_name] = canonical_in
+                elif out_name in input_names_set:
+                    # same name used for both input and output (e.g. present.1.key)
+                    kv_in_by_out[out_name] = out_name
+            if len(kv_in_by_out) > len(self.key_value_input_names):
+                self.key_value_input_names = [
+                    kv_in_by_out[k] for k in self.key_value_output_names if k in kv_in_by_out
+                ]
         # Keeping the original model for serialization
         self._pkv_precision = Type.f32
         self.next_beam_idx = None
@@ -414,6 +434,11 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
                     shapes[inputs][1] = -1
                 else:
                     shapes[inputs][2] = -1
+            elif input_name.startswith("present.") and len(inputs.partial_shape) == 4:
+                # Hybrid-naming models (e.g. ZAYA): odd-layer KV inputs are named
+                # "present.X.key/value" (same as outputs).  They are KV-cache inputs
+                # and the dynamic axis is seq (dim 2), not num_heads (dim 1).
+                shapes[inputs][2] = -1
             elif input_name.startswith("beam_idx") or input_name.startswith("cache_position"):
                 shapes[inputs][0] = -1
             else:
@@ -899,7 +924,17 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         elif model_type == "gpt_bigcode":
             init_cls = OVGPTBigCodeForCausalLM
         elif model_type in SSM_MODELS:
-            init_cls = OVModelWithMambaForCausalLM
+            # OVModelWithMambaForCausalLM requires cache_params.* input naming.
+            # Some SSM models (e.g. ZAYA) may be exported with the standard
+            # past_key_values/present naming instead. In that case, fall back to
+            # the standard OVModelForCausalLM which handles that naming correctly.
+            _has_cache_params_inputs = any(
+                "cache_params" in inp.get_any_name() for inp in model.inputs
+            )
+            if _has_cache_params_inputs:
+                init_cls = OVModelWithMambaForCausalLM
+            else:
+                init_cls = cls
         else:
             init_cls = cls
 
@@ -1058,6 +1093,28 @@ class OVGPTBigCodeForCausalLM(OVModelForCausalLM):
             return tuple(np.take(layer_past, beam_idx, 0) for layer_past in past_key_values)
 
 
+def _cache_name_sort_key(name: str):
+    prefix, _, suffix = name.rpartition(".")
+    if suffix.isdigit():
+        return prefix, 0, int(suffix)
+    return prefix, 1, suffix
+
+
+def _normalize_cache_dtype(config: PretrainedConfig, dtype: Optional[torch.dtype]) -> torch.dtype:
+    if isinstance(dtype, str):
+        dtype = getattr(torch, dtype.removeprefix("torch."), None)
+    if dtype is not None:
+        return dtype
+
+    config_dtype = getattr(config, "torch_dtype", None)
+    if isinstance(config_dtype, str):
+        config_dtype = getattr(torch, config_dtype.removeprefix("torch."), None)
+
+    if config.model_type == "zaya":
+        return config_dtype or torch.bfloat16
+    return config_dtype or torch.float32
+
+
 class OVCacheWithMambaStates(MambaCache):
     """
     Hybrid cache for Mamba and transformer blocks
@@ -1068,8 +1125,8 @@ class OVCacheWithMambaStates(MambaCache):
         batch_size (`int`):
             The batch size with which the model will be used. Note that a new instance must be instantiated if a
             smaller batch size is used.
-        dtype (`torch.dtype`, *optional*, defaults to `torch.float16`):
-            The default `dtype` to use when initializing the layer.
+        dtype (`torch.dtype`, *optional*):
+            The `dtype` to use when initializing the layer. Defaults to `config.torch_dtype` when available.
         device (`torch.device` or `str`, *optional*):
             The device on which the cache should be initialized. Should be the same as the layer.
         max_batch_size (`int`):
@@ -1088,7 +1145,7 @@ class OVCacheWithMambaStates(MambaCache):
         self,
         config: "PretrainedConfig",
         batch_size: int = None,
-        dtype: torch.dtype = torch.float32,
+        dtype: Optional[torch.dtype] = None,
         device: Optional[Union[torch.device, str]] = None,
         max_batch_size: Optional[int] = None,
         conv_states: Optional[List[torch.Tensor]] = None,
@@ -1096,6 +1153,7 @@ class OVCacheWithMambaStates(MambaCache):
         key_cache: Optional[List[torch.Tensor]] = None,
         value_cache: Optional[List[torch.Tensor]] = None,
     ):
+        dtype = _normalize_cache_dtype(config, dtype)
         self.dtype = dtype
         self.max_batch_size = batch_size or max_batch_size
         self.device = torch.device(device) if device is not None else torch.device("cpu")
@@ -1104,10 +1162,11 @@ class OVCacheWithMambaStates(MambaCache):
         self.mamba_d_conv = getattr(config, "mamba_d_conv", None)
         self.mamba_expand = getattr(config, "mamba_expand", None)
         self.mamba_d_state = getattr(config, "mamba_d_state", None)
-        self.intermediate_size = config.intermediate_size
+        self.intermediate_size = getattr(config, "intermediate_size", getattr(config, "hidden_size", None))
         self.conv_kernel_size = getattr(
             config, "conv_kernel", getattr(config, "mamba_d_conv", getattr(config, "conv_L_cache", None))
         )
+        self.zaya_in_out_ch = None
         if config.model_type == "granitemoehybrid":
             layer_types = getattr(config, "layer_types", None)
             self.num_key_value_heads = getattr(config, "num_key_value_heads", None)
@@ -1118,6 +1177,17 @@ class OVCacheWithMambaStates(MambaCache):
             self.mamba_headdim = getattr(config, "mamba_d_head", None)
             self.num_mamba_layers = layer_types.count("mamba")
             self.num_attn_layers = layer_types.count("attention")
+        elif config.model_type == "zaya":
+            self.num_key_value_heads = getattr(config, "num_key_value_heads", None)
+            self.head_dim = getattr(config, "head_dim", None)
+            self.mamba_ngroups = None
+            self.n_mamba_heads = None
+            self.ssm_state_size = getattr(config, "hidden_size", None)
+            self.mamba_headdim = None
+            self.num_mamba_layers = config.num_hidden_layers
+            self.num_attn_layers = (config.num_hidden_layers + 1) // 2
+            self.conv_kernel_size = 2
+            self.zaya_in_out_ch = (config.num_query_groups + config.num_attention_heads) * self.head_dim
         else:
             # Mamba 2 specific parameters
             hybrid_layer_ids = getattr(config, "hybrid_layer_ids", None)
@@ -1155,6 +1225,8 @@ class OVCacheWithMambaStates(MambaCache):
                         intermediate_size + 2 * self.mamba_ngroups * self.mamba_d_state,
                         self.mamba_d_conv,
                     )
+                elif config.model_type == "zaya":
+                    conv_state_shape = (self.max_batch_size, self.zaya_in_out_ch, self.conv_kernel_size)
                 else:
                     # Mamba block
                     conv_state_shape = (self.max_batch_size, self.intermediate_size, self.conv_kernel_size)
@@ -1164,7 +1236,15 @@ class OVCacheWithMambaStates(MambaCache):
         self.ssm_states = ssm_states
         if self.ssm_states is None:
             self.ssm_states: List[torch.Tensor] = []
-            if config.model_type in ["lfm2_moe", "lfm2"]:
+            if config.model_type == "zaya":
+                for _ in range(self.num_mamba_layers):
+                    ssm_state: torch.Tensor = torch.zeros(
+                        (self.max_batch_size, self.hidden_size),
+                        device=self.device,
+                        dtype=dtype,
+                    )
+                    self.ssm_states.append(ssm_state)
+            elif config.model_type in ["lfm2_moe", "lfm2"]:
                 for _ in range(self.num_mamba_layers):
                     if self.n_mamba_heads and self.mamba_headdim:
                         # Mamba2 block
@@ -1277,17 +1357,31 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
             **kwargs,
         )
 
-        self.key_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.key" in key])
-        self.value_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.value" in key])
-        self.ssm_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.ssm" in key])
-        self.conv_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.conv" in key])
-
-        self.key_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.key" in key])
-        self.value_cache_output_names = sorted(
-            [key for key in self.output_names if "cache_params.present.value" in key]
+        self.key_cache_input_names = sorted(
+            [key for key in self.input_names if "cache_params.past.key" in key], key=_cache_name_sort_key
         )
-        self.ssm_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.ssm" in key])
-        self.conv_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.conv" in key])
+        self.value_cache_input_names = sorted(
+            [key for key in self.input_names if "cache_params.past.value" in key], key=_cache_name_sort_key
+        )
+        self.ssm_cache_input_names = sorted(
+            [key for key in self.input_names if "cache_params.past.ssm" in key], key=_cache_name_sort_key
+        )
+        self.conv_cache_input_names = sorted(
+            [key for key in self.input_names if "cache_params.past.conv" in key], key=_cache_name_sort_key
+        )
+
+        self.key_cache_output_names = sorted(
+            [key for key in self.output_names if "cache_params.present.key" in key], key=_cache_name_sort_key
+        )
+        self.value_cache_output_names = sorted(
+            [key for key in self.output_names if "cache_params.present.value" in key], key=_cache_name_sort_key
+        )
+        self.ssm_cache_output_names = sorted(
+            [key for key in self.output_names if "cache_params.present.ssm" in key], key=_cache_name_sort_key
+        )
+        self.conv_cache_output_names = sorted(
+            [key for key in self.output_names if "cache_params.present.conv" in key], key=_cache_name_sort_key
+        )
 
         if hasattr(config, "conv_kernel") and config.conv_kernel is not None:
             self.conv_kernel = config.conv_kernel
@@ -1307,10 +1401,10 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                     self.ssm_cache_names.append(state.name)
                 elif "cache_params.present.conv" in state.name:
                     self.conv_cache_names.append(state.name)
-            self.key_cache_names = sorted(self.key_cache_names)
-            self.value_cache_names = sorted(self.value_cache_names)
-            self.ssm_cache_names = sorted(self.ssm_cache_names)
-            self.conv_cache_names = sorted(self.conv_cache_names)
+            self.key_cache_names = sorted(self.key_cache_names, key=_cache_name_sort_key)
+            self.value_cache_names = sorted(self.value_cache_names, key=_cache_name_sort_key)
+            self.ssm_cache_names = sorted(self.ssm_cache_names, key=_cache_name_sort_key)
+            self.conv_cache_names = sorted(self.conv_cache_names, key=_cache_name_sort_key)
 
     @staticmethod
     def _has_cache_inputs(model: openvino.Model) -> bool:
@@ -1457,13 +1551,11 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         # Overwitten -- uses `cache_params` as opposed to `past_key_values`
 
         if self.use_cache:
-            # `cache_position` should have been initialized in `generate`
             if cache_position is None:
-                raise ValueError(
-                    "`cache_position` should not be None as it should have been initialized in "
-                    "`model.generate`, you are responsible for passing in a valid `cache_position` if "
-                    "you are calling `prepare_inputs_for_generation` directly with `use_cache=True`"
-                )
+                if self.config.model_type == "zaya":
+                    cache_position = torch.arange(0, input_ids.shape[1], dtype=torch.long, device=input_ids.device)
+                else:
+                    cache_position = torch.zeros(1, dtype=torch.long, device=input_ids.device)
             if cache_position[0] > 0:
                 # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)
@@ -1475,6 +1567,7 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                     "qwen3_next",
                     "qwen3_5_text",
                     "qwen3_5_moe_text",
+                    "zaya",
                 ]:
                     # LFM2, GraniteMoeHybrid (Granite-4.0), and Qwen3-Next require the attention mask
                     # to be the length of the full context, so default mask from OVModelForCausalLM needs to be used.

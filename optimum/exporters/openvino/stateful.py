@@ -105,6 +105,7 @@ def build_state_initializer(ov_model: ov.Model, batch_dim: int):
     main_input_name = "input_ids" if model_has_input_output_name(ov_model, "input_ids") else "inputs_embeds"
     input_ids = ov_model.input(main_input_name)
     batch = opset13.gather(opset13.shape_of(input_ids, output_type="i64"), opset13.constant([0]), opset13.constant(0))
+    batch = opset13.reshape(batch, opset13.constant(np.array([-1], dtype=np.int64)), False)
     for op in ov_model.get_ops():
         if op.get_type_name() == "ReadValue":
             dims = [dim.min_length for dim in list(op.get_output_partial_shape(0))]

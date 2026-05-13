@@ -83,6 +83,13 @@ from .utils import (
 
 logger = logging.getLogger(__name__)
 
+
+def _should_use_torch_export(config: Optional["OnnxConfig"] = None) -> bool:
+    return os.getenv("OPENVINO_DYNAMO_EXPORT", "false").lower() == "true" or getattr(
+        config, "force_dynamo_export", False
+    )
+
+
 if is_torch_available():
     import torch.nn as nn
     from transformers.modeling_utils import PreTrainedModel
@@ -419,7 +426,7 @@ def export_pytorch(
         with patcher:
             check_dummy_inputs_are_allowed(model, dummy_inputs)
             input_info = _get_input_info(model, config, dummy_inputs)
-            torch_export = os.getenv("OPENVINO_DYNAMO_EXPORT", "false").lower() == "true"
+            torch_export = _should_use_torch_export(config)
             if torch_export:
                 if hasattr(torch.ops, "_prepare_4d_causal_attention_mask_for_sdpa"):
                     # patch_everywhere breaks torch.ops namespace
@@ -428,7 +435,7 @@ def export_pytorch(
                 _export_kwargs = {"args": (), "kwargs": _normalize_dummy_inputs(dummy_inputs, _get_model_dtype(model))}
                 _export_kwargs["dynamic_shapes"] = dynamic_shapes
 
-                ep = torch.export.export_for_training(model, **_export_kwargs)
+                ep = torch.export.export(model, **_export_kwargs)
 
                 ov_model = convert_model(ep)
             else:

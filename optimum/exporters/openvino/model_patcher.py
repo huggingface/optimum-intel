@@ -7623,6 +7623,369 @@ class Zamba2ModelPatcher(ModelPatcher):
             mamba_layer.forward = mamba_layer._orig_forward
 
 
+def zaya_linear_forward_patched(self, input: torch.Tensor):
+    output = F.linear(input.to(self.weight.dtype), self.weight, self.bias)
+    return output.to(input.dtype)
+
+
+def zaya_block_forward_patched(
+    self,
+    hidden_states: torch.Tensor,
+    prev_router_hidden_states: Optional[torch.Tensor] = None,
+    past_router_states: Optional[torch.Tensor] = None,
+    use_cache: bool = False,
+    cca_mask: Optional[torch.Tensor] = None,
+):
+    route_prob, expert_choice, prev_router_hidden_states = self.router(
+        hidden_states, router_states=prev_router_hidden_states
+    )
+    batch_size, seq_length, hidden_dim = hidden_states.shape
+    hidden_states_flat = hidden_states.view(batch_size * seq_length, hidden_dim)
+
+    hidden_states_expanded = hidden_states_flat.unsqueeze(0).expand(self.experts.num_local_experts, -1, -1)
+    fc1 = torch.bmm(hidden_states_expanded, self.experts.fc1_weights.transpose(1, 2))
+    if self.experts.fc1_bias is not None:
+        fc1 = fc1 + self.experts.fc1_bias[:, None, :]
+
+    if self.config.gated_linear_unit:
+        gate, up = torch.chunk(fc1, 2, dim=-1)
+        if self.config.activation_func == "swiglu":
+            expert_hidden_states = F.silu(gate) * up
+        else:
+            expert_hidden_states = self.experts.act_fn(gate) * up
+    else:
+        expert_hidden_states = self.experts.act_fn(fc1)
+
+    expert_hidden_states = torch.bmm(expert_hidden_states, self.experts.fc2_weights.transpose(1, 2))
+    if self.experts.fc2_bias is not None:
+        expert_hidden_states = expert_hidden_states + self.experts.fc2_bias[:, None, :]
+
+    all_expert_outputs = expert_hidden_states
+    if self.config.zaya_use_mod:
+        all_expert_outputs = torch.cat([all_expert_outputs, hidden_states_flat.unsqueeze(0)], dim=0)
+
+    selected_experts = expert_choice.view(-1)
+    routing_weights = route_prob.view(-1).to(hidden_states.dtype)
+    expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=all_expert_outputs.shape[0]).transpose(0, 1)
+    expert_output = (all_expert_outputs * expert_mask.unsqueeze(-1).to(all_expert_outputs.dtype)).sum(dim=0)
+    expert_output = expert_output.view(batch_size, seq_length, hidden_dim)
+    expert_output = expert_output * routing_weights.view(batch_size, seq_length, 1)
+
+    return expert_output, None, prev_router_hidden_states
+
+
+def zaya_cca_forward_patched(
+    self,
+    hidden_states: torch.Tensor,
+    past_key_values,
+    cca_mask,
+):
+    """
+    Patched version of CCA.forward() that fixes two bugs when has_previous_state=True:
+
+    Bug 1 (shape mismatch): hs_d = prev_hs.unsqueeze(0) → [1, B, H] always.
+    For prefill with S>1, val_proj2(hs_d)=[1,B,128] while val_proj1(hs)=[S,B,128],
+    causing torch.cat([v1, v2]) shape mismatch.
+    Fix: hs_d = cat([prev_hs.unsqueeze(0), hs[:-1]], dim=0) → [S, B, H] for any S.
+
+    Bug 2 (stale conv state): update_conv_state stores only the first token (new_conv_state[:,0,:])
+    for S>1, leaving wrong tokens in the conv window.
+    Fix: store qk_packed0_cat[:, :, -conv_kernel_size:] (last 2 columns).
+    """
+    if cca_mask is not None and hidden_states.shape[1] > 1:
+        dtype = hidden_states.dtype
+        hidden_states = (hidden_states * cca_mask[:, :, None]).to(dtype)
+
+    # Switch to [S, B, H]
+    hs = hidden_states.transpose(0, 1).contiguous()  # [S, B, H]
+    # Default time-shifted stream (overridden below when has_previous_state=True)
+    hs_d = F.pad(hs[:-1], pad=(0, 0, 0, 0, 1, 0))  # [S, B, H]
+
+    # Q/K projections
+    q = self.linear_q(hs)  # [S, B, latent_q_dim]
+    k = self.linear_k(hs)  # [S, B, latent_k_dim]
+    qk_packed0 = torch.cat([q, k], dim=-1)  # [S, B, latent_q + latent_k]
+
+    # Pre-mean tensors for residual mixing
+    query_pre = qk_packed0[..., : self.latent_q_dim].view(
+        *qk_packed0.shape[:2], self.num_q_heads, self.head_dim
+    )  # [S, B, qh, dh]
+    key_pre = qk_packed0[..., self.latent_q_dim :].view(
+        *qk_packed0.shape[:2], self.num_kv_heads, self.head_dim
+    )  # [S, B, kh, dh]
+    key_pre = (
+        key_pre.unsqueeze(-2)
+        .repeat(1, 1, 1, self.gqa_groups, 1)
+        .view(*qk_packed0.shape[:2], self.num_q_heads, self.head_dim)
+    )  # [S, B, qh, dh]
+    qk_mean_q = (query_pre + key_pre) / 2
+    qk_mean_k = qk_mean_q.view(
+        *qk_mean_q.shape[:2], self.num_kv_heads, self.gqa_groups, -1
+    ).mean(dim=-2)
+
+    if past_key_values is not None:
+        if past_key_values.has_previous_state:
+            # Fix Bug 1: hs_d shape [S, B, H] for any S (not just S=1)
+            # S=1 (decode):  cat([1,B,H], hs[:-1]=[0,B,H]) = [1,B,H] ✓
+            # S>1 (prefill): cat([1,B,H], hs[:-1]=[S-1,B,H]) = [S,B,H] ✓
+            hs_d_single = past_key_values.prev_hs[self.layer_number].clone()  # [B, H]
+            hs_d = torch.cat([hs_d_single.unsqueeze(0), hs[:-1]], dim=0)  # [S, B, H]
+
+            # Conv computation - works for any S
+            qk_packed0_t = qk_packed0.transpose(0, 1)  # [B, S, H]
+            qk_packed0_cached = past_key_values.conv_states[self.layer_number]  # [B, H, 2]
+            qk_packed0_cat = torch.cat(
+                [qk_packed0_cached, qk_packed0_t.transpose(1, 2)], dim=-1
+            )  # [B, H, 2+S]
+            qk_packed3 = self.conv_qk(qk_packed0_cat).permute(2, 0, 1)  # [S, B, E]
+
+            # Fix Bug 2: store last conv_kernel_size tokens (not just the first)
+            conv_kernel_size = qk_packed0_cached.shape[-1]  # 2
+            past_key_values.conv_states[self.layer_number] = (
+                qk_packed0_cat[:, :, -conv_kernel_size:].detach()
+            )
+        else:
+            # Prefill path (no previous state) - unchanged from original
+            qk_packed0_transposed = qk_packed0.permute(1, 2, 0)  # [B, E, S]
+            conv_states = F.pad(
+                qk_packed0_transposed,
+                (past_key_values.conv_kernel_size - qk_packed0_transposed.shape[-1], 0),
+            )
+            past_key_values.update_conv_state(
+                layer_idx=self.layer_number, new_conv_state=conv_states
+            )
+            qk_packed1 = qk_packed0.permute(1, 2, 0)  # [B, E, S]
+            qk_packed2 = F.pad(qk_packed1, (self.total_padding, 0))
+            qk_packed3 = self.conv_qk(qk_packed2).permute(2, 0, 1)  # [S, B, E]
+    else:
+        # No cache - unchanged from original
+        qk_packed1 = qk_packed0.permute(1, 2, 0)  # [B, E, S]
+        qk_packed2 = F.pad(qk_packed1, (self.total_padding, 0))
+        qk_packed3 = self.conv_qk(qk_packed2).permute(2, 0, 1)  # [S, B, E]
+
+    # Build queries/keys from conv output + residual means
+    query = (
+        qk_packed3[..., : self.latent_q_dim].view(
+            *qk_packed3.shape[:2], self.num_q_heads, self.head_dim
+        )
+        + qk_mean_q
+    )  # [S, B, qh, dh]
+    key = (
+        qk_packed3[..., self.latent_q_dim :].view(
+            *qk_packed3.shape[:2], self.num_kv_heads, self.head_dim
+        )
+        + qk_mean_k
+    )  # [S, B, kh, dh]
+
+    # Values from the two time streams
+    v1 = self.val_proj1(hs)  # [S, B, latent_k_dim/2]
+    if past_key_values is not None:
+        past_key_values.prev_hs[self.layer_number] = hs[-1, :, :].detach()
+    v2 = self.val_proj2(hs_d)  # [S, B, latent_k_dim/2] - now always same shape as v1
+
+    value = (
+        torch.cat([v1, v2], dim=-1)
+        .contiguous()
+        .view(*hs.shape[:2], self.num_kv_heads, self.head_dim)
+    )  # [S, B, kh, dh]
+
+    # L2-normalize per head, then scale
+    query_norm = query.norm(p=2, dim=-1, keepdim=True)
+    key_norm = key.norm(p=2, dim=-1, keepdim=True)
+    key = (key * (self.sqrt_head_dim / key_norm)) * self.temp[None, None].unsqueeze(-1)
+    query = query * (self.sqrt_head_dim / query_norm)
+
+    # Flatten head axis, return to HF layout [B, S, ...]
+    query = (
+        query.view(*query.shape[:2], self.num_q_heads * self.head_dim)
+        .transpose(0, 1)
+        .contiguous()
+    )
+    key = (
+        key.view(*key.shape[:2], self.num_kv_heads * self.head_dim)
+        .transpose(0, 1)
+        .contiguous()
+    )
+    value = (
+        value.view(*value.shape[:2], self.num_kv_heads * self.head_dim)
+        .transpose(0, 1)
+        .contiguous()
+    )
+    return query, key, value
+
+
+class ZayaModelPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from transformers.models.zaya.modeling_zaya import ZayaDynamicCache
+
+        super().__init__(config, model, model_kwargs)
+
+        class ZayaDynamicCacheWrap(ZayaDynamicCache):
+            def __init__(self, config, batch_size: int, conv_states, prev_hs, attention_layer_ids, key_cache, value_cache):
+                dtype = conv_states[0].dtype
+                device = conv_states[0].device
+                super().__init__(config=config, batch_size=batch_size, dtype=dtype, device=device)
+                self.conv_states = torch.stack(conv_states, dim=0)
+                self.prev_hs = torch.stack(prev_hs, dim=0)
+                self.attention_layer_ids = attention_layer_ids
+                self.has_previous_state = True
+
+                for layer_idx, key_state, value_state in zip(attention_layer_ids, key_cache, value_cache):
+                    self.update(key_state, value_state, layer_idx)
+
+            @property
+            def key_cache(self):
+                return [layer.keys for layer in self.layers]
+
+            @property
+            def value_cache(self):
+                return [layer.values for layer in self.layers]
+
+            def get_seq_length(self, layer_idx: int = 0) -> int:
+                if layer_idx not in self.attention_layer_ids:
+                    layer_idx = self.attention_layer_ids[0]
+                return super().get_seq_length(layer_idx)
+
+        def patched_forward(
+            input_ids,
+            attention_mask=None,
+            position_ids=None,
+            cache_params=None,
+        ):
+            num_layers = self.real_config._config.num_hidden_layers
+            attention_layer_ids = [idx for idx in range(num_layers) if idx % 2 == 0]
+            num_attention_layers = len(attention_layer_ids)
+
+            use_cache = False
+            wrapped_cache_params = None
+            if cache_params is not None:
+                use_cache = True
+                conv_states = []
+                prev_hs = []
+                key_cache = []
+                value_cache = []
+
+                batch_size = cache_params[0].size(0)
+                for idx in range(num_layers):
+                    conv_states.append(cache_params[2 * idx])
+                    prev_hs.append(cache_params[2 * idx + 1])
+
+                for idx in range(num_attention_layers):
+                    key_cache.append(cache_params[2 * num_layers + 2 * idx])
+                    value_cache.append(cache_params[2 * num_layers + 2 * idx + 1])
+
+                wrapped_cache_params = ZayaDynamicCacheWrap(
+                    self.real_config._config,
+                    batch_size,
+                    conv_states,
+                    prev_hs,
+                    attention_layer_ids,
+                    key_cache,
+                    value_cache,
+                )
+
+            causal_lm_output = self.model_orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=wrapped_cache_params,
+                use_cache=use_cache,
+            )
+            outputs = {"logits": causal_lm_output.logits}
+
+            if use_cache:
+                past_key_values = causal_lm_output.past_key_values
+                present_key_values = []
+                for idx in range(num_layers):
+                    present_key_values.append(past_key_values.conv_states[idx].to(cache_params[2 * idx].dtype))
+                    present_key_values.append(past_key_values.prev_hs[idx].to(cache_params[2 * idx + 1].dtype))
+
+                for idx, layer_idx in enumerate(attention_layer_ids):
+                    present_key_values.append(past_key_values.key_cache[layer_idx].to(cache_params[2 * num_layers + 2 * idx].dtype))
+                    present_key_values.append(past_key_values.value_cache[layer_idx].to(cache_params[2 * num_layers + 2 * idx + 1].dtype))
+
+                outputs["present_key_values"] = present_key_values
+
+            return outputs
+
+        self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+    def __enter__(self):
+        from transformers.models.zaya.modeling_zaya import ZayaDecoderMLPLayer
+
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
+        for layer in self._model.model.layers:
+            if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "qkv"):
+                qkv = layer.self_attn.qkv
+                for proj_name in ("val_proj1", "val_proj2"):
+                    proj = getattr(qkv, proj_name, None)
+                    if proj is None:
+                        continue
+                    proj._orig_forward = proj.forward
+                    proj.forward = types.MethodType(zaya_linear_forward_patched, proj)
+                # Patch CCA.forward to fix hs_d shape mismatch when has_previous_state=True
+                qkv._orig_forward = qkv.forward
+                qkv.forward = types.MethodType(zaya_cca_forward_patched, qkv)
+            if not isinstance(layer, ZayaDecoderMLPLayer):
+                continue
+
+            zaya_block = layer.zaya_block
+            experts = zaya_block.experts
+            num_experts = experts.num_local_experts
+            experts.fc1_weights = torch.cat(
+                tuple(experts.local_experts[i].linear_fc1.weight.unsqueeze(0) for i in range(num_experts)), dim=0
+            )
+            experts.fc2_weights = torch.cat(
+                tuple(experts.local_experts[i].linear_fc2.weight.unsqueeze(0) for i in range(num_experts)), dim=0
+            )
+            experts.fc1_bias = None
+            experts.fc2_bias = None
+            if experts.local_experts[0].linear_fc1.bias is not None:
+                experts.fc1_bias = torch.cat(
+                    tuple(experts.local_experts[i].linear_fc1.bias.unsqueeze(0) for i in range(num_experts)), dim=0
+                )
+            if experts.local_experts[0].linear_fc2.bias is not None:
+                experts.fc2_bias = torch.cat(
+                    tuple(experts.local_experts[i].linear_fc2.bias.unsqueeze(0) for i in range(num_experts)), dim=0
+                )
+            experts.act_fn = experts.local_experts[0].activation_func
+            zaya_block._orig_forward = zaya_block.forward
+            zaya_block.forward = types.MethodType(zaya_block_forward_patched, zaya_block)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        from transformers.models.zaya.modeling_zaya import ZayaDecoderMLPLayer
+
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+
+        for layer in self._model.model.layers:
+            if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "qkv"):
+                qkv = layer.self_attn.qkv
+                for proj_name in ("val_proj1", "val_proj2"):
+                    proj = getattr(qkv, proj_name, None)
+                    if proj is None or not hasattr(proj, "_orig_forward"):
+                        continue
+                    proj.forward = proj._orig_forward
+                if hasattr(qkv, "_orig_forward"):
+                    qkv.forward = qkv._orig_forward  # Restore zaya_cca_forward_patched
+            if not isinstance(layer, ZayaDecoderMLPLayer):
+                continue
+
+            zaya_block = layer.zaya_block
+            zaya_block.forward = zaya_block._orig_forward
+            experts = zaya_block.experts
+            del experts.fc1_weights, experts.fc2_weights, experts.fc1_bias, experts.fc2_bias, experts.act_fn
+
+
 # Unified torch representation of the CausalConv1d operation
 # This representation is used across all models with CausalConv1d.
 # The resulting OV graph for this function can be fused into the internal CausalConv1d operation.

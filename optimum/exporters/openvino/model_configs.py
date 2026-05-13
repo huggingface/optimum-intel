@@ -217,6 +217,7 @@ from .model_patcher import (
     VideoChatFlashQwenVisionEmbeddingModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
+    ZayaModelPatcher,
     _get_model_attribute,
 )
 
@@ -568,8 +569,8 @@ class OVMiniCPM3DummyPastKeyValuesGenerator(MistralDummyPastKeyValuesGenerator):
         k_shape = (self.batch_size, self.num_key_value_heads, self.sequence_length, self.k_head_dim)
         return [
             (
-                self.random_float_tensor(k_shape, framework=framework, dtype=float_dtype),
-                self.random_float_tensor(v_shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(k_shape, framework=framework, dtype=cache_dtype),
+                self.random_float_tensor(v_shape, framework=framework, dtype=cache_dtype),
             )
             for _ in range(self.num_layers)
         ]
@@ -634,8 +635,8 @@ class ChatGLM2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             )
         return [
             (
-                self.random_float_tensor(pkv_shape, framework=framework, dtype=float_dtype),
-                self.random_float_tensor(pkv_shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(pkv_shape, framework=framework, dtype=cache_dtype),
+                self.random_float_tensor(pkv_shape, framework=framework, dtype=cache_dtype),
             )
             for _ in range(self.num_layers)
         ]
@@ -5276,6 +5277,165 @@ class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
         if self.use_past_in_inputs:
             self.add_past_key_values(common_inputs, direction="inputs")
         return common_inputs
+
+
+class ZayaDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    """
+    Generates dummy cache_params inputs for Zaya architectures.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("cache_params",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+
+        config = normalized_config.config
+        self.num_layers = config.num_hidden_layers
+        self.attention_layer_ids = [idx for idx in range(config.num_hidden_layers) if idx % 2 == 0]
+        self.num_attention_layers = len(self.attention_layer_ids)
+        self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
+        self.num_key_value_heads = config.num_key_value_heads
+        self.conv_kernel_size = getattr(
+            config, "conv_kernel_size", getattr(config, "d_conv", getattr(config, "kernel_size", 2))
+        )
+        self.in_out_ch = (config.num_query_groups + config.num_attention_heads) * self.head_dim
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        cache_params = []
+        cache_dtype = "bf16"
+
+        for _ in range(self.num_layers):
+            conv_state_shape = (self.batch_size, self.in_out_ch, self.conv_kernel_size)
+            conv_state = self.random_float_tensor(conv_state_shape, framework=framework, dtype=cache_dtype)
+            cache_params.append(conv_state)
+
+            prev_hidden_state_shape = (self.batch_size, self.hidden_size)
+            prev_hidden_state = self.random_float_tensor(prev_hidden_state_shape, framework=framework, dtype=cache_dtype)
+            cache_params.append(prev_hidden_state)
+
+        for _ in range(self.num_attention_layers):
+            kv_shape = (self.batch_size, self.num_key_value_heads, self.sequence_length, self.head_dim)
+            key_cache = self.random_float_tensor(kv_shape, framework=framework, dtype=cache_dtype)
+            value_cache = self.random_float_tensor(kv_shape, framework=framework, dtype=cache_dtype)
+            cache_params.append(key_cache)
+            cache_params.append(value_cache)
+
+        return cache_params
+
+
+@register_in_tasks_manager("zaya", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class ZayaOpenVINOConfig(MambaOpenVINOConfig):
+    PAD_ATTENTION_MASK_TO_PAST = False
+    force_dynamo_export = True
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, ZayaDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = ZayaDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    MIN_TRANSFORMERS_VERSION = "4.57.1"
+    MAX_TRANSFORMERS_VERSION = "5.99.0"
+    _MODEL_PATCHER = ZayaModelPatcher
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        logger.warning(
+            "The current support for the 'Zaya' model type is experimental. "
+            "Performance is not optimal with high memory consumption. "
+            "Optimizations and improved support will be available in a future OpenVINO release."
+        )
+
+    @staticmethod
+    def _get_attention_layer_ids(config) -> List[int]:
+        return [idx for idx in range(config.num_hidden_layers) if idx % 2 == 0]
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            cache_name_prefix = "cache_params.past"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            cache_name_prefix = "cache_params.present"
+
+        config = self._normalized_config.config
+        attention_layer_ids = self._get_attention_layer_ids(config)
+
+        for i in range(self._normalized_config.num_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
+            inputs_or_outputs[f"{cache_name_prefix}.ssm.{i}"] = {0: "batch_size"}
+
+        for i in range(len(attention_layer_ids)):
+            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            common_inputs["attention_mask"] = {0: "batch_size", 1: "past_sequence_length + sequence_length"}
+            common_inputs["position_ids"] = {0: "batch_size", 1: "sequence_length"}
+            self.add_past_key_values(common_inputs, direction="inputs")
+        else:
+            common_inputs["attention_mask"] = {0: "batch_size", 1: "sequence_length"}
+        return common_inputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
+
+        dummy_inputs = {}
+        input_names = [key for key in self.inputs.keys() if not key.startswith("cache_params")]
+        if self.use_past_in_inputs:
+            input_names.extend(["cache_params"])
+
+        for input_name in input_names:
+            input_was_inserted = False
+            for dummy_input_gen in dummy_inputs_generators:
+                if dummy_input_gen.supports_input(input_name):
+                    if self.use_past_in_inputs and isinstance(dummy_input_gen, DummyTextInputGenerator):
+                        sequence_length = dummy_input_gen.sequence_length
+                        if input_name == "input_ids":
+                            dummy_input_gen.sequence_length = 1
+                        elif input_name == "attention_mask":
+                            dummy_input_gen.sequence_length = sequence_length + 1
+                        elif input_name == "position_ids":
+                            dummy_input_gen.sequence_length = 1
+                        dummy_inputs[input_name] = dummy_input_gen.generate(
+                            input_name,
+                            framework=framework,
+                            int_dtype=self.int_dtype,
+                            float_dtype=self.float_dtype,
+                        )
+                        dummy_input_gen.sequence_length = sequence_length
+                    else:
+                        dummy_inputs[input_name] = self.overwrite_shape_and_generate_input(
+                            dummy_input_gen,
+                            input_name,
+                            framework,
+                            input_shapes=kwargs,
+                        )
+                    input_was_inserted = True
+                    break
+            if not input_was_inserted:
+                raise RuntimeError(
+                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model ONNX config.'
+                )
+
+        return dummy_inputs
 
 
 class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
