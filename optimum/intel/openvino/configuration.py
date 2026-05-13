@@ -452,13 +452,23 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "bits": 4,
         "sym": False,
         "group_size": 64,
+        "quant_method": OVQuantizationMethod.AWQ,
         "group_size_fallback": "adjust",
     },
     "google/gemma-4-26B-A4B": {
         "bits": 4,
         "sym": False,
         "group_size": 64,
+        "quant_method": OVQuantizationMethod.AWQ,
         "group_size_fallback": "adjust",
+    },
+    "google/gemma-4-E4B-it": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "dataset": "contextual",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
     },
     "Qwen/Qwen3.5-35B-A3B": {
         "quantization_configs": {
