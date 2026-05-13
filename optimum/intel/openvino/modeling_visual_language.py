@@ -4292,6 +4292,7 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
         # Segment-level LRUs survive across generate() calls. Keys are blake2b fingerprints
         # (see _projection_key / _audio_key). Default capacity trades memory for hit rate;
         # a single projected segment can be several MB, so 32 is a safe starting point.
+        # Not thread-safe: assumes single-threaded inference per model instance.
         self._projection_cache: OrderedDict = OrderedDict()
         self._audio_cache: OrderedDict = OrderedDict()
         self._projection_cache_capacity = 32
@@ -4307,8 +4308,9 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
 
     def _set_ov_config_parameters(self):
         super()._set_ov_config_parameters()
-        # MoE models require FP32 precision to avoid numerical errors from BF16 inference
-        # Without this, expert routing errors compound through layers causing garbage outputs
+        # MoE models require FP32 activation precision to avoid numerical errors from BF16
+        # inference; expert routing errors otherwise compound through layers. This governs
+        # activations only and remains compatible with INT4/INT8 weight compression.
         if self.ov_config.get("INFERENCE_PRECISION_HINT") is None:
             self.ov_config["INFERENCE_PRECISION_HINT"] = "f32"
 
