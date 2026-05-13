@@ -486,7 +486,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "lm_model": {
                 "bits": 4,
                 "sym": False,
-                "group_size": 128,
+                "group_size": 64,
             },
             "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
             "vision_embeddings_merger_model": {"bits": 8, "sym": True, "weight_only": True},
@@ -634,11 +634,6 @@ _DEFAULT_IGNORED_SCOPE_CONFIGS = {
         },
     },
     "Qwen/Qwen3.5-35B-A3B": {
-        "lm_model": {
-            "patterns": [".*shared_expert.*", ".*attn.*"],
-        },
-    },
-    "Qwen/Qwen3.6-35B-A3B": {
         "lm_model": {
             "patterns": [".*shared_expert.*", ".*attn.*"],
         },
