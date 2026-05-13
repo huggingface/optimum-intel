@@ -1032,6 +1032,7 @@ class OVModelPart(OVModelHostMixin):
         self._model_name = model_name
         self.config = self.parent_model.config
         self._model_dir = Path(model_dir or parent_model.model_save_dir)
+        self._device_override: Optional[str] = None
 
     def compile(self):
         if self.parent_model._compile_only and isinstance(self.model, CompiledModel):
@@ -1052,6 +1053,11 @@ class OVModelPart(OVModelHostMixin):
 
     @property
     def _device(self) -> str:
+        # Per-part device override takes precedence over the parent model's device. This is used by
+        # multi-component architectures (e.g. Qwen3-Omni) to place audio_encoder on GPU while keeping
+        # talker on CPU, without mutating the parent model's configured device.
+        if self._device_override is not None:
+            return self._device_override
         return self.parent_model._device
 
     @property

@@ -16,9 +16,11 @@
 Tests for audit finding fixes:
 - Pipeline dispatch routing for qwen3_omni_moe (accelerator_utils.py)
 - OVTalkerDecoder null guard on _infer_request
-- Codec embedding guard in _run_talker_generation
 - Batch size validation in _run_talker_generation
 - OVModelForOmni __init__ attribute initialization
+- Per-component device/ov_config override plumbing
+- OVCode2Wav chunk stitching
+- Projection / audio LRU cache helpers
 """
 
 import unittest
@@ -179,65 +181,11 @@ class TestTalkerNullGuard(unittest.TestCase):
         assert hidden.shape == (1, 5, 64)
 
 
-class TestCodecEmbeddingGuard(unittest.TestCase):
-    """Verify _run_talker_generation raises ValueError when _cp_codec_embedding is None."""
-
-    def _build_model_stub(self, codec_embedding=None):
-        """Build a minimal mock of _OVQwen3OmniMoeForCausalLM for the codec embedding check."""
-        model = MagicMock()
-        model._cp_codec_embedding = codec_embedding
-        model._run_talker_generation = _bind_run_talker_generation(model)
-        return model
-
-    def test_codec_embedding_missing_raises(self):
-        model = self._build_model_stub(codec_embedding=None)
-        talker_input_embeds = torch.randn(1, 10, 64)
-        trailing_text_hidden = torch.randn(1, 5, 64)
-        tts_pad_embed = torch.randn(1, 1, 64)
-        talker_kwargs = {}
-
-        with pytest.raises(ValueError, match="code_predictor_codec_embedding.npy not found"):
-            model._run_talker_generation(talker_input_embeds, trailing_text_hidden, tts_pad_embed, talker_kwargs)
-
-    def test_codec_embedding_present_passes_guard(self):
-        codec_embedding = torch.randn(16, 256, 64)
-        model = self._build_model_stub(codec_embedding=codec_embedding)
-
-        vocab_size = 1024
-        eos_token_id = 999
-
-        talker_config = MagicMock()
-        talker_config.codec_eos_token_id = eos_token_id
-        talker_config.code_predictor_config.num_code_groups = 1
-        model.config = MagicMock()
-        model.config.talker_config = talker_config
-
-        mock_talker = MagicMock()
-        model.talker = mock_talker
-        model.talker_text_embeddings = MagicMock(return_value=torch.randn(1, 1, 64))
-
-        # Return logits where the EOS token has the highest score so the loop exits immediately
-        logits = torch.zeros(1, 10, vocab_size)
-        logits[0, -1, eos_token_id] = 100.0
-        mock_talker.return_value = (logits, torch.randn(1, 10, 64))
-
-        talker_input_embeds = torch.randn(1, 10, 64)
-        trailing_text_hidden = torch.randn(1, 5, 64)
-        tts_pad_embed = torch.randn(1, 1, 64)
-        talker_kwargs = {"max_new_tokens": 1, "temperature": 0}
-
-        # Should not raise -- the guard passes when codec_embedding is set
-        result = model._run_talker_generation(talker_input_embeds, trailing_text_hidden, tts_pad_embed, talker_kwargs)
-        # With max_new_tokens=1 and EOS at first token, result is None (empty) or a tensor
-        assert result is None or isinstance(result, torch.Tensor)
-
-
 class TestBatchSizeValidation(unittest.TestCase):
     """Verify _run_talker_generation raises ValueError when batch_size > 1."""
 
     def test_batch_size_2_raises(self):
         model = MagicMock()
-        model._cp_codec_embedding = torch.randn(16, 256, 64)
         model._run_talker_generation = _bind_run_talker_generation(model)
 
         talker_input_embeds = torch.randn(2, 10, 64)
@@ -249,7 +197,6 @@ class TestBatchSizeValidation(unittest.TestCase):
 
     def test_batch_size_3_raises(self):
         model = MagicMock()
-        model._cp_codec_embedding = torch.randn(16, 256, 64)
         model._run_talker_generation = _bind_run_talker_generation(model)
 
         talker_input_embeds = torch.randn(3, 10, 64)
@@ -261,7 +208,6 @@ class TestBatchSizeValidation(unittest.TestCase):
 
     def test_batch_size_0_raises(self):
         model = MagicMock()
-        model._cp_codec_embedding = torch.randn(16, 256, 64)
         model._run_talker_generation = _bind_run_talker_generation(model)
 
         talker_input_embeds = torch.randn(0, 10, 64)
@@ -273,7 +219,6 @@ class TestBatchSizeValidation(unittest.TestCase):
 
     def test_batch_size_1_passes_guard(self):
         model = MagicMock()
-        model._cp_codec_embedding = torch.randn(16, 256, 64)
         model._run_talker_generation = _bind_run_talker_generation(model)
 
         talker_config = MagicMock()
@@ -447,7 +392,6 @@ class TestTalkerConfigGuard(unittest.TestCase):
 
     def test_missing_talker_config_raises(self):
         model = MagicMock()
-        model._cp_codec_embedding = torch.randn(16, 256, 64)
         model._run_talker_generation = _bind_run_talker_generation(model)
 
         config = MagicMock()
@@ -460,6 +404,164 @@ class TestTalkerConfigGuard(unittest.TestCase):
 
         with pytest.raises(ValueError, match="talker_config is required"):
             model._run_talker_generation(talker_input_embeds, trailing, pad, {})
+
+
+class TestPerComponentDeviceOverrides(unittest.TestCase):
+    """Verify _split_component_overrides correctly separates per-component keys from ov_config."""
+
+    def test_device_override_uppercased(self):
+        from optimum.intel.openvino.modeling_visual_language import _OVQwen3OmniMoeForCausalLM
+
+        dev, _, _ = _OVQwen3OmniMoeForCausalLM._split_component_overrides({"talker.device": "gpu"})
+        assert dev == {"talker": "GPU"}
+
+    def test_whitelisted_components_extracted(self):
+        from optimum.intel.openvino.modeling_visual_language import _OVQwen3OmniMoeForCausalLM
+
+        dev, cfg, base = _OVQwen3OmniMoeForCausalLM._split_component_overrides(
+            {
+                "audio_encoder.device": "GPU",
+                "talker.device": "CPU",
+                "talker.ov_config": {"PERFORMANCE_HINT": "LATENCY"},
+                "code_predictor.device": "NPU",
+                "CACHE_DIR": "/tmp/x",
+            }
+        )
+        assert dev == {"audio_encoder": "GPU", "talker": "CPU", "code_predictor": "NPU"}
+        assert cfg == {"talker": {"PERFORMANCE_HINT": "LATENCY"}}
+        assert base == {"CACHE_DIR": "/tmp/x"}
+
+    def test_unknown_component_stays_in_base(self):
+        from optimum.intel.openvino.modeling_visual_language import _OVQwen3OmniMoeForCausalLM
+
+        dev, cfg, base = _OVQwen3OmniMoeForCausalLM._split_component_overrides(
+            {"unknown_component.device": "GPU", "PERFORMANCE_HINT": "LATENCY"}
+        )
+        assert dev == {}
+        assert cfg == {}
+        assert base == {"unknown_component.device": "GPU", "PERFORMANCE_HINT": "LATENCY"}
+
+    def test_non_dict_ov_config_value_stays_in_base(self):
+        from optimum.intel.openvino.modeling_visual_language import _OVQwen3OmniMoeForCausalLM
+
+        dev, cfg, base = _OVQwen3OmniMoeForCausalLM._split_component_overrides({"talker.ov_config": "not_a_dict"})
+        assert cfg == {}
+        assert base == {"talker.ov_config": "not_a_dict"}
+
+    def test_empty_ov_config(self):
+        from optimum.intel.openvino.modeling_visual_language import _OVQwen3OmniMoeForCausalLM
+
+        dev, cfg, base = _OVQwen3OmniMoeForCausalLM._split_component_overrides({})
+        assert dev == {} and cfg == {} and base == {}
+
+
+class TestCode2WavChunking(unittest.TestCase):
+    """Verify OVCode2Wav chunk stitching and guards."""
+
+    def _make_mock_code2wav(self, samples_per_step=40):
+        from optimum.intel.openvino.modeling_visual_language import OVCode2Wav
+
+        class Mock(OVCode2Wav):
+            def __init__(self, spp):
+                self.chunk_size = 25
+                self.chunk_overlap = 5
+                self._async_infer_requests = []
+                self.request = None
+                self._spp = spp
+
+            def _run_single(self, chunk_np):
+                samples = chunk_np.shape[-1] * self._spp
+                return np.ones((1, samples), dtype=np.float32) * float(chunk_np[0, 0, 0])
+
+            def _ensure_infer_pool(self, size):
+                return
+
+        return Mock(samples_per_step)
+
+    def test_chunked_produces_2d_waveform(self):
+        m = self._make_mock_code2wav()
+        codes = torch.ones(1, 16, 60)
+        wave = m._run_chunked(codes, 25, 5)
+        assert wave.ndim == 2
+        assert wave.shape[0] == 1
+
+    def test_chunk_overlap_ge_chunk_size_raises(self):
+        m = self._make_mock_code2wav()
+        codes = torch.ones(1, 16, 60)
+        with pytest.raises(ValueError, match="chunk_overlap"):
+            m._run_chunked(codes, 25, 25)
+        with pytest.raises(ValueError, match="chunk_overlap"):
+            m._run_chunked(codes, 25, 30)
+
+    def test_batch_size_gt_1_raises(self):
+        m = self._make_mock_code2wav()
+        codes = torch.ones(2, 16, 60)
+        with pytest.raises(ValueError, match="batch_size=1"):
+            m._run_chunked(codes, 25, 5)
+
+    def test_wrong_ndim_raises(self):
+        m = self._make_mock_code2wav()
+        codes = torch.ones(16, 60)
+        with pytest.raises(ValueError, match=r"\(B, G, T\)"):
+            m._run_chunked(codes, 25, 5)
+
+    def test_estimate_samples_per_step(self):
+        from optimum.intel.openvino.modeling_visual_language import OVCode2Wav
+
+        assert OVCode2Wav._estimate_samples_per_step(25, 5000) == 200
+        assert OVCode2Wav._estimate_samples_per_step(0, 100) == 0
+        assert OVCode2Wav._estimate_samples_per_step(10, 0) == 0
+
+
+class TestCaches(unittest.TestCase):
+    """Verify projection + audio LRU helpers on _OVQwen3OmniMoeForCausalLM."""
+
+    def test_lru_get_miss_returns_none(self):
+        from collections import OrderedDict
+
+        from optimum.intel.openvino.modeling_visual_language import _OVQwen3OmniMoeForCausalLM
+
+        cache = OrderedDict()
+        assert _OVQwen3OmniMoeForCausalLM._lru_get(cache, b"x") is None
+
+    def test_lru_put_evicts_lru(self):
+        from collections import OrderedDict
+
+        from optimum.intel.openvino.modeling_visual_language import _OVQwen3OmniMoeForCausalLM
+
+        cache = OrderedDict()
+        _OVQwen3OmniMoeForCausalLM._lru_put(cache, b"a", 1, capacity=2)
+        _OVQwen3OmniMoeForCausalLM._lru_put(cache, b"b", 2, capacity=2)
+        _OVQwen3OmniMoeForCausalLM._lru_put(cache, b"c", 3, capacity=2)
+        assert b"a" not in cache
+        assert list(cache.keys()) == [b"b", b"c"]
+
+    def test_lru_get_promotes_to_end(self):
+        from collections import OrderedDict
+
+        from optimum.intel.openvino.modeling_visual_language import _OVQwen3OmniMoeForCausalLM
+
+        cache = OrderedDict()
+        _OVQwen3OmniMoeForCausalLM._lru_put(cache, b"a", 1, capacity=3)
+        _OVQwen3OmniMoeForCausalLM._lru_put(cache, b"b", 2, capacity=3)
+        assert _OVQwen3OmniMoeForCausalLM._lru_get(cache, b"a") == 1
+        # "a" should now be most-recently-used, so "b" evicts first.
+        _OVQwen3OmniMoeForCausalLM._lru_put(cache, b"c", 3, capacity=2)
+        assert b"b" not in cache
+        assert b"a" in cache and b"c" in cache
+
+    def test_tensor_bytes_stable_across_calls(self):
+        from optimum.intel.openvino.modeling_visual_language import _OVQwen3OmniMoeForCausalLM
+
+        t = torch.arange(6).reshape(2, 3)
+        assert _OVQwen3OmniMoeForCausalLM._tensor_bytes(t) == _OVQwen3OmniMoeForCausalLM._tensor_bytes(t)
+
+    def test_tensor_bytes_distinct_for_different_values(self):
+        from optimum.intel.openvino.modeling_visual_language import _OVQwen3OmniMoeForCausalLM
+
+        a = torch.tensor([1, 2, 3])
+        b = torch.tensor([1, 2, 4])
+        assert _OVQwen3OmniMoeForCausalLM._tensor_bytes(a) != _OVQwen3OmniMoeForCausalLM._tensor_bytes(b)
 
 
 if __name__ == "__main__":

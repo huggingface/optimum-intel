@@ -4179,19 +4179,9 @@ def _append_hidden_states_output(
 
 
 class Qwen3OmniMoeLMConfigHelper(LMInputEmbedsConfigHelper):
-    def __init__(
-        self, export_config, patcher_cls=None, dummy_input_generator=None, inputs_update=None, model_config=None
-    ):
-        super().__init__(export_config, patcher_cls, dummy_input_generator, inputs_update)
-        self._model_config = model_config
-
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        has_talker = False
-        if self._model_config is not None:
-            talker_config = getattr(self._model_config, "talker_config", None)
-            has_talker = talker_config is not None and getattr(talker_config, "accept_hidden_layer", None) is not None
-        return _append_hidden_states_output(self.orig_export_config.outputs, include_intermediate=has_talker)
+        return _append_hidden_states_output(self.orig_export_config.outputs, include_intermediate=True)
 
 
 class DummyQwen3OmniMoeLMInputGenerator(DummyQwen3VLLMInputGenerator):
@@ -4216,22 +4206,47 @@ class Qwen3OmniMoeTalkerLMConfigHelper(LMInputEmbedsConfigHelper):
 
 
 class Qwen3OmniMoeCodePredictorLMConfigHelper(LMInputEmbedsConfigHelper):
+    # Unrolled CodePredictor: single graph call runs all num_code_groups-1 inner steps
+    # with in-graph Gumbel-max sampling. The graph is stateless across calls (use_past=False),
+    # so patch_stateful is skipped; the only inputs are inputs_embeds + sampling controls.
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Disable stateful past wrapping: each call starts fresh.
+        self.use_past = False
+        self.use_past_in_inputs = False
+
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        orig_inputs = super().inputs
-        orig_inputs["generation_steps"] = {}
-        return orig_inputs
+        return {
+            "inputs_embeds": {0: "batch_size", 1: "sequence_length"},
+            "temperature": {},
+            "top_k": {},
+            "seeds": {0: "num_inner_steps"},
+        }
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        return _append_hidden_states_output(self.orig_export_config.outputs)
+        return {
+            "codes": {0: "batch_size", 1: "num_inner_steps"},
+            "codec_hiddens_sum": {0: "batch_size", 1: "sequence_length"},
+        }
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
-        dummy_inputs = super().generate_dummy_inputs(framework, **kwargs)
         import torch
 
-        dummy_inputs["generation_steps"] = torch.tensor(0, dtype=torch.int64)
-        return dummy_inputs
+        talker_config = getattr(self._config, "talker_config", self._config)
+        cp_config = getattr(talker_config, "code_predictor_config", talker_config)
+        hidden_size = getattr(cp_config, "hidden_size", getattr(self._normalized_config, "hidden_size", 64))
+        num_code_groups = getattr(cp_config, "num_code_groups", 16)
+        num_inner_steps = max(1, num_code_groups - 1)
+
+        return {
+            "inputs_embeds": torch.randn(1, 2, hidden_size, dtype=torch.float32),
+            "temperature": torch.tensor(0.9, dtype=torch.float32),
+            "top_k": torch.tensor(50, dtype=torch.int64),
+            "seeds": torch.arange(num_inner_steps, dtype=torch.int64),
+        }
 
 
 class DummyQwen3OmniMoeAudioInputGenerator(DummyInputGenerator):
@@ -4508,7 +4523,6 @@ class Qwen3OmniMoeOpenVINOConfig(BaseVLMOpenVINOConfig):
                 patcher_cls=Qwen3OmniMoeLanguageModelPatcher,
                 dummy_input_generator=DummyQwen3OmniMoeLMInputGenerator,
                 inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
-                model_config=self._orig_config,
             )
             config._normalized_config = internal_config._normalized_config
             vision_config = getattr(thinker_config, "vision_config", None)

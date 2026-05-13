@@ -559,35 +559,6 @@ def export_models(
     return outputs
 
 
-def _save_auxiliary_weights(model, model_type: str, output_dir: Path):
-    if model_type != "qwen3_omni_moe":
-        return
-    # CodePredictor is traced with inputs_embeds, so the per-step codec_embedding
-    # tables aren't part of the IR and must be dumped separately for runtime lookup.
-    import numpy as np
-    import torch
-
-    talker = getattr(model, "talker", None)
-    if talker is None:
-        return
-    code_predictor = getattr(talker, "code_predictor", None)
-    if code_predictor is None:
-        return
-    cp_model = getattr(code_predictor, "model", None)
-    if cp_model is None:
-        return
-    codec_embedding = getattr(cp_model, "codec_embedding", None)
-    if codec_embedding is None or len(codec_embedding) == 0:
-        return
-    try:
-        stacked = torch.stack([emb.weight.data for emb in codec_embedding])
-    except (AttributeError, RuntimeError) as e:
-        logger.warning(f"Failed to extract codec_embedding weights for qwen3_omni_moe: {e}")
-        return
-    np.save(output_dir / "code_predictor_codec_embedding.npy", stacked.cpu().float().numpy())
-    logger.info(f"Saved CodePredictor codec_embedding weights ({stacked.shape}) to {output_dir}")
-
-
 def export_from_model(
     model: Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"],
     output: Union[str, Path],
@@ -819,8 +790,6 @@ def export_from_model(
         patch_16bit_model=patch_16bit_model,
         library_name=library_name,
     )
-
-    _save_auxiliary_weights(model, model_type, output)
 
     return files_subpaths
 

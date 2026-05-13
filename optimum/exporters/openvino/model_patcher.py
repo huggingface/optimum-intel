@@ -4692,14 +4692,12 @@ class _Qwen3OmniMoeLMPatcherMixin:
 
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "4.57"):
-            # For both 4.x and 5.x, patch the MoE forward to avoid .nonzero() which breaks tracing
-            self._original_moe_forward = self._moe_block_cls.forward
-            self._moe_block_cls.forward = self._patched_moe_forward
+        # Patch MoE forward to avoid .nonzero() which breaks tracing.
+        self._original_moe_forward = self._moe_block_cls.forward
+        self._moe_block_cls.forward = self._patched_moe_forward
 
     def __exit__(self, exc_type, exc_value, traceback):
-        if is_transformers_version(">=", "4.57"):
-            self._moe_block_cls.forward = self._original_moe_forward
+        self._moe_block_cls.forward = self._original_moe_forward
         super().__exit__(exc_type, exc_value, traceback)
 
 
@@ -4714,8 +4712,7 @@ class Qwen3OmniMoeLanguageModelPatcher(_Qwen3OmniMoeLMPatcherMixin, OVDecoderMod
         self._patched_moe_forward = qwen3_moe_forward_patched
 
         # Talker consumes one intermediate layer's hidden state; layer index comes from talker_config.
-        talker_config = getattr(model.config, "talker_config", None)
-        accept_hidden_layer = getattr(talker_config, "accept_hidden_layer", None)
+        accept_hidden_layer = model.config.talker_config.accept_hidden_layer
 
         def lm_forward(
             self,
@@ -4739,15 +4736,13 @@ class Qwen3OmniMoeLanguageModelPatcher(_Qwen3OmniMoeLMPatcherMixin, OVDecoderMod
                 past_key_values=pkv,
                 visual_pos_masks=visual_pos_masks,
                 deepstack_visual_embeds=deepstack_visual_embeds,
-                output_hidden_states=accept_hidden_layer is not None,
+                output_hidden_states=True,
             )
             hidden_states = outputs[0]
             logits = self.thinker.lm_head(hidden_states)
-            legacy_pkv = postprocess_past_key_values(outputs.past_key_values)
-            if accept_hidden_layer is not None:
-                intermediate_hidden_states = outputs.hidden_states[accept_hidden_layer]
-                return (logits, hidden_states, intermediate_hidden_states, legacy_pkv)
-            return (logits, hidden_states, legacy_pkv)
+            pkv_tuple = postprocess_past_key_values(outputs.past_key_values)
+            intermediate_hidden_states = outputs.hidden_states[accept_hidden_layer]
+            return (logits, hidden_states, intermediate_hidden_states, pkv_tuple)
 
         model.__orig_forward = model.forward
         model.forward = types.MethodType(lm_forward, model)
@@ -4801,6 +4796,12 @@ class Qwen3OmniMoeTalkerLanguageModelPatcher(_Qwen3OmniMoeLMPatcherMixin, OVDeco
 
 
 class Qwen3OmniMoeCodePredictorPatcher(OVDecoderModelPatcher):
+    # Unrolls all num_code_groups-1 inner generation steps into a single graph call.
+    # Sampling is done in-graph via the Gumbel-max trick (equivalent to categorical sampling
+    # from softmax(logits/temperature)) with a per-step int64 seed, so runs are reproducible.
+    # The graph is stateless between calls: each invocation builds its own DynamicCache,
+    # so use_past=False is enforced by the config helper to skip patch_stateful.
+
     def __init__(
         self,
         config: "OnnxConfig",
@@ -4813,31 +4814,84 @@ class Qwen3OmniMoeCodePredictorPatcher(OVDecoderModelPatcher):
 
         # Per-step lm_head selection via integer index needs a stacked weight tensor for tracing.
         stacked_heads = torch.stack([head.weight for head in code_predictor.lm_head])
+        stacked_codec_embeds = torch.stack([emb.weight for emb in code_predictor.model.codec_embedding])
+        num_inner_steps = stacked_heads.shape[0]
+
+        def _seeded_uniform(seed, shape, dtype, device):
+            # Traceable PRNG: pure arithmetic on the seed tensor, no CPU fallback.
+            # Emits a (0, 1) uniform tensor of the requested shape; identical seeds
+            # produce identical draws run to run, independent of batch or device state.
+            idx = torch.arange(shape[-1], device=device, dtype=torch.float32)
+            seed_f = seed.to(torch.float32)
+            # Two-term hash keeps correlations low across adjacent indices.
+            raw = torch.sin(seed_f * 12.9898 + idx * 78.233) * 43758.5453
+            u = raw - torch.floor(raw)  # fractional part ~ uniform(0, 1)
+            return u.clamp(min=1e-20, max=1.0 - 1e-20).to(dtype).expand(shape)
+
+        def _gumbel_sample(logits, top_k, seed):
+            # argmax(logits + Gumbel(0,1)) ~ Categorical(softmax(logits)). Top-k masking uses
+            # sort + index_select so top_k can be a runtime int64 tensor (torch.topk requires
+            # a Python int for k, which breaks tracing).
+            sorted_logits, _ = torch.sort(logits, dim=-1, descending=True)
+            top_k_idx = torch.clamp(top_k.reshape(1) - 1, min=0)
+            threshold = torch.index_select(sorted_logits, -1, top_k_idx)
+            logits = torch.where(logits < threshold, torch.full_like(logits, float("-inf")), logits)
+            u = _seeded_uniform(seed, logits.shape, logits.dtype, logits.device)
+            gumbel = -torch.log(-torch.log(u))
+            return (logits + gumbel).argmax(dim=-1)
 
         def cp_forward(
             self,
             inputs_embeds,
-            attention_mask,
-            position_ids,
-            past_key_values,
-            generation_steps,
-            use_cache=True,
+            temperature,
+            top_k,
+            seeds,
         ):
+            # inputs_embeds: [B, 2, hidden] = concat(prefix_hidden[:, -1:], first_code_embed)
+            # temperature: scalar float32; top_k: scalar int64; seeds: [num_inner_steps] int64
             if is_transformers_version("<", "5"):
-                pkv = DynamicCache.from_legacy_cache(past_key_values)
+                pkv = DynamicCache.from_legacy_cache(None)
             else:
-                pkv = DynamicCache(past_key_values)
+                pkv = DynamicCache(None)
+
+            # Prefill: two-token input (prefix hidden + first-code embed).
             outputs = self.talker.code_predictor.model(
                 inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                use_cache=use_cache,
+                attention_mask=None,
+                position_ids=None,
+                use_cache=True,
                 past_key_values=pkv,
             )
-            hidden_states = outputs[0]
-            head_weight = stacked_heads[generation_steps]
-            logits = torch.nn.functional.linear(hidden_states, head_weight)
-            return (logits, hidden_states, postprocess_past_key_values(outputs.past_key_values))
+            hidden_states = outputs.last_hidden_state
+            pkv = outputs.past_key_values
+
+            codes_list = []
+            codec_hiddens_sum = inputs_embeds[:, 1:2, :]  # start with the first-code embed
+
+            temperature_safe = torch.clamp(temperature, min=1e-6)
+            for step in range(num_inner_steps):
+                step_logits = torch.nn.functional.linear(hidden_states[:, -1, :], stacked_heads[step])
+                step_logits = step_logits / temperature_safe
+                token = _gumbel_sample(step_logits, top_k, seeds[step])
+                codes_list.append(token.unsqueeze(-1))  # [B, 1]
+
+                token_embed = torch.nn.functional.embedding(token, stacked_codec_embeds[step]).unsqueeze(1)
+                codec_hiddens_sum = codec_hiddens_sum + token_embed
+
+                if step < num_inner_steps - 1:
+                    # feed token embed as the next input; KV cache already holds prefix + first code
+                    outputs = self.talker.code_predictor.model(
+                        inputs_embeds=token_embed,
+                        attention_mask=None,
+                        position_ids=None,
+                        use_cache=True,
+                        past_key_values=pkv,
+                    )
+                    hidden_states = outputs.last_hidden_state
+                    pkv = outputs.past_key_values
+
+            codes = torch.cat(codes_list, dim=1)  # [B, num_inner_steps]
+            return codes, codec_hiddens_sum
 
         model.__orig_forward = model.forward
         model.forward = types.MethodType(cp_forward, model)
@@ -4869,9 +4923,8 @@ class Qwen3OmniMoeCode2WavPatcher(ModelPatcher):
         # Code2Wav extends ModelPatcher (not OVDecoderModelPatcher), so the 5.x-safe mask wrappers
         # that handle the transformers 5.x `q_length`/`q_offset` signature are not registered by the
         # base class. Register them here so the Code2Wav attention layers trace under 5.x.
-        if is_transformers_version(">=", "4.53.0"):
-            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
-            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+        ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
+        ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -7489,7 +7542,9 @@ def qwen3_moe_forward_patched(self, hidden_states: torch.Tensor) -> torch.Tensor
         # Based on Transformers PR #40114 pattern for MoE export
         for expert_idx in range(self.gate.num_experts):
             # Process all tokens through this expert (no dynamic indexing)
-            gate, up = torch.nn.functional.linear(hidden_states, self.experts.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+            gate, up = torch.nn.functional.linear(hidden_states, self.experts.gate_up_proj[expert_idx]).chunk(
+                2, dim=-1
+            )
             expert_output = self.experts.act_fn(gate) * up
             expert_output = torch.nn.functional.linear(expert_output, self.experts.down_proj[expert_idx])
 
@@ -9910,7 +9965,9 @@ def qwen3_omni_moe_talker_sparse_forward_patched(self, hidden_states: torch.Tens
         # Process ALL tokens through each expert - routing weights naturally zero out non-selected tokens
         for expert_idx in range(self.gate.num_experts):
             # Process all tokens through this expert (no dynamic indexing)
-            gate, up = torch.nn.functional.linear(hidden_states, self.experts.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+            gate, up = torch.nn.functional.linear(hidden_states, self.experts.gate_up_proj[expert_idx]).chunk(
+                2, dim=-1
+            )
             expert_output = self.experts.act_fn(gate) * up
             expert_output = torch.nn.functional.linear(expert_output, self.experts.down_proj[expert_idx])
 
