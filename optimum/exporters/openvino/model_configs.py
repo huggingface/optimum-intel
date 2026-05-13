@@ -5291,7 +5291,9 @@ class ZayaDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         self.num_attention_layers = len(self.attention_layer_ids)
         self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
         self.num_key_value_heads = config.num_key_value_heads
-        self.conv_kernel_size = 2
+        self.conv_kernel_size = getattr(
+            config, "conv_kernel_size", getattr(config, "d_conv", getattr(config, "kernel_size", 2))
+        )
         self.in_out_ch = (config.num_query_groups + config.num_attention_heads) * self.head_dim
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
