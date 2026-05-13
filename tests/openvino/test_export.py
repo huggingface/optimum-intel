@@ -94,6 +94,7 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-3": OVStableDiffusion3Pipeline,
         "flux": OVFluxPipeline,
         "ltx-video": OVLTXPipeline,
+        "kokoro": OVModelForTextToSpeechSeq2Seq,
     }
 
     if is_transformers_version(">=", "4.48.0"):
