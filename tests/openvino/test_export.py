@@ -93,6 +93,7 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-3": OVStableDiffusion3Pipeline,
         "flux": OVFluxPipeline,
         "ltx-video": OVLTXPipeline,
+        "kokoro": OVModelForTextToSpeechSeq2Seq,
     }
 
     if is_transformers_version(">=", "4.48.0"):
@@ -174,6 +175,13 @@ class ExportModelTest(unittest.TestCase):
             from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
 
             model = Qwen3ASRForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
+        elif model_type == "kokoro":
+            model = TasksManager.get_model_from_task(
+                task=task,
+                model_name_or_path=model_name,
+                framework="pt",
+                library_name="kokoro",
+            )
         else:
             model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
 
