@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import torch
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
+from optimum.exporters.onnx.base import ConfigBehavior
 from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
     AlbertOnnxConfig,
@@ -113,6 +114,7 @@ from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
     DTYPE_MAPPER,
+    DummyAudioInputGenerator,
     DummyInputGenerator,
     DummyPastKeyValuesGenerator,
     DummySeq2SeqDecoderTextInputGenerator,
@@ -4267,6 +4269,71 @@ class MBartOpenVINOConfig(BartOpenVINOConfig):
 )
 class M2M100OpenVINOConfig(BartOpenVINOConfig):
     pass
+
+
+@register_in_tasks_manager(
+    "seamless_m4t_v2",
+    *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
+    library_name="transformers",
+)
+class SeamlessM4Tv2OpenVINOConfig(M2M100OpenVINOConfig):
+    pass
+
+
+class SeamlessM4Tv2DummyAudioInputGenerator(DummyAudioInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("input_features", "attention_mask")
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "attention_mask":
+            return self.random_mask_tensor(
+                shape=[self.batch_size, self.nb_max_frames], framework=framework, dtype=int_dtype
+            )
+        return self.random_float_tensor(
+            shape=[self.batch_size, self.nb_max_frames, self.feature_size],
+            min_value=-1,
+            max_value=1,
+            framework=framework,
+            dtype=float_dtype,
+        )
+
+
+@register_in_tasks_manager(
+    "seamless_m4t_v2",
+    *["automatic-speech-recognition", "automatic-speech-recognition-with-past"],
+    library_name="transformers",
+)
+class SeamlessM4Tv2ForSpeechOpenVINOConfig(WhisperOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        encoder_num_layers="speech_encoder_layers",
+        decoder_num_layers="decoder_layers",
+        encoder_num_attention_heads="speech_encoder_attention_heads",
+        decoder_num_attention_heads="decoder_attention_heads",
+        feature_size="feature_projection_input_dim",
+        allow_new=True,
+    )
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        SeamlessM4Tv2DummyAudioInputGenerator,
+        DummySeq2SeqDecoderTextInputGenerator,
+        DummySeq2SeqPastKeyValuesGenerator,
+    )
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {}
+
+        if self._behavior in {ConfigBehavior.ENCODER, ConfigBehavior.MONOLITH}:
+            common_inputs["input_features"] = {0: "batch_size", 1: "encoder_sequence_length", 2: "feature_size"}
+        else:
+            common_inputs["encoder_outputs"] = {0: "batch_size", 1: "encoder_sequence_length"}
+
+        common_inputs["attention_mask"] = {0: "batch_size", 1: "encoder_sequence_length"}
+
+        if self._behavior in {ConfigBehavior.DECODER, ConfigBehavior.MONOLITH}:
+            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
+            if self.use_past_in_inputs:
+                self.add_past_key_values(common_inputs, direction="inputs")
+
+        return common_inputs
 
 
 @register_in_tasks_manager(

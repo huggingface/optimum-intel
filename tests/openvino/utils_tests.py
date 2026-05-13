@@ -142,6 +142,72 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+def _create_tiny_seamless_m4t_v2_model():
+    """Generate a tiny random SeamlessM4Tv2 text-to-text model for testing."""
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_seamless_m4t_v2"
+    if (output_dir / "config.json").exists() and (output_dir / "model.safetensors").exists():
+        return str(output_dir)
+
+    from transformers import AutoProcessor, GenerationConfig, SeamlessM4Tv2Config, SeamlessM4Tv2ForTextToText
+
+    processor = AutoProcessor.from_pretrained("facebook/seamless-m4t-v2-large")
+    config = SeamlessM4Tv2Config(
+        vocab_size=len(processor.tokenizer),
+        hidden_size=32,
+        encoder_layers=2,
+        decoder_layers=2,
+        encoder_attention_heads=4,
+        decoder_attention_heads=4,
+        encoder_ffn_dim=64,
+        decoder_ffn_dim=64,
+        max_position_embeddings=64,
+        dropout=0.0,
+        attention_dropout=0.0,
+        activation_dropout=0.0,
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    SeamlessM4Tv2ForTextToText(config).save_pretrained(output_dir)
+    processor.save_pretrained(output_dir)
+    GenerationConfig.from_pretrained("facebook/seamless-m4t-v2-large").save_pretrained(output_dir)
+    return str(output_dir)
+
+
+def _create_tiny_seamless_m4t_v2_speech_model():
+    """Generate a tiny random SeamlessM4Tv2 speech-to-text model for testing."""
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_seamless_m4t_v2_speech"
+    if (output_dir / "config.json").exists() and (output_dir / "model.safetensors").exists():
+        return str(output_dir)
+
+    from transformers import AutoProcessor, GenerationConfig, SeamlessM4Tv2Config, SeamlessM4Tv2ForSpeechToText
+
+    processor = AutoProcessor.from_pretrained("facebook/seamless-m4t-v2-large")
+    config = SeamlessM4Tv2Config(
+        vocab_size=len(processor.tokenizer),
+        hidden_size=32,
+        encoder_layers=2,
+        decoder_layers=2,
+        speech_encoder_layers=2,
+        encoder_attention_heads=4,
+        decoder_attention_heads=4,
+        speech_encoder_attention_heads=4,
+        encoder_ffn_dim=64,
+        decoder_ffn_dim=64,
+        speech_encoder_intermediate_size=64,
+        max_position_embeddings=64,
+        dropout=0.0,
+        attention_dropout=0.0,
+        activation_dropout=0.0,
+        feature_projection_input_dim=160,
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    SeamlessM4Tv2ForSpeechToText(config).save_pretrained(output_dir)
+    processor.save_pretrained(output_dir)
+    GenerationConfig.from_pretrained("facebook/seamless-m4t-v2-large").save_pretrained(output_dir)
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -315,6 +381,8 @@ MODEL_NAMES = {
     "stable-diffusion-xl": "optimum-intel-internal-testing/tiny-random-stable-diffusion-xl",
     "stable-diffusion-xl-refiner": "optimum-intel-internal-testing/tiny-random-stable-diffusion-xl-refiner",
     "stable-diffusion-3": "optimum-intel-internal-testing/stable-diffusion-3-tiny-random",
+    "seamless_m4t_v2": _create_tiny_seamless_m4t_v2_model(),
+    "seamless_m4t_v2_speech": _create_tiny_seamless_m4t_v2_speech_model(),
     "stablelm": "optimum-intel-internal-testing/tiny-random-StableLmForCausalLM",
     "starcoder2": "optimum-intel-internal-testing/tiny-random-Starcoder2ForCausalLM",
     "siglip": "optimum-intel-internal-testing/tiny-random-SiglipModel",
@@ -702,6 +770,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "vit-with-attentions": "vit",
     "vit-with-hidden-states": "vit",
     "wav2vec2-hf": "wav2vec2",
+    "seamless_m4t_v2_speech": "seamless_m4t_v2",
 }
 
 
