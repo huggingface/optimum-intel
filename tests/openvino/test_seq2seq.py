@@ -153,7 +153,7 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
     TASK = "text2text-generation"
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
-    UNSUPPORTED_ARCHITECTURES = set()
+    UNSUPPORTED_ARCHITECTURES = {"seamless_m4t_v2"}
     if not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2026.1")) and is_transformers_version(
         "<", "5"
     ):
@@ -336,7 +336,7 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
 
 
 class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
-    SUPPORTED_ARCHITECTURES = ("whisper",)
+    SUPPORTED_ARCHITECTURES = ("whisper", "seamless_m4t_v2_speech")
     OVMODEL_CLASS = OVModelForSpeechSeq2Seq
     AUTOMODEL_CLASS = AutoModelForSpeechSeq2Seq
     TASK = "automatic-speech-recognition"

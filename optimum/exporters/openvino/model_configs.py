@@ -4270,6 +4270,31 @@ class M2M100OpenVINOConfig(BartOpenVINOConfig):
 
 
 @register_in_tasks_manager(
+    "seamless_m4t_v2",
+    *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
+    library_name="transformers",
+)
+class SeamlessM4Tv2OpenVINOConfig(M2M100OpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "seamless_m4t_v2",
+    *["automatic-speech-recognition", "automatic-speech-recognition-with-past"],
+    library_name="transformers",
+)
+class SeamlessM4Tv2ForSpeechOpenVINOConfig(WhisperOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        encoder_num_layers="speech_encoder_layers",
+        decoder_num_layers="decoder_layers",
+        encoder_num_attention_heads="speech_encoder_attention_heads",
+        decoder_num_attention_heads="decoder_attention_heads",
+        feature_size="feature_projection_input_dim",
+        allow_new=True,
+    )
+
+
+@register_in_tasks_manager(
     "deepseek_v3", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 @register_in_tasks_manager(
