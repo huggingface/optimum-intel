@@ -322,6 +322,7 @@ MODEL_NAMES = {
     "sew": "optimum-intel-internal-testing/tiny-random-SEWModel",
     "sew-d": "optimum-intel-internal-testing/sew-d-tiny-100k-ft-ls100h",
     "swin": "optimum-intel-internal-testing/tiny-random-SwinModel",
+    "swin2sr": "hf-internal-testing/tiny-random-Swin2SRForImageSuperResolution",
     "swin-window": "optimum-intel-internal-testing/tiny-random-swin-patch4-window7-224",
     "t5": "optimum-intel-internal-testing/tiny-random-t5",
     "trocr": "optimum-intel-internal-testing/trocr-small-handwritten",
