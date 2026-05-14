@@ -1265,7 +1265,9 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
         if past_key_values is not None:
             decoder_input_ids = decoder_input_ids[:, -1:]
 
-        if decoder_attention_mask is None and decoder_input_ids is not None:
+        if decoder_input_ids is not None and (
+            decoder_attention_mask is None or decoder_attention_mask.shape[1] != decoder_input_ids.shape[1]
+        ):
             decoder_attention_mask = torch.ones_like(decoder_input_ids).to(decoder_input_ids.device)
 
         return {
@@ -1273,6 +1275,7 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
             "past_key_values": past_key_values,
             "decoder_input_ids": decoder_input_ids,
             "attention_mask": attention_mask,
+            "decoder_attention_mask": decoder_attention_mask,
             "head_mask": head_mask,
             "decoder_head_mask": decoder_head_mask,
             "cross_attn_head_mask": cross_attn_head_mask,

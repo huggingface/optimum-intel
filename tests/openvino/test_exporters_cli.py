@@ -94,6 +94,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "gpt2"),
         ("text2text-generation", "t5"),
         ("text2text-generation-with-past", "t5"),
+        ("text2text-generation", "seamless_m4t_v2"),
+        ("automatic-speech-recognition", "seamless_m4t_v2_speech"),
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon_mamba"),
         ("text-classification", "albert"),

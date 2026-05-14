@@ -336,7 +336,7 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
 
 
 class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
-    SUPPORTED_ARCHITECTURES = ("whisper",)
+    SUPPORTED_ARCHITECTURES = ("whisper", "seamless_m4t_v2_speech")
     OVMODEL_CLASS = OVModelForSpeechSeq2Seq
     AUTOMODEL_CLASS = AutoModelForSpeechSeq2Seq
     TASK = "automatic-speech-recognition"
@@ -386,7 +386,19 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
                 torch.allclose(torch.Tensor(ov_stateless_outputs.logits), transformers_outputs.logits, atol=1e-3)
             )
 
-        generate_kwrgs = {}
+            if model_arch == "seamless_m4t_v2_speech":
+                seq = torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id
+                for _ in range(3):
+                    with torch.no_grad():
+                        transformers_step = transformers_model(**pt_features, decoder_input_ids=seq)
+                    ov_step = ov_stateless_model(**pt_features, decoder_input_ids=seq)
+                    pt_next = transformers_step.logits[:, -1, :].argmax(-1)
+                    ov_next = torch.Tensor(ov_step.logits)[:, -1, :].argmax(-1)
+                    self.assertTrue(torch.equal(pt_next, ov_next))
+                    seq = torch.cat([seq, pt_next[:, None]], dim=1)
+                return
+
+            generate_kwrgs = {}
         if is_transformers_version(">=", "4.50") and is_transformers_version("<", "5"):
             generate_kwrgs = {"use_model_defaults": False}
 
@@ -421,6 +433,9 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         is_transformers_version("==", "5.0"), reason="Issue with transformers v5.0 coming from num_frames"
     )
     def test_pipeline(self, model_arch):
+        if model_arch == "seamless_m4t_v2_speech":
+            self.skipTest("SeamlessM4T-v2 speech uses custom generation behavior not exercised by the generic ASR pipeline test")
+
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         model = self.OVMODEL_CLASS.from_pretrained(model_id, device=OPENVINO_DEVICE)
