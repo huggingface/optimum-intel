@@ -634,7 +634,11 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         # may have modified it (e.g., setting is_encoder_decoder, decoder_start_token_id)
         exported_config_path = save_dir_path / "config.json"
         if exported_config_path.exists():
+            original_name_or_path = getattr(config, "_name_or_path", None) or model_id
             config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
+            # Preserve the original model identifier so that default quantization
+            # config lookup based on the model id keeps working.
+            config._name_or_path = original_name_or_path
 
         return cls._from_pretrained(
             model_id=save_dir_path,
