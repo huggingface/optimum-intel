@@ -171,6 +171,7 @@ from .model_patcher import (
     InternVL2ChatLangModelPatcher,
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
+    KokoroModelPatcher,
     Lfm2ModelPatcher,
     Lfm2MoeModelPatcher,
     Llama4ImageEmbeddingsModelPatcher,
@@ -214,6 +215,7 @@ from .model_patcher import (
     Qwen3VLVisionEmbMergerPatcher,
     QwenModelPatcher,
     SanaTextEncoderModelPatcher,
+    VideoChatFlashQwenVisionEmbeddingModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
     _get_model_attribute,
@@ -263,6 +265,21 @@ if TYPE_CHECKING:
 def init_model_configs():
     if "open_clip" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
         TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["open_clip"] = {}
+    if "kokoro" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
+        TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["kokoro"] = {}
+    if "kokoro" not in TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP:
+        from optimum.intel.utils.modeling_utils import _KokoroForTextToSpeech
+
+        try:
+            import kokoro as _kokoro_module
+
+            if not hasattr(_kokoro_module, "_KokoroForTextToSpeech"):
+                _kokoro_module._KokoroForTextToSpeech = _KokoroForTextToSpeech
+            TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP["kokoro"] = {
+                "text-to-audio": "_KokoroForTextToSpeech",
+            }
+        except ImportError:
+            pass
 
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "image-text-to-text")] = ("transformers", "AutoModelForCausalLM")
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "automatic-speech-recognition")] = (
@@ -5777,6 +5794,218 @@ class SiglipTextOpenVINOConfig(SiglipTextOnnxConfig):
     pass
 
 
+class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("hidden_states", "rotary_pos_emb")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        visual_seq_length: int = DEFAULT_DUMMY_SHAPES["visual_seq_length"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, visual_seq_length, **kwargs)
+        self.num_frames = normalized_config.config.mm_local_num_frames
+        self.embed_dim = normalized_config.config.mm_hidden_size
+        self.height = normalized_config.config.image_size
+        self.width = normalized_config.config.image_size
+        self.image_size = (self.height, self.width)
+        self.patch_size = normalized_config.config.patch_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "hidden_states":
+            return self.random_float_tensor(
+                shape=[
+                    self.batch_size,
+                    self.num_channels,
+                    self.num_frames,
+                    self.height,
+                    self.width,
+                ],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        elif input_name == "rotary_pos_emb":
+            grid_h, grid_w = self.height // self.patch_size, self.width // self.patch_size
+            grid_t = self.num_frames
+            # Source: https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L523
+            # The first dimension of rotary_pos_emb is fixed to 1 in the original model.
+            # And the second dimension is the total number of tokens for all frames, which is calculated as grid_h * grid_w * grid_t plus 1 for the cls token.
+            return self.random_float_tensor(
+                [1, 1 + grid_h * grid_t * grid_w, self.embed_dim], framework=framework, dtype=float_dtype
+            )
+
+
+class DummyVideoChatFlashQwenProjectorInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ["input"]
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        self.hidden_size = normalized_config.config.mm_hidden_size
+        self.num_patches = normalized_config.config.mm_projector_num_tome_tokens
+        self.normalized_config = normalized_config
+
+    def generate(
+        self,
+        input_name: str,
+        framework: str = "pt",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+    ):
+        shape = [self.batch_size, self.num_patches, self.hidden_size]
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
+class VideoChatFlashQwenProjectorOpenVINOConfig(OnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyVideoChatFlashQwenProjectorInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"input": {0: "batch_size", 1: "num_patches", 2: "hidden_size"}}
+
+
+class VideoChatFlashQwenConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    VISION_PROJECTION = "vision_projection"
+    TEXT_EMBEDDINGS = "text_embeddings"
+
+
+@register_in_tasks_manager("videochat_flash_qwen", *["image-text-to-text"], library_name="transformers")
+class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.49.0"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in VideoChatFlashQwenConfigBehavior]
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyVideoChatFlashQwenInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VideoChatFlashQwenConfigBehavior = VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            behavior=behavior,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        self._model_config_prepared = False
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if not self._behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {
+            "hidden_states": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+            # rotary_pos_emb has a fixed leading dimension of 1 in the dummy generator,
+            # so we do not associate axis 0 with batch_size and keep only dynamic axes here.
+            "rotary_pos_emb": {1: "num_tokens", 2: "hidden_size"},
+        }
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VideoChatFlashQwenConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+
+        Args:
+            behavior ([`ConfigBehavior`]):
+                The behavior to use for the new instance.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, VideoChatFlashQwenConfigBehavior):
+            behavior = VideoChatFlashQwenConfigBehavior(behavior)
+
+        if behavior == VideoChatFlashQwenConfigBehavior.VISION_PROJECTION:
+            export_config = VideoChatFlashQwenProjectorOpenVINOConfig(
+                self._orig_config,
+                task="feature-extraction",
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            return export_config
+
+        if behavior == VideoChatFlashQwenConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
+
+        if behavior == VideoChatFlashQwenConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
+
+        if behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VideoChatFlashQwenConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VideoChatFlashQwenConfigBehavior):
+            behavior = VideoChatFlashQwenConfigBehavior(behavior)
+
+        if not self._model_config_prepared:
+            vision_tower = model.get_vision_tower()
+            model.config.mm_num_attention_heads = vision_tower.config.num_attention_heads
+            # num_tome_tokens=64 comes from the upstream projector_type "tome16_mlp_hd64", which uses a fixed 64-token output.
+            # Source: https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L135-L146
+            model.config.mm_projector_num_tome_tokens = 64
+            model.config.patch_size = vision_tower.config.patch_size
+            model.config.image_size = vision_tower.config.image_size
+            model.config.image_mean = vision_tower.image_processor.image_mean
+            model.config.image_std = vision_tower.image_processor.image_std
+            self._model_config_prepared = True
+
+        if behavior == VideoChatFlashQwenConfigBehavior.VISION_PROJECTION:
+            vision_projector = model.get_model().mm_projector.mlp
+            vision_projector.config = model.config
+            return vision_projector
+
+        if behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
+            vision_tower = model.get_vision_tower().vision_tower
+            vision_tower.config = model.config
+            return vision_tower
+
+        if behavior == VideoChatFlashQwenConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.config
+            return text_embedding
+
+        if behavior == VideoChatFlashQwenConfigBehavior.LANGUAGE:
+            model.model.llm_compress_layer_list = []
+            return model
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+
+        if self._behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
+            return VideoChatFlashQwenVisionEmbeddingModelPatcher(self, model, model_kwargs)
+
+        return super().patch_model_for_export(model, model_kwargs)
+
+
 @register_in_tasks_manager(
     "hunyuan_v1_dense",
     *[
@@ -6234,3 +6463,83 @@ class Qwen3_5MoeOpenVINOConfig(Qwen3_5OpenVINOConfig):
                 "qwen3_5_moe_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
             ).outputs
         return super().outputs
+
+
+class DummyKokoroInputGenerator(DummyInputGenerator):
+    """Generates dummy inputs for the Kokoro TTS model."""
+
+    SUPPORTED_INPUT_NAMES = ("input_ids", "ref_s", "speed")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = 1
+        self.sequence_length = sequence_length
+        self.style_dim = getattr(normalized_config, "style_dim", 128)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "input_ids":
+            shape = [self.batch_size, self.sequence_length]
+            input_ids_value = self.random_int_tensor(
+                shape=shape, min_value=0, max_value=178, framework=framework, dtype=int_dtype
+            )
+            input_ids_value[:, 0] = 0
+            input_ids_value[:, -1] = 0
+            return input_ids_value
+        elif input_name == "ref_s":
+            shape = [self.batch_size, self.style_dim * 2]
+            return self.random_float_tensor(
+                shape=shape, min_value=-1, max_value=1, framework=framework, dtype=float_dtype
+            )
+        elif input_name == "speed":
+            return self.random_int_tensor(shape=[1], min_value=1, max_value=10, framework=framework, dtype=float_dtype)
+        else:
+            raise ValueError(f"Unsupported input {input_name} for DummyKokoroInputGenerator")
+
+
+@register_in_tasks_manager(
+    "kokoro",
+    *["text-to-audio"],
+    library_name="kokoro",
+)
+class KokoroOpenVINOConfig(OnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyKokoroInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig
+    _MODEL_PATCHER = KokoroModelPatcher
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "text-to-audio",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {1: ("sequence_length", 2, -1)},
+            "ref_s": {1: "style_dim"},
+            "speed": {},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "waveform": {0: "batch_size", 1: "audio_length"},
+            "phonemes": {0: "batch_size", 1: "phoneme_length"},
+        }

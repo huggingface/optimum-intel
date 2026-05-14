@@ -1,9 +1,12 @@
 import copy
 import enum
+import importlib
 import inspect
 import logging
 import math
 import os
+import sys
+import types
 import warnings
 from abc import abstractmethod
 from dataclasses import dataclass
@@ -14,12 +17,13 @@ import numpy as np
 import openvino
 import openvino as ov
 import torch
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from transformers import (
     AutoConfig,
     AutoImageProcessor,
+    AutoModel,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
@@ -4957,6 +4961,473 @@ class _OVLlama4ForCausalLM(OVModelForVisualCausalLM):
         return inputs
 
 
+class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
+    auto_model_class = AutoModel
+    additional_parts = ["vision_projection"]
+    _videochat_model_dir_cache = {}  # Cache: model_ref -> model_dir to avoid repeated resolution
+
+    @staticmethod
+    def _resolve_videochat_source_dir(model_ref):
+        if isinstance(model_ref, TemporaryDirectory):
+            model_ref = model_ref.name
+
+        model_dir = None
+        if model_ref is not None:
+            candidate = Path(model_ref).expanduser()
+            if candidate.is_file():
+                model_dir = candidate.parent
+            elif candidate.is_dir():
+                model_dir = candidate
+
+        if model_dir is None and isinstance(model_ref, str) and model_ref:
+            try:
+                snapshot_dir = snapshot_download(
+                    repo_id=model_ref,
+                    allow_patterns=["*.py", "*.json"],
+                    local_files_only=True,
+                )
+                model_dir = Path(snapshot_dir).resolve()
+            except Exception as e:
+                raise ValueError(
+                    "Failed to resolve local model directory from model reference. "
+                    "Pass a local model path, or ensure this Hub model is present in local cache."
+                ) from e
+
+        if not (model_dir and model_dir.is_dir()):
+            raise ValueError("VideoChat model reference must resolve to a valid local model directory.")
+
+        required_source_files = ["mm_utils.py", "vision_tower_builder.py"]
+        missing_source_files = [name for name in required_source_files if not (model_dir / name).is_file()]
+        if missing_source_files:
+            missing_files_text = ", ".join(missing_source_files)
+            raise ValueError(
+                f"Model source directory '{model_dir}' is missing required files: {missing_files_text}. "
+                "Pass a local model directory containing the original remote-code files, or ensure the full Hub snapshot is cached locally."
+            )
+
+        return model_dir
+
+    @classmethod
+    def _import_videochat_module(cls, module_name: str, model_ref):
+        # Use cached model_dir to avoid repeated resolution
+        if model_ref not in cls._videochat_model_dir_cache:
+            cls._videochat_model_dir_cache[model_ref] = cls._resolve_videochat_source_dir(model_ref)
+        model_dir = cls._videochat_model_dir_cache[model_ref]
+
+        package_name = "_videochat_flash_local"
+        local_pkg = sys.modules.get(package_name)
+        if local_pkg is None:
+            local_pkg = types.ModuleType(package_name)
+            local_pkg.__path__ = [str(model_dir)]
+            sys.modules[package_name] = local_pkg
+        elif getattr(local_pkg, "__path__", None) != [str(model_dir)]:
+            local_pkg.__path__ = [str(model_dir)]
+
+        return importlib.import_module(f"{package_name}.{module_name}")
+
+    def _resolve_hf_method_provider_dir(self, model_save_dir):
+        model_dir = model_save_dir.name if isinstance(model_save_dir, TemporaryDirectory) else model_save_dir
+        if model_dir is not None:
+            model_dir_path = Path(model_dir).resolve()
+            if model_dir_path.is_file():
+                model_dir_path = model_dir_path.parent
+            if model_dir_path.is_dir():
+                return model_dir_path
+
+        raise ValueError(
+            "Failed to locate local model directory for building transformers method provider. "
+            "Pass a valid local model_save_dir."
+        )
+
+    def _build_hf_method_provider(self, model_dir):
+        config = AutoConfig.from_pretrained(str(model_dir), trust_remote_code=True, local_files_only=True)
+        try:
+            from accelerate import init_empty_weights
+
+            build_ctx = init_empty_weights()
+        except Exception:
+            from contextlib import nullcontext
+
+            build_ctx = nullcontext()
+
+        with build_ctx:
+            provider = self.auto_model_class.from_config(config, trust_remote_code=True)
+
+        try:
+            provider = self._patch_hf_provider_for_ov_inference(provider)
+        except Exception as e:
+            raise ValueError(f"Failed to patch HF provider for OV inference: {e}")
+
+        return provider
+
+    def _patch_hf_provider_for_ov_inference(self, provider):
+        ov_model = self
+
+        class _OVVisionTowerProxy(torch.nn.Module):
+            def forward(self, images):
+                # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L822-L832
+                # Upstream preprocessing provides BTCHW, but the vision tower expects BCHWT,
+                # so we permute dimensions before running the visual encoder.
+                # We then keep patch tokens in [B, T*L, C] (dropping cls later) because
+                # downstream token merging/projection operates on a flattened token sequence.
+                T = images.shape[1]
+                images = images.permute(0, 2, 1, 3, 4)
+                if T == 1:
+                    pos_embeds = ov_model.img_pos_embed.detach()
+                else:
+                    pos_embeds = ov_model.pos_embed.detach()
+                image_embeds = ov_model.vision_embeddings(images, rotary_pos_emb=pos_embeds).last_hidden_state
+                image_embeds = image_embeds[:, 1:, :]
+                return torch.from_numpy(image_embeds) if isinstance(image_embeds, np.ndarray) else image_embeds
+
+        class _OVMLPProxy(torch.nn.Module):
+            # Only intercept the final MLP projection step inside mm_projector.forward().
+            # The original mm_projector's reshape and merge_tokens logic runs as-is.
+            def forward(self, x):
+                result = ov_model.vision_projection(x)
+                return torch.from_numpy(result) if isinstance(result, np.ndarray) else result
+
+        # Patch only mm_projector.mlp to route the OV vision projection inference.
+        # The rest of mm_projector.forward() (reshape, merge_tokens) runs from the original model code.
+        mm_projector = provider.model.mm_projector
+        mm_projector.mlp = _OVMLPProxy()
+
+        class _OVMMProjectorProxy:
+            def __init__(self, projector):
+                self._projector = projector
+                self.num_image_patches_per_side = getattr(projector, "num_image_patches_per_side", None)
+
+            def __call__(self, *args, **kwargs):
+                return self._projector(*args, **kwargs)
+
+        class _OVBackboneProxy(torch.nn.Module):
+            # Minimal proxy used only by prepare_inputs_labels_for_multimodal.
+            # Use @property to transparently access OV model attributes instead of copying values.
+            def __init__(self, projector_proxy):
+                super().__init__()
+                self.vision_tower = _OVVisionTowerProxy()
+                self.mm_projector = projector_proxy
+
+            @property
+            def image_newline(self):
+                return ov_model.image_newline if hasattr(ov_model, "image_newline") else None
+
+            @property
+            def frame_newline(self):
+                return ov_model.frame_newline if hasattr(ov_model, "frame_newline") else None
+
+            def get_vision_tower(self):
+                return self.vision_tower
+
+            def embed_tokens(self, input_ids):
+                return torch.from_numpy(ov_model.get_text_embeddings(input_ids.unsqueeze(0))[0])
+
+        backbone_proxy = _OVBackboneProxy(_OVMMProjectorProxy(mm_projector))
+        provider.model = backbone_proxy
+        provider.get_model = lambda: backbone_proxy
+        provider.get_vision_tower = lambda: backbone_proxy.get_vision_tower()
+
+        # Build a CPU-only execution context for prepare_inputs_labels_for_multimodal.
+        # This avoids `x.to(self.device)` turning real tensors into meta tensors.
+        class _HFPrepareContext:
+            pass
+
+        prepare_ctx = _HFPrepareContext()
+        prepare_ctx.config = provider.config
+        prepare_ctx.model = backbone_proxy
+        prepare_ctx.training = False
+        prepare_ctx.device = torch.device("cpu")
+        prepare_ctx.get_model = lambda: backbone_proxy
+        prepare_ctx.get_vision_tower = lambda: backbone_proxy.get_vision_tower()
+        prepare_ctx.encode_video_image = types.MethodType(provider.encode_video_image.__func__, prepare_ctx)
+        prepare_ctx.prepare_inputs_labels_for_multimodal = types.MethodType(
+            provider.prepare_inputs_labels_for_multimodal.__func__, prepare_ctx
+        )
+        provider._ov_prepare_ctx = prepare_ctx
+
+        # Safety guard: this helper provider is only for preprocessing, never for generation.
+        def _forbid_hf_generate(*args, **kwargs):
+            raise RuntimeError("HF generate should not be called here; OV model.generate is the only generation path.")
+
+        provider.generate = _forbid_hf_generate
+
+        return provider
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = None,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+        model_dir = self._resolve_hf_method_provider_dir(model_save_dir)
+
+        # Import position embedding utilities from the original model directory
+        # Only needs to be called once during initialization to get the pos_embed computation function
+        sys.path.insert(0, str(model_dir))
+        try:
+            import vision_tower_builder
+        finally:
+            sys.path.pop(0)
+        vision_tower_builder = sys.modules.pop("vision_tower_builder")
+        get_3d_sincos_pos_embed = vision_tower_builder.get_3d_sincos_pos_embed
+
+        num_frames = config.mm_local_num_frames
+        self.mm_num_attention_heads = config.mm_num_attention_heads
+        self.patch_size = config.patch_size
+        self.image_size = config.image_size
+        self.grid_size = (
+            num_frames,
+            self.image_size // self.patch_size,
+            self.image_size // self.patch_size,
+        )  # (T, H, W)
+        self.num_patches = self.grid_size[0] * self.grid_size[1] * self.grid_size[2]
+        self.num_img_patches = self.grid_size[1] * self.grid_size[2]
+        self.embed_dim = config.mm_hidden_size
+        self.pos_embed = torch.nn.Parameter(torch.zeros(1, self.num_patches + 1, self.embed_dim))
+        self.img_pos_embed = torch.nn.Parameter(torch.zeros(1, self.num_img_patches + 1, self.embed_dim))
+        # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L559
+        # pos_embed for video
+        pos_embed = get_3d_sincos_pos_embed(
+            self.pos_embed.shape[-1], self.grid_size[1], self.grid_size[0], cls_token=True
+        )
+        pos_embed = torch.from_numpy(pos_embed) if isinstance(pos_embed, np.ndarray) else pos_embed
+        self.pos_embed.data.copy_(pos_embed.to(dtype=self.pos_embed.dtype).unsqueeze(0))
+
+        # pos_embed for image
+        img_pos_embed = get_3d_sincos_pos_embed(self.pos_embed.shape[-1], self.grid_size[1], 1, cls_token=True)
+        img_pos_embed = torch.from_numpy(img_pos_embed) if isinstance(img_pos_embed, np.ndarray) else img_pos_embed
+        self.img_pos_embed.data.copy_(img_pos_embed.to(dtype=self.img_pos_embed.dtype).unsqueeze(0))
+
+        if "unpad" in getattr(config, "mm_patch_merge_type", ""):
+            self.image_newline = torch.nn.Parameter(torch.empty(config.hidden_size, dtype=self.dtype))
+        if (
+            "nopad" in getattr(config, "mm_patch_merge_type", "")
+            and getattr(self.config, "mm_newline_position", "nothing") != "nothing"
+        ):
+            self.frame_newline = torch.nn.Parameter(torch.empty(config.hidden_size, dtype=self.dtype))
+
+        self._hf_method_provider = self._build_hf_method_provider(model_dir=model_dir)
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if config is None:
+            raise ValueError("Config is required.")
+
+        # Import tokenizer/image utilities from the original model directory.
+        # mm_utils relies on relative imports, so load it via a synthetic package root.
+        model_ref = getattr(config, "_name_or_path", None)
+        mm_utils = _OVVideoChatFlashQwenForCausalLM._import_videochat_module("mm_utils", model_ref)
+        vision_tower_builder = _OVVideoChatFlashQwenForCausalLM._import_videochat_module(
+            "vision_tower_builder", model_ref
+        )
+        tokenizer_image_token = mm_utils.tokenizer_image_token
+        InternVideo2ImageProcessor = vision_tower_builder.InternVideo2ImageProcessor
+
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        if tokenizer is None:
+            raise ValueError("Tokenizer is required.")
+        image_sizes = []
+        frames = []
+        modalities = []
+        results = {}
+        local_num_frames = config.mm_local_num_frames
+        # use default image preprocessing parameters from config
+        # use default image_size from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L682
+        target_image_size = getattr(config, "image_size", 224)
+        target_size = (target_image_size, target_image_size) if target_image_size is not None else None
+        # use default image_mean and image_std from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L682
+        image_mean = getattr(config, "image_mean", (0.485, 0.456, 0.406))
+        image_std = getattr(config, "image_std", (0.229, 0.224, 0.225))
+
+        # Create image processor once for reuse
+        image_processor = InternVideo2ImageProcessor(size=target_size, image_mean=image_mean, image_std=image_std)
+
+        # preprocess text
+        prompt = f"<image>\n{text}" if (image is not None or video is not None) else text
+        if getattr(tokenizer, "chat_template", None) is not None:
+            messages = [{"role": "user", "content": prompt}]
+            text_prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        else:
+            text_prompt = prompt
+        input_ids = tokenizer_image_token(text_prompt, tokenizer, return_tensors="pt").unsqueeze(0)
+        results["input_ids"] = input_ids
+
+        # preprocess video
+        if video is not None:
+            if isinstance(video, np.ndarray):
+                num_frames = video.shape[0]
+                image_size = video.shape[1:3]
+                if num_frames % local_num_frames != 0:
+                    pad_frames = local_num_frames - (num_frames % local_num_frames)
+                    pad = np.repeat(video[-1:], pad_frames, axis=0)
+                    video = np.concatenate([video, pad], axis=0)
+            elif isinstance(video, list):
+                num_frames = len(video)
+                if isinstance(video[0], np.ndarray):
+                    image_size = video[0].shape[:2]
+                else:
+                    width, height = video[0].size
+                    image_size = (height, width)
+                if num_frames % local_num_frames != 0:
+                    pad_frames = local_num_frames - (num_frames % local_num_frames)
+                    video = video + [video[-1]] * pad_frames
+            else:
+                raise ValueError(f"Unsupported video type: {type(video)}")
+
+            image_sizes.append(image_size)
+            processed_images = image_processor.preprocess(video, return_tensors="pt").pixel_values
+            frames.append(processed_images)
+            modalities.append("video")
+
+        # preprocess image
+        if image is not None:
+            from PIL.Image import Image as PILImage
+
+            if isinstance(image, PILImage):
+                width, height = image.size
+                image_size = (height, width)
+            else:
+                image_size = image.shape[:2]
+            image_frame = image_processor.preprocess(image, return_tensors="pt").pixel_values
+            frames.append(image_frame)
+            image_sizes.append(image_size)
+            modalities.append("image")
+
+        if len(frames) >= 1:
+            results["images"] = frames
+            results["image_sizes"] = image_sizes
+            results["modalities"] = modalities
+
+        if tokenizer.pad_token_id is None and "qwen" in tokenizer.name_or_path.lower():
+            logger.info("Using bos token as pad token for qwen model attention mask.")
+            tokenizer.pad_token_id = tokenizer.bos_token_id
+        attention_masks = (
+            input_ids.ne(tokenizer.pad_token_id).long()
+            if tokenizer.pad_token_id is not None
+            else torch.ones_like(input_ids)
+        )
+        results["attention_mask"] = attention_masks
+
+        return results
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        modalities=None,
+        image_sizes=None,
+        **kwargs,
+    ):
+        images = pixel_values
+
+        if images is None:
+            inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
+            return inputs_embeds, attention_mask, position_ids
+
+        # Call prepare_inputs_labels_for_multimodal from the original transformers model.
+        # This method handles complex multimodal input processing including video/image encoding,
+        # token merging, and embedding preparation.
+        prepare_ctx = self._hf_method_provider._ov_prepare_ctx
+        _, position_ids, attention_mask, _, new_input_embeds, _ = prepare_ctx.prepare_inputs_labels_for_multimodal(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            past_key_values=None,  # Not used in get_multimodal_embeddings context
+            labels=None,  # Labels not needed for embedding extraction
+            images=images,
+            modalities=modalities if modalities is not None else ["image"],
+            image_sizes=image_sizes,
+        )
+        return new_input_embeds, attention_mask, position_ids
+
+    def _update_model_kwargs_for_generation(
+        self,
+        outputs: ModelOutput,
+        model_kwargs: Dict[str, Any],
+        is_encoder_decoder: bool = False,
+        num_new_tokens: int = 1,
+    ) -> Dict[str, Any]:
+        model_kwargs = super()._update_model_kwargs_for_generation(
+            outputs=outputs,
+            model_kwargs=model_kwargs,
+            is_encoder_decoder=is_encoder_decoder,
+            num_new_tokens=num_new_tokens,
+        )
+
+        # Vision inputs are only needed at the first step; later decoding uses cached states.
+        model_kwargs.pop("images", None)
+        model_kwargs.pop("image_sizes", None)
+        past_len = self.language_model._past_length
+        attn = model_kwargs.get("attention_mask")
+        # Keep mask length aligned with cached sequence length during incremental decoding.
+        if attn is not None and attn.shape[1] < past_len + 1:
+            model_kwargs["attention_mask"] = torch.ones(
+                (attn.shape[0], past_len + 1),
+                dtype=attn.dtype,
+                device=attn.device,
+            )
+
+        return model_kwargs
+
+    # Keep modalities compatibility only for VideoChat.
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        image_sizes=None,
+        modalities=None,
+        attention_mask=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            image_sizes=image_sizes,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        model_inputs["modalities"] = modalities
+        return model_inputs
+
+
 # The inheritance from Qwen3_5Model is needed to get access to methods:
 # get_placeholder_mask(), get_rope_index(), get_image_features(), get_video_features(), compute_3d_position_ids()
 #
@@ -5374,4 +5845,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_5_moe": _OVQwen3_5ForCausalLM,
     "qwen3_5_moe_text": _OVQwen3_5ForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
+    "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
 }
