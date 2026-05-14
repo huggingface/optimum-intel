@@ -334,10 +334,8 @@ def init_model_configs():
             "AutoModelForVision2Seq",
         )
 
-    # Qwen3-ASR: try importing qwen_asr package which registers model with AutoConfig/AutoModel
-    try:
-        import qwen_asr  # noqa: F401
-
+    # Qwen3-ASR is loaded via trust_remote_code; register custom classes for task lookup.
+    if is_transformers_version("==", "4.57.6"):
         TasksManager._CUSTOM_CLASSES[("pt", "qwen3_asr", "automatic-speech-recognition")] = (
             "transformers",
             "AutoModel",
@@ -346,8 +344,6 @@ def init_model_configs():
             "transformers",
             "AutoModel",
         )
-    except ImportError:
-        pass
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"

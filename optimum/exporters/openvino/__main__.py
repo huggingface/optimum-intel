@@ -101,7 +101,7 @@ def infer_task(
                 )
             except KeyError as e:
                 try:
-                    config = AutoConfig.from_pretrained(model_name_or_path)
+                    config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
                     with_past_arch_list = ["MistralForCausalLM", "Zamba2ForCausalLM"]
                     if any(arch in config.architectures for arch in with_past_arch_list):
                         task = "text-generation-with-past"
@@ -115,14 +115,35 @@ def infer_task(
                 )
 
     if library_name == "transformers":
-        config = AutoConfig.from_pretrained(
-            model_name_or_path,
-            subfolder=subfolder,
-            revision=revision,
-            cache_dir=cache_dir,
-            token=token,
-            trust_remote_code=trust_remote_code,
-        )
+        try:
+            config = AutoConfig.from_pretrained(
+                model_name_or_path,
+                subfolder=subfolder,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
+                trust_remote_code=trust_remote_code,
+            )
+        except (KeyError, ValueError) as e:
+            # Some custom model types are registered with transformers via a separate
+            # third-party package (e.g. `qwen_asr` for `qwen3_asr`). Try to import it
+            # lazily so we don't have a hard dependency at import time.
+            if "qwen3_asr" in str(e):
+                try:
+                    import qwen_asr  # noqa: F401
+
+                    config = AutoConfig.from_pretrained(
+                        model_name_or_path,
+                        subfolder=subfolder,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        token=token,
+                        trust_remote_code=trust_remote_code,
+                    )
+                except ImportError:
+                    raise e
+            else:
+                raise
         if hasattr(config, "export_model_type"):
             model_type = config.export_model_type
         else:
