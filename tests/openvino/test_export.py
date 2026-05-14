@@ -122,6 +122,9 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.57.0"):
         SUPPORTED_ARCHITECTURES.update({"hunyuan_v1_dense": OVModelForCausalLM})
 
+    if is_transformers_version(">=", "5.0.0"):
+        SUPPORTED_ARCHITECTURES.update({"glm4_moe_lite": OVModelForCausalLM})
+
     if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.update({"qwen3_next": OVModelForCausalLM})
 

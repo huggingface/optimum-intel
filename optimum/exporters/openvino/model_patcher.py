@@ -3905,6 +3905,67 @@ class MiniCPM3Patcher(OVDecoderModelPatcher):
             block.self_attn.forward = block.self_attn._orig_forward
 
 
+def glm4_moe_lite_naive_moe_forward(
+    self,
+    hidden_states: torch.Tensor,
+    top_k_index: torch.Tensor,
+    top_k_weights: torch.Tensor,
+) -> torch.Tensor:
+    """Vectorized forward for Glm4MoeLiteNaiveMoe that avoids dynamic control flow.
+
+    Replaces the original loop-over-experts implementation with batched matrix
+    multiplications, enabling stable torch.jit.trace for OpenVINO export.
+    """
+    num_tokens = hidden_states.shape[0]
+    num_experts = self.num_experts
+
+    # Build a dense routing weights matrix of shape (num_tokens, num_experts)
+    routing_weights = torch.zeros(num_tokens, num_experts, dtype=hidden_states.dtype, device=hidden_states.device)
+    routing_weights.scatter_(1, top_k_index, top_k_weights.to(hidden_states.dtype))
+
+    # Expand hidden states for all experts: (num_experts, num_tokens, hidden_dim)
+    hidden_expanded = hidden_states.unsqueeze(0).expand(num_experts, -1, -1)
+
+    # gate_up_proj: (num_experts, 2 * intermediate_dim, hidden_dim)
+    # hidden_expanded @ gate_up_proj.T => (num_experts, num_tokens, 2 * intermediate_dim)
+    gate_up = torch.bmm(hidden_expanded, self.gate_up_proj.transpose(1, 2))
+    gate, up = gate_up.chunk(2, dim=-1)
+
+    # Apply activation and element-wise multiply: (num_experts, num_tokens, intermediate_dim)
+    activated = self.act_fn(gate) * up
+
+    # down_proj: (num_experts, hidden_dim, intermediate_dim)
+    # activated @ down_proj.T => (num_experts, num_tokens, hidden_dim)
+    expert_out = torch.bmm(activated, self.down_proj.transpose(1, 2))
+
+    # Weight each expert's output by the routing weight and sum over experts
+    # routing_weights.T: (num_experts, num_tokens) -> unsqueeze -> (num_experts, num_tokens, 1)
+    weighted_out = expert_out * routing_weights.T.unsqueeze(-1)
+    return weighted_out.sum(dim=0)
+
+
+class Glm4MoeLitePatcher(OVDecoderModelPatcher):
+    """Model patcher for Glm4MoeLiteForCausalLM.
+
+    Patches the ``Glm4MoeLiteNaiveMoe`` forward method with a vectorized
+    (batched matrix-multiplication) implementation to ensure stable graph
+    generation during torch.jit.trace.
+    """
+
+    def __enter__(self):
+        super().__enter__()
+        for block in self._model.model.layers:
+            if hasattr(block.mlp, "experts"):
+                block.mlp.experts._orig_forward = block.mlp.experts.forward
+                block.mlp.experts.forward = types.MethodType(glm4_moe_lite_naive_moe_forward, block.mlp.experts)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for block in self._model.model.layers:
+            if hasattr(block.mlp, "experts") and hasattr(block.mlp.experts, "_orig_forward"):
+                block.mlp.experts.forward = block.mlp.experts._orig_forward
+
+
 class DeepseekPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
