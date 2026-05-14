@@ -1183,13 +1183,15 @@ class OVModelTextEncoder(OVPipelinePart):
             model_outputs["pooler_output"] = torch.from_numpy(ov_outputs[1])
         if self.hidden_states_output_names and "last_hidden_state" not in model_outputs:
             model_outputs["last_hidden_state"] = torch.from_numpy(ov_outputs[self.hidden_states_output_names[-1]])
-        if (
-            self.hidden_states_output_names
-            and output_hidden_states
-            or getattr(self.config, "output_hidden_states", False)
+        if self.hidden_states_output_names and (
+            output_hidden_states or getattr(self.config, "output_hidden_states", False)
         ):
             hidden_states = [torch.from_numpy(ov_outputs[out_name]) for out_name in self.hidden_states_output_names]
             model_outputs["hidden_states"] = hidden_states
+        elif (output_hidden_states or getattr(self.config, "output_hidden_states", False)) and "last_hidden_state" in model_outputs:
+            # For models like LTX2 where config.output_hidden_states is True but the exported model
+            # only has last_hidden_state, provide it as hidden_states for compatibility
+            model_outputs["hidden_states"] = (model_outputs["last_hidden_state"],)
 
         if return_dict:
             return model_outputs
@@ -1333,6 +1335,7 @@ class OVModelTransformerLTX2(OVPipelinePart):
         audio_coords: Optional[torch.Tensor] = None,
         attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
+        **kwargs,
     ):
         self.compile()
 
@@ -1385,18 +1388,18 @@ class OVModelConnectors(OVPipelinePart):
         text_encoder_hidden_states: torch.FloatTensor,
         attention_mask: torch.FloatTensor,
         additive_mask: bool = False,
+        **kwargs,
     ):
         self.compile()
 
-        # The OV model was traced with additive_mask=False, so it internally converts
-        # binary mask (1=real, 0=padding) to additive form. If the caller already provides
-        # an additive mask, convert it back to binary to avoid double-conversion.
+        # The OV model was traced with a 2D binary mask (1=real, 0=padding).
+        # If the caller provides an additive mask, convert it back to binary.
         if additive_mask:
             attention_mask = (attention_mask >= -0.5).to(attention_mask.dtype)
 
-        # The exported model expects 4D attention_mask (B, 1, 1, seq_len)
-        if attention_mask.ndim == 2:
-            attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
+        # The exported model expects 2D attention_mask (B, seq_len)
+        if attention_mask.ndim == 4:
+            attention_mask = attention_mask.squeeze(1).squeeze(1)
 
         model_inputs = {
             "text_encoder_hidden_states": text_encoder_hidden_states,
@@ -1912,6 +1915,9 @@ class OVLTX2Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTX2Pip
             if text_encoder is not None
             else None
         )
+        # LTX2 requires text encoder to output hidden states for use in connectors
+        if self.text_encoder is not None:
+            self.text_encoder.config.output_hidden_states = True
         self.connectors = (
             OVModelConnectors(connectors, self, DIFFUSION_MODEL_CONNECTORS_SUBFOLDER)
             if connectors is not None

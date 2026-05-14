@@ -3136,7 +3136,9 @@ class LTX2ConnectorsDummyInputGenerator(DummyVisionInputGenerator):
         if input_name == "text_encoder_hidden_states":
             return self.random_float_tensor([self.batch_size, self.sequence_length, self.input_channels])
         if input_name == "attention_mask":
-            return self.random_float_tensor([self.batch_size, 1, 1, self.sequence_length])
+            # Binary 2D mask [batch, seq_len] matching LTX2TextConnectors.forward signature
+            import torch
+            return torch.ones(self.batch_size, self.sequence_length, dtype=torch.float32)
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
@@ -3149,7 +3151,7 @@ class LTX2ConnectorsOpenVINOConfig(VaeEncoderOnnxConfig):
     def inputs(self) -> Dict[str, Dict[int, str]]:
         return {
             "text_encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
-            "attention_mask": {0: "batch_size", 3: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
         }
 
     @property

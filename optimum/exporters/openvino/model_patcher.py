@@ -9566,9 +9566,91 @@ def _ltx2_connector_forward_patched(self, hidden_states, attention_mask=None, at
     return hidden_states, attention_mask
 
 
+def _ltx2_connectors_top_level_forward_patched(self, text_encoder_hidden_states, attention_mask, padding_side="left", scale_factor=8):
+    """
+    Patched top-level forward for LTX2TextConnectors that makes per_layer_masked_mean_norm
+    traceable by avoiding data-dependent indexing.
+    """
+    import torch
+
+    if text_encoder_hidden_states.ndim == 3:
+        text_encoder_hidden_states = text_encoder_hidden_states.unflatten(2, (self.config.caption_channels, -1))
+
+    if self.config.per_modality_projections:
+        from diffusers.pipelines.ltx2.connectors import per_token_rms_norm
+        import math
+
+        norm_text_encoder_hidden_states = per_token_rms_norm(text_encoder_hidden_states)
+        norm_text_encoder_hidden_states = norm_text_encoder_hidden_states.flatten(2, 3)
+        bool_mask = attention_mask.bool().unsqueeze(-1)
+        norm_text_encoder_hidden_states = torch.where(
+            bool_mask, norm_text_encoder_hidden_states, torch.zeros_like(norm_text_encoder_hidden_states)
+        )
+        video_scale_factor = math.sqrt(self.config.video_hidden_dim / self.config.caption_channels)
+        video_norm_text_emb = norm_text_encoder_hidden_states * video_scale_factor
+        audio_scale_factor = math.sqrt(self.config.audio_hidden_dim / self.config.caption_channels)
+        audio_norm_text_emb = norm_text_encoder_hidden_states * audio_scale_factor
+        video_text_emb_proj = self.video_text_proj_in(video_norm_text_emb)
+        audio_text_emb_proj = self.audio_text_proj_in(audio_norm_text_emb)
+    else:
+        # Traceable version of per_layer_masked_mean_norm
+        # text_encoder_hidden_states: [batch, seq, hidden_dim, num_layers]
+        # attention_mask: [batch, seq] binary (1=valid, 0=pad)
+        eps = 1e-6
+        batch_size, seq_len, hidden_dim, num_layers = text_encoder_hidden_states.shape
+        original_dtype = text_encoder_hidden_states.dtype
+
+        # Create mask [batch, seq, 1, 1] from binary attention_mask
+        mask = attention_mask[:, :, None, None].bool()
+
+        # Compute masked mean
+        masked_text_hidden_states = text_encoder_hidden_states.masked_fill(~mask, 0.0)
+        num_valid_positions = (attention_mask.sum(dim=-1) * hidden_dim).view(batch_size, 1, 1, 1)
+        masked_mean = masked_text_hidden_states.sum(dim=(1, 2), keepdim=True) / (num_valid_positions + eps)
+
+        # Compute min/max
+        x_min = text_encoder_hidden_states.masked_fill(~mask, float("inf")).amin(dim=(1, 2), keepdim=True)
+        x_max = text_encoder_hidden_states.masked_fill(~mask, float("-inf")).amax(dim=(1, 2), keepdim=True)
+
+        # Normalize
+        normalized_hidden_states = (text_encoder_hidden_states - masked_mean) / (x_max - x_min + eps)
+        normalized_hidden_states = normalized_hidden_states * scale_factor
+
+        # Pack to 3D
+        normalized_hidden_states = normalized_hidden_states.flatten(2)
+        mask_flat = mask.squeeze(-1).expand(-1, -1, hidden_dim * num_layers)
+        normalized_hidden_states = normalized_hidden_states.masked_fill(~mask_flat, 0.0)
+        norm_text_encoder_hidden_states = normalized_hidden_states.to(dtype=original_dtype)
+
+        text_emb_proj = self.text_proj_in(norm_text_encoder_hidden_states)
+        video_text_emb_proj = text_emb_proj
+        audio_text_emb_proj = text_emb_proj
+
+    # Convert to additive attention mask for sub-connectors
+    text_dtype = video_text_emb_proj.dtype
+    add_attn_mask = (attention_mask.to(torch.int64) - 1).to(text_dtype)
+    add_attn_mask = add_attn_mask.reshape(attention_mask.shape[0], 1, 1, attention_mask.shape[-1])
+    add_attn_mask = add_attn_mask * torch.finfo(text_dtype).max
+
+    video_text_embedding, video_attn_mask = self.video_connector(video_text_emb_proj, add_attn_mask)
+
+    # Convert video attn mask to binary
+    binary_attn_mask = (video_attn_mask < 1e-6).to(torch.int64)
+    binary_attn_mask = binary_attn_mask.reshape(video_text_embedding.shape[0], video_text_embedding.shape[1], 1)
+    video_text_embedding = video_text_embedding * binary_attn_mask
+
+    audio_text_embedding, _ = self.audio_connector(audio_text_emb_proj, add_attn_mask)
+
+    return video_text_embedding, audio_text_embedding, binary_attn_mask.squeeze(-1)
+
+
 class LTX2ConnectorsPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
+
+        # Patch the top-level forward of LTX2TextConnectors
+        self._model._orig_forward = self._model.forward
+        self._model.forward = types.MethodType(_ltx2_connectors_top_level_forward_patched, self._model)
 
         # Patch both video_connector and audio_connector
         for connector_name in ["video_connector", "audio_connector"]:
@@ -9579,6 +9661,10 @@ class LTX2ConnectorsPatcher(ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+
+        # Restore top-level forward
+        if hasattr(self._model, "_orig_forward"):
+            self._model.forward = self._model._orig_forward
 
         for connector_name in ["video_connector", "audio_connector"]:
             connector = getattr(self._model, connector_name, None)
