@@ -284,6 +284,7 @@ MODEL_NAMES = {
     "phimoe": "optimum-intel-internal-testing/phi-3.5-moe-tiny-random",
     "phi3_v": "optimum-intel-internal-testing/tiny-random-phi3-vision",
     "phi4mm": "optimum-intel-internal-testing/tiny-random-phi-4-multimodal",
+    "phi4flash": "microsoft/Phi-4-mini-flash-reasoning",
     "poolformer": "optimum-intel-internal-testing/tiny-random-PoolFormerModel",
     "qwen": "optimum-intel-internal-testing/tiny-random-qwen",
     "qwen2": "optimum-intel-internal-testing/tiny-dummy-qwen2",

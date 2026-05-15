@@ -7623,6 +7623,32 @@ class Zamba2ModelPatcher(ModelPatcher):
             mamba_layer.forward = mamba_layer._orig_forward
 
 
+class Phi4FlashModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        if getattr(self._model.config, "_attn_implementation", None) == "flash_attention_2":
+            self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+            self._model.config._attn_implementation = "eager"
+
+        model = getattr(self._model, "model", None)
+        if model is not None and getattr(model, "_attn_implementation", None) == "flash_attention_2":
+            model._orig_attn_implementation = model._attn_implementation
+            model._attn_implementation = "eager"
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        model = getattr(self._model, "model", None)
+        if model is not None and hasattr(model, "_orig_attn_implementation"):
+            model._attn_implementation = model._orig_attn_implementation
+            del model._orig_attn_implementation
+
+        if hasattr(self._model.config, "_orig_attn_implementation"):
+            self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+            del self._model.config._orig_attn_implementation
+
+
 # Unified torch representation of the CausalConv1d operation
 # This representation is used across all models with CausalConv1d.
 # The resulting OV graph for this function can be fused into the internal CausalConv1d operation.
