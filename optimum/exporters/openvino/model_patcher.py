@@ -7854,18 +7854,54 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
             conv_layer.slow_forward = conv_layer._orig_forward
 
 
+def gpt_oss_forward_transformers_v5(
+    self,
+    hidden_states: torch.Tensor,
+    top_k_index: torch.Tensor,
+    top_k_weights: torch.Tensor,
+) -> torch.Tensor:
+    routing_weights = top_k_weights.to(hidden_states.dtype)
+    num_tokens, hidden_dim = hidden_states.shape
+    num_experts = self.num_experts
+
+    dense_routing_weights = torch.zeros(
+        num_tokens,
+        num_experts,
+        device=hidden_states.device,
+        dtype=hidden_states.dtype,
+    )
+    dense_routing_weights.scatter_(dim=1, index=top_k_index, src=routing_weights)
+    hidden_states_expanded = hidden_states.repeat(num_experts, 1)  # (num_experts * num_tokens, hidden_dim)
+    hidden_states_expanded = hidden_states_expanded.view(
+        num_experts, -1, hidden_dim
+    )  # (num_experts, num_tokens, hidden_dim)
+
+    gate_up = torch.bmm(hidden_states_expanded, self.gate_up_proj) + self.gate_up_proj_bias[..., None, :]
+    gate, up = gate_up[..., ::2], gate_up[..., 1::2]
+    gate = gate.clamp(min=None, max=self.limit)
+    up = up.clamp(min=-self.limit, max=self.limit)
+    glu = gate * torch.sigmoid(gate * self.alpha)
+    next_states = torch.bmm(((up + 1) * glu), self.down_proj)
+    next_states = next_states + self.down_proj_bias[..., None, :]
+    next_states = next_states.view(num_experts, num_tokens, -1, self.hidden_size)
+    next_states = next_states * dense_routing_weights.transpose(0, 1).view(num_experts, num_tokens, -1)[..., None]
+    next_states = next_states.sum(dim=0)
+    return next_states
+
+
 class GptOssModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "5"):
+        if is_transformers_version(">=", "4.55.0"):
             from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
 
             self.original_gpt_oss_forward = GptOssExperts.forward
-            GptOssExperts.forward = gpt_oss_forward
 
-        if is_transformers_version(">=", "5"):
-            self._model.set_experts_implementation("batched_mm")
+            if is_transformers_version("<", "5"):
+                GptOssExperts.forward = gpt_oss_forward
+            else:
+                GptOssExperts.forward = gpt_oss_forward_transformers_v5
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -9053,12 +9089,12 @@ def lfm2_moe_experts_forward(
         num_experts, -1, hidden_dim
     )  # (num_experts, num_tokens, hidden_dim)
 
-    gate_proj, up_proj = self.gate_up_proj.chunk(2, dim=-2)
+    gate_proj, up_proj = self.gate_up_proj.transpose(1, 2).chunk(2, dim=-2)
 
     gate = torch.bmm(hidden_states_expanded, gate_proj.transpose(1, 2))
     up = torch.bmm(hidden_states_expanded, up_proj.transpose(1, 2))
-    next_states = self.act_fn(gate) * up
-    next_states = torch.bmm(next_states, self.down_proj.transpose(1, 2))
+    next_states = torch.sigmoid(gate) * up
+    next_states = torch.bmm(next_states, self.down_proj.transpose(1, 2).transpose(1, 2))
 
     next_states = next_states.view(num_experts, num_tokens, hidden_dim)
     next_states = next_states * dense_routing_weights.transpose(0, 1).view(num_experts, num_tokens)[..., None]
