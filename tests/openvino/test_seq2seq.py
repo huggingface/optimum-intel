@@ -444,6 +444,102 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         gc.collect()
 
 
+class Qwen3ASRTest(unittest.TestCase):
+    """
+    Test Qwen3ASR model type.
+    Compares OpenVINO model output to original PyTorch transformers model output.
+    """
+
+    SUPPORTED_ARCHITECTURES = ("qwen3_asr",)
+
+    def _generate_audio_data(self):
+        np.random.seed(SEED)
+        sample_rate = 16000
+        t = np.linspace(0, 1.0, sample_rate, endpoint=False)
+        audio_data = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+        return audio_data, sample_rate
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.skipif(
+        is_transformers_version("!=", "4.57.6"),
+        reason="requires transformers==4.57.6.",
+    )
+    def test_compare_to_transformers(self, model_arch):
+        from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
+
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+
+        # Load processor
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+
+        # Prepare audio input
+        audio_data, sample_rate = self._generate_audio_data()
+        text_prompt = processor.apply_chat_template(
+            [
+                {"role": "system", "content": ""},
+                {"role": "user", "content": [{"type": "audio", "audio": ""}]},
+            ],
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+        inputs = processor(
+            text=text_prompt,
+            audio=audio_data,
+            sampling_rate=sample_rate,
+            return_tensors="pt",
+        )
+
+        # Load and infer with PyTorch model
+        transformers_model = Qwen3ASRForConditionalGeneration.from_pretrained(model_id, trust_remote_code=True)
+        transformers_model.eval()
+
+        gen_kwargs = {
+            "max_new_tokens": 10,
+        }
+
+        with torch.no_grad():
+            pt_generated_ids = transformers_model.generate(
+                input_ids=inputs["input_ids"],
+                input_features=inputs["input_features"],
+                feature_attention_mask=inputs["feature_attention_mask"],
+                attention_mask=inputs["attention_mask"],
+                **gen_kwargs,
+            )
+        if hasattr(pt_generated_ids, "sequences"):
+            pt_generated_ids = pt_generated_ids.sequences
+
+        # Load and infer with OpenVINO model
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+
+        ov_generated_ids = ov_model.generate(
+            input_features=inputs["input_features"],
+            attention_mask=inputs.get("feature_attention_mask"),
+            decoder_input_ids=inputs["input_ids"],
+            **gen_kwargs,
+        )
+        if hasattr(ov_generated_ids, "sequences"):
+            ov_generated_ids = ov_generated_ids.sequences
+
+        # Compare generated token sequences
+        self.assertTrue(
+            torch.equal(pt_generated_ids, ov_generated_ids),
+            f"Token mismatch:\n  PyTorch:  {pt_generated_ids[0].tolist()}\n  OpenVINO: {ov_generated_ids[0].tolist()}",
+        )
+
+        # Compare decoded text
+        prompt_len = inputs["input_ids"].shape[1]
+        pt_text = processor.batch_decode(pt_generated_ids[:, prompt_len:], skip_special_tokens=True)[0]
+        ov_text = processor.batch_decode(ov_generated_ids[:, prompt_len:], skip_special_tokens=True)[0]
+        self.assertEqual(pt_text, ov_text)
+
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+
 class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ["vision-encoder-decoder", "trocr", "donut"]
     # GOT-OCR2 models shouldn't be exported using the task image-to-text (currently equivalent to exporting the model using image-text-to-text) and will be deprecated v1.29
