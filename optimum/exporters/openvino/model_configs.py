@@ -535,6 +535,13 @@ class Qwen3VLTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         return common_inputs
 
 
+@register_in_tasks_manager("qwen3_vl_text", *["feature-extraction"], library_name="transformers")
+class Qwen3VLTextFeatureExtractionOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
+
+
 @register_in_tasks_manager(
     "qwen3_moe",
     *["text-generation", "text-generation-with-past", "feature-extraction", "feature-extraction-with-past"],
@@ -1950,6 +1957,21 @@ def get_vlm_internal_text_generation_config(model_type, model_config, int_dtype,
     return export_config
 
 
+def get_vlm_internal_text_feature_config(model_type, model_config, int_dtype, float_dtype):
+    if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
+        raise ValueError(
+            f"Unsupported language model type provided `{model_type}`. Please define custom export config"
+        )
+
+    if "feature-extraction" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
+        raise ValueError(
+            f"Export config for feature extraction for `{model_type}` is not available. Please define custom export config"
+        )
+
+    export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]["feature-extraction"]
+    return export_config_class(model_config, task="feature-extraction", int_dtype=int_dtype, float_dtype=float_dtype)
+
+
 def get_vlm_text_embeddings_config(model_type, model_config, int_dtype, float_dtype):
     internal_export_config = get_vlm_internal_text_generation_config(model_type, model_config, int_dtype, float_dtype)
     InputEmbedOpenVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
@@ -1959,6 +1981,26 @@ def get_vlm_text_embeddings_config(model_type, model_config, int_dtype, float_dt
         int_dtype=int_dtype,
         float_dtype=float_dtype,
     )
+    return export_config
+
+
+def get_vlm_text_feature_config(
+    model_type,
+    model_config,
+    int_dtype,
+    float_dtype,
+    model_patcher=None,
+    dummy_input_generator=None,
+    inputs_update=None,
+):
+    internal_export_config = get_vlm_internal_text_feature_config(model_type, model_config, int_dtype, float_dtype)
+    export_config = LMInputEmbedsConfigHelper(
+        internal_export_config,
+        patcher_cls=model_patcher,
+        dummy_input_generator=dummy_input_generator,
+        inputs_update=inputs_update,
+    )
+    export_config._normalized_config = internal_export_config._normalized_config
     return export_config
 
 
@@ -3900,11 +3942,10 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return vision_emb_merger
 
         if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
-            text_embedding = (
-                model.model.embed_tokens
-                if hasattr(model.model, "embed_tokens")
-                else _get_model_attribute(model, "language_model").embed_tokens
-            )
+            if hasattr(model, "model") and hasattr(model.model, "embed_tokens"):
+                text_embedding = model.model.embed_tokens
+            else:
+                text_embedding = _get_model_attribute(model, "language_model").embed_tokens
             text_embedding.config = model.config
             return text_embedding
 
@@ -4010,7 +4051,7 @@ class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
 
 @register_in_tasks_manager(
     "qwen3_vl",
-    *["image-text-to-text"],
+    *["feature-extraction", "image-text-to-text"],
     library_name="transformers",
 )
 class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
@@ -4040,8 +4081,13 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self._normalized_config.use_embed_dim = True
 
-    @staticmethod
-    def get_model_for_behavior(model, behavior: Union[str, QwenVLConfigBehavior]):
+    def get_model_for_behavior(self, model, behavior: Union[str, QwenVLConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
+
+        if behavior == QwenVLConfigBehavior.LANGUAGE and self.task == "feature-extraction":
+            return _get_model_attribute(model, "language_model")
+
         if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
             vision_emb_pos = _get_model_attribute(model, "visual").pos_embed
             vision_emb_pos.config = model.config.vision_config
@@ -4068,15 +4114,25 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
             )
 
         if behavior == QwenVLConfigBehavior.LANGUAGE:
-            config = get_vlm_text_generation_config(
-                "qwen3_vl_text",
-                self._orig_config.text_config,
-                self.int_dtype,
-                self.float_dtype,
-                model_patcher=Qwen3VLLanguageModelPatcher,
-                dummy_input_generator=DummyQwen2VLLMInputGenerator,
-                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
-            )
+            if self.task == "feature-extraction":
+                config = get_vlm_text_feature_config(
+                    "qwen3_vl_text",
+                    self._orig_config.text_config,
+                    self.int_dtype,
+                    self.float_dtype,
+                    dummy_input_generator=DummyQwen2VLLMInputGenerator,
+                    inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                )
+            else:
+                config = get_vlm_text_generation_config(
+                    "qwen3_vl_text",
+                    self._orig_config.text_config,
+                    self.int_dtype,
+                    self.float_dtype,
+                    model_patcher=Qwen3VLLanguageModelPatcher,
+                    dummy_input_generator=DummyQwen2VLLMInputGenerator,
+                    inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                )
             config._normalized_config.deepstack_visual_indexes = (
                 self._orig_config.vision_config.deepstack_visual_indexes
             )

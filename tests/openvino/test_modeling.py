@@ -1108,6 +1108,33 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
             self.assertIn("Please use `OVSentenceTransformer`", str(context.exception))
 
 
+@unittest.skipIf(is_transformers_version("<", "4.57.0"), reason="Qwen3-VL requires transformers >= 4.57.0")
+class OVQwen3VLFeatureExtractionIntegrationTest(unittest.TestCase):
+    def test_compare_to_transformers_text_only(self):
+        model_id = MODEL_NAMES["qwen3_vl"]
+        set_seed(SEED)
+        ov_model = OVModelForFeatureExtraction.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        transformers_model = AutoModel.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens)
+
+        ov_outputs = ov_model(**tokens)
+        self.assertIn("last_hidden_state", ov_outputs)
+        self.assertTrue(
+            torch.allclose(torch.Tensor(ov_outputs.last_hidden_state), transformers_outputs.last_hidden_state, atol=1e-4)
+        )
+
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "albert",
