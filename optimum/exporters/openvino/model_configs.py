@@ -450,7 +450,6 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
             common_inputs = super().inputs
         return common_inputs
 
-
 class DummyQwen3VLLMInputGenerator(DummyTextInputGenerator):
     SUPPORTED_INPUT_NAMES = (
         "input_ids",
@@ -2479,9 +2478,16 @@ class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
     ):
         self.task = task
         self.batch_size = batch_size
-        self.pooled_projection_dim = normalized_config.config.pooled_projection_dim
+        config = normalized_config.config
+        pooled_projection_dim = getattr(config, "pooled_projection_dim", None)
+        if pooled_projection_dim is None and hasattr(config, "get"):
+            pooled_projection_dim = config.get("pooled_projection_dim", None)
+
+        self.pooled_projection_dim = pooled_projection_dim
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if self.pooled_projection_dim is None:
+            raise ValueError("`pooled_projection_dim` is required to generate `pooled_projections` input.")
         shape = [self.batch_size, self.pooled_projection_dim]
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
@@ -2617,6 +2623,34 @@ class Gemma2TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
             "attention_mask": {0: "batch_size", 1: "sequence_length"},
         }
 
+@register_in_tasks_manager("qwen3-text-encoder", *["feature-extraction"], library_name="diffusers")
+class Qwen3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        common_outputs = {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
+
+        num_layers = getattr(self._normalized_config, "num_layers", None)
+        if num_layers is None:
+            num_layers = getattr(self._normalized_config, "num_hidden_layers", 0)
+
+        for i in range(int(num_layers) + 1):
+            common_outputs[f"hidden_states.{i}"] = {0: "batch_size", 1: "sequence_length"}
+
+        return common_outputs
+
+    @property
+    def values_override(self) -> Optional[Dict[str, Any]]:
+        values = super().values_override or {}
+        values.update({"output_hidden_states": True, "return_dict": True, "use_cache": False})
+        return values
+
 
 class DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
     SUPPORTED_INPUT_NAMES = (
@@ -2727,6 +2761,27 @@ class DcaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
         }
 
 
+def _get_flux_ids_dim(config) -> int:
+    for attr_name in ("axes_dims_rope", "axes_dim", "axes_dims"):
+        value = getattr(config, attr_name, None)
+        if value is not None:
+            if isinstance(value, (list, tuple)):
+                return len(value)
+            if isinstance(value, int):
+                return value
+
+    if hasattr(config, "get"):
+        for key in ("axes_dims_rope", "axes_dim", "axes_dims"):
+            value = config.get(key, None)
+            if value is not None:
+                if isinstance(value, (list, tuple)):
+                    return len(value)
+                if isinstance(value, int):
+                    return value
+
+    return 3
+
+
 class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = (
         "pixel_values",
@@ -2745,12 +2800,12 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
         num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
         width: int = DEFAULT_DUMMY_SHAPES["width"] // 4,
         height: int = DEFAULT_DUMMY_SHAPES["height"] // 4,
-        # Reduce img shape by 4 for FLUX to reduce memory usage on conversion
         **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
         if getattr(normalized_config, "in_channels", None):
             self.num_channels = normalized_config.in_channels // 4
+        self.ids_dim = _get_flux_ids_dim(normalized_config.config)
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name in ["hidden_states", "sample"]:
@@ -2761,9 +2816,9 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
             img_ids_width = self.width // 2
             return self.random_int_tensor(
                 (
-                    [self.batch_size, img_ids_height * img_ids_width, 3]
+                    [self.batch_size, img_ids_height * img_ids_width, self.ids_dim]
                     if is_diffusers_version("<", "0.31.0")
-                    else [img_ids_height * img_ids_width, 3]
+                    else [img_ids_height * img_ids_width, self.ids_dim]
                 ),
                 min_value=0,
                 max_value=min(img_ids_height, img_ids_width),
@@ -2783,14 +2838,35 @@ class DummyFluxTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
         "txt_ids",
     )
 
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+            **kwargs,
+        )
+        self.ids_dim = _get_flux_ids_dim(normalized_config.config)
+
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "txt_ids":
             import torch
 
             shape = (
-                [self.batch_size, self.sequence_length, 3]
+                [self.batch_size, self.sequence_length, self.ids_dim]
                 if is_diffusers_version("<", "0.31.0")
-                else [self.sequence_length, 3]
+                else [self.sequence_length, self.ids_dim]
             )
             dtype = DTYPE_MAPPER.pt(float_dtype)
             return torch.full(shape, 0, dtype=dtype)
@@ -2812,6 +2888,15 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
     def inputs(self):
         common_inputs = super().inputs
         common_inputs.pop("sample", None)
+
+        config = self._normalized_config.config
+        pooled_projection_dim = getattr(config, "pooled_projection_dim", None)
+        if pooled_projection_dim is None and hasattr(config, "get"):
+            pooled_projection_dim = config.get("pooled_projection_dim", None)
+
+        if pooled_projection_dim is None:
+            common_inputs.pop("pooled_projections", None)
+
         common_inputs["hidden_states"] = {0: "batch_size", 1: "packed_height_width"}
         common_inputs["txt_ids"] = (
             {0: "batch_size", 1: "sequence_length"} if is_diffusers_version("<", "0.31.0") else {0: "sequence_length"}
