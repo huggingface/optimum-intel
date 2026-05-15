@@ -9089,12 +9089,12 @@ def lfm2_moe_experts_forward(
         num_experts, -1, hidden_dim
     )  # (num_experts, num_tokens, hidden_dim)
 
-    gate_proj, up_proj = self.gate_up_proj.transpose(1, 2).chunk(2, dim=-2)
+    gate_proj, up_proj = self.gate_up_proj.chunk(2, dim=-2)
 
     gate = torch.bmm(hidden_states_expanded, gate_proj.transpose(1, 2))
     up = torch.bmm(hidden_states_expanded, up_proj.transpose(1, 2))
-    next_states = torch.sigmoid(gate) * up
-    next_states = torch.bmm(next_states, self.down_proj.transpose(1, 2).transpose(1, 2))
+    next_states = self.act_fn(gate) * up
+    next_states = torch.bmm(next_states, self.down_proj.transpose(1, 2)
 
     next_states = next_states.view(num_experts, num_tokens, hidden_dim)
     next_states = next_states * dense_routing_weights.transpose(0, 1).view(num_experts, num_tokens)[..., None]
