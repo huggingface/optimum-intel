@@ -604,6 +604,22 @@ class MiniCPM3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     _MODEL_PATCHER = MiniCPM3Patcher
 
 
+@register_in_tasks_manager(
+    "smollm3",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class SmolLM3OpenVINOConfig(LlamaOnnxConfig):
+    MIN_TRANSFORMERS_VERSION = "4.53.0"
+    _MODEL_PATCHER = OVDecoderModelPatcher
+
+
 @register_in_tasks_manager("stablelm", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class StableLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
