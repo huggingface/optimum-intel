@@ -133,7 +133,6 @@ from optimum.utils.normalized_config import (
 from ...intel.utils.import_utils import (
     is_diffusers_available,
     is_diffusers_version,
-    is_openvino_version,
     is_transformers_version,
 )
 from .model_patcher import (
@@ -250,11 +249,12 @@ logger = logging.getLogger(__name__)
 
 def _warn_potential_accuracy_issue_ov_2026_1(model_type: str, min_transformers_version: Optional[str] = None):
     # Fix CVS-185350: OpenVINO 2026.1.0 inference results mismatch
-    if not is_openvino_version(">=", "2026.1.0"):
-        return
-    if min_transformers_version is not None and not is_transformers_version(">=", min_transformers_version):
-        return
-    logger.warning(f"Model type '{model_type}' may have potential accuracy issues with OpenVINO >= 2026.1.0.")
+    # if not is_openvino_version(">=", "2026.1.0"):
+    #    return
+    # if min_transformers_version is not None and not is_transformers_version(">=", min_transformers_version):
+    #    return
+    # logger.warning(f"Model type '{model_type}' may have potential accuracy issues with OpenVINO >= 2026.1.0.")
+    return
 
 
 if TYPE_CHECKING:
