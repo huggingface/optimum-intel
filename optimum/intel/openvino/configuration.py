@@ -475,7 +475,8 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "lm_model": {
                 "bits": 4,
                 "sym": False,
-                "group_size": 128,
+                "backup_precision": "int8_sym",
+                "group_size": 64,
             },
             "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
             "vision_embeddings_merger_model": {"bits": 8, "sym": True, "weight_only": True},
@@ -486,6 +487,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "lm_model": {
                 "bits": 4,
                 "sym": False,
+                "backup_precision": "int8_sym",
                 "group_size": 64,
             },
             "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
@@ -631,11 +633,6 @@ _DEFAULT_IGNORED_SCOPE_CONFIGS = {
     "google/gemma-4-26B-A4B": {
         "lm_model": {
             "patterns": [".*router.*"],
-        },
-    },
-    "Qwen/Qwen3.5-35B-A3B": {
-        "lm_model": {
-            "patterns": [".*shared_expert.*", ".*attn.*"],
         },
     },
 }
