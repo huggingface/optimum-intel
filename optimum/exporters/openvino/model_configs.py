@@ -21,7 +21,12 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import torch
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
-from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
+from optimum.exporters.onnx.config import (
+    AudioToTextOnnxConfig,
+    OnnxConfig,
+    TextDecoderOnnxConfig,
+    TextDecoderWithPositionIdsOnnxConfig,
+)
 from optimum.exporters.onnx.model_configs import (
     AlbertOnnxConfig,
     ASTOnnxConfig,
@@ -113,6 +118,7 @@ from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
     DTYPE_MAPPER,
+    DummyAudioInputGenerator,
     DummyInputGenerator,
     DummyPastKeyValuesGenerator,
     DummySeq2SeqDecoderTextInputGenerator,
@@ -126,6 +132,7 @@ from optimum.utils.input_generators import (
 )
 from optimum.utils.normalized_config import (
     NormalizedConfig,
+    NormalizedSeq2SeqConfig,
     NormalizedTextConfig,
     NormalizedVisionConfig,
 )
@@ -171,6 +178,7 @@ from .model_patcher import (
     InternVL2ChatLangModelPatcher,
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
+    KokoroModelPatcher,
     Lfm2ModelPatcher,
     Lfm2MoeModelPatcher,
     Llama4ImageEmbeddingsModelPatcher,
@@ -204,12 +212,17 @@ from .model_patcher import (
     Qwen2MoEPatcher,
     Qwen2VLLanguageModelPatcher,
     Qwen2VLVisionEmbMergerPatcher,
+    Qwen3_5ModelPatcher,
+    Qwen3_5MoeModelPatcher,
+    Qwen3_5VisionEmbMergerPatcher,
+    Qwen3ASRModelPatcher,
     Qwen3MoeModelPatcher,
     Qwen3NextModelPatcher,
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
     QwenModelPatcher,
     SanaTextEncoderModelPatcher,
+    VideoChatFlashQwenVisionEmbeddingModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
     _get_model_attribute,
@@ -259,6 +272,21 @@ if TYPE_CHECKING:
 def init_model_configs():
     if "open_clip" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
         TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["open_clip"] = {}
+    if "kokoro" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
+        TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["kokoro"] = {}
+    if "kokoro" not in TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP:
+        from optimum.intel.utils.modeling_utils import _KokoroForTextToSpeech
+
+        try:
+            import kokoro as _kokoro_module
+
+            if not hasattr(_kokoro_module, "_KokoroForTextToSpeech"):
+                _kokoro_module._KokoroForTextToSpeech = _KokoroForTextToSpeech
+            TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP["kokoro"] = {
+                "text-to-audio": "_KokoroForTextToSpeech",
+            }
+        except ImportError:
+            pass
 
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "image-text-to-text")] = ("transformers", "AutoModelForCausalLM")
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "automatic-speech-recognition")] = (
@@ -304,6 +332,17 @@ def init_model_configs():
         TasksManager._CUSTOM_CLASSES[("pt", "llava_next_video", "image-text-to-text")] = (
             "transformers",
             "AutoModelForVision2Seq",
+        )
+
+    # Qwen3-ASR is loaded via trust_remote_code; register custom classes for task lookup.
+    if is_transformers_version("==", "4.57.6"):
+        TasksManager._CUSTOM_CLASSES[("pt", "qwen3_asr", "automatic-speech-recognition")] = (
+            "transformers",
+            "AutoModel",
+        )
+        TasksManager._CUSTOM_CLASSES[("pt", "qwen3_asr", "automatic-speech-recognition-with-past")] = (
+            "transformers",
+            "AutoModel",
         )
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
@@ -3705,6 +3744,14 @@ class DummyQwen2VLLMInputGenerator(DummyTextInputGenerator):
         return generated_input
 
 
+class DummyQwen3_5LMInputGenerator(DummyTextInputGenerator):
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        generated_input = super().generate(input_name, framework, int_dtype, float_dtype)
+        if input_name == "position_ids":
+            return generated_input.unsqueeze(0).expand(4, -1, -1)
+        return generated_input
+
+
 class DummyQwen2VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = (
         "hidden_states",
@@ -4166,6 +4213,124 @@ class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
 )
 class WhisperOpenVINOConfig(WhisperOnnxConfig):
     _MODEL_PATCHER = OVSeq2SeqModelPatcher
+
+
+class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummySeq2SeqPastKeyValuesGenerator):
+    """Custom KV cache generator for Qwen3-ASR with GQA (num_key_value_heads != num_attention_heads).
+    Qwen3-ASR has no cross-attention, so only self-attention KV cache is generated (2 per layer)."""
+
+    def __init__(self, task, normalized_config, **kwargs):
+        super().__init__(task, normalized_config, **kwargs)
+        # Override head count and head_dim for GQA
+        self.decoder_num_attention_heads = normalized_config.decoder_num_attention_heads
+        self.decoder_head_dim = getattr(normalized_config, "head_dim", None)
+        if self.decoder_head_dim is None:
+            self.decoder_head_dim = self.decoder_hidden_size // normalized_config.num_attention_heads
+
+    def generate(self, input_name, framework="pt", int_dtype="int64", float_dtype="fp32"):
+        if input_name == "past_key_values":
+            decoder_shape = (
+                self.batch_size,
+                self.decoder_num_attention_heads,
+                self.sequence_length,
+                self.decoder_head_dim,
+            )
+            # Qwen3-ASR has no cross-attention, only self-attention KV cache
+            return [
+                (
+                    self.random_float_tensor(decoder_shape, framework=framework, dtype=float_dtype),
+                    self.random_float_tensor(decoder_shape, framework=framework, dtype=float_dtype),
+                )
+                for _ in range(self.decoder_num_layers)
+            ]
+        return super().generate(input_name, framework=framework, int_dtype=int_dtype, float_dtype=float_dtype)
+
+
+@register_in_tasks_manager(
+    "qwen3_asr",
+    *[
+        "automatic-speech-recognition",
+        "automatic-speech-recognition-with-past",
+    ],
+    library_name="transformers",
+)
+class Qwen3ASROpenVINOConfig(AudioToTextOnnxConfig):
+    """OpenVINO export config for Qwen3-ASR model."""
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummyAudioInputGenerator,
+        DummySeq2SeqDecoderTextInputGenerator,
+        Qwen3ASRDummySeq2SeqPastKeyValuesGenerator,
+    )
+
+    NORMALIZED_CONFIG_CLASS = NormalizedSeq2SeqConfig.with_args(
+        encoder_num_layers="encoder_layers",
+        decoder_num_layers="num_hidden_layers",
+        num_attention_heads="num_attention_heads",
+        # Use num_key_value_heads for KV cache shape generation (GQA)
+        decoder_num_attention_heads="num_key_value_heads",
+        feature_size="num_mel_bins",
+        allow_new=True,
+    )
+    MIN_TRANSFORMERS_VERSION = "4.57.6"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
+    _MODEL_PATCHER = Qwen3ASRModelPatcher
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "automatic-speech-recognition",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        # Flatten nested config for NormalizedSeq2SeqConfig
+        thinker = getattr(config, "thinker_config", config)
+        audio_config = getattr(thinker, "audio_config", None)
+        text_config = getattr(thinker, "text_config", None)
+
+        if audio_config is not None:
+            config.encoder_layers = audio_config.encoder_layers
+            config.num_mel_bins = audio_config.num_mel_bins
+            # Use output_dim (post-projection) as d_model since that's the actual encoder output size
+            config.d_model = getattr(audio_config, "output_dim", audio_config.d_model)
+
+        if text_config is not None:
+            config.num_hidden_layers = text_config.num_hidden_layers
+            config.hidden_size = text_config.hidden_size
+            config.num_attention_heads = text_config.num_attention_heads
+            config.num_key_value_heads = getattr(text_config, "num_key_value_heads", text_config.num_attention_heads)
+            config.head_dim = getattr(
+                text_config, "head_dim", text_config.hidden_size // text_config.num_attention_heads
+            )
+            config.decoder_start_token_id = getattr(text_config, "bos_token_id", None) or 0
+            config.vocab_size = text_config.vocab_size
+
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+            **kwargs,
+        )
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        """Override to exclude encoder KV cache since Qwen3-ASR has no cross-attention."""
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_decoder_sequence_length"
+            name = "past_key_values"
+        else:
+            decoder_sequence_name = "past_decoder_sequence_length + decoder_sequence_length"
+            name = "present"
+
+        for i in range(self._normalized_config.decoder_num_layers):
+            inputs_or_outputs[f"{name}.{i}.decoder.key"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
 
 
 @register_in_tasks_manager(
@@ -5769,6 +5934,218 @@ class SiglipTextOpenVINOConfig(SiglipTextOnnxConfig):
     pass
 
 
+class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("hidden_states", "rotary_pos_emb")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        visual_seq_length: int = DEFAULT_DUMMY_SHAPES["visual_seq_length"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, visual_seq_length, **kwargs)
+        self.num_frames = normalized_config.config.mm_local_num_frames
+        self.embed_dim = normalized_config.config.mm_hidden_size
+        self.height = normalized_config.config.image_size
+        self.width = normalized_config.config.image_size
+        self.image_size = (self.height, self.width)
+        self.patch_size = normalized_config.config.patch_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "hidden_states":
+            return self.random_float_tensor(
+                shape=[
+                    self.batch_size,
+                    self.num_channels,
+                    self.num_frames,
+                    self.height,
+                    self.width,
+                ],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        elif input_name == "rotary_pos_emb":
+            grid_h, grid_w = self.height // self.patch_size, self.width // self.patch_size
+            grid_t = self.num_frames
+            # Source: https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L523
+            # The first dimension of rotary_pos_emb is fixed to 1 in the original model.
+            # And the second dimension is the total number of tokens for all frames, which is calculated as grid_h * grid_w * grid_t plus 1 for the cls token.
+            return self.random_float_tensor(
+                [1, 1 + grid_h * grid_t * grid_w, self.embed_dim], framework=framework, dtype=float_dtype
+            )
+
+
+class DummyVideoChatFlashQwenProjectorInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ["input"]
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        self.hidden_size = normalized_config.config.mm_hidden_size
+        self.num_patches = normalized_config.config.mm_projector_num_tome_tokens
+        self.normalized_config = normalized_config
+
+    def generate(
+        self,
+        input_name: str,
+        framework: str = "pt",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+    ):
+        shape = [self.batch_size, self.num_patches, self.hidden_size]
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
+class VideoChatFlashQwenProjectorOpenVINOConfig(OnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyVideoChatFlashQwenProjectorInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"input": {0: "batch_size", 1: "num_patches", 2: "hidden_size"}}
+
+
+class VideoChatFlashQwenConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    VISION_PROJECTION = "vision_projection"
+    TEXT_EMBEDDINGS = "text_embeddings"
+
+
+@register_in_tasks_manager("videochat_flash_qwen", *["image-text-to-text"], library_name="transformers")
+class VideoChatFlashQwenOpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.49.0"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in VideoChatFlashQwenConfigBehavior]
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyVideoChatFlashQwenInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VideoChatFlashQwenConfigBehavior = VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            behavior=behavior,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        self._model_config_prepared = False
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if not self._behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {
+            "hidden_states": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+            # rotary_pos_emb has a fixed leading dimension of 1 in the dummy generator,
+            # so we do not associate axis 0 with batch_size and keep only dynamic axes here.
+            "rotary_pos_emb": {1: "num_tokens", 2: "hidden_size"},
+        }
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VideoChatFlashQwenConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+
+        Args:
+            behavior ([`ConfigBehavior`]):
+                The behavior to use for the new instance.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, VideoChatFlashQwenConfigBehavior):
+            behavior = VideoChatFlashQwenConfigBehavior(behavior)
+
+        if behavior == VideoChatFlashQwenConfigBehavior.VISION_PROJECTION:
+            export_config = VideoChatFlashQwenProjectorOpenVINOConfig(
+                self._orig_config,
+                task="feature-extraction",
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            return export_config
+
+        if behavior == VideoChatFlashQwenConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
+
+        if behavior == VideoChatFlashQwenConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
+
+        if behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VideoChatFlashQwenConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VideoChatFlashQwenConfigBehavior):
+            behavior = VideoChatFlashQwenConfigBehavior(behavior)
+
+        if not self._model_config_prepared:
+            vision_tower = model.get_vision_tower()
+            model.config.mm_num_attention_heads = vision_tower.config.num_attention_heads
+            # num_tome_tokens=64 comes from the upstream projector_type "tome16_mlp_hd64", which uses a fixed 64-token output.
+            # Source: https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/mm_projector_builder.py#L135-L146
+            model.config.mm_projector_num_tome_tokens = 64
+            model.config.patch_size = vision_tower.config.patch_size
+            model.config.image_size = vision_tower.config.image_size
+            model.config.image_mean = vision_tower.image_processor.image_mean
+            model.config.image_std = vision_tower.image_processor.image_std
+            self._model_config_prepared = True
+
+        if behavior == VideoChatFlashQwenConfigBehavior.VISION_PROJECTION:
+            vision_projector = model.get_model().mm_projector.mlp
+            vision_projector.config = model.config
+            return vision_projector
+
+        if behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
+            vision_tower = model.get_vision_tower().vision_tower
+            vision_tower.config = model.config
+            return vision_tower
+
+        if behavior == VideoChatFlashQwenConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.config
+            return text_embedding
+
+        if behavior == VideoChatFlashQwenConfigBehavior.LANGUAGE:
+            model.model.llm_compress_layer_list = []
+            return model
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+
+        if self._behavior == VideoChatFlashQwenConfigBehavior.VISION_EMBEDDINGS:
+            return VideoChatFlashQwenVisionEmbeddingModelPatcher(self, model, model_kwargs)
+
+        return super().patch_model_for_export(model, model_kwargs)
+
+
 @register_in_tasks_manager(
     "hunyuan_v1_dense",
     *[
@@ -5931,3 +6308,378 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
 class LFM2MoeOpenVINOConfig(LFM2OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "5.0"
     _MODEL_PATCHER = Lfm2MoeModelPatcher
+
+
+class Qwen3_5DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    """
+    Generates dummy cache_params inputs for Qwen3.5 architectures.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("cache_params",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+
+        config = normalized_config.config
+        self.num_full_attn_layers = config.layer_types.count("full_attention")
+        self.num_linear_attn_layers = config.layer_types.count("linear_attention")
+        self.conv_kernel_size = config.linear_conv_kernel_dim
+        self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
+        self.head_k_dim = config.linear_key_head_dim
+        self.head_v_dim = config.linear_value_head_dim
+        self.num_v_heads = config.linear_num_value_heads
+        self.num_k_heads = config.linear_num_key_heads
+        self.num_key_value_heads = config.num_key_value_heads
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        cache_params = []
+
+        for idx in range(self.num_linear_attn_layers):
+            d_inner = self.num_k_heads * (2 * self.head_k_dim + self.head_v_dim * self.num_v_heads // self.num_k_heads)
+            conv_state_shape = (
+                self.batch_size,
+                d_inner,
+                self.conv_kernel_size,
+            )
+            conv_state = self.random_float_tensor(conv_state_shape, framework=framework, dtype=float_dtype)
+            cache_params.append(conv_state)
+            num_heads = self.num_v_heads
+            recurrent_state_shape = (self.batch_size, num_heads, self.head_k_dim, self.head_v_dim)
+            recurrent_state = self.random_float_tensor(recurrent_state_shape, framework=framework, dtype=float_dtype)
+            cache_params.append(recurrent_state)
+
+        for idx in range(self.num_full_attn_layers):
+            kv_shape = (self.batch_size, self.num_key_value_heads, self.sequence_length, self.head_dim)
+            k = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            v = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            cache_params.append(k)
+            cache_params.append(v)
+
+        return cache_params
+
+
+@register_in_tasks_manager(
+    "qwen3_5_text",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Qwen3_5DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Qwen3_5DummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    MIN_TRANSFORMERS_VERSION = "5.2.0"
+    MAX_TRANSFORMERS_VERSION = "5.2.99"
+    _MODEL_PATCHER = Qwen3_5ModelPatcher
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            cache_name_prefix = "cache_params.past"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            cache_name_prefix = "cache_params.present"
+
+        self.num_full_attn_layers = self._normalized_config.layer_types.count("full_attention")
+        self.num_linear_attn_layers = self._normalized_config.layer_types.count("linear_attention")
+
+        for i in range(self.num_linear_attn_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
+            inputs_or_outputs[f"{cache_name_prefix}.ssm.{i}"] = {0: "batch_size"}
+
+        for i in range(self.num_full_attn_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+            "position_ids": {0: "batch_size", 1: "sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
+
+        dummy_inputs = {}
+        input_names = [key for key in self.inputs.keys() if not key.startswith("cache_params")]
+        if self.use_past_in_inputs:
+            input_names.extend(["cache_params"])
+
+        for input_name in input_names:
+            input_was_inserted = False
+            for dummy_input_gen in dummy_inputs_generators:
+                if dummy_input_gen.supports_input(input_name):
+                    dummy_inputs[input_name] = self.overwrite_shape_and_generate_input(
+                        dummy_input_gen,
+                        input_name,
+                        framework,
+                        input_shapes=kwargs,
+                    )
+                    input_was_inserted = True
+                    break
+            if not input_was_inserted:
+                raise RuntimeError(
+                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model ONNX config.'
+                )
+
+        return dummy_inputs
+
+
+@register_in_tasks_manager(
+    "qwen3_5",
+    *["image-text-to-text"],
+    library_name="transformers",
+)
+class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior]
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
+    MIN_TRANSFORMERS_VERSION = "5.2.0"
+    MAX_TRANSFORMERS_VERSION = "5.2.99"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: QwenVLConfigBehavior = QwenVLConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+            behavior=behavior,
+        )
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+            self._normalized_config.use_embed_dim = True
+
+    def with_behavior(
+        self,
+        behavior: Union[str, QwenVLConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+        Args:
+            behavior ([`ConfigBehavior`]):
+                The behavior to use for the new instance.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
+
+        if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "qwen3_5_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == QwenVLConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "qwen3_5_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Qwen3_5ModelPatcher,
+                dummy_input_generator=DummyQwen3_5LMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+            )
+
+        if behavior in (
+            QwenVLConfigBehavior.VISION_EMBEDDINGS,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS_POS,
+        ):
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def patch_model_for_export(self, model: Union["PreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            return Qwen3_5VisionEmbMergerPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
+            return super().outputs
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            return {"last_hidden_state": {0: "seq_len"}}
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
+            return {"last_hidden_state": {0: "seq_len", 1: "seq_len"}}
+        if self._behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
+            return {"inputs_embeds": {0: "batch_size", 1: "sequence_length"}}
+        if self._behavior == QwenVLConfigBehavior.LANGUAGE:
+            return get_vlm_internal_text_generation_config(
+                "qwen3_5_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
+            ).outputs
+        raise Exception("Unknown Qwen3.5 behavior type.")
+
+
+@register_in_tasks_manager(
+    "qwen3_5_moe_text",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class Qwen3_5MoeTextOpenVINOConfig(Qwen3_5TextOpenVINOConfig):
+    _MODEL_PATCHER = Qwen3_5MoeModelPatcher
+
+
+@register_in_tasks_manager(
+    "qwen3_5_moe",
+    *["image-text-to-text"],
+    library_name="transformers",
+)
+class Qwen3_5MoeOpenVINOConfig(Qwen3_5OpenVINOConfig):
+    def with_behavior(
+        self,
+        behavior: Union[str, QwenVLConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
+
+        if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "qwen3_5_moe_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == QwenVLConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "qwen3_5_moe_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Qwen3_5MoeModelPatcher,
+                dummy_input_generator=DummyQwen3_5LMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+            )
+
+        if behavior in (
+            QwenVLConfigBehavior.VISION_EMBEDDINGS,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS_POS,
+        ):
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == QwenVLConfigBehavior.LANGUAGE:
+            return get_vlm_internal_text_generation_config(
+                "qwen3_5_moe_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
+            ).outputs
+        return super().outputs
+
+
+class DummyKokoroInputGenerator(DummyInputGenerator):
+    """Generates dummy inputs for the Kokoro TTS model."""
+
+    SUPPORTED_INPUT_NAMES = ("input_ids", "ref_s", "speed")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = 1
+        self.sequence_length = sequence_length
+        self.style_dim = getattr(normalized_config, "style_dim", 128)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "input_ids":
+            shape = [self.batch_size, self.sequence_length]
+            input_ids_value = self.random_int_tensor(
+                shape=shape, min_value=0, max_value=178, framework=framework, dtype=int_dtype
+            )
+            input_ids_value[:, 0] = 0
+            input_ids_value[:, -1] = 0
+            return input_ids_value
+        elif input_name == "ref_s":
+            shape = [self.batch_size, self.style_dim * 2]
+            return self.random_float_tensor(
+                shape=shape, min_value=-1, max_value=1, framework=framework, dtype=float_dtype
+            )
+        elif input_name == "speed":
+            return self.random_int_tensor(shape=[1], min_value=1, max_value=10, framework=framework, dtype=float_dtype)
+        else:
+            raise ValueError(f"Unsupported input {input_name} for DummyKokoroInputGenerator")
+
+
+@register_in_tasks_manager(
+    "kokoro",
+    *["text-to-audio"],
+    library_name="kokoro",
+)
+class KokoroOpenVINOConfig(OnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyKokoroInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig
+    _MODEL_PATCHER = KokoroModelPatcher
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "text-to-audio",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {1: ("sequence_length", 2, -1)},
+            "ref_s": {1: "style_dim"},
+            "speed": {},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "waveform": {0: "batch_size", 1: "audio_length"},
+            "phonemes": {0: "batch_size", 1: "phoneme_length"},
+        }

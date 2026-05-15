@@ -39,6 +39,7 @@ from optimum.intel.utils.import_utils import (
 )
 from optimum.intel.utils.modeling_utils import (
     _infer_library_from_model_name_or_path,
+    _KokoroForTextToSpeech,
     _OpenClipForZeroShotImageClassification,
 )
 
@@ -86,6 +87,8 @@ def infer_task(
     if task == "auto":
         if library_name == "open_clip":
             task = "zero-shot-image-classification"
+        elif library_name == "kokoro":
+            task = "text-to-audio"
         else:
             try:
                 task = TasksManager._infer_task_from_model_name_or_path(
@@ -98,7 +101,7 @@ def infer_task(
                 )
             except KeyError as e:
                 try:
-                    config = AutoConfig.from_pretrained(model_name_or_path)
+                    config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
                     with_past_arch_list = ["MistralForCausalLM", "Zamba2ForCausalLM"]
                     if any(arch in config.architectures for arch in with_past_arch_list):
                         task = "text-generation-with-past"
@@ -112,14 +115,35 @@ def infer_task(
                 )
 
     if library_name == "transformers":
-        config = AutoConfig.from_pretrained(
-            model_name_or_path,
-            subfolder=subfolder,
-            revision=revision,
-            cache_dir=cache_dir,
-            token=token,
-            trust_remote_code=trust_remote_code,
-        )
+        try:
+            config = AutoConfig.from_pretrained(
+                model_name_or_path,
+                subfolder=subfolder,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
+                trust_remote_code=trust_remote_code,
+            )
+        except (KeyError, ValueError) as e:
+            # Some custom model types are registered with transformers via a separate
+            # third-party package (e.g. `qwen_asr` for `qwen3_asr`). Try to import it
+            # lazily so we don't have a hard dependency at import time.
+            if "qwen3_asr" in str(e):
+                try:
+                    import qwen_asr  # noqa: F401
+
+                    config = AutoConfig.from_pretrained(
+                        model_name_or_path,
+                        subfolder=subfolder,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        token=token,
+                        trust_remote_code=trust_remote_code,
+                    )
+                except ImportError:
+                    raise e
+            else:
+                raise
         if hasattr(config, "export_model_type"):
             model_type = config.export_model_type
         else:
@@ -478,6 +502,8 @@ def main_export(
     try:
         if library_name == "open_clip":
             model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
+        elif library_name == "kokoro":
+            model = _KokoroForTextToSpeech.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         else:
             # remote code models like phi3_v internvl2, minicpmv, internvl2, nanollava, maira2 should be loaded using AutoModelForCausalLM and not AutoModelForImageTextToText
             # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)

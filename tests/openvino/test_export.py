@@ -93,6 +93,7 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-3": OVStableDiffusion3Pipeline,
         "flux": OVFluxPipeline,
         "ltx-video": OVLTXPipeline,
+        "kokoro": OVModelForTextToSpeechSeq2Seq,
     }
 
     if is_transformers_version(">=", "4.48.0"):
@@ -110,15 +111,25 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "4.58.0"):
         SUPPORTED_ARCHITECTURES.update({"afmoe": OVModelForCausalLM})
 
+    if is_transformers_version("==", "4.57.6"):
+        SUPPORTED_ARCHITECTURES.update({"qwen3_asr": OVModelForSpeechSeq2Seq})
+
     if is_transformers_version(">=", "5.5.0"):
         SUPPORTED_ARCHITECTURES.update({"gemma4": OVModelForVisualCausalLM})
         SUPPORTED_ARCHITECTURES.update({"gemma4_moe": OVModelForVisualCausalLM})
+
+    if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
+        SUPPORTED_ARCHITECTURES.update({"qwen3_5": OVModelForVisualCausalLM})
+        SUPPORTED_ARCHITECTURES.update({"qwen3_5_moe": OVModelForVisualCausalLM})
 
     if is_transformers_version(">=", "4.57.0"):
         SUPPORTED_ARCHITECTURES.update({"hunyuan_v1_dense": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.update({"qwen3_next": OVModelForCausalLM})
+
+    if is_transformers_version(">=", "4.49") and is_transformers_version("<=", "4.57.6"):
+        SUPPORTED_ARCHITECTURES.update({"videochat_flash_qwen": OVModelForVisualCausalLM})
 
     if is_transformers_version(">=", "5.0"):
         SUPPORTED_ARCHITECTURES.update({"lfm2_moe": OVModelForCausalLM})
@@ -156,9 +167,20 @@ class ExportModelTest(unittest.TestCase):
             model_class = TasksManager.get_model_class_for_task(task, library=library_name)
             model = model_class(f"hf_hub:{model_name}", pretrained=True, exportable=True)
             TasksManager.standardize_model_attributes(model_name, model, library_name=library_name)
-        elif model_type == "llava":
+        elif model_type in ["llava", "videochat_flash_qwen"]:
             model = MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
                 model_name, **loading_kwargs
+            )
+        elif model_type == "qwen3_asr":
+            from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
+
+            model = Qwen3ASRForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
+        elif model_type == "kokoro":
+            model = TasksManager.get_model_from_task(
+                task=task,
+                model_name_or_path=model_name,
+                framework="pt",
+                library_name="kokoro",
             )
         else:
             model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)

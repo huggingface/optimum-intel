@@ -114,6 +114,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
+        ("text-to-audio", "kokoro"),
     ]
 
     if is_transformers_version(">=", "4.48.0"):
@@ -214,6 +215,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "ltx-video": 2,
         "sam": 0,  # no tokenizer
         "speecht5": 2,
+        "kokoro": 0,  # uses g2p, no tokenizer
         "clip": 2,
         "mamba": 2,
         "falcon_mamba": 2,
@@ -838,6 +840,17 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "resampler_model": {"int8": 6},
             },
         ),
+        (
+            "image-text-to-text",
+            "videochat_flash_qwen",
+            "int4 --group-size 8 --ratio 0.8 --trust-remote-code",
+            {
+                "lm_model": {"int8": 12, "int4": 18},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 5},
+                "vision_projection_model": {"int8": 2},
+            },
+        ),
     ]
 
     # filter models type depending on min max transformers version
@@ -868,6 +881,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             expected = {"qwen3_vl"}
         else:
             expected = {"llava-qwen2", "phi3_v", "phi4mm", "minicpmo"}
+        if is_transformers_version("<", "4.49") or is_transformers_version(">", "4.57.6"):
+            expected.add("videochat_flash_qwen")
         if is_transformers_version(">=", "5"):
             expected.update({"llama4", "llava_next_video", "minicpmv", "internvl_chat"})
 
