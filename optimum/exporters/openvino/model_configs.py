@@ -201,6 +201,7 @@ from .model_patcher import (
     Phi4MMLanguageModelPatcher,
     Phi4MMVisionEmbeddingsPatcher,
     PhiMoEModelPatcher,
+    Phi4FlashModelPatcher,
     Qwen2_5_VLVisionEmbMergerPatcher,
     Qwen2MoEPatcher,
     Qwen2VLLanguageModelPatcher,
@@ -5272,6 +5273,114 @@ class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
         common_inputs = {
             "input_ids": {0: "batch_size", 1: "sequence_length"},
             "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs
+
+
+class Phi4FlashDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    """
+    Generates dummy cache_params inputs for Phi-4-mini-flash-reasoning architectures.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("cache_params", "cache_position")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+
+        config = normalized_config.config
+        self.intermediate_size = int(config.mamba_expand * config.hidden_size)
+        self.conv_kernel_size = config.mamba_d_conv
+        self.mamba_d_state = config.mamba_d_state
+        self.num_attention_heads = config.num_key_value_heads
+        self.head_dim = config.hidden_size // config.num_attention_heads
+        self.num_cache_layers = config.num_hidden_layers // 2 + 2
+        self.global_attention_layer_idx = config.num_hidden_layers // 2 + 1
+        sliding_window = config.sliding_window
+        if isinstance(sliding_window, (list, tuple)):
+            sliding_window = max((window for window in sliding_window if window is not None), default=0)
+        self.sliding_window = sliding_window
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "cache_position":
+            return self.random_int_tensor(
+                shape=[self.sequence_length],
+                max_value=max(self.sequence_length, self.sliding_window, self.conv_kernel_size),
+                framework=framework,
+                dtype=int_dtype,
+            )
+
+        past_key_values = []
+        for layer_idx in range(self.num_cache_layers):
+            if layer_idx % 2 == 0:
+                conv_state_shape = (self.batch_size, self.intermediate_size, self.conv_kernel_size)
+                conv_state = self.random_float_tensor(conv_state_shape, framework=framework, dtype=float_dtype)
+                ssm_state_shape = (self.batch_size, self.intermediate_size, self.mamba_d_state)
+                ssm_state = self.random_float_tensor(ssm_state_shape, framework=framework, dtype=float_dtype)
+                past_key_values.append((conv_state, ssm_state))
+            else:
+                past_length = self.sequence_length if layer_idx == self.global_attention_layer_idx else self.sliding_window
+                kv_shape = (self.batch_size, self.num_attention_heads, past_length, self.head_dim)
+                k = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+                v = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+                past_key_values.append((k, v))
+
+        return past_key_values
+
+
+@register_in_tasks_manager("phi4flash", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class Phi4FlashOpenVINOConfig(MambaOpenVINOConfig):
+    PAD_ATTENTION_MASK_TO_PAST = False
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Phi4FlashDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Phi4FlashDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    MIN_TRANSFORMERS_VERSION = "4.49.0"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
+    _MODEL_PATCHER = Phi4FlashModelPatcher
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            cache_name_prefix = "cache_params.past"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            cache_name_prefix = "cache_params.present"
+
+        num_cache_layers = self._normalized_config.num_layers // 2 + 2
+        for layer_idx in range(num_cache_layers):
+            if layer_idx % 2 == 0:
+                inputs_or_outputs[f"{cache_name_prefix}.conv.{layer_idx}"] = {0: "batch_size"}
+                inputs_or_outputs[f"{cache_name_prefix}.ssm.{layer_idx}"] = {0: "batch_size"}
+            else:
+                inputs_or_outputs[f"{cache_name_prefix}.key.{layer_idx}"] = {0: "batch_size", 2: decoder_sequence_name}
+                inputs_or_outputs[f"{cache_name_prefix}.value.{layer_idx}"] = {
+                    0: "batch_size",
+                    2: decoder_sequence_name,
+                }
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+            "cache_position": {0: "cache_sequence_length"},
         }
         if self.use_past_in_inputs:
             self.add_past_key_values(common_inputs, direction="inputs")
