@@ -476,7 +476,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
                 "bits": 4,
                 "sym": False,
                 "backup_precision": "int8_sym",
-                "group_size": 128,
+                "group_size": 64,
             },
             "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
             "vision_embeddings_merger_model": {"bits": 8, "sym": True, "weight_only": True},
