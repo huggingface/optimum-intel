@@ -4200,6 +4200,58 @@ def deepseek_moe_infer(self, x, topk_ids, topk_weight):
     return final_out
 
 
+def deepseek_v4_moe_forward(self, x, token_ids=None):
+    """Vectorized MoE forward for DeepseekV4 that replaces dynamic for-loop with mask to be compatible with tracing."""
+    bsz, seq, d = x.shape
+    flat = x.view(-1, d)
+    n_tokens = flat.shape[0]
+    n_experts = self.n_experts
+
+    weights, indices = self.gate(flat, token_ids)  # [tokens, topk], [tokens, topk]
+
+    # Build a dense routing matrix [tokens, n_experts]
+    routing_weights = torch.zeros(n_tokens, n_experts, device=flat.device, dtype=weights.dtype)
+    routing_weights.scatter_(1, indices, weights)
+
+    # Use pre-stacked expert weights (set in patcher's __enter__)
+    # gate_w: [E, inter, d], up_w: [E, inter, d], down_w: [E, d, inter]
+    flat_exp = flat.unsqueeze(0).expand(n_experts, -1, -1)  # [E, tokens, d]
+
+    gate_out = torch.bmm(flat_exp, self._gate_w.transpose(1, 2))  # [E, tokens, inter]
+    up_out = torch.bmm(flat_exp, self._up_w.transpose(1, 2))  # [E, tokens, inter]
+    gate_up = F.silu(gate_out) * up_out  # [E, tokens, inter]
+    expert_outs = torch.bmm(gate_up, self._down_w.transpose(1, 2))  # [E, tokens, d]
+
+    # Weighted sum over experts: routing_weights.T [E, tokens, 1] * expert_outs [E, tokens, d]
+    out = (expert_outs * routing_weights.T.unsqueeze(-1)).sum(0)  # [tokens, d]
+
+    out = out + self.shared_expert(flat)
+    return out.view(bsz, seq, d)
+
+
+class DeepseekV4Patcher(OVDecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        device = next(self._model.parameters()).device
+        for block in self._model.model.layers:
+            # Pre-compute cos/sin before tracing so they become frozen constants in the graph
+            block.self_attn._get_cos_sin(device, torch.float32)
+            # Pre-stack expert weights to avoid torch.stack inside traced forward
+            mlp = block.mlp
+            mlp._gate_w = torch.stack([e.gate_proj.weight.data for e in mlp.experts]).to(device)
+            mlp._up_w = torch.stack([e.up_proj.weight.data for e in mlp.experts]).to(device)
+            mlp._down_w = torch.stack([e.down_proj.weight.data for e in mlp.experts]).to(device)
+            # Patch MoE forward to remove data-dependent for-loop with conditional
+            mlp._orig_forward = mlp.forward
+            mlp.forward = types.MethodType(deepseek_v4_moe_forward, mlp)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for block in self._model.model.layers:
+            block.mlp.forward = block.mlp._orig_forward
+            del block.mlp._gate_w, block.mlp._up_w, block.mlp._down_w
+
+
 class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,

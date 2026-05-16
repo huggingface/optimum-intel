@@ -187,6 +187,7 @@ MODEL_NAMES = {
     "deberta-v2": "optimum-intel-internal-testing/tiny-random-DebertaV2Model",
     "decilm": "optimum-intel-internal-testing/tiny-random-decilm",
     "deepseek": "optimum-intel-internal-testing/tiny-random-deepseek-v3",
+    "deepseek_v4": "/home/rkazants/.copilot/workspace/tiny-deepseek-v4-flash",
     "deit": "optimum-intel-internal-testing/tiny-random-DeiTModel",
     "convnext": "optimum-intel-internal-testing/tiny-random-convnext",
     "convnextv2": "optimum-intel-internal-testing/tiny-random-ConvNextV2Model",
@@ -359,6 +360,7 @@ EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "afmoe": {"model": 16},
+    "deepseek_v4": {"model": 80},
     "bert": {"model": 68 if is_transformers_version("<", "5") else 70},
     "roberta": {"model": 68},
     "albert": {"model": 84},
@@ -561,6 +563,7 @@ REMOTE_CODE_MODELS = (
     "decilm",
     "minicpm3",
     "deepseek",
+    "deepseek_v4",
     "qwen3_eagle3",
     "qwen3_asr",
     "videochat_flash_qwen",
