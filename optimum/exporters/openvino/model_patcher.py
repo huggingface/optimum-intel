@@ -161,8 +161,8 @@ def batched_mm_experts_forward_patched(
     num_experts = self.gate_up_proj.size(0)
 
     if not self.is_transposed:
-        gate_up_proj = self.gate_up_proj.transpose(1,2)
-        down_proj = self.down_proj.transpose(1,2)
+        gate_up_proj = self.gate_up_proj.transpose(1, 2)
+        down_proj = self.down_proj.transpose(1, 2)
     else:
         gate_up_proj = self.gate_up_proj
         down_proj = self.down_proj
@@ -210,6 +210,7 @@ def batched_mm_experts_forward_patched(
 
 def patch_batched_mm(patcher):
     from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
+
     patcher.original_gpt_oss_forward = ALL_EXPERTS_FUNCTIONS._global_mapping["batched_mm"]
     ALL_EXPERTS_FUNCTIONS._global_mapping["batched_mm"] = batched_mm_experts_forward_patched
     patcher._model.set_experts_implementation("batched_mm")
@@ -217,6 +218,7 @@ def patch_batched_mm(patcher):
 
 def set_original_batched_mm(patcher):
     from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
+
     ALL_EXPERTS_FUNCTIONS._global_mapping["batched_mm"] = patcher.original_gpt_oss_forward
 
 
@@ -7238,45 +7240,6 @@ def qwen3_moe_forward_patched(self, hidden_states: torch.Tensor) -> torch.Tensor
     final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
     return final_hidden_states, router_logits
 
-def qwen3_moe_tr5(self, hidden_states: torch.Tensor) -> torch.Tensor:
-    batch_size, sequence_length, hidden_dim = hidden_states.shape
-    hidden_states = hidden_states.view(-1, hidden_dim)
-    # router_logits: (batch * sequence_length, n_experts)
-    router_logits = self.gate(hidden_states)
-
-    routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
-    routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
-    if self.norm_topk_prob:  # only diff with mixtral sparse moe block!
-        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-    # we cast back to the input dtype
-    routing_weights = routing_weights.to(hidden_states.dtype)
-
-    final_hidden_states = torch.zeros(
-        (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
-    )
-
-    # One hot encode the selected experts to create an expert mask
-    # this will be used to easily index which expert is going to be sollicitated
-    expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
-
-    # Loop over all available experts in the model and perform the computation on each expert
-    expert_hitted = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-    for expert_idx in range(self.num_experts):
-        expert_layer = self.experts[expert_idx]
-        idx, top_x = torch.where(expert_mask[expert_idx].squeeze(0))
-
-        # Index the correct hidden states and compute the expert hidden state for
-        # the current expert. We need to make sure to multiply the output hidden
-        # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-        current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
-        current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
-
-        # However `index_add_` only support torch tensors for indexing so we'll use
-        # the `top_x` tensor here.
-        final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
-    final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
-    return final_hidden_states, router_logits
-
 
 class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
@@ -7288,10 +7251,9 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
                 Qwen3MoeSparseMoeBlock.forward = qwen3_moe_forward_patched
             else:
                 from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeExperts
+
                 self.original_moe_forward = Qwen3MoeExperts.forward
                 Qwen3MoeExperts.forward = lfm2_moe_experts_forward
-
-
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -7301,11 +7263,12 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
                 Qwen3MoeSparseMoeBlock.forward = self.original_moe_forward
             else:
                 from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeExperts
+
                 Qwen3MoeExperts.forward = self.original_moe_forward
 
-
-
             # The original implementation of this forward method can be found at:
+
+
 # https://github.com/huggingface/transformers/blob/v4.55.4/src/transformers/models/zamba2/modeling_zamba2.py#L729
 # This patch modifies `forward()` so that when traced by torch.jit, it works correctly
 # during both the prefill and decoding steps.
@@ -7980,6 +7943,7 @@ class GptOssModelPatcher(OVDecoderModelPatcher):
         if is_transformers_version(">=", "4.55.0"):
             if is_transformers_version("<", "5"):
                 from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
+
                 self.original_gpt_oss_forward = GptOssExperts.forward
                 GptOssExperts.forward = gpt_oss_forward
             else:
@@ -7991,10 +7955,10 @@ class GptOssModelPatcher(OVDecoderModelPatcher):
         if is_transformers_version(">=", "4.55.0"):
             if is_transformers_version("<", "5"):
                 from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
+
                 GptOssExperts.forward = self.original_gpt_oss_forward
             else:
                 set_original_batched_mm(self)
-
 
 
 # This patch overrides the following line in Transformers:
