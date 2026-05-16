@@ -150,6 +150,78 @@ for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
         UNSUPPORTED_OPS_PATCHING_SPEC.pop(idx)
 
 
+def batched_mm_experts_forward_patched(
+    self: torch.nn.Module,
+    hidden_states: torch.Tensor,
+    top_k_index: torch.Tensor,
+    top_k_weights: torch.Tensor,
+) -> torch.Tensor:
+    num_tokens = hidden_states.size(0)
+    hidden_dim = hidden_states.size(-1)
+    num_experts = self.gate_up_proj.size(0)
+
+    if not self.is_transposed:
+        gate_up_proj = self.gate_up_proj.transpose(1, 2)
+        down_proj = self.down_proj.transpose(1, 2)
+    else:
+        gate_up_proj = self.gate_up_proj
+        down_proj = self.down_proj
+
+    dense_routing_weights = torch.zeros(
+        num_tokens,
+        num_experts,
+        device=hidden_states.device,
+        dtype=hidden_states.dtype,
+    )
+    dense_routing_weights.scatter_(dim=1, index=top_k_index, src=top_k_weights)
+    hidden_states_expanded = hidden_states.repeat(num_experts, 1)  # (num_experts * num_tokens, hidden_dim)
+    hidden_states_expanded = hidden_states_expanded.view(
+        num_experts, -1, hidden_dim
+    )  # (num_experts, num_tokens, hidden_dim)
+
+    # --- Up projection per expert (batched) ---
+    gate_up_out = torch.bmm(hidden_states_expanded, gate_up_proj)
+    # (S, 2 * intermediate_dim)
+
+    if self.has_bias:
+        gate_up_out = gate_up_out + self.gate_up_proj_bias[..., None, :]
+
+    # Apply gating
+    # gate, up = gate_up_out[..., ::2], gate_up_out[..., 1::2]
+    # gate = gate.clamp(min=None, max=self.limit)
+    # up = up.clamp(min=-self.limit, max=self.limit)
+    # gated_out = gate * torch.sigmoid(gate * self.alpha)
+    gated_out = self._apply_gate(gate_up_out)
+
+    # --- Down projection per expert (batched) ---
+    next_states = torch.bmm(gated_out, down_proj)  # (S, hidden_dim)
+
+    if self.has_bias:
+        next_states = next_states + self.down_proj_bias[..., None, :]
+
+    next_states = next_states.view(num_experts, num_tokens, -1, hidden_dim)
+
+    # Apply routing weights
+    next_states = next_states * dense_routing_weights.transpose(0, 1).view(num_experts, num_tokens, -1)[..., None]
+    next_states = next_states.sum(dim=0)
+
+    return next_states
+
+
+def patch_batched_mm(patcher):
+    from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
+
+    patcher.original_gpt_oss_forward = ALL_EXPERTS_FUNCTIONS._global_mapping["batched_mm"]
+    ALL_EXPERTS_FUNCTIONS._global_mapping["batched_mm"] = batched_mm_experts_forward_patched
+    patcher._model.set_experts_implementation("batched_mm")
+
+
+def set_original_batched_mm(patcher):
+    from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
+
+    ALL_EXPERTS_FUNCTIONS._global_mapping["batched_mm"] = patcher.original_gpt_oss_forward
+
+
 def patch_update_causal_mask(
     model, transformers_version, inner_model_name="model", patch_fn=None, patch_extrnal_model=False
 ):
@@ -7173,20 +7245,30 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        if is_transformers_version(">=", "4.53") and is_transformers_version("<", "5"):
-            self.original_moe_forward = Qwen3MoeSparseMoeBlock.forward
-            Qwen3MoeSparseMoeBlock.forward = qwen3_moe_forward_patched
-        if is_transformers_version(">=", "5"):
-            self._model.set_experts_implementation("batched_mm")
+        if is_transformers_version(">=", "4.53"):
+            if is_transformers_version("<", "5"):
+                self.original_moe_forward = Qwen3MoeSparseMoeBlock.forward
+                Qwen3MoeSparseMoeBlock.forward = qwen3_moe_forward_patched
+            else:
+                from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeExperts
+
+                self.original_moe_forward = Qwen3MoeExperts.forward
+                Qwen3MoeExperts.forward = lfm2_moe_experts_forward
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if is_transformers_version(">=", "4.53") and is_transformers_version("<", "5"):
-            Qwen3MoeSparseMoeBlock.forward = self.original_moe_forward
+        if is_transformers_version(">=", "4.53"):
+            if is_transformers_version("<", "5"):
+                Qwen3MoeSparseMoeBlock.forward = self.original_moe_forward
+            else:
+                from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeExperts
+
+                Qwen3MoeExperts.forward = self.original_moe_forward
+
+            # The original implementation of this forward method can be found at:
 
 
-# The original implementation of this forward method can be found at:
 # https://github.com/huggingface/transformers/blob/v4.55.4/src/transformers/models/zamba2/modeling_zamba2.py#L729
 # This patch modifies `forward()` so that when traced by torch.jit, it works correctly
 # during both the prefill and decoding steps.
@@ -7858,22 +7940,25 @@ class GptOssModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "5"):
-            from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
+        if is_transformers_version(">=", "4.55.0"):
+            if is_transformers_version("<", "5"):
+                from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
 
-            self.original_gpt_oss_forward = GptOssExperts.forward
-            GptOssExperts.forward = gpt_oss_forward
-
-        if is_transformers_version(">=", "5"):
-            self._model.set_experts_implementation("batched_mm")
+                self.original_gpt_oss_forward = GptOssExperts.forward
+                GptOssExperts.forward = gpt_oss_forward
+            else:
+                patch_batched_mm(self)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "5"):
-            from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
+        if is_transformers_version(">=", "4.55.0"):
+            if is_transformers_version("<", "5"):
+                from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
 
-            GptOssExperts.forward = self.original_gpt_oss_forward
+                GptOssExperts.forward = self.original_gpt_oss_forward
+            else:
+                set_original_batched_mm(self)
 
 
 # This patch overrides the following line in Transformers:
