@@ -193,6 +193,8 @@ from .model_patcher import (
     MiniCPMModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
+    Mistral3ImageEmbeddingModelPatcher,
+    Mistral3MultiModalProjectorPatcher,
     MistralModelPatcher,
     MixtralModelPatcher,
     MPTModelPatcher,
@@ -300,6 +302,14 @@ def init_model_configs():
     TasksManager._CUSTOM_CLASSES[("pt", "phi4_multimodal", "automatic-speech-recognition")] = (
         "transformers",
         "AutoModelForCausalLM",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "mistral3", "text-generation")] = (
+        "transformers",
+        "AutoModelForImageTextToText",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "mistral3", "text-generation-with-past")] = (
+        "transformers",
+        "AutoModelForImageTextToText",
     )
 
     # since transformers v4.46, model can be loaded using default AutoModelForImageTextToText
@@ -2241,6 +2251,135 @@ class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
         if self._behavior != LlavaNextVideoConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return LlavaNextVideoImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+
+class Mistral3ConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    # VISION_EMBEDDINGS extracts visual features and applies projector.norm().
+    # Combined with the cycle block
+    # (https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L76-L94)
+    # and MULTI_MODAL_PROJECTOR, this is equivalent to get_image_features
+    # (https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L223-L248).
+    VISION_EMBEDDINGS = "vision_embeddings"
+    TEXT_EMBEDDINGS = "text_embeddings"
+    MULTI_MODAL_PROJECTOR = "multi_modal_projector"
+
+
+class DummyMistral3MultiModalProjectorInputGenerator(DummyLLavaMultiModalProjectorInputGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, random_batch_size_range, **kwargs)
+        self.spatial_merge_size = getattr(
+            normalized_config.config, "spatial_merge_size", getattr(normalized_config, "spatial_merge_size", 2)
+        )
+        self.num_merged_patches = self.num_patches // (self.spatial_merge_size**2)
+
+    def generate(
+        self,
+        input_name: str,
+        framework: str = "pt",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+    ):
+        input_dim = self.hidden_size * self.spatial_merge_size**2
+        shape = [self.num_merged_patches, input_dim]
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
+class Mistral3MultiModalProjectorOpenVINOConfig(OnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyMistral3MultiModalProjectorInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    _MODEL_PATCHER = Mistral3MultiModalProjectorPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"image_features": {0: "num_patches"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"hidden_states": {0: "num_patches"}}
+
+
+@register_in_tasks_manager(
+    "mistral3", *["image-text-to-text", "text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.50.0"
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in Mistral3ConfigBehavior]
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    def with_behavior(
+        self,
+        behavior: Union[str, Mistral3ConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, Mistral3ConfigBehavior):
+            behavior = Mistral3ConfigBehavior(behavior)
+
+        if behavior == Mistral3ConfigBehavior.MULTI_MODAL_PROJECTOR:
+            return Mistral3MultiModalProjectorOpenVINOConfig(
+                self._orig_config.vision_config,
+                task="feature-extraction",
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+
+        return super().with_behavior(behavior)
+
+    def get_model_for_behavior(self, model, behavior: Union[str, Mistral3ConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Mistral3ConfigBehavior):
+            behavior = Mistral3ConfigBehavior(behavior)
+
+        if behavior == Mistral3ConfigBehavior.LANGUAGE:
+            return model.float()
+
+        if behavior == Mistral3ConfigBehavior.MULTI_MODAL_PROJECTOR:
+            return (
+                model.multi_modal_projector
+                if hasattr(model, "multi_modal_projector")
+                else model.model.multi_modal_projector
+            )
+
+        return super().get_model_for_behavior(model, behavior)
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+
+        return Mistral3ImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs) -> Dict:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and self._config.model_type == "pixtral":
+            kwargs["batch_size"] = 1
+        return super().generate_dummy_inputs(framework, **kwargs)
 
 
 @register_in_tasks_manager(

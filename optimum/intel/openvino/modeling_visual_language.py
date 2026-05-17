@@ -1716,6 +1716,91 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
         return video_features
 
 
+class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = ["multi_modal_projector"]
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, image_sizes=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+
+        image_features = self.vision_embeddings(pixel_values).last_hidden_state
+        image_features = torch.from_numpy(image_features) if isinstance(image_features, np.ndarray) else image_features
+
+        # Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L75-L96
+        patch_size = self.config.vision_config.patch_size
+        spatial_merge_size = self.config.spatial_merge_size
+        d = image_features.shape[-1]
+
+        image_sizes_scaled = [(size[0] // patch_size, size[1] // patch_size) for size in image_sizes]
+        tokens_per_image = [h * w for h, w in image_sizes_scaled]
+
+        permuted_tensor = []
+        for image_index, image_tokens in enumerate(image_features.split(tokens_per_image)):
+            h, w = image_sizes_scaled[image_index]
+            image_grid = image_tokens.view(h, w, d).permute(2, 0, 1).unsqueeze(0)
+            grid = torch.nn.functional.unfold(
+                image_grid,
+                kernel_size=spatial_merge_size,
+                stride=spatial_merge_size,
+            )
+            grid = grid.view(d * spatial_merge_size**2, -1).t()
+            permuted_tensor.append(grid)
+
+        image_features = torch.cat(permuted_tensor, dim=0)
+        image_features = self.multi_modal_projector(image_features)
+
+        return image_features
+
+    # Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L258-L280
+    # and https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L313-L324
+    def merge_vision_text_embeddings(
+        self,
+        vision_embeds,
+        inputs_embeds,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        **kwargs,
+    ):
+        image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+
+        special_image_mask = (input_ids == self.config.image_token_id).unsqueeze(-1)
+        special_image_mask = special_image_mask.expand_as(inputs_embeds).to(inputs_embeds.device)
+        image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
+        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None or audio is not None:
+            raise ValueError("Video/Audio input is not supported for Mistral3")
+
+        conversation = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": text}],
+            }
+        ]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+
+        prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+        inputs = processor(images=image, text=prompt, return_tensors="pt")
+        return inputs
+
+
 class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
@@ -5822,6 +5907,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
     "llava_next_video": _OVLlavaNextVideoForCausalLM,
+    "mistral3": _OVMistral3ForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
     "maira2": _OVMaira2ForCausalLM,

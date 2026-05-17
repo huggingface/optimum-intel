@@ -682,7 +682,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             SUPPORT_AUDIO.append("phi4mm")
 
     if is_transformers_version(">=", "4.50"):
-        SUPPORTED_ARCHITECTURES += ["gemma3"]
+        SUPPORTED_ARCHITECTURES += ["gemma3", "mistral3"]
         # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
         if is_transformers_version("<", "5"):
             SUPPORTED_ARCHITECTURES += ["smolvlm"]
@@ -744,6 +744,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "llava",
             "llava_next",
             "llava_next_mistral",
+            "mistral3",
             "qwen2_vl",
             "qwen2_5_vl",
             "got_ocr2",
@@ -846,6 +847,12 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(
             model_id, trust_remote_code=trust_remote_code, **loading_kwargs
         )
+
+        # The tiny Mistral3 checkpoint contains mixed fp32/bf16 weights, while the
+        # integration test compares against an F32 OpenVINO export.
+        if model_arch == "mistral3":
+            transformers_model = transformers_model.float()
+
         transformers_model.eval()
         if "internvl_chat" in model_arch:
             tokenizer = AutoTokenizer.from_pretrained(model_id, trast_remote_code=trust_remote_code)
