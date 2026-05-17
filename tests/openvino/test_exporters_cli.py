@@ -111,6 +111,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("inpainting", "flux-fill"),
         ("text-to-image", "sana"),
         ("text-to-video", "ltx-video"),
+        ("text-to-video", "ltx-video-0.9.1"),
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
@@ -210,6 +211,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "llava": 2,
         "sana": 2,
         "ltx-video": 2,
+        "ltx-video-0.9.1": 2,
         "sam": 0,  # no tokenizer
         "speecht5": 2,
         "kokoro": 0,  # uses g2p, no tokenizer
