@@ -171,6 +171,17 @@ def update_config_for_dflash(
             "AutoModel": moduler_path + "--model_patcher.Qwen3DFlashDraftModel",
             "AutoModelForCausalLM": moduler_path + "--model_patcher.Qwen3DFlashForCausalLM",
         }
+    # TODO ofir: remove this after implementing load time override in openvino.genai
+    dflash_block_size_override = os.environ.get("DFLASH_BLOCK_SIZE_OVERRIDE")
+    if dflash_block_size_override:
+        try:
+            block_size = int(dflash_block_size_override)
+        except ValueError as exc:
+            raise ValueError("DFLASH_BLOCK_SIZE_OVERRIDE must be an integer.") from exc
+        if block_size <= 1:
+            raise ValueError("DFLASH_BLOCK_SIZE_OVERRIDE must be greater than 1.")
+        config.block_size = block_size
+
     config.dflash_target_model = dflash_target_model
     config.dflash_target_cache_dir = cache_dir
     config.dflash_target_revision = revision
