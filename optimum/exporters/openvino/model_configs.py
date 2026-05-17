@@ -2152,7 +2152,9 @@ class Mistral3MultiModalProjectorOpenVINOConfig(OnnxConfig):
         return {"hidden_states": {0: "num_patches"}}
 
 
-@register_in_tasks_manager("mistral3", *["image-text-to-text", "text-generation", "text-generation-with-past"], library_name="transformers")
+@register_in_tasks_manager(
+    "mistral3", *["image-text-to-text", "text-generation", "text-generation-with-past"], library_name="transformers"
+)
 class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Mistral3ConfigBehavior]
