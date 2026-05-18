@@ -31,16 +31,27 @@ from transformers import (
 from transformers.file_utils import add_start_docstrings
 from transformers.modeling_outputs import ModelOutput
 from transformers.models.clip.modeling_clip import CLIPOutput
-from transformers.utils import is_offline_mode
 
+from optimum.exporters.openvino import main_export
 from optimum.exporters.tasks import TasksManager
+from optimum.intel.openvino.configuration import (
+    OVConfig,
+    OVWeightQuantizationConfig,
+)
+from optimum.intel.openvino.modeling import MODEL_START_DOCSTRING, OVModel
+from optimum.intel.openvino.modeling_base import OVModelHostMixin
+from optimum.intel.openvino.utils import (
+    TemporaryDirectory,
+    classproperty,
+)
+from optimum.intel.utils.import_utils import is_huggingface_hub_version
+from optimum.intel.utils.modeling_utils import _find_files_matching_pattern, _OpenClipForZeroShotImageClassification
 
-from ...exporters.openvino import main_export
-from ..utils.modeling_utils import _find_files_matching_pattern, _OpenClipForZeroShotImageClassification
-from .configuration import OVConfig, OVWeightQuantizationConfig
-from .modeling import MODEL_START_DOCSTRING, OVModel
-from .modeling_base import OVModelHostMixin
-from .utils import TemporaryDirectory, classproperty
+
+if is_huggingface_hub_version(">=", "1.2.1"):
+    from huggingface_hub import is_offline_mode
+else:
+    from transformers.utils import is_offline_mode
 
 
 logger = logging.getLogger(__name__)
