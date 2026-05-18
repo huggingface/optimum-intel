@@ -509,7 +509,10 @@ class MixtralModelPatcher(OVDecoderModelPatcher):
                     _mixtral_sparse_moe_block_forward, layer.block_sparse_moe
                 )
         else:
-            self._model.set_experts_implementation("batched_mm")
+            from transformers.models.mixtral.modeling_mixtral import MixtralExperts
+
+            self.original_moe_forward = MixtralExperts.forward
+            MixtralExperts.forward = lfm2_moe_experts_forward
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -517,6 +520,10 @@ class MixtralModelPatcher(OVDecoderModelPatcher):
         if is_transformers_version("<", "5"):
             for layer in self._model.model.layers:
                 layer.block_sparse_moe.forward = layer.block_sparse_moe._unpatched_forward
+        else:
+            from transformers.models.mixtral.modeling_mixtral import MixtralExperts
+
+            MixtralExperts.forward = self.original_moe_forward
 
 
 class ArcticModelPatcher(MixtralModelPatcher):
@@ -1829,7 +1836,10 @@ class PhiMoEModelPatcher(Phi3ModelPatcher):
                     _phi_moe_sparse_moe_block_forward, layer.block_sparse_moe
                 )
         else:
-            self._model.set_experts_implementation("batched_mm")
+            from transformers.models.phimoe.modeling_phimoe import PhimoeExperts
+
+            self.original_moe_forward = PhimoeExperts.forward
+            PhimoeExperts.forward = lfm2_moe_experts_forward
 
         # fixed in https://github.com/huggingface/transformers/pull/43445, still needed for v5.0
         if is_transformers_version("==", "5.0"):
@@ -1846,6 +1856,10 @@ class PhiMoEModelPatcher(Phi3ModelPatcher):
         if is_transformers_version("<", "5"):
             for layer in self._model.model.layers:
                 layer.block_sparse_moe.forward = layer.block_sparse_moe._orig_forward
+        else:
+            from transformers.models.phimoe.modeling_phimoe import PhimoeExperts
+
+            PhimoeExperts.forward = self.original_moe_forward
 
 
 def _aquila_self_attn_sdpa_forward(
@@ -5868,20 +5882,28 @@ class Qwen2MoEPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        if is_transformers_version(">=", "4.52.0") and is_transformers_version("<", "5"):
-            from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeSparseMoeBlock
+        if is_transformers_version(">=", "4.52.0"):
+            if is_transformers_version("<", "5"):
+                from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeSparseMoeBlock
 
-            modulewise_patch(self._model, Qwen2MoeSparseMoeBlock, _qwen2moe_sparse_block_forward)
+                modulewise_patch(self._model, Qwen2MoeSparseMoeBlock, _qwen2moe_sparse_block_forward)
+            else:
+                from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeExperts
 
-        if is_transformers_version(">=", "5"):
-            self._model.set_experts_implementation("batched_mm")
+                self.original_moe_forward = Qwen2MoeExperts.forward
+                Qwen2MoeExperts.forward = lfm2_moe_experts_forward
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if is_transformers_version(">=", "4.52.0") and is_transformers_version("<", "5"):
-            from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeSparseMoeBlock
+        if is_transformers_version(">=", "4.52.0"):
+            if is_transformers_version("<", "5"):
+                from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeSparseMoeBlock
 
-            modulewise_unpatch(self._model, Qwen2MoeSparseMoeBlock)
+                modulewise_unpatch(self._model, Qwen2MoeSparseMoeBlock)
+            else:
+                from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeExperts
+
+                Qwen2MoeExperts.forward = self.original_moe_forward
 
 
 class MarianModelPatcher(OVSeq2SeqModelPatcher):
@@ -7266,9 +7288,8 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
 
                 Qwen3MoeExperts.forward = self.original_moe_forward
 
-            # The original implementation of this forward method can be found at:
 
-
+# The original implementation of this forward method can be found at:
 # https://github.com/huggingface/transformers/blob/v4.55.4/src/transformers/models/zamba2/modeling_zamba2.py#L729
 # This patch modifies `forward()` so that when traced by torch.jit, it works correctly
 # during both the prefill and decoding steps.
