@@ -714,7 +714,16 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     }
     SUPPORTED_ARCHITECTURES += [arch for arch, supported in _is_model_supported.items() if supported]
     UNSUPPORTED_ARCHITECTURES.update(arch for arch, supported in _is_model_supported.items() if not supported)
-    REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "minicpmo", "llava-qwen2", "phi3_v", "maira2", "phi4mm", "videochat_flash_qwen"]
+    REMOTE_CODE_MODELS = [
+        "internvl_chat",
+        "minicpmv",
+        "minicpmo",
+        "llava-qwen2",
+        "phi3_v",
+        "maira2",
+        "phi4mm",
+        "videochat_flash_qwen",
+    ]
     IMAGE = Image.open(
         requests.get(
             TEST_IMAGE_URL,

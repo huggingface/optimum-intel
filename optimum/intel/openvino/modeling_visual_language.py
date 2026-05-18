@@ -32,6 +32,7 @@ from transformers import (
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLModel
 from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLModel, VisionRotaryEmbedding
+from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import Qwen3_5Model, Qwen3_5VisionModel
 from transformers.models.qwen3_vl.modeling_qwen3_vl import (
     Qwen3VLModel,
     Qwen3VLVisionModel,
@@ -3268,63 +3269,6 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
         return inputs
 
 
-
-if is_transformers_version(">=", "4.57.0"):
-    from transformers.models.qwen3_vl.modeling_qwen3_vl import (
-        Qwen3VLModel,
-        Qwen3VLVisionModel,
-        Qwen3VLVisionRotaryEmbedding,
-    )
-else:
-
-    class Qwen3VLModel:
-        pass
-
-    class Qwen3VLVisionModel:
-        pass
-
-    class Qwen3_5Model:
-        pass
-
-    class Qwen3_5VisionModel:
-        pass
-
-
-if is_transformers_version(">=", "5.2.0"):
-    from transformers.models.qwen3_5.modeling_qwen3_5 import (
-        Qwen3_5Model,
-        Qwen3_5VisionModel,
-        Qwen3_5VisionRotaryEmbedding,
-    )
-else:
-
-    class Qwen3_5Model:
-        pass
-
-    class Qwen3_5VisionModel:
-        pass
-
-    class Qwen3_5VisionRotaryEmbedding:
-        pass
-
-
-if is_transformers_version(">=", "5.2.0"):
-    from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
-        Qwen3_5MoeModel,
-        Qwen3_5MoeVisionModel,
-    )
-else:
-
-    class Qwen3_5MoeModel:
-        pass
-
-    class Qwen3_5MoeVisionModel:
-        pass
-
-
-
-
-
 class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
     get_placeholder_mask = Qwen3VLModel.get_placeholder_mask
     get_rope_index = Qwen3VLModel.get_rope_index
@@ -5289,12 +5233,12 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
         return model_inputs
 
 
-# The inheritance from Qwen3_5Model is needed to get access to methods:
-# get_placeholder_mask(), get_rope_index(), get_image_features(), get_video_features(), compute_3d_position_ids()
-#
-# and inheritance from Qwen3_5VisionModel is needed for accessing the following method:
-# rot_pos_emb()
-class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM, Qwen3_5Model, Qwen3_5VisionModel):
+class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
+    get_placeholder_mask = Qwen3_5Model.get_placeholder_mask
+    get_rope_index = Qwen3_5Model.get_rope_index
+    get_image_features = Qwen3_5Model.get_image_features
+    get_video_features = Qwen3_5Model.get_video_features
+    rot_pos_emb = Qwen3_5VisionModel.rot_pos_emb
     additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
 
     def __init__(
