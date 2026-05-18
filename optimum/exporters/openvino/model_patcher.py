@@ -42,7 +42,6 @@ from transformers.models.llama.modeling_llama import (
     LlamaRotaryEmbedding,
 )
 from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
-from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLTextRotaryEmbedding
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
 from transformers.processing_utils import Unpack
 from transformers.utils import ModelOutput
@@ -74,6 +73,8 @@ if is_transformers_version(">=", "4.54"):
     from transformers.masking_utils import create_causal_mask
 if is_transformers_version(">=", "4.56"):
     import transformers.masking_utils
+if is_transformers_version(">=", "4.57"):
+    from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLTextRotaryEmbedding
 if is_transformers_version(">=", "5"):
     from transformers.modeling_rope_utils import RotaryEmbeddingConfigMixin
 
