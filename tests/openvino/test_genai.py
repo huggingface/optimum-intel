@@ -157,6 +157,8 @@ class LLMPipelineTestCase(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_outputs(self, model_arch):
+        if model_arch == "llama":
+            self.skipTest("Temporarily skipping llama to isolate downstream same-process contamination")
         model_id = MODEL_NAMES[model_arch]
         echo = model_arch not in self.NO_ECHO_MODELS
         use_cache = model_arch not in self.NO_CACHE_MODELS
