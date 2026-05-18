@@ -27,6 +27,8 @@ from optimum.exporters.openvino.model_configs import (
     DeepseekOpenVINOConfig,
     LFM2MoeOpenVINOConfig,
     LFM2OpenVINOConfig,
+    Qwen3_5MoeTextOpenVINOConfig,
+    Qwen3_5TextOpenVINOConfig,
     Qwen3VLOpenVINOConfig,
 )
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
@@ -324,6 +326,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # qwen3_vl_text a part of qwen3_vl architecture and is tested in seq2seq group
         if is_transformers_version(">=", str(Qwen3VLOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"qwen3_vl_text"}
+        # qwen3_5_text a part of qwen3_5 architecture and is tested in seq2seq group
+        if is_transformers_version(">=", str(Qwen3_5TextOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"qwen3_5_text"}
+        # qwen3_5_moe_text a part of qwen3_5_moe architecture and is tested in seq2seq group
+        if is_transformers_version(">=", str(Qwen3_5MoeTextOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"qwen3_5_moe_text"}
 
         # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
         if is_transformers_version(">=", "5"):
