@@ -32,7 +32,11 @@ from transformers import (
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLModel
 from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLModel, VisionRotaryEmbedding
-from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import Qwen3_5Model, Qwen3_5VisionModel
+from transformers.models.qwen3_5.modeling_qwen3_5 import (
+    Qwen3_5Model,
+    Qwen3_5VisionModel,
+    Qwen3_5VisionRotaryEmbedding,
+)
 from transformers.models.qwen3_vl.modeling_qwen3_vl import (
     Qwen3VLModel,
     Qwen3VLVisionModel,
