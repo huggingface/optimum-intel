@@ -183,9 +183,10 @@ def update_config_for_eagle3(config):
         moduler_path = os.path.dirname(spec.origin)
         # Use VLM-aware Eagle3 classes for models targeting VLM architectures
         # (e.g. AngelSlim/Qwen3-VL-4B-Instruct_eagle3 with Eagle3LlamaForCausalLM).
-        is_vlm_eagle3 = getattr(config, "modal_type", "") == "VLM" or getattr(
-            config, "target_model_type", ""
-        ) in {"qwen2_vl", "qwen3_vl"}
+        is_vlm_eagle3 = getattr(config, "modal_type", "") == "VLM" or getattr(config, "target_model_type", "") in {
+            "qwen2_vl",
+            "qwen3_vl",
+        }
         if is_vlm_eagle3:
             model_cls = "QwenVLEagle3Model"
             causal_lm_cls = "QwenVLEagle3ForCausalLM"

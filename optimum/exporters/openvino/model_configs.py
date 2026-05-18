@@ -902,7 +902,9 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
                 self.use_past_in_inputs = True
                 # Eagle3VLMDummyGenerator must precede DummyTextInputGenerator
                 # so it wins for inputs_embeds and position_ids generation.
-                self.DUMMY_INPUT_GENERATOR_CLASSES = (Eagle3VLMDummyGenerator,) + self.DUMMY_INPUT_GENERATOR_CLASSES + (Eagle3DummyGenerator,)
+                self.DUMMY_INPUT_GENERATOR_CLASSES = (
+                    (Eagle3VLMDummyGenerator,) + self.DUMMY_INPUT_GENERATOR_CLASSES + (Eagle3DummyGenerator,)
+                )
                 self.MIN_TRANSFORMERS_VERSION = "4.57.0"
             else:
                 self.DUMMY_INPUT_GENERATOR_CLASSES += (Eagle3DummyGenerator,)
