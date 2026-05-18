@@ -493,6 +493,12 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "vision_embeddings_merger_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
+    "hexgrad/Kokoro-82M": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "group_size_fallback": "adjust",
+    },
 }
 
 _DEFAULT_8BIT_WQ_CONFIGS = {
