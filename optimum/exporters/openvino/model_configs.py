@@ -922,48 +922,6 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
             common_inputs["position_ids"] = {0: "num_dims", 1: "batch_size", 2: "sequence_length"}
         return common_inputs
 
-    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
-        dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
-
-        dummy_inputs = {}
-        input_names = [key for key in self.inputs.keys() if not key.startswith("past_key_values")]
-        if self.use_past_in_inputs and self.use_cache_branch is not False:
-            input_names.append("past_key_values")
-
-        for input_name in input_names:
-            input_was_inserted = False
-            for dummy_input_gen in dummy_inputs_generators:
-                if dummy_input_gen.supports_input(input_name):
-                    dummy_inputs[input_name] = self.overwrite_shape_and_generate_input(
-                        dummy_input_gen,
-                        input_name,
-                        framework,
-                        input_shapes=kwargs,
-                    )
-                    input_was_inserted = True
-                    break
-            if not input_was_inserted:
-                raise RuntimeError(
-                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model ONNX config.'
-                )
-
-        if (
-            self.use_past_in_inputs
-            and self.PAD_ATTENTION_MASK_TO_PAST
-            and self.use_cache_branch is not False
-            and "attention_mask" in dummy_inputs
-            and self.task in ("text-generation", "image-text-to-text")
-        ):
-            # VLM Eagle3 uses inputs_embeds instead of input_ids
-            main_input = dummy_inputs.get("input_ids", dummy_inputs.get("inputs_embeds"))
-            seq_len = main_input.shape[1]
-            past_seq_len = dummy_inputs["past_key_values"][0][1].shape[-2]
-            dummy_inputs["attention_mask"] = DummyInputGenerator.pad_input_on_dim(
-                dummy_inputs["attention_mask"], desired_length=past_seq_len + seq_len, dim=1
-            )
-
-        return dummy_inputs
-
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         common_outputs = super().outputs
