@@ -35,6 +35,7 @@ INSTALL_REQUIRE = [
     "nncf>=2.19.0",
     "openvino>=2026.0",
     "openvino-tokenizers>=2026.0",
+    "requests>=2.33,<3.0",
 ]
 
 TESTS_REQUIRE = [
@@ -64,6 +65,10 @@ TESTS_REQUIRE = [
     "vocos",
     "vector_quantize_pytorch",
     "openvino-genai",
+    "av",
+    "decord",
+    "imageio",
+    "kokoro",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
