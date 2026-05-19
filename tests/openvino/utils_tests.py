@@ -352,6 +352,7 @@ MODEL_NAMES = {
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
+    "qwen3_vl_eagle3": "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
     "videochat_flash_qwen": "optimum-intel-internal-testing/tiny-videochat-flash-qwen",
 }
 
@@ -361,7 +362,7 @@ EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7
 # These use Qwen3-VL MRoPE and target VLM models for speculative decoding.
 # Only used in the decoder test (not genai, since the VLM target needs image-text-to-text export).
 EAGLE3_VLM_MODELS = {
-    "qwen3_vl_eagle3": ("AngelSlim/Qwen3-VL-4B-Instruct_eagle3", "Qwen/Qwen3-VL-4B-Instruct"),
+    "qwen3_vl_eagle3": ("optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3", "optimum-intel-internal-testing/tiny-random-qwen3-vl-layer10"),
 }
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
@@ -525,6 +526,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "lfm2_moe": {"model": 46},
     "hunyuan_v1_dense": {"model": 32},
     "qwen3_eagle3": {"model": 20},
+    "qwen3_vl_eagle3": {"model": 18},
     "qwen3_next": {"model": 100},
     "gemma4": {
         "lm_model": 54,
@@ -569,6 +571,7 @@ REMOTE_CODE_MODELS = (
     "minicpm3",
     "deepseek",
     "qwen3_eagle3",
+    "qwen3_vl_eagle3",
     "qwen3_asr",
     "videochat_flash_qwen",
 )
