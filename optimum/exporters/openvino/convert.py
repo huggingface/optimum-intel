@@ -432,22 +432,28 @@ def export_pytorch(
 
                 ov_model = convert_model(ep)
             else:
-                if patch_16bit_model:
-                    from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
+                should_unpatch_torch_functions = False
+                try:
+                    if patch_16bit_model:
+                        from openvino.frontend.pytorch.patch_model import __make_16bit_traceable, _unpatch_torch_functions
 
-                    __make_16bit_traceable(model)
+                        __make_16bit_traceable(model)
+                        should_unpatch_torch_functions = True
 
-                conversion_extensions = getattr(patcher, "conversion_extensions", None)
-                module_extensions = getattr(patcher, "module_extensions", None)
-                if module_extensions is not None:
-                    ts_decoder_kwargs["module_extensions"] = module_extensions
-                ts_decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **ts_decoder_kwargs)
-                ov_model = convert_model(
-                    ts_decoder,
-                    example_input=dummy_inputs,
-                    input=[(item.shape, item.type) for item in input_info],
-                    extension=conversion_extensions,
-                )
+                    conversion_extensions = getattr(patcher, "conversion_extensions", None)
+                    module_extensions = getattr(patcher, "module_extensions", None)
+                    if module_extensions is not None:
+                        ts_decoder_kwargs["module_extensions"] = module_extensions
+                    ts_decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **ts_decoder_kwargs)
+                    ov_model = convert_model(
+                        ts_decoder,
+                        example_input=dummy_inputs,
+                        input=[(item.shape, item.type) for item in input_info],
+                        extension=conversion_extensions,
+                    )
+                finally:
+                    if should_unpatch_torch_functions:
+                        _unpatch_torch_functions()
 
         ov_model.validate_nodes_and_infer_types()  # TODO: remove as unnecessary validation?
 
