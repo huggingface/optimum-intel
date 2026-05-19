@@ -1386,7 +1386,10 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     )
 
     # Transformer
+    import copy
+
     transformer = pipeline.transformer
+    transformer_config = copy.copy(transformer.config)
     transformer.config.text_encoder_projection_dim = transformer.config.joint_attention_dim
     transformer.config.requires_aesthetics_score = getattr(pipeline.config, "requires_aesthetics_score", False)
     transformer.config.time_cond_proj_dim = None
