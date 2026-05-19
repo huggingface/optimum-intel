@@ -166,6 +166,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "4.53.0") and is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "gigachat3"),
+            ]
+        )
+
     if is_transformers_version(">=", "4.57.0"):
         SUPPORTED_ARCHITECTURES.extend(
             [
@@ -221,6 +228,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "exaone4": 2,
         "bitnet": 2,
         "granitemoehybrid": 2,
+        "gigachat3": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
