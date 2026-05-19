@@ -846,6 +846,9 @@ class Eagle3VLMDummyGenerator(DummyInputGenerator):
             shape = (self.batch_size, self.sequence_length, self.hidden_size)
             return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
         if input_name == "position_ids":
+            # The rotary embedding is MRoPE (Multimodal RoPE)
+            # MRoPE encodes position along three independent axes: temporal, height, and width
+            # https://github.com/Tencent/AngelSlim/blob/main/angelslim/compressor/speculative/train/models/draft/llama_eagle3.py#L211
             shape = (3, self.batch_size, self.sequence_length)
             return self.random_int_tensor(shape, max_value=self.sequence_length, framework=framework, dtype=int_dtype)
 
