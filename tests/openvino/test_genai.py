@@ -655,7 +655,9 @@ class LLMPipelineWithEagle3TestCase(unittest.TestCase):
         if is_transformers_version("<", "4.57"):
             self.skipTest("Eagle3 VLM requires transformers >= 4.57")
         if is_openvino_version("<", "2026.999"):
-            self.skipTest("Eagle3 requires openvino-genai >= 2026.999. Need to get PR https://github.com/openvinotoolkit/openvino.genai/pull/3330 merged.")
+            self.skipTest(
+                "Eagle3 requires openvino-genai >= 2026.999. Need to get PR https://github.com/openvinotoolkit/openvino.genai/pull/3330 merged."
+            )
 
         draft_model_id, target_model_id = model_pair
         trust_remote_code = model_arch in REMOTE_CODE_MODELS
@@ -685,9 +687,9 @@ class LLMPipelineWithEagle3TestCase(unittest.TestCase):
         # Phase 1: generate with Eagle3 speculative decoding
         ov_draft_model = draft_model(draft_model_path, "CPU")
         ov_eagle3_pipe = VLMPipeline(main_model_path, OPENVINO_DEVICE, draft_model=ov_draft_model, **TEST_CONFIG)
-        genai_eagle3_output = ov_eagle3_pipe.generate(
-            prompt=question, videos=[input_video], **self.GEN_KWARGS
-        ).texts[0]
+        genai_eagle3_output = ov_eagle3_pipe.generate(prompt=question, videos=[input_video], **self.GEN_KWARGS).texts[
+            0
+        ]
         del ov_eagle3_pipe
         del ov_draft_model
         gc.collect()
