@@ -255,7 +255,11 @@ def sdpa_mask_without_vmap(**kwargs) -> Optional[torch.Tensor]:
     kwargs.pop("use_vmap", None)
     if is_transformers_version("<", "5"):
         return sdpa_mask_without_vmap_legacy(**kwargs)
-    elif is_transformers_version(">=", "5.4") and is_transformers_version("<=", "5.7"):
+    elif (
+        is_transformers_version(">=", "5.4")
+        and is_transformers_version("<", "5.9")
+        and isinstance(kwargs.get("q_length", None), torch.Tensor)
+    ):
         q_length = kwargs.pop("q_length", None)
         q_offset = kwargs.pop("q_offset", 0)
         cache_position = torch.arange(q_offset, q_offset + q_length, device=q_length.device)
