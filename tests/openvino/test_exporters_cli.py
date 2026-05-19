@@ -1133,9 +1133,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         if model_type in ["bitnet"]:
             self.skipTest("CVS-176501 INT8 compression fails for BitNet; need to compress remaining BF16 weights")
         if model_type == "qwen3_vl_eagle3":
-            self.skipTest(
-                "Skipped, no compression and quantiozation are needed for the draft Eagle3 model."
-            )
+            self.skipTest("Skipped, no compression and quantiozation are needed for the draft Eagle3 model.")
         with TemporaryDirectory() as tmpdir:
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":

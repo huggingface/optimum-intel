@@ -362,7 +362,10 @@ EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7
 # These use Qwen3-VL MRoPE and target VLM models for speculative decoding.
 # Only used in the decoder test (not genai, since the VLM target needs image-text-to-text export).
 EAGLE3_VLM_MODELS = {
-    "qwen3_vl_eagle3": ("optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3", "optimum-intel-internal-testing/tiny-random-qwen3-vl-layer10"),
+    "qwen3_vl_eagle3": (
+        "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
+        "optimum-intel-internal-testing/tiny-random-qwen3-vl-layer10",
+    ),
 }
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
