@@ -253,6 +253,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mamba": 0,
         "falcon_mamba": 0,
         "arcee": 2,
+        "smollm3": 2,
         "gpt_oss": 2,
         "gpt_oss_mxfp4": 2,
         "zamba2": 1,
