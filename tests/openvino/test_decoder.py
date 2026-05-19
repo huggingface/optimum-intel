@@ -12,7 +12,6 @@ from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
 from utils_tests import (
     EAGLE3_MODELS,
-    EAGLE3_VLM_MODELS,
     F32_CONFIG,
     MODEL_NAMES,
     OPENVINO_DEVICE,
