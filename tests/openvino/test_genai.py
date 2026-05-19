@@ -657,9 +657,6 @@ class LLMPipelineWithEagle3TestCase(unittest.TestCase):
         if is_openvino_version("<", "2026.999"):
             self.skipTest("Eagle3 requires openvino-genai >= 2026.999. Need to get PR https://github.com/openvinotoolkit/openvino.genai/pull/3330 merged.")
 
-        from huggingface_hub import hf_hub_download
-        from transformers.video_utils import load_video
-
         draft_model_id, target_model_id = model_pair
         trust_remote_code = model_arch in REMOTE_CODE_MODELS
 
@@ -680,13 +677,9 @@ class LLMPipelineWithEagle3TestCase(unittest.TestCase):
             output=main_model_path,
         )
 
-        video_path = hf_hub_download(
-            repo_id="raushan-testing-hf/videos-test",
-            filename="sample_demo_1.mp4",
-            repo_type="dataset",
-        )
-        input_video, _ = load_video(video_path, num_frames=10, backend="opencv")
-        input_video = ov.Tensor(input_video)
+        # Use a small deterministic random video tensor: (num_frames, H, W, 3) uint8
+        rng = np.random.default_rng(42)
+        input_video = ov.Tensor(rng.integers(0, 256, size=(5, 32, 32, 3), dtype=np.uint8))
         question = "Why is this video funny?"
 
         # Phase 1: generate with Eagle3 speculative decoding
