@@ -652,8 +652,8 @@ class LLMPipelineWithEagle3TestCase(unittest.TestCase):
 
     @parameterized.expand(EAGLE3_VLM_MODELS.items())
     def test_compare_outputs_vlm(self, model_arch, model_pair):
-        if is_transformers_version("<", "4.57"):
-            self.skipTest("Eagle3 VLM requires transformers >= 4.57")
+        if is_transformers_version("<", "4.57") or is_transformers_version(">=", "5.0.0"):
+            self.skipTest("Eagle3 VLM requires transformers >= 4.57 and < 5.0.0")
         if is_openvino_version("<", "2026.999"):
             self.skipTest(
                 "Eagle3 requires openvino-genai >= 2026.999. Need to get PR https://github.com/openvinotoolkit/openvino.genai/pull/3330 merged."

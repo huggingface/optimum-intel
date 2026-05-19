@@ -173,7 +173,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
-    if is_transformers_version(">=", "4.57"):
+    if is_transformers_version(">=", "4.57") and is_transformers_version("<", "5.0.0"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("image-text-to-text", "qwen3_vl_eagle3"),

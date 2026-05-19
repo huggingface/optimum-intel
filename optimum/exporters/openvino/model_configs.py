@@ -906,6 +906,8 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
                     (Eagle3VLMDummyGenerator,) + self.DUMMY_INPUT_GENERATOR_CLASSES + (Eagle3DummyGenerator,)
                 )
                 self.MIN_TRANSFORMERS_VERSION = "4.57.0"
+                # VLM Eagle3 export uses transformers modeling APIs that changed in 5.0.
+                self.MAX_TRANSFORMERS_VERSION = "4.57.99"
             else:
                 self.DUMMY_INPUT_GENERATOR_CLASSES += (Eagle3DummyGenerator,)
 
