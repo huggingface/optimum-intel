@@ -10372,7 +10372,7 @@ def _ltx2_connectors_top_level_forward_patched(self, text_encoder_hidden_states,
     if text_encoder_hidden_states.ndim == 3:
         text_encoder_hidden_states = text_encoder_hidden_states.unflatten(2, (self.config.caption_channels, -1))
 
-    if self.config.per_modality_projections:
+    if self.config.get("per_modality_projections", False):
         from diffusers.pipelines.ltx2.connectors import per_token_rms_norm
         import math
 
