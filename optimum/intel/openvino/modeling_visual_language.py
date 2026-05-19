@@ -32,11 +32,6 @@ from transformers import (
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLModel
 from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLModel, VisionRotaryEmbedding
-from transformers.models.qwen3_5.modeling_qwen3_5 import (
-    Qwen3_5Model,
-    Qwen3_5VisionModel,
-    Qwen3_5VisionRotaryEmbedding,
-)
 from transformers.models.qwen3_vl.modeling_qwen3_vl import (
     Qwen3VLModel,
     Qwen3VLVisionModel,
@@ -58,6 +53,14 @@ from optimum.intel.openvino.utils import (
     classproperty,
 )
 from optimum.intel.utils.import_utils import is_transformers_version
+
+
+if is_transformers_version(">=", "5.2"):
+    from transformers.models.qwen3_5.modeling_qwen3_5 import (
+        Qwen3_5Model,
+        Qwen3_5VisionModel,
+        Qwen3_5VisionRotaryEmbedding,
+    )
 
 
 if is_transformers_version(">=", "4.46.0"):
@@ -5238,11 +5241,6 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
 
 class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
-    get_placeholder_mask = Qwen3_5Model.get_placeholder_mask
-    get_rope_index = Qwen3_5Model.get_rope_index
-    get_image_features = Qwen3_5Model.get_image_features
-    get_video_features = Qwen3_5Model.get_video_features
-    rot_pos_emb = Qwen3_5VisionModel.rot_pos_emb
     additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
 
     def __init__(
@@ -5625,6 +5623,12 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
         self.rope_deltas = None
 
         return super().generate(*args, **kwargs)
+
+
+if is_transformers_version(">=", "5.2"):
+    _OVQwen3_5ForCausalLM.get_placeholder_mask = Qwen3_5Model.get_placeholder_mask
+    _OVQwen3_5ForCausalLM.get_rope_index = Qwen3_5Model.get_rope_index
+    _OVQwen3_5ForCausalLM.rot_pos_emb = Qwen3_5VisionModel.rot_pos_emb
 
 
 MODEL_TYPE_TO_CLS_MAPPING = {
