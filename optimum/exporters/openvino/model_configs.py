@@ -383,7 +383,7 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 class DFlashDummyInputGenerator(DummyInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("input_ids", "target_hidden", "position_ids")
+    SUPPORTED_INPUT_NAMES = ("input_ids", "hidden_states", "position_ids")
 
     def __init__(
         self,
@@ -410,7 +410,7 @@ class DFlashDummyInputGenerator(DummyInputGenerator):
                 framework=framework,
                 dtype=int_dtype,
             )
-        if input_name == "target_hidden":
+        if input_name == "hidden_states":
             return self.random_float_tensor(
                 [self.batch_size, self.context_length, self.hidden_size * self.num_target_layers],
                 framework=framework,
@@ -471,17 +471,18 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         archs = getattr(config, "architectures", None)
         self.dflash = isinstance(archs, list) and len(archs) > 0 and archs[0] == "DFlashDraftModel"
         if self.dflash:
-            self.DUMMY_INPUT_GENERATOR_CLASSES = (DFlashDummyInputGenerator,)
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DFlashDummyInputGenerator, GemmaDummyPastKeyValuesGenerator)
             self.MIN_TRANSFORMERS_VERSION = "4.57.0"
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if self.dflash:
-            return {
-                "input_ids": {0: "batch_size", 1: "block_size"},
-                "target_hidden": {0: "batch_size", 1: "context_length", 2: "target_hidden_size"},
-                "position_ids": {0: "batch_size", 1: "position_sequence_length"},
-            }
+            common_inputs = super().inputs
+            common_inputs.pop("attention_mask", None)
+            common_inputs["input_ids"] = {0: "batch_size", 1: "block_size"}
+            common_inputs["hidden_states"] = {0: "batch_size", 1: "context_length", 2: "target_hidden_size"}
+            common_inputs["position_ids"] = {0: "batch_size", 1: "position_sequence_length"}
+            return common_inputs
         if self.task in ["feature-extraction"]:
             common_inputs = {
                 "input_ids": {0: "batch_size", 1: "sequence_length"},
@@ -494,8 +495,18 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         if self.dflash:
-            return {"logits": {0: "batch_size", 1: "draft_sequence_length"}}
+            common_outputs = super().outputs
+            common_outputs["logits"] = {0: "batch_size", 1: "draft_sequence_length"}
+            return common_outputs
         return super().outputs
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        super().add_past_key_values(inputs_or_outputs, direction)
+        if self.dflash and direction == "outputs":
+            for axes in inputs_or_outputs.values():
+                for axis, name in axes.items():
+                    if name == "past_sequence_length + sequence_length":
+                        axes[axis] = "past_sequence_length + context_length"
 
 
 class DummyQwen3VLLMInputGenerator(DummyTextInputGenerator):

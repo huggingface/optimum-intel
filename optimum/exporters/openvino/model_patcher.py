@@ -8601,22 +8601,31 @@ class Qwen3DFlashAttention(nn.Module):
         query_states = self.q_proj(hidden_states).view(bsz, q_len, -1, self.head_dim)
         query_states = self.q_norm(query_states).transpose(1, 2)
 
-        key_context = self.k_proj(target_hidden)
-        key_noise = self.k_proj(hidden_states)
-        value_context = self.v_proj(target_hidden)
-        value_noise = self.v_proj(hidden_states)
-
-        key_states = torch.cat([key_context, key_noise], dim=1).view(bsz, ctx_len + q_len, -1, self.head_dim)
-        value_states = torch.cat([value_context, value_noise], dim=1).view(bsz, ctx_len + q_len, -1, self.head_dim)
+        kv_hidden_states = torch.cat([target_hidden, hidden_states], dim=1)
+        key_states = self.k_proj(kv_hidden_states).view(bsz, ctx_len + q_len, -1, self.head_dim)
+        value_states = self.v_proj(kv_hidden_states).view(bsz, ctx_len + q_len, -1, self.head_dim)
         key_states = self.k_norm(key_states).transpose(1, 2)
         value_states = value_states.transpose(1, 2)
 
         cos, sin = position_embeddings
         query_states, key_states = _dflash_apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        target_key_states, block_key_states = key_states.split([ctx_len, q_len], dim=2)
+        target_value_states, block_value_states = value_states.split([ctx_len, q_len], dim=2)
 
         if past_key_values is not None:
-            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            # Persist only committed target-prefix K/V. The speculative block
+            # stays local to this inference, so rejection never requires cache trim.
+            target_cache_position = cache_position[:ctx_len] if cache_position is not None else None
+            cache_kwargs = {"sin": sin[:, :ctx_len], "cos": cos[:, :ctx_len], "cache_position": target_cache_position}
+            target_key_states, target_value_states = past_key_values.update(
+                target_key_states,
+                target_value_states,
+                self.layer_idx,
+                cache_kwargs,
+            )
+
+        key_states = torch.cat([target_key_states, block_key_states], dim=2)
+        value_states = torch.cat([target_value_states, block_value_states], dim=2)
 
         attn_output, attn_weights = qwen3_eager_attention_forward(
             self,
@@ -8703,27 +8712,48 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         position_ids: torch.LongTensor,
         attention_mask: Optional[torch.Tensor] = None,
         noise_embedding: Optional[torch.Tensor] = None,
-        target_hidden: Optional[torch.Tensor] = None,
+        hidden_states: Optional[torch.Tensor] = None,
         past_key_values: Optional[Cache] = None,
-        use_cache: bool = False,
+        use_cache: Optional[bool] = None,
+        cache_position: Optional[torch.LongTensor] = None,
         **kwargs,
-    ) -> torch.FloatTensor:
-        hidden_states = noise_embedding
-        target_hidden = target_hidden.to(hidden_states.dtype)
+    ) -> BaseModelOutputWithPast:
+        noise_states = noise_embedding
+        target_hidden = hidden_states.to(noise_states.dtype)
         target_hidden = self.hidden_norm(self.fc(target_hidden))
-        position_embeddings = self.rotary_emb(hidden_states, position_ids)
+        use_cache = use_cache if use_cache is not None else self.config.use_cache
+        if use_cache:
+            if past_key_values is None:
+                past_key_values = DynamicCache(config=self.config)
+            elif not isinstance(past_key_values, Cache):
+                if is_transformers_version("<", "5"):
+                    past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+                else:
+                    past_key_values = DynamicCache(past_key_values)
+        if use_cache and cache_position is None:
+            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+            cache_position = torch.arange(
+                past_seen_tokens,
+                past_seen_tokens + target_hidden.shape[1] + noise_states.shape[1],
+                device=noise_states.device,
+            )
+        position_embeddings = self.rotary_emb(noise_states, position_ids)
         for layer in self.layers:
-            hidden_states = layer(
-                hidden_states=hidden_states,
+            noise_states = layer(
+                hidden_states=noise_states,
                 target_hidden=target_hidden,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 past_key_value=past_key_values,
                 use_cache=use_cache,
+                cache_position=cache_position,
                 position_embeddings=position_embeddings,
                 **kwargs,
             )
-        return self.norm(hidden_states)
+        return BaseModelOutputWithPast(
+            last_hidden_state=self.norm(noise_states),
+            past_key_values=past_key_values if use_cache else None,
+        )
 
 
 class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
@@ -8765,17 +8795,17 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
     def forward(
         self,
         input_ids: torch.LongTensor,
-        target_hidden: torch.Tensor,
+        hidden_states: torch.Tensor,
         position_ids: torch.LongTensor,
         attention_mask: Optional[torch.Tensor] = None,
         past_key_values: Optional[Cache] = None,
-        use_cache: bool = False,
+        use_cache: Optional[bool] = None,
         logits_to_keep: Optional[int] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
         noise_embedding = self.embed_tokens(input_ids)
-        hidden_states = super().forward(
-            target_hidden=target_hidden,
+        outputs = super().forward(
+            hidden_states=hidden_states,
             noise_embedding=noise_embedding,
             position_ids=position_ids,
             attention_mask=attention_mask,
@@ -8785,8 +8815,8 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
         )
         if logits_to_keep is None:
             logits_to_keep = self.block_size - 1
-        logits = self.lm_head(hidden_states[:, -logits_to_keep:, :])
-        return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
+        logits = self.lm_head(outputs.last_hidden_state[:, -logits_to_keep:, :])
+        return CausalLMOutputWithPast(logits=logits, past_key_values=outputs.past_key_values)
 
 
 # Patched implementation of the gated delta rule in recurrent form.
