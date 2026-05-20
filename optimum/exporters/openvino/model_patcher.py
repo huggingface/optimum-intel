@@ -241,17 +241,19 @@ def get_correct_experts_implementation_patched(self, requested_experts: str | No
 def register_ov_batched_mm(patcher):
     from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
 
-    patcher.get_correct_experts_implementation_orig = patcher._model.get_correct_experts_implementation
-    patcher._model.get_correct_experts_implementation = types.MethodType(
-        get_correct_experts_implementation_patched, patcher._model
-    )
+    if is_transformers_version("<", "5.7"):
+        patcher.get_correct_experts_implementation_orig = patcher._model.get_correct_experts_implementation
+        patcher._model.get_correct_experts_implementation = types.MethodType(
+            get_correct_experts_implementation_patched, patcher._model
+        )
 
     ALL_EXPERTS_FUNCTIONS.register("ov_batched_mm", batched_mm_experts_forward_patched)
     patcher._model.set_experts_implementation("ov_batched_mm")
 
 
 def set_original_get_correct_experts_implementation(patcher):
-    patcher.get_correct_experts_implementation = patcher.get_correct_experts_implementation_orig
+    if is_transformers_version("<", "5.7"):
+        patcher.get_correct_experts_implementation = patcher.get_correct_experts_implementation_orig
 
 
 def patch_update_causal_mask(
