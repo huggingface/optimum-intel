@@ -251,11 +251,6 @@ def register_ov_batched_mm(patcher):
     patcher._model.set_experts_implementation("ov_batched_mm")
 
 
-def set_original_get_correct_experts_implementation(patcher):
-    if is_transformers_version("<", "5.7"):
-        patcher.get_correct_experts_implementation = patcher.get_correct_experts_implementation_orig
-
-
 def patch_update_causal_mask(
     model, transformers_version, inner_model_name="model", patch_fn=None, patch_extrnal_model=False
 ):
@@ -8012,8 +8007,6 @@ class GptOssModelPatcher(OVDecoderModelPatcher):
                 from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
 
                 GptOssExperts.forward = self.original_gpt_oss_forward
-            else:
-                set_original_get_correct_experts_implementation(self)
 
 
 # This patch overrides the following line in Transformers:
