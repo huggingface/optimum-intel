@@ -540,6 +540,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     },
 }
 
+_ARCHITECTURES_INT8_TASK_OVERRIDES = {
+    "smollm3": {
+        "text-classification": {"model": 32},
+    },
+}
+
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
 
 REMOTE_CODE_MODELS = (
