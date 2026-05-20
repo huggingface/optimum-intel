@@ -150,6 +150,11 @@ for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
         UNSUPPORTED_OPS_PATCHING_SPEC.pop(idx)
 
 
+# Original code: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/integrations/moe.py#L98
+# Method needs to be patched to match the pattern that OpenVINO MoE optimization transformation expect.
+# The difference is that this method packs hidden states and routing weight to dense representation,
+# instead of usage of indexed tensors.
+# Also, original method adds squeeze/unsqueeze operations around MatMul's which also break expected pattern.
 def batched_mm_experts_forward_patched(
     self: torch.nn.Module,
     hidden_states: torch.Tensor,
