@@ -1679,34 +1679,36 @@ class OVLTXPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTXPipel
 
         return [value] * effective_batch_size
 
-    def __call__(self, *args, **kwargs):
-        prompt = kwargs.get("prompt", args[0] if args else None)
-        prompt_embeds = kwargs.get("prompt_embeds")
-        num_videos_per_prompt = kwargs.get("num_videos_per_prompt", 1) or 1
+def __call__(self, *args, **kwargs):
+    prompt = kwargs.get("prompt", args[0] if args else None)
+    prompt_embeds = kwargs.get("prompt_embeds")
+    num_videos_per_prompt = kwargs.get("num_videos_per_prompt", 1) or 1
 
-        if prompt is not None and isinstance(prompt, str):
-            batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):
-            batch_size = len(prompt)
-        elif prompt_embeds is not None:
-            batch_size = prompt_embeds.shape[0]
-        else:
-            batch_size = 1
-
-        if kwargs.get("decode_timestep") is None:
-            kwargs["decode_timestep"] = self._expand_decode_condition(0.0, batch_size, num_videos_per_prompt)
-        else:
-            kwargs["decode_timestep"] = self._expand_decode_condition(
-                kwargs["decode_timestep"], batch_size, num_videos_per_prompt
-            )
-
-        if kwargs.get("decode_noise_scale") is not None:
-            kwargs["decode_noise_scale"] = self._expand_decode_condition(
-                kwargs["decode_noise_scale"], batch_size, num_videos_per_prompt
-            )
-
+    if num_videos_per_prompt == 1 or not getattr(self.vae.config, "timestep_conditioning", False):
         return super().__call__(*args, **kwargs)
 
+    if prompt is not None and isinstance(prompt, str):
+        batch_size = 1
+    elif prompt is not None and isinstance(prompt, list):
+        batch_size = len(prompt)
+    elif prompt_embeds is not None:
+        batch_size = prompt_embeds.shape[0]
+    else:
+        batch_size = 1
+
+    if kwargs.get("decode_timestep") is None:
+        kwargs["decode_timestep"] = self._expand_decode_condition(0.0, batch_size, num_videos_per_prompt)
+    else:
+        kwargs["decode_timestep"] = self._expand_decode_condition(
+            kwargs["decode_timestep"], batch_size, num_videos_per_prompt
+        )
+
+    if kwargs.get("decode_noise_scale") is not None:
+        kwargs["decode_noise_scale"] = self._expand_decode_condition(
+            kwargs["decode_noise_scale"], batch_size, num_videos_per_prompt
+        )
+
+    return super().__call__(*args, **kwargs)
 
 SUPPORTED_OV_PIPELINES = [
     OVStableDiffusionPipeline,
