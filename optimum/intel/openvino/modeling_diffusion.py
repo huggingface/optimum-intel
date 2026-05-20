@@ -1701,6 +1701,20 @@ class OVFlux2KleinPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, F
     export_feature = "text-to-image"
     auto_model_class = Flux2KleinPipeline
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Neutralize export-time runtime scaling for tighter parity with diffusers.
+        for component_name in ("transformer", "vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2"):
+            component = getattr(self, component_name, None)
+            if component is None:
+                continue
+            try:
+                component.model.set_rt_info("1.0", ["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                component.clear_requests()
+            except Exception:
+                pass
+
     def __call__(self, *args, **kwargs):
         if args and isinstance(args[0], str) and "prompt" not in kwargs:
             user_prompt = args[0]
@@ -1708,6 +1722,10 @@ class OVFlux2KleinPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, F
                 f"`prompt` must be passed as a keyword argument for Flux2Klein pipelines because the first positional "
                 f"argument is `image`. Use `pipeline(prompt={user_prompt!r})`."
             )
+
+        if "guidance_scale" in kwargs and kwargs["guidance_scale"] is not None and kwargs["guidance_scale"] != 1.0:
+            kwargs["guidance_scale"] = 1.0
+
         return super().__call__(*args, **kwargs)
 
 
@@ -1835,6 +1853,7 @@ if is_diffusers_version(">=", "0.33.0"):
 if is_diffusers_version(">=", "0.37.0"):
     SUPPORTED_OV_PIPELINES.append(OVFlux2KleinPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["flux2-klein"] = OVFlux2KleinPipeline
+    OV_IMAGE2IMAGE_PIPELINES_MAPPING["flux2-klein"] = OVFlux2KleinPipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,
