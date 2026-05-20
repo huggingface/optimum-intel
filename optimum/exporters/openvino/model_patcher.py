@@ -215,18 +215,40 @@ def batched_mm_experts_forward_patched(
     return next_states
 
 
-def patch_batched_mm(patcher):
+# Original code: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/modeling_utils.py#L1930
+# The patch is needed to add "ov_batched_mm" to the applicable_experts list.
+def get_correct_experts_implementation_patched(self, requested_experts: str | None) -> str:
+    applicable_experts = "grouped_mm" if requested_experts is None else requested_experts
+    if applicable_experts not in ["eager", "grouped_mm", "batched_mm", "ov_batched_mm"]:
+        message = (
+            f'Specified `experts_implementation="{applicable_experts}"` is not supported. The only possible arguments are '
+            '`experts_implementation="eager"`, `"experts_implementation=grouped_mm"` and `"experts_implementation=batched_mm"`.'
+        )
+        raise ValueError(message)
+
+    # Perform relevant checks
+    if applicable_experts == "grouped_mm":
+        try:
+            self._grouped_mm_can_dispatch()
+        except (ValueError, ImportError) as e:
+            if requested_experts == "grouped_mm":
+                raise e
+            applicable_experts = "eager"
+
+    return applicable_experts
+
+
+def register_ov_batched_mm(patcher):
     from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
+    patcher.get_correct_experts_implementation_orig = patcher._model.get_correct_experts_implementation
+    patcher._model.get_correct_experts_implementation = types.MethodType(get_correct_experts_implementation_patched, patcher._model)
 
-    patcher.original_gpt_oss_forward = ALL_EXPERTS_FUNCTIONS._global_mapping["batched_mm"]
-    ALL_EXPERTS_FUNCTIONS._global_mapping["batched_mm"] = batched_mm_experts_forward_patched
-    patcher._model.set_experts_implementation("batched_mm")
+    ALL_EXPERTS_FUNCTIONS.register("ov_batched_mm", batched_mm_experts_forward_patched)
+    patcher._model.set_experts_implementation("ov_batched_mm")
 
 
-def set_original_batched_mm(patcher):
-    from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
-
-    ALL_EXPERTS_FUNCTIONS._global_mapping["batched_mm"] = patcher.original_gpt_oss_forward
+def set_original_get_correct_experts_implementation(patcher):
+    patcher.get_correct_experts_implementation = patcher.get_correct_experts_implementation_orig
 
 
 def patch_update_causal_mask(
@@ -7975,7 +7997,7 @@ class GptOssModelPatcher(OVDecoderModelPatcher):
                 self.original_gpt_oss_forward = GptOssExperts.forward
                 GptOssExperts.forward = gpt_oss_forward
             else:
-                patch_batched_mm(self)
+                register_ov_batched_mm(self)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -7986,7 +8008,7 @@ class GptOssModelPatcher(OVDecoderModelPatcher):
 
                 GptOssExperts.forward = self.original_gpt_oss_forward
             else:
-                set_original_batched_mm(self)
+                set_original_get_correct_experts_implementation(self)
 
 
 # This patch overrides the following line in Transformers:
