@@ -39,7 +39,15 @@ from transformers import (
     AutoTokenizer,
     set_seed,
 )
-from utils_tests import EAGLE3_MODELS, F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS, TEST_IMAGE_URL
+from utils_tests import (
+    EAGLE3_MODELS,
+    EAGLE3_VLM_MODELS,
+    F32_CONFIG,
+    MODEL_NAMES,
+    OPENVINO_DEVICE,
+    REMOTE_CODE_MODELS,
+    TEST_IMAGE_URL,
+)
 
 from optimum.exporters.openvino import main_export
 from optimum.intel.openvino import (
@@ -632,6 +640,63 @@ class LLMPipelineWithEagle3TestCase(unittest.TestCase):
         genai_output = str(
             ov_pipe.generate(prompt, echo=True, apply_chat_template=False, ignore_eos=True, **self.GEN_KWARGS)
         )
+        del ov_pipe
+        gc.collect()
+
+        # assert they are not empty
+        self.assertTrue(genai_eagle3_output)
+        self.assertTrue(genai_output)
+
+        # compare outputs
+        self.assertEqual(genai_eagle3_output, genai_output)
+
+    @parameterized.expand(EAGLE3_VLM_MODELS.items())
+    def test_compare_outputs_vlm(self, model_arch, model_pair):
+        if is_transformers_version("<", "4.57") or is_transformers_version(">=", "5.0.0"):
+            self.skipTest("Eagle3 VLM requires transformers >= 4.57 and < 5.0.0")
+        if is_openvino_version("<", "2026.999"):
+            self.skipTest(
+                "Eagle3 requires openvino-genai >= 2026.999. Need to get PR https://github.com/openvinotoolkit/openvino.genai/pull/3330 merged."
+            )
+
+        draft_model_id, target_model_id = model_pair
+        trust_remote_code = model_arch in REMOTE_CODE_MODELS
+
+        # export main (VLM) and draft (Eagle3) models
+        draft_model_path = Path(self.temp_dir) / "draft_model"
+        main_model_path = Path(self.temp_dir) / "main_model"
+        main_export(
+            model_name_or_path=draft_model_id,
+            task="image-text-to-text",
+            trust_remote_code=trust_remote_code,
+            convert_tokenizer=False,
+            output=draft_model_path,
+        )
+        main_export(
+            model_name_or_path=target_model_id,
+            task="image-text-to-text",
+            convert_tokenizer=True,
+            output=main_model_path,
+        )
+
+        # Use a small deterministic random video tensor: (num_frames, H, W, 3) uint8
+        rng = np.random.default_rng(42)
+        input_video = ov.Tensor(rng.integers(0, 256, size=(5, 32, 32, 3), dtype=np.uint8))
+        question = "Why is this video funny?"
+
+        # Phase 1: generate with Eagle3 speculative decoding
+        ov_draft_model = draft_model(draft_model_path, "CPU")
+        ov_eagle3_pipe = VLMPipeline(main_model_path, OPENVINO_DEVICE, draft_model=ov_draft_model, **TEST_CONFIG)
+        genai_eagle3_output = ov_eagle3_pipe.generate(prompt=question, videos=[input_video], **self.GEN_KWARGS).texts[
+            0
+        ]
+        del ov_eagle3_pipe
+        del ov_draft_model
+        gc.collect()
+
+        # Phase 2: generate without Eagle3
+        ov_pipe = VLMPipeline(main_model_path, OPENVINO_DEVICE, **TEST_CONFIG)
+        genai_output = ov_pipe.generate(prompt=question, videos=[input_video], **self.GEN_KWARGS).texts[0]
         del ov_pipe
         gc.collect()
 
