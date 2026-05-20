@@ -114,6 +114,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
+        ("text-to-audio", "kokoro"),
     ]
 
     if is_transformers_version(">=", "4.48.0"):
@@ -128,24 +129,30 @@ class OVCLIExportTestCase(unittest.TestCase):
             [
                 ("text-generation", "lfm2"),
                 ("text-generation-with-past", "lfm2"),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
                 ("text-generation-with-past", "qwen3_eagle3"),
             ]
         )
 
-    if is_transformers_version(">=", "4.49"):
+    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "zamba2"),
             ]
         )
 
-    if is_transformers_version(">=", "4.54"):
+    if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "exaone4"),
             ]
         )
-    if is_transformers_version(">=", "4.52.1"):
+    if is_transformers_version(">=", "4.52.1") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "bitnet"),
@@ -163,7 +170,28 @@ class OVCLIExportTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "hunyuan_v1_dense"),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.57") and is_transformers_version("<", "5.0.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("image-text-to-text", "qwen3_vl_eagle3"),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
                 ("text-generation-with-past", "qwen3_next"),
+            ]
+        )
+
+    if is_transformers_version(">=", "5.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation", "lfm2_moe"),
+                ("text-generation-with-past", "lfm2_moe"),
             ]
         )
 
@@ -185,11 +213,13 @@ class OVCLIExportTestCase(unittest.TestCase):
         "lfm2": 2
         if is_openvino_version(">=", "2026.0")
         else 0,  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
+        "lfm2_moe": 2,
         "llava": 2,
         "sana": 2,
         "ltx-video": 2,
         "sam": 0,  # no tokenizer
         "speecht5": 2,
+        "kokoro": 0,  # uses g2p, no tokenizer
         "clip": 2,
         "mamba": 2,
         "falcon_mamba": 2,
@@ -198,6 +228,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "exaone4": 2,
         "bitnet": 2,
         "granitemoehybrid": 2,
+        "qwen3_vl_eagle3": 0,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -422,7 +453,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "model": 33,
             },
             {
-                "model": {"int8": 35},
+                "model": {"int8": 35 if is_transformers_version("<", "5") else 36},
             },
         ),
         (
@@ -446,7 +477,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "model": 32,
             },
             {
-                "model": {"int8": 34},
+                "model": {"int8": 34 if is_transformers_version("<", "5") else 35},
             },
         ),
         (
@@ -487,7 +518,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
                 if is_transformers_version("<=", "4.45")
-                else {"encoder": {"int8": 32}, "decoder": {"int8": 52}}
+                else {"encoder": {"int8": 32}, "decoder": {"int8": 52 if is_transformers_version("<", "5") else 53}}
             ),
         ),
         (
@@ -504,48 +535,58 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "prompt_encoder_mask_decoder": {"int8": 49},
             },
         ),
-        (
-            "image-text-to-text",
-            "internvl_chat",
-            "f8e4m3",
-            "--dataset contextual --num-samples 1 --trust-remote-code",
-            {
-                "lm_model": 15,
-                "text_embeddings_model": 0,
-                "vision_embeddings_model": 17,
-            },
-            {
-                "lm_model": {"f8e4m3": 15},
-                "text_embeddings_model": {"int8": 1},
-                "vision_embeddings_model": {"f8e4m3": 11},
-            },
-        ),
     ]
+
+    if is_transformers_version("<", "5"):
+        SUPPORTED_QUANTIZATION_ARCHITECTURES.append(
+            (
+                "image-text-to-text",
+                "internvl_chat",
+                "f8e4m3",
+                "--dataset contextual --num-samples 1 --trust-remote-code",
+                {
+                    "lm_model": 15,
+                    "text_embeddings_model": 0,
+                    "vision_embeddings_model": 17,
+                },
+                {
+                    "lm_model": {"f8e4m3": 15},
+                    "text_embeddings_model": {"int8": 1},
+                    "vision_embeddings_model": {"f8e4m3": 11},
+                },
+            ),
+        )
 
     TRANSFORMERS_4BIT_CONFIGURATIONS = [
         (
             "text-generation-with-past",
             "opt125m",
             "int4 --sym --group-size 128",
-            {"model": {"int8": 4, "int4": 72}},
+            {"model": {"int8": 4 if is_transformers_version("<", "5") else 6, "int4": 72}},
         ),
         (
             "text-generation-with-past",
             "opt125m",
             "int4 --group-size 64",
-            {"model": {"int8": 4, "int4": 144}},
+            {"model": {"int8": 4 if is_transformers_version("<", "5") else 6, "int4": 144}},
         ),
         (
             "text-generation-with-past",
             "opt125m",
             "mxfp4",
-            {"model": {"int8": 4, "f4e2m1": 72, "f8e8m0": 72}},
+            {
+                "model": {
+                    "f4e2m1": 72,
+                    "f8e4m3": 2 if is_transformers_version("<", "5") else 3,
+                    "f8e8m0": 74 if is_transformers_version("<", "5") else 75,
+                }
+            },
         ),
         (
             "text-generation-with-past",
             "opt125m",
             "nf4",
-            {"model": {"int8": 4, "nf4": 72}},
+            {"model": {"int8": 4 if is_transformers_version("<", "5") else 6, "nf4": 72}},
         ),
         (
             "text-generation-with-past",
@@ -803,6 +844,17 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "resampler_model": {"int8": 6},
             },
         ),
+        (
+            "image-text-to-text",
+            "videochat_flash_qwen",
+            "int4 --group-size 8 --ratio 0.8 --trust-remote-code",
+            {
+                "lm_model": {"int8": 12, "int4": 18},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 5},
+                "vision_projection_model": {"int8": 2},
+            },
+        ),
     ]
 
     # filter models type depending on min max transformers version
@@ -833,6 +885,10 @@ class OVCLIExportTestCase(unittest.TestCase):
             expected = {"qwen3_vl"}
         else:
             expected = {"llava-qwen2", "phi3_v", "phi4mm", "minicpmo"}
+        if is_transformers_version("<", "4.49") or is_transformers_version(">", "4.57.6"):
+            expected.add("videochat_flash_qwen")
+        if is_transformers_version(">=", "5"):
+            expected.update({"llama4", "llava_next_video", "minicpmv", "internvl_chat"})
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.SUPPORTED_4BIT_CONFIGURATIONS}
@@ -870,11 +926,15 @@ class OVCLIExportTestCase(unittest.TestCase):
             if model_type in REMOTE_CODE_MODELS:
                 model_kwargs["trust_remote_code"] = True
 
-            eval(
-                _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
-                if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
-                else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
-            ).from_pretrained(tmpdir, **model_kwargs)
+            # VLM Eagle3 exports a single causal LM (not a multi-component VLM)
+            # so it must be loaded with OVModelForCausalLM rather than OVModelForVisualCausalLM.
+            if model_type == "qwen3_vl_eagle3":
+                automodel_cls = "OVModelForCausalLM"
+            elif task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS:
+                automodel_cls = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+            else:
+                automodel_cls = _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
+            eval(automodel_cls).from_pretrained(tmpdir, **model_kwargs)
 
     @parameterized.expand(
         arch
@@ -886,6 +946,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":
                 add_ops = '--model-kwargs "{\\"vocoder\\": \\"fxmarty/speecht5-hifigan-tiny\\"}"'
+            if model_type in REMOTE_CODE_MODELS:
+                add_ops = "--trust-remote-code"
             output = subprocess.check_output(
                 f"TRANSFORMERS_VERBOSITY=debug optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} {tmpdir}",
                 shell=True,
@@ -1058,16 +1120,20 @@ class OVCLIExportTestCase(unittest.TestCase):
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
             if model_type in REMOTE_CODE_MODELS:
                 model_kwargs["trust_remote_code"] = True
-            eval(
-                _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
-                if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
-                else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
-            ).from_pretrained(tmpdir, **model_kwargs)
+            if model_type == "qwen3_vl_eagle3":
+                automodel_cls = "OVModelForCausalLM"
+            elif task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS:
+                automodel_cls = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+            else:
+                automodel_cls = _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
+            eval(automodel_cls).from_pretrained(tmpdir, **model_kwargs)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_int8(self, task: str, model_type: str):
         if model_type in ["bitnet"]:
             self.skipTest("CVS-176501 INT8 compression fails for BitNet; need to compress remaining BF16 weights")
+        if model_type == "qwen3_vl_eagle3":
+            self.skipTest("Skipped, no compression and quantiozation are needed for the draft Eagle3 model.")
         with TemporaryDirectory() as tmpdir:
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":
@@ -1083,11 +1149,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
             if model_type in REMOTE_CODE_MODELS:
                 model_kwargs["trust_remote_code"] = True
-            model = eval(
-                _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
-                if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
-                else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
-            ).from_pretrained(tmpdir, **model_kwargs)
+            if model_type == "qwen3_vl_eagle3":
+                automodel_cls = "OVModelForCausalLM"
+            elif task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS:
+                automodel_cls = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+            else:
+                automodel_cls = _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
+            model = eval(automodel_cls).from_pretrained(tmpdir, **model_kwargs)
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
             expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
@@ -1222,13 +1290,14 @@ class OVCLIExportTestCase(unittest.TestCase):
             {"model": 65},
         ),
         (
-            "gpt_oss_mxfp4",
+            # mxfp4 fixing saving broken since v5, fixed in https://github.com/huggingface/transformers/pull/43148, test can be added back for v5.3
+            "gpt_oss_mxfp4" if is_transformers_version("<", "5") else "gpt_oss",
             "openai/gpt-oss-20b",
             AutoModelForCausalLM,
             OVModelForCausalLM,
             "--task text-generation-with-past --weight-format int4",
             _DEFAULT_4BIT_WQ_CONFIGS,
-            {"model": {"int8": 22, "int4": 4}},
+            {"model": {"int8": 22, "int4": 4} if is_transformers_version("<", "5") else {"int8": 40, "int4": 0}},
             {"model": 0},
         ),
         (
@@ -1262,6 +1331,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         expected_num_weight_nodes_per_model,
         expected_fake_nodes_per_model,
     ):
+        if model_name in ["gpt_oss"]:
+            self.skipTest("CVS-186980 int4 compression fails for tiny gpt_oss, full model works fine.")
         with TemporaryDirectory() as tmpdir:
             pt_model = auto_model_cls.from_pretrained(MODEL_NAMES[model_name])
             # overload for matching with default configuration
