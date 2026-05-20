@@ -240,8 +240,11 @@ def get_correct_experts_implementation_patched(self, requested_experts: str | No
 
 def register_ov_batched_mm(patcher):
     from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
+
     patcher.get_correct_experts_implementation_orig = patcher._model.get_correct_experts_implementation
-    patcher._model.get_correct_experts_implementation = types.MethodType(get_correct_experts_implementation_patched, patcher._model)
+    patcher._model.get_correct_experts_implementation = types.MethodType(
+        get_correct_experts_implementation_patched, patcher._model
+    )
 
     ALL_EXPERTS_FUNCTIONS.register("ov_batched_mm", batched_mm_experts_forward_patched)
     patcher._model.set_experts_implementation("ov_batched_mm")
