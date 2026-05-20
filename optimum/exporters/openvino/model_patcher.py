@@ -73,6 +73,8 @@ if is_transformers_version(">=", "4.54"):
     from transformers.masking_utils import create_causal_mask
 if is_transformers_version(">=", "4.56"):
     import transformers.masking_utils
+if is_transformers_version(">=", "4.57"):
+    from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLTextRotaryEmbedding
 if is_transformers_version(">=", "5"):
     from transformers.modeling_rope_utils import RotaryEmbeddingConfigMixin
 
@@ -8450,7 +8452,19 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
         self.hidden_size = config.hidden_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, config.pad_token_id)
-        self.rotary_emb = LlamaRotaryEmbedding(config=config)
+        # Select rotary embedding based on the target model's RoPE configuration:
+        #   - LlamaRotaryEmbedding for standard Eagle-3 draft models
+        #     (e.g. AngelSlim/Qwen3-1.7B_eagle3).
+        #   - Qwen3VLTextRotaryEmbedding for VLM Eagle-3 draft models that
+        #     require interleaved multimodal RoPE / MRoPE
+        #     (e.g. AngelSlim/Qwen3-VL-4B-Instruct_eagle3).
+        # adopted from https://github.com/Tencent/AngelSlim/blob/main/angelslim/compressor/speculative/train/models/draft/llama_eagle3.py#L258
+        rope_scaling = getattr(config, "rope_scaling", None) or {}
+        rope_type = rope_scaling.get("rope_type") or rope_scaling.get("type")
+        if rope_type == "mrope" or rope_scaling.get("mrope_section") is not None:
+            self.rotary_emb = Qwen3VLTextRotaryEmbedding(config=config)
+        else:
+            self.rotary_emb = LlamaRotaryEmbedding(config=config)
 
         self.midlayer = LlamaEagle3DecoderLayer(config)
         self.target_hidden_size = getattr(config, "target_hidden_size", config.hidden_size)

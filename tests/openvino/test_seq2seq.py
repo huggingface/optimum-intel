@@ -657,7 +657,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     ]
     SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl"]
     SUPPORT_AUDIO = []
-    UNSUPPORTED_ARCHITECTURES = {"phi4_multimodal"}
+    # "llama" is registered for image-text-to-text
+    # to support VLM Eagle3 draft models (tested separately in test_genai.py).
+    UNSUPPORTED_ARCHITECTURES = {"phi4_multimodal", "llama"}
     OVMODEL_CLASS = OVModelForVisualCausalLM
     TASK = "image-text-to-text"
 
