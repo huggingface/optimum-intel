@@ -1037,7 +1037,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if is_transformers_version("<", "4.49"):
             self.skipTest("Incompatible transformers version: Phi3 longrope requires transformers>=4.49")
         set_seed(SEED)
-        model_id = "optimum-intel-internal-testing/tiny-random-phi3-longrope"
+        model_id = MODEL_NAMES["phi3-longrope"]
 
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
 
