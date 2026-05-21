@@ -88,7 +88,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
-        SUPPORTED_ARCHITECTURES += ("phi3", "phi3-longrope")
+        SUPPORTED_ARCHITECTURES += ("phi3-longrope",)
 
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_SSM_ARCHITECTURES += ("granitemoehybrid",)
@@ -1037,7 +1037,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if is_transformers_version("<", "4.49"):
             self.skipTest("Incompatible transformers version: Phi3 longrope requires transformers>=4.49")
         set_seed(SEED)
-        model_id = "optimum-intel-internal-testing/tiny-random-phi3-longrope"
+        model_id = MODEL_NAMES["phi3-longrope"]
 
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32)
 
