@@ -716,7 +716,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     if is_transformers_version(">=", "5.5"):
         SUPPORTED_ARCHITECTURES += ["gemma4", "gemma4_moe"]
 
-    if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
+    if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.9.0"):
         SUPPORTED_ARCHITECTURES += ["qwen3_5", "qwen3_5_moe"]
 
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly

@@ -8714,6 +8714,7 @@ def qwen3_next_gated_delta_net_forward(
     cache_params=None,
     cache_position: Optional[torch.LongTensor] = None,
     attention_mask: Optional[torch.Tensor] = None,
+    **kwargs,
 ):
     def apply_mask_to_padding_states(hidden_states, attention_mask):
         """
@@ -9275,6 +9276,7 @@ def qwen3_5_gated_delta_net_forward(
     cache_params=None,
     cache_position: Optional[torch.LongTensor] = None,
     attention_mask: Optional[torch.Tensor] = None,
+    **kwargs,
 ):
     def apply_mask_to_padding_states(hidden_states, attention_mask):
         """
@@ -9370,7 +9372,7 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DynamicCache
+        from transformers.models.qwen3_5.modeling_qwen3_5 import DynamicCache as Qwen3_5DynamicCache
 
         from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
 
@@ -9401,10 +9403,10 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
                 full_attn_layer_idx = 0
                 linear_attn_layer_idx = 0
                 for i in range(len(config.layer_types)):
-                    if self.layer_types[i] == "full_attention":
+                    if config.layer_types[i] == "full_attention":
                         self.full_attn_mapping[i] = full_attn_layer_idx
                         full_attn_layer_idx += 1
-                    elif self.layer_types[i] == "linear_attention":
+                    elif config.layer_types[i] == "linear_attention":
                         self.linear_attn_mapping[i] = linear_attn_layer_idx
                         linear_attn_layer_idx += 1
 
@@ -9429,17 +9431,38 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
             def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
                 """Returns the sequence length of the cached states. A layer index can be optionally passed."""
                 # take any layer that contains cache and not empty tensor
-                layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
-                layer_idx = self.full_attn_mapping[layer_idx]
-                if len(self.key_cache) <= layer_idx or self.key_cache[layer_idx] is None:
+                full_attn_layers = list(self.full_attn_mapping.keys())
+                layer_idx = full_attn_layers[0] if layer_idx not in full_attn_layers else layer_idx
+                mapped_layer_idx = self.full_attn_mapping[layer_idx]
+                if len(self.key_cache) <= mapped_layer_idx or self.key_cache[mapped_layer_idx] is None:
                     return 0
-                return self.key_cache[layer_idx].shape[-2]
+                return self.key_cache[mapped_layer_idx].shape[-2]
 
-            @property
-            def has_previous_state(self):
+            def has_previous_state(self, layer_idx: Optional[int] = None) -> bool:
                 """We have a previous state if the last linear (conv) layer was already updated."""
-                layer_idx = self.linear_attn_mapping[self.last_linear_layer]
-                return self.conv_states[layer_idx] is not None
+                if layer_idx is None:
+                    # Get the last linear attention layer
+                    linear_layers = list(self.linear_attn_mapping.keys())
+                    if not linear_layers:
+                        return False
+                    layer_idx = linear_layers[-1]
+                mapped_layer_idx = self.linear_attn_mapping.get(layer_idx)
+                if mapped_layer_idx is None:
+                    return False
+                return self.conv_states[mapped_layer_idx] is not None
+
+            def get_mask_sizes(self, query_length: int, layer_idx: int = 0) -> tuple[int, int]:
+                """Returns (kv_length, kv_offset) using key_cache instead of the base cache layers."""
+                full_attn_layers = list(self.full_attn_mapping.keys())
+                if not full_attn_layers:
+                    return query_length, 0
+                if layer_idx not in self.full_attn_mapping:
+                    layer_idx = full_attn_layers[0]
+                local_idx = self.full_attn_mapping[layer_idx]
+                if local_idx >= len(self.key_cache) or self.key_cache[local_idx] is None:
+                    return query_length, 0
+                past_len = self.key_cache[local_idx].shape[-2]
+                return past_len + query_length, 0
 
         # the patch is needed to include KV-cache, Conv, and SSM states in the inputs and outputs.
         def patched_forward(
