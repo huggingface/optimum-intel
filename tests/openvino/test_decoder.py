@@ -1039,7 +1039,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         model_id = "optimum-intel-internal-testing/tiny-random-phi3-longrope"
 
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32)
 
         # Doublecheck that model has LongRoPE support
         original_max_pos = getattr(transformers_model.config, "original_max_position_embeddings", None)

@@ -296,10 +296,23 @@ def eager_mask_without_vmap(*args, **kwargs) -> Optional[torch.Tensor]:
 # Adapted from https://github.com/huggingface/transformers/blob/3c307e380ad07ca16903a39e09a47d532cb782d9/src/transformers/models/phimoe/modular_phimoe.py#L57
 def _longrope_forward(self, x, position_ids=None, layer_type=None):
     # _compute_longrope_parameters https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/modeling_rope_utils.py#L391
-    self.config.standardize_rope_params()
-    rope_parameters = (
-        self.config.rope_parameters[layer_type] if layer_type is not None else self.config.rope_parameters
-    )
+    # transformers >= 5 stores RoPE settings under config.rope_parameters; transformers < 5 (e.g. 4.57) stores
+    # them under config.rope_scaling and as plain attributes on the config.
+    if hasattr(self.config, "rope_parameters") and self.config.rope_parameters is not None:
+        rope_parameters = (
+            self.config.rope_parameters[layer_type] if layer_type is not None else self.config.rope_parameters
+        )
+    else:
+        rope_scaling = getattr(self.config, "rope_scaling", None) or {}
+        rope_parameters = dict(rope_scaling)
+        rope_parameters.setdefault("rope_theta", getattr(self.config, "rope_theta", 10000.0))
+        rope_parameters.setdefault(
+            "original_max_position_embeddings",
+            getattr(self.config, "original_max_position_embeddings", self.config.max_position_embeddings),
+        )
+        rope_parameters.setdefault(
+            "partial_rotary_factor", getattr(self.config, "partial_rotary_factor", 1.0)
+        )
     rope_theta = rope_parameters["rope_theta"]
     long_factor = rope_parameters["long_factor"]
     short_factor = rope_parameters["short_factor"]
@@ -374,6 +387,12 @@ class OVDecoderModelPatcher(ModelPatcher):
                 if rope_type == "longrope" and isinstance(getattr(module, "config", None), RotaryEmbeddingConfigMixin):
                     module._rope_orig_forward = module.forward
                     module.forward = types.MethodType(_longrope_forward, module)
+        else:
+            for module in self._model.modules():
+                rope_type = getattr(module, "rope_type", None)
+                if rope_type == "longrope":
+                    module._rope_orig_forward = module.forward
+                    module.forward = types.MethodType(_longrope_forward, module)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -386,11 +405,10 @@ class OVDecoderModelPatcher(ModelPatcher):
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
 
-        if is_transformers_version(">=", "5"):
-            for module in self._model.modules():
-                if hasattr(module, "_rope_orig_forward"):
-                    module.forward = module._rope_orig_forward
-                    del module._rope_orig_forward
+        for module in self._model.modules():
+            if hasattr(module, "_rope_orig_forward"):
+                module.forward = module._rope_orig_forward
+                del module._rope_orig_forward
 
 
 def _mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -1657,11 +1675,8 @@ class Phi3ModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        # currently, long RoPE can not be traced for long context support, disable it for avoid potential accuracy issues
-        if self._model.config.max_position_embeddings != getattr(
-            self._model.config, "original_max_position_embeddings", self._model.config.max_position_embeddings
-        ):
-            self._model.config.max_position_embeddings = self._model.config.original_max_position_embeddings
+        # LongRoPE is handled via _longrope_forward in OVDecoderModelPatcher for both transformers >= 5 and < 5,
+        # so keep the original max_position_embeddings to preserve the correct attention scaling factor.
 
         if is_transformers_version("<", "4.48.0"):
             self._model.model._orig_forward = self._model.model.forward
