@@ -951,6 +951,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         return causal_model
 
+
 class OVPhi3ForCausalLM(OVModelForCausalLM):
     # Adapted from https://github.com/huggingface/transformers/blob/v4.57.0/src/transformers/models/phi3/modeling_phi3.py#L493
     def prepare_inputs_for_generation(

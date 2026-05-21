@@ -310,9 +310,7 @@ def _longrope_forward(self, x, position_ids=None, layer_type=None):
             "original_max_position_embeddings",
             getattr(self.config, "original_max_position_embeddings", self.config.max_position_embeddings),
         )
-        rope_parameters.setdefault(
-            "partial_rotary_factor", getattr(self.config, "partial_rotary_factor", 1.0)
-        )
+        rope_parameters.setdefault("partial_rotary_factor", getattr(self.config, "partial_rotary_factor", 1.0))
     rope_theta = rope_parameters["rope_theta"]
     long_factor = rope_parameters["long_factor"]
     short_factor = rope_parameters["short_factor"]
