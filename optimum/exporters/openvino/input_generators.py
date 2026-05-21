@@ -16,6 +16,7 @@ from typing import Optional, Tuple
 
 import torch
 
+from optimum.intel.utils.import_utils import is_diffusers_version
 from optimum.utils import (
     DEFAULT_DUMMY_SHAPES,
     DummyAudioInputGenerator,
@@ -34,8 +35,6 @@ from optimum.utils import (
 )
 from optimum.utils.input_generators import DTYPE_MAPPER
 from optimum.utils.normalized_config import NormalizedConfig, NormalizedVisionConfig
-
-from ...intel.utils.import_utils import is_diffusers_version
 
 
 class GPTBigCodeDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
