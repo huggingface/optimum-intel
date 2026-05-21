@@ -88,7 +88,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
-        SUPPORTED_ARCHITECTURES += ("phi3", "phi3-longrope")
+        SUPPORTED_ARCHITECTURES += ("phi3-longrope",)
 
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_SSM_ARCHITECTURES += ("granitemoehybrid",)
