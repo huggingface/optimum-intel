@@ -1541,23 +1541,6 @@ class GptOssModelPatcher(ModelPatcher):
             GptOssExperts.forward = self.original_gpt_oss_forward
 
 
-def postprocess_past_key_values(past_key_values):
-    if isinstance(past_key_values, (EncoderDecoderCache, DynamicCache)):
-        if hasattr(past_key_values, "to_legacy_cache"):
-            past_key_values = past_key_values.to_legacy_cache()
-        elif isinstance(past_key_values, DynamicCache):
-            past_key_values = [(lay.keys, lay.values) for lay in past_key_values.layers]
-        elif isinstance(past_key_values, EncoderDecoderCache):
-            past_key_values = [
-                (self_lay.keys, self_lay.values, cross_lay.keys, cross_lay.values)
-                for self_lay, cross_lay in zip(
-                    past_key_values.self_attention_cache.layers,
-                    past_key_values.cross_attention_cache.layers,
-                )
-            ]
-    return past_key_values
-
-
 def _get_model_attribute(model, name):
     target = getattr(model, "model", model) if is_transformers_version(">=", "5") else model
     return getattr(target, name)
