@@ -2455,12 +2455,61 @@ class LTXVaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
         }
 
 
+class LTXTransformerDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("hidden_states", "width", "height", "num_frames", "rope_interpolation_scale", "timestep")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = 16,
+        height: int = 8,
+        num_frames: int = 2,
+        frame_rate: int = 10,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        self.num_frames = num_frames
+        self.frame_rate = frame_rate
+        self.vae_spatial_compression_ratio = normalized_config.config.vae_spatial_compression_ratio
+        self.vae_temporal_compression_ratio = normalized_config.config.vae_temporal_compression_ratio
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        import torch
+
+        if input_name == "hidden_states":
+            return self.random_float_tensor(
+                [self.batch_size, self.num_frames * self.height * self.width, self.num_channels]
+            )
+        if input_name == "width":
+            return torch.tensor(self.width)
+        if input_name == "height":
+            return torch.tensor(self.height)
+        if input_name == "num_frames":
+            return torch.tensor(self.num_frames)
+        if input_name == "rope_interpolation_scale":
+            import torch
+
+            return torch.tensor(
+                [
+                    self.vae_temporal_compression_ratio / self.frame_rate,
+                    self.vae_spatial_compression_ratio,
+                    self.vae_spatial_compression_ratio,
+                ]
+            )
+        if input_name == "timestep":
+            seq_len = self.num_frames * self.height * self.width
+            return self.random_float_tensor([self.batch_size, seq_len], framework=framework, dtype=float_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
 @register_in_tasks_manager("ltx-video-transformer", *["semantic-segmentation"], library_name="diffusers")
 class LTXVideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (
         LTXTransformerDummyInputGenerator,
         DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator,
-        DummySanaTimestepInputGenerator,
     )
 
     @property
@@ -2472,7 +2521,7 @@ class LTXVideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
             "width": {},
             "height": {},
             "num_frames": {},
-            "timestep": {0: "batch_size"},
+            "timestep": {0: "batch_size", 1: "video_sequence_length"},
             "rope_interpolation_scale": {},
         }
 

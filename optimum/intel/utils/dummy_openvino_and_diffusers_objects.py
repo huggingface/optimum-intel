@@ -103,6 +103,17 @@ class OVLatentConsistencyModelImg2ImgPipeline(metaclass=DummyObject):
         requires_backends(cls, ["openvino", "diffusers"])
 
 
+class OVLTXImageToVideoPipeline(metaclass=DummyObject):
+    _backends = ["openvino", "diffusers"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino", "diffusers"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino", "diffusers"])
+
+
 class OVLTXPipeline(metaclass=DummyObject):
     _backends = ["openvino", "diffusers"]
 
@@ -148,6 +159,17 @@ class OVPipelineForImage2Image(metaclass=DummyObject):
 
 
 class OVPipelineForText2Video(metaclass=DummyObject):
+    _backends = ["openvino", "diffusers"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino", "diffusers"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino", "diffusers"])
+
+
+class OVPipelineForImage2Video(metaclass=DummyObject):
     _backends = ["openvino", "diffusers"]
 
     def __init__(self, *args, **kwargs):
