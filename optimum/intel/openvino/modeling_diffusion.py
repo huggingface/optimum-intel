@@ -768,6 +768,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         if is_ltx:
             height = height // self.vae_spatial_compression_ratio if height > 0 else -1
             width = width // self.vae_spatial_compression_ratio if width > 0 else -1
+            if num_frames > 0:
+                num_frames = (num_frames - 1) // self.vae_temporal_compression_ratio + 1
             packed_height_width = width * height * num_frames if height > 0 and width > 0 and num_frames > 0 else -1
         else:
             height = height // self.vae_scale_factor if height > 0 else height
