@@ -12,18 +12,22 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import dataclasses
 import functools
 import inspect
 import logging
 import logging as log
 import math
+import sys
 import types
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
+import transformers
 from torch import nn
+from torch.onnx import symbolic_helper
 from transformers import PreTrainedModel
 from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache
 from transformers.configuration_utils import PretrainedConfig
@@ -33,7 +37,6 @@ from transformers.modeling_outputs import (
     BaseModelOutputWithPast,
     BaseModelOutputWithPooling,
 )
-from transformers.modeling_utils import PreTrainedModel
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import (
     LlamaAttention,
@@ -47,7 +50,8 @@ from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSp
 from transformers.processing_utils import Unpack
 from transformers.utils import ModelOutput
 
-# from optimum.exporters.openvino.base import OnnxConfig
+from optimum.exporters.openvino._ov_ops import convert_recurrent_attention_cell
+from optimum.exporters.openvino.base import OnnxConfig
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
     is_openvino_version,
@@ -55,49 +59,14 @@ from optimum.intel.utils.import_utils import (
     is_transformers_version,
 )
 
-from ._ov_ops import convert_recurrent_attention_cell
 
-
-if is_transformers_version(">=", "4.53"):
-    from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, eager_mask, sdpa_mask
-    from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
-if is_transformers_version(">=", "4.54"):
-    from transformers.masking_utils import create_causal_mask
-if is_transformers_version(">=", "4.56"):
-    import transformers.masking_utils
-if is_transformers_version(">=", "4.57"):
-    from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLTextRotaryEmbedding
-if is_transformers_version(">=", "5"):
-    from transformers.modeling_rope_utils import RotaryEmbeddingConfigMixin
-
-if TYPE_CHECKING:
-    from transformers.cache_utils import Cache
-    from transformers.modeling_utils import PreTrainedModel
-
-if is_transformers_version(">=", "4.54"):
-    from transformers.utils import TransformersKwargs
-else:
-    TransformersKwargs = object
-
-
-#######
-
-import dataclasses
-import sys
-from typing import TYPE_CHECKING
-
-import transformers
-from torch.onnx import symbolic_helper
-
-from optimum.utils import is_diffusers_version, is_torch_version, is_transformers_version
-
+if is_transformers_version(">=", "4.43") and is_transformers_version("<", "4.48"):
+    from transformers.models.clip.modeling_clip import CLIPAttention, CLIPSdpaAttention
 
 if is_transformers_version(">=", "4.44") and is_transformers_version("<", "4.50"):
     from optimum.exporters.openvino._traceable_cache import TraceableCache
-if is_transformers_version(">=", "4.54"):
-    from optimum.exporters.openvino._traceable_decorator import traceable_check_model_inputs
-if is_transformers_version(">=", "4.43") and is_transformers_version("<", "4.48"):
-    from transformers.models.clip.modeling_clip import CLIPAttention, CLIPSdpaAttention
+
+
 if is_transformers_version(">=", "4.48"):
     from transformers.cache_utils import DynamicCache, EncoderDecoderCache
     from transformers.models.moonshine.modeling_moonshine import MoonshinePreTrainedModel
@@ -113,15 +82,35 @@ if is_transformers_version(">=", "4.53"):
         sdpa_mask,
     )
     from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
+
+
+
 if is_transformers_version(">=", "4.53.1"):
     from transformers.masking_utils import find_packed_sequence_indices
+
+
+if is_transformers_version(">=", "4.54"):
+    from transformers.masking_utils import create_causal_mask
+    from transformers.utils import TransformersKwargs
+
+    from optimum.exporters.openvino._traceable_decorator import traceable_check_model_inputs
+
+else:
+    TransformersKwargs = object
+
 if is_transformers_version(">=", "4.55"):
     from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
 if is_transformers_version(">=", "4.56"):
+    import transformers.masking_utils
     from transformers.cache_utils import DynamicLayer
 
-if is_diffusers_version(">=", "0.35.0"):
-    import diffusers.models.transformers.transformer_flux
+
+if is_transformers_version(">=", "4.57"):
+    from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLTextRotaryEmbedding
+
+
+if is_transformers_version(">=", "5"):
+    from transformers.modeling_rope_utils import RotaryEmbeddingConfigMixin
 
 
 logger = logging.getLogger(__name__)
@@ -969,108 +958,6 @@ def patched_speecht5_prenet_forward(
     return inputs_embeds
 
 
-class SpeechT5ModelPatcher(ModelPatcher):
-    def __enter__(self):
-        super().__enter__()
-
-        self.original_speecht5_prenet_forward = self._model.speecht5.decoder.prenet.forward
-        self._model.speecht5.decoder.prenet.forward = types.MethodType(
-            patched_speecht5_prenet_forward, self._model.speecht5.decoder.prenet
-        )
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-
-        self._model.speecht5.decoder.prenet.forward = types.MethodType(
-            self.original_speecht5_prenet_forward, self._model.speecht5.decoder.prenet
-        )
-
-    def __init__(
-        self,
-        config: "OnnxConfig",
-        model: PreTrainedModel,
-        model_kwargs: dict[str, Any],
-    ):
-        super().__init__(config, model, model_kwargs)
-        model.vocoder = model_kwargs["vocoder_model"].eval()
-
-        def patched_forward(
-            input_ids=None,
-            speaker_embeddings=None,
-            encoder_outputs=None,
-            past_key_values=None,
-            output_sequence=None,
-            spectrogram=None,
-            encoder_attention_mask=None,
-        ):
-            if past_key_values is not None:
-                past_key_values = preprocess_past_key_values(past_key_values)
-
-            if self.real_config._behavior == "encoder":
-                encoder_attention_mask = torch.ones_like(input_ids)
-                encoder_out = model.speecht5.encoder(input_values=input_ids, attention_mask=encoder_attention_mask)
-                # downsample encoder attention mask
-                if isinstance(model.speecht5.encoder, SpeechT5EncoderWithSpeechPrenet):
-                    encoder_attention_mask = model.speecht5.encoder.prenet._get_feature_vector_attention_mask(
-                        encoder_out[0].shape[1], encoder_attention_mask
-                    )
-                outputs = {
-                    "encoder_outputs": encoder_out.last_hidden_state,
-                    "encoder_attention_mask": encoder_attention_mask,
-                }
-            elif self.real_config._behavior == "decoder":
-                use_cache = self.real_config.use_past
-                encoder_hidden_states = encoder_outputs[0]
-                decoder_hidden_states = model.speecht5.decoder.prenet(output_sequence, speaker_embeddings)
-                # Run the decoder layers on the last element of the prenet output.
-                decoder_out = model.speecht5.decoder.wrapped_decoder(
-                    hidden_states=decoder_hidden_states[:, -1:],
-                    encoder_hidden_states=encoder_hidden_states,
-                    encoder_attention_mask=encoder_attention_mask,
-                    past_key_values=past_key_values,
-                    output_attentions=False,
-                    use_cache=use_cache,
-                )
-                last_decoder_output = decoder_out.last_hidden_state[0, -1]
-                past_key_values = decoder_out.past_key_values
-                # Predict the new mel spectrum for this step in the sequence.
-                spectrum = model.speech_decoder_postnet.feat_out(last_decoder_output)
-                spectrum = spectrum.view(model.config.reduction_factor, model.config.num_mel_bins)
-                # NOTE: extending the spectrogram should is to be handled outside of the ONNX.
-                # spectrogram.append(spectrum)
-                # Extend the output sequence with the new mel spectrum.
-                output_sequence = torch.cat(
-                    (output_sequence, spectrum[-1].view(1, 1, model.config.num_mel_bins)), dim=1
-                )
-                # Predict the probability that this is the stop token.
-                prob = torch.sigmoid(model.speech_decoder_postnet.prob_out(last_decoder_output))
-                outputs = {
-                    "output_sequence_out": output_sequence,
-                    "spectrum": spectrum,
-                    "prob": prob,
-                    "past_key_values": past_key_values,
-                }
-            elif self.real_config.is_postnet_and_vocoder:
-                # NOTE: the following concatenation is expected to be handled outside of the ONNX:
-                # spectrogram = torch.cat(spectrogram, dim=0).unsqueeze(0)
-                spectrogram = spectrogram.unsqueeze(0)
-                spectrogram = model.speech_decoder_postnet.postnet(spectrogram)
-                spectrogram = spectrogram.squeeze(0)
-                waveform = model.vocoder(spectrogram)
-                outputs = {"waveform": waveform}
-            else:
-                raise ValueError("Should not happen")
-
-            if outputs.get("past_key_values") is not None:
-                outputs["past_key_values"] = postprocess_past_key_values(
-                    outputs["past_key_values"], output_names=list(config.outputs.keys())
-                )
-
-            return outputs
-
-        self.patched_forward = patched_forward
-
-
 class SentenceTransformersTransformerPatcher(ModelPatcher):
     def __init__(
         self,
@@ -1445,22 +1332,6 @@ def patched_apply_rotary_emb(
         x_out = torch.view_as_real(x_rotated * freqs_cis).flatten(3)
 
         return x_out.type_as(x)
-
-
-class FluxTransformerModelPatcher(ModelPatcher):
-    def __enter__(self):
-        super().__enter__()
-
-        if is_diffusers_version(">=", "0.35.0"):
-            self.original_apply_rotary_emb = diffusers.models.transformers.transformer_flux.apply_rotary_emb
-            diffusers.models.transformers.transformer_flux.apply_rotary_emb = patched_apply_rotary_emb
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-
-        if is_diffusers_version(">=", "0.35.0"):
-            diffusers.models.transformers.transformer_flux.apply_rotary_emb = self.original_apply_rotary_emb
-            del self.original_apply_rotary_emb
 
 
 def patched_cohere_rotary_forward(self, x, position_ids):
@@ -5006,7 +4877,7 @@ def _embednb_forward(self, ids: torch.Tensor) -> torch.Tensor:
     return emb.unsqueeze(1)
 
 
-class FluxTransfromerModelPatcher(ModelPatcher):
+class FluxTransformerModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
         if is_diffusers_version("<", "0.31.0"):
@@ -7591,7 +7462,7 @@ def speecht5_decoder_layer_forward(
     return outputs
 
 
-class OVSpeechT5ModelPatcher(ModelPatcher):
+class SpeechT5ModelPatcher(ModelPatcher):
     def __enter__(self):
         if self.real_config._behavior != "vocoder":
             super().__enter__()
@@ -11346,54 +11217,3 @@ class KokoroModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model._orig_forward
-
-
-################################################################################################################################################################
-
-
-from transformers.models.vit.modeling_vit import ViTPatchEmbeddings
-
-
-def patched_vit_patch_embedding_forward(
-    self, pixel_values: torch.Tensor, interpolate_pos_encoding: bool = False
-) -> torch.Tensor:
-    # _batch_size, num_channels, height, width = pixel_values.shape
-    # Unexpted error.
-    # TypeError: cond must be a bool, but got <class 'torch.Tensor'>?
-    # torch._check(
-    #    num_channels == self.num_channels,
-    #    lambda: (
-    #        "Make sure that the channel dimension of the pixel values match with the one set in the configuration."
-    #        f" Expected {self.num_channels} but got {num_channels}."
-    #    )
-    # )
-    # This check fails if dynamic shapes are not properly set up.
-    # Let's drop it.
-    # if not interpolate_pos_encoding:
-    #    torch._check(
-    #        height == self.image_size[0] and width == self.image_size[1],
-    #        lambda:(
-    #            f"Input image size ({height}*{width}) doesn't match model"
-    #            f" ({self.image_size[0]}*{self.image_size[1]})."
-    #        )
-    #    )
-    embeddings = self.projection(pixel_values).flatten(2).transpose(1, 2)
-    return embeddings
-
-
-class ViTForImageClassificationPatcher(ModelPatcher):
-    def __enter__(self):
-        super().__enter__()
-
-        if is_transformers_version(">=", "4.36.0"):
-            self.original_forward = ViTPatchEmbeddings.forward
-            ViTPatchEmbeddings.forward = patched_vit_patch_embedding_forward
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-
-        if is_transformers_version(">=", "4.36.0"):
-            ViTPatchEmbeddings.forward = self.original_forward
-
-
-################################################################################################################################################################

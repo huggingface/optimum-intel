@@ -1352,7 +1352,7 @@ class DummyVisionPositionIdsInputGenerator(DummyVisionInputGenerator):
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
-class DummySpeechT5OpenVINOInputGenerator(DummyInputGenerator):
+class DummySpeechT5InputGenerator(DummyInputGenerator):
     SUPPORTED_INPUT_NAMES = (
         "inputs_embeds",
         "output_sequence",
