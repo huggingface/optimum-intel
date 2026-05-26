@@ -783,6 +783,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             shapes[inputs] = inputs.get_partial_shape()
             if inputs.get_any_name() in ["timestep", "guidance"]:
                 shapes[inputs][0] = batch_size
+                if is_ltx and len(shapes[inputs]) == 2:
+                    shapes[inputs][1] = packed_height_width
             elif inputs.get_any_name() == "hidden_states":
                 in_channels = self.transformer.config.get("in_channels", None)
                 if in_channels is None:
@@ -1693,6 +1695,11 @@ class OVLTXImageToVideoPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMix
     main_input_name = "image"
     export_feature = "image-to-video"
     auto_model_class = LTXImageToVideoPipeline
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.transformer is not None:
+            self.transformer.__class__ = OVModelLTXTransformer
 
 
 SUPPORTED_OV_PIPELINES = [
