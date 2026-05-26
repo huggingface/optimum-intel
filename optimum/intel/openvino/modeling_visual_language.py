@@ -3879,6 +3879,66 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM, Qwen3VLModel, Qwen3VLVisio
         return super().generate(*args, **kwargs)
 
 
+class _OVNemotronLabsDiffusionVLMForCausalLM(_OVLlavaForCausalLM):
+    _IMAGE_TOKEN_ID = 19
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, image_sizes=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        if image_sizes is None:
+            raise ValueError("image_sizes are required for Nemotron-Labs-Diffusion-VLM vision inputs")
+        return self.vision_embeddings(pixel_values, image_sizes=image_sizes).last_hidden_state
+
+    def merge_vision_text_embeddings(
+        self,
+        vision_embeds,
+        inputs_embeds,
+        input_ids,
+        attention_mask,
+        position_ids=None,
+        legacy_processing=False,
+        **kwargs,
+    ):
+        image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+
+        image_token_id = getattr(self.config, "image_token_id", self._IMAGE_TOKEN_ID)
+        num_image_tokens = (input_ids == image_token_id).sum().item()
+        if num_image_tokens != image_features.shape[0]:
+            raise ValueError(
+                f"Image features and image tokens do not match: tokens: {num_image_tokens}, features: {image_features.shape[0]}"
+            )
+
+        special_image_mask = (input_ids == image_token_id).unsqueeze(-1).expand_as(inputs_embeds)
+        image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
+        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+
+        conversation = [{"role": "user", "content": [{"type": "text", "text": text}]}]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+        return processor(images=image, text=text_prompt, return_tensors="pt")
+
+
 class _OVMaira2ForCausalLM(_OVLlavaForCausalLM):
     @staticmethod
     def preprocess_inputs(
@@ -5818,9 +5878,16 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM, Qwen3_5Model, Qwen3_5Visio
         return super().generate(*args, **kwargs)
 
 
+
+class _OVNemotronLabsDiffusionVLMForCausalLM(_OVIdefics3ForCausalLM):
+    """Nemotron Labs Diffusion VLM model for OpenVINO."""
+    pass
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
+    "nemotron_labs_diffusion_vlm": _OVNemotronLabsDiffusionVLMForCausalLM,
     "llava_next_video": _OVLlavaNextVideoForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
@@ -5846,4 +5913,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_5_moe_text": _OVQwen3_5ForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
+    "nemotron_labs_diffusion_vlm": _OVNemotronLabsDiffusionVLMForCausalLM
 }

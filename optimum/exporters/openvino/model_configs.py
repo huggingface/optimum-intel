@@ -196,6 +196,7 @@ from .model_patcher import (
     MiniCPMVResamplerModelPatcher,
     MistralModelPatcher,
     MixtralModelPatcher,
+    NemotronLabsDiffusionVLMLanguageModelPatcher,
     MPTModelPatcher,
     OVDecoderModelPatcher,
     OVSeq2SeqModelPatcher,
@@ -389,6 +390,24 @@ def init_model_configs():
             "NemotronLabsDiffusionModelLoader",
         )
         TasksManager._CUSTOM_CLASSES[("pt", "nemotron_labs_diffusion", "text-generation-with-past")] = (
+            "optimum.exporters.openvino.model_configs",
+            "NemotronLabsDiffusionModelLoader",
+        )
+
+        # Register nemotron_labs_diffusion_vlm for image-text-to-text task
+        # This VLM variant combines pixtral vision encoder with nemotron_labs_diffusion text model
+        TasksManager._CUSTOM_CLASSES[("pt", "nemotron_labs_diffusion_vlm", "image-text-to-text")] = (
+            "transformers",
+            "AutoModelForCausalLM",
+        )
+        
+        # Register nemotron_labs_diffusion_vlm for text generation tasks
+        # These are used when exporting the language model portion of the VLM
+        TasksManager._CUSTOM_CLASSES[("pt", "nemotron_labs_diffusion_vlm", "text-generation")] = (
+            "optimum.exporters.openvino.model_configs",
+            "NemotronLabsDiffusionModelLoader",
+        )
+        TasksManager._CUSTOM_CLASSES[("pt", "nemotron_labs_diffusion_vlm", "text-generation-with-past")] = (
             "optimum.exporters.openvino.model_configs",
             "NemotronLabsDiffusionModelLoader",
         )
@@ -2120,6 +2139,21 @@ class VLMConfigBehavior(str, enum.Enum):
     LANGUAGE = "language"
 
 
+class DummyNemotronLabsDiffusionVLMInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "image_sizes")
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "image_sizes":
+            import torch
+
+            return torch.tensor(
+                [[self.height, self.width] for _ in range(self.batch_size)],
+                dtype=DTYPE_MAPPER.pt(int_dtype),
+            )
+
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
 class BaseVLMOpenVINOConfig(OnnxConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in VLMConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
@@ -2251,6 +2285,91 @@ class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs) -> Dict:
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and self._config.model_type == "pixtral":
+            kwargs["batch_size"] = 1
+        return super().generate_dummy_inputs(framework, **kwargs)
+
+
+@register_in_tasks_manager("nemotron_labs_diffusion_vlm", *["image-text-to-text"], library_name="transformers")
+class NemotronLabsDiffusionVLMOpenVINOConfig(BaseVLMOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyNemotronLabsDiffusionVLMInputGenerator,)
+    _OV_2026_1_MODEL_TYPE = "nemotron_labs_diffusion_vlm"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            behavior=behavior,
+            preprocessors=preprocessors,
+            **kwargs,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            vision_config = config.vision_config
+            if isinstance(vision_config, dict):
+                vision_config = PretrainedConfig(**vision_config)
+            self._config = vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+        _warn_potential_accuracy_issue_ov_2026_1(self._OV_2026_1_MODEL_TYPE, min_transformers_version="5.0")
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().inputs
+        return {
+            "pixel_values": {0: "batch_size", 2: "height", 3: "width"},
+            "image_sizes": {0: "batch_size"},
+        }
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VLMConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "nemotron_labs_diffusion", self._orig_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "nemotron_labs_diffusion",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=NemotronLabsDiffusionVLMLanguageModelPatcher,
+            )
+
+        return super().with_behavior(behavior)
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.config
+            return text_embedding
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return model
+
+        return super().get_model_for_behavior(model, behavior)
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs) -> Dict:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and getattr(self._config, "model_type", None) == "pixtral":
             kwargs["batch_size"] = 1
         return super().generate_dummy_inputs(framework, **kwargs)
 

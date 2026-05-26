@@ -4358,6 +4358,50 @@ class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
+class NemotronLabsDiffusionVLMLanguageModelPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        def lm_forward(
+            self,
+            attention_mask=None,
+            position_ids=None,
+            past_key_values=None,
+            inputs_embeds=None,
+            use_cache=True,
+        ):
+            if past_key_values is None:
+                pkv = None
+            elif is_transformers_version("<", "5"):
+                pkv = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                pkv = DynamicCache(past_key_values)
+
+            outputs = self.encoder(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=pkv,
+                is_training=False,
+            )
+            logits = self.diffusion_head(outputs.last_hidden_state)
+            next_pkv = outputs.past_key_values
+            if next_pkv is not None:
+                next_pkv = postprocess_past_key_values(next_pkv)
+            return logits, next_pkv
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(lm_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
 class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,

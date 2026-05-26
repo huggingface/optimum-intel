@@ -336,6 +336,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llama4",
     "minicpmo",
     "videochat_flash_qwen",
+    "nemotron_labs_diffusion_vlm",
 ]
 
 SSM_MODELS = [
