@@ -73,6 +73,7 @@ from optimum.exporters.onnx.model_configs import (
     MobileViTOnnxConfig,
     MPNetOnnxConfig,
     MPTOnnxConfig,
+    NemotronOnnxConfig,
     NystromformerOnnxConfig,
     Olmo2OnnxConfig,
     OPTOnnxConfig,
@@ -269,6 +270,34 @@ if TYPE_CHECKING:
     from transformers.modeling_utils import PreTrainedModel  # noqa: F811
 
 
+class NemotronLabsDiffusionModelLoader:
+    """
+    Custom model loader for NemotronLabsDiffusion models.
+    Wraps AutoModelForCausalLM and handles the custom config registration.
+    """
+    
+    @staticmethod
+    def from_pretrained(model_name_or_path, **kwargs):
+        """Load NemotronLabsDiffusion model with proper config registration."""
+        from transformers import AutoModelForCausalLM
+        from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+        from transformers import AutoConfig
+        
+        # Register the config if not already registered
+        if 'nemotron_labs_diffusion' not in CONFIG_MAPPING:
+            try:
+                config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+                CONFIG_MAPPING._extra_content['nemotron_labs_diffusion'] = config.__class__
+            except Exception:
+                pass  # If registration fails, continue anyway
+        
+        # Ensure trust_remote_code is enabled
+        kwargs['trust_remote_code'] = True
+        
+        # Load the model
+        return AutoModelForCausalLM.from_pretrained(model_name_or_path, **kwargs)
+
+
 def init_model_configs():
     if "open_clip" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
         TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["open_clip"] = {}
@@ -343,6 +372,25 @@ def init_model_configs():
         TasksManager._CUSTOM_CLASSES[("pt", "qwen3_asr", "automatic-speech-recognition-with-past")] = (
             "transformers",
             "AutoModel",
+        )
+        # Register nemotron_labs_diffusion to use custom loader class
+        # The model has a custom config that isn't in transformers' registry,
+        # so we need a custom loader that registers it before loading
+        TasksManager._CUSTOM_CLASSES[("pt", "nemotron_labs_diffusion", "feature-extraction")] = (
+            "optimum.exporters.openvino.model_configs",
+            "NemotronLabsDiffusionModelLoader",
+        )
+        TasksManager._CUSTOM_CLASSES[("pt", "nemotron_labs_diffusion", "feature-extraction-with-past")] = (
+            "optimum.exporters.openvino.model_configs",
+            "NemotronLabsDiffusionModelLoader",
+        )
+        TasksManager._CUSTOM_CLASSES[("pt", "nemotron_labs_diffusion", "text-generation")] = (
+            "optimum.exporters.openvino.model_configs",
+            "NemotronLabsDiffusionModelLoader",
+        )
+        TasksManager._CUSTOM_CLASSES[("pt", "nemotron_labs_diffusion", "text-generation-with-past")] = (
+            "optimum.exporters.openvino.model_configs",
+            "NemotronLabsDiffusionModelLoader",
         )
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
@@ -934,6 +982,30 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
         if self.eagle3:
             common_outputs["d2t"] = {0: "vocab_size"}
         return common_outputs
+
+
+@register_in_tasks_manager(
+    "nemotron",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+@register_in_tasks_manager(
+    "nemotron_labs_diffusion",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class NemotronOpenVINOConfig(NemotronOnnxConfig):
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager(
