@@ -859,6 +859,8 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get("RUN_DFLASH_EXPORT_TEST"), "Set RUN_DFLASH_EXPORT_TEST=1 to run DFlash export")
     def test_dflash_export_smoke(self):
+        import openvino as ov
+
         draft_model_id, target_model_id = DFLASH_MODELS["qwen3_coder_dflash"]
         with TemporaryDirectory() as tmpdir:
             main_export(
@@ -871,6 +873,35 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
             self.assertTrue((Path(tmpdir) / "openvino_model.xml").exists())
             self.assertTrue((Path(tmpdir) / "openvino_model.bin").exists())
+
+            model_path = Path(tmpdir) / "openvino_model.xml"
+            core = ov.Core()
+            dflash_model = core.read_model(model_path)
+            logits = next(output for output in dflash_model.outputs if "logits" in output.get_names())
+            self.assertTrue(dflash_model.input("input_ids").get_partial_shape()[1].is_dynamic)
+            self.assertTrue(logits.get_partial_shape()[1].is_dynamic)
+
+            for input_length in (2, 5):
+                with self.subTest(input_length=input_length):
+                    dflash_model = core.read_model(model_path)
+                    hidden_states_shape = dflash_model.input("hidden_states").get_partial_shape()
+                    hidden_states_shape[0] = 1
+                    hidden_states_shape[1] = 4
+                    position_ids_shape = dflash_model.input("position_ids").get_partial_shape()
+                    position_ids_shape[0] = 1
+                    position_ids_shape[1] = hidden_states_shape[1].get_length() + input_length
+
+                    dflash_model.reshape(
+                        {
+                            "input_ids": ov.PartialShape([1, input_length]),
+                            "hidden_states": hidden_states_shape,
+                            "position_ids": position_ids_shape,
+                        }
+                    )
+                    logits = next(output for output in dflash_model.outputs if "logits" in output.get_names())
+                    logits_sequence_length = logits.get_partial_shape()[1]
+                    self.assertFalse(logits_sequence_length.is_dynamic)
+                    self.assertEqual(logits_sequence_length.get_length(), input_length - 1)
 
     def test_filtered_architectures(cls):
         if is_transformers_version("<", "4.49"):

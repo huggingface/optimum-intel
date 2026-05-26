@@ -8814,8 +8814,10 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
             **kwargs,
         )
         if logits_to_keep is None:
-            logits_to_keep = self.block_size - 1
-        logits = self.lm_head(outputs.last_hidden_state[:, -logits_to_keep:, :])
+            hidden_states = outputs.last_hidden_state[:, 1:, :]
+        else:
+            hidden_states = outputs.last_hidden_state[:, -logits_to_keep:, :]
+        logits = self.lm_head(hidden_states)
         return CausalLMOutputWithPast(logits=logits, past_key_values=outputs.past_key_values)
 
 
