@@ -29,6 +29,23 @@ from transformers.utils import is_torch_available
 from openvino import Model, save_model
 from openvino.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
+from optimum.exporters.openvino.utils import (
+    MULTI_MODAL_TEXT_GENERATION_MODELS,
+    ONNX_SUPPORTED_ARCHITECTURES,
+    OV_XML_FILE_NAME,
+    _get_dynamic_shapes_info,
+    _get_input_info,
+    _get_kokoro_submodels_fn_and_export_configs,
+    _get_model_dtype,
+    _get_open_clip_submodels_fn_and_export_configs,
+    _normalize_dummy_inputs,
+    allow_skip_tracing_check,
+    clear_class_registry,
+    remove_none_from_dummy_inputs,
+    save_config,
+    save_preprocessors,
+    set_simplified_chat_template,
+)
 from optimum.exporters.tasks import TasksManager
 from optimum.exporters.utils import (
     DECODER_NAME,
@@ -50,34 +67,18 @@ from optimum.intel.utils.import_utils import (
     _torch_version,
     _transformers_version,
     compare_versions,
+    is_diffusers_available,
+    is_nncf_available,
     is_transformers_version,
 )
-from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
+from optimum.utils import DEFAULT_DUMMY_SHAPES
 
-from ...intel.utils.import_utils import is_nncf_available
 from ...intel.utils.modeling_utils import _infer_library_from_model_or_model_class
 from .stateful import (
     ensure_export_task_support_stateful,
     ensure_model_type_support_stateful,
     ensure_stateful_is_available,
     patch_stateful,
-)
-from .utils import (
-    MULTI_MODAL_TEXT_GENERATION_MODELS,
-    ONNX_SUPPORTED_ARCHITECTURES,
-    OV_XML_FILE_NAME,
-    _get_dynamic_shapes_info,
-    _get_input_info,
-    _get_kokoro_submodels_fn_and_export_configs,
-    _get_model_dtype,
-    _get_open_clip_submodels_fn_and_export_configs,
-    _normalize_dummy_inputs,
-    allow_skip_tracing_check,
-    clear_class_registry,
-    remove_none_from_dummy_inputs,
-    save_config,
-    save_preprocessors,
-    set_simplified_chat_template,
 )
 
 
@@ -606,8 +607,8 @@ def export_from_model(
         model_type = getattr(model.config, "model_type", None) or ""
 
     if model_type in ONNX_SUPPORTED_ARCHITECTURES:
-        logger.warning(
-            f"The OpenVINO export of {model_type} models is not officially supported by optimum-intel, export at your own risks."
+        raise ValueError(
+            f"The OpenVINO export of {model_type} models is not officially supported by optimum-intel and has been deprecated."
         )
 
     custom_architecture = library_name == "transformers" and model_type not in TasksManager._SUPPORTED_MODEL_TYPE

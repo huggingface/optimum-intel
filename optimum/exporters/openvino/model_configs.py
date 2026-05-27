@@ -14,7 +14,6 @@
 
 import enum
 import logging
-from copy import deepcopy
 from typing import Any, Dict, List, Optional, Union
 
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
@@ -168,7 +167,6 @@ from optimum.exporters.openvino.model_patcher import (
     Zamba2ModelPatcher,
     _get_model_attribute,
 )
-from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_diffusers_available,
@@ -332,26 +330,6 @@ def init_model_configs():
     if is_diffusers_available() and "text-to-video" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"] = {}
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx-video"] = "LTXPipeline"
-
-    # TODO: add warning to state that architectures from ONNX_SUPPORTED_ARCHITECTURES are deprecated
-
-    supported_model_types = [
-        "_SUPPORTED_MODEL_TYPE",
-        "_DIFFUSERS_SUPPORTED_MODEL_TYPE",
-        "_TIMM_SUPPORTED_MODEL_TYPE",
-        "_SENTENCE_TRANSFORMERS_SUPPORTED_MODEL_TYPE",
-    ]
-    # TODO: remove once models from ONNX_SUPPORTED_ARCHITECTURES are deprecated (optimum-intel v1.29)
-    for supported_models_config in supported_model_types:
-        supported_models = getattr(TasksManager, supported_models_config)
-        for model, export_configs in supported_models.items():
-            # adding only the architectures that are already supported via optimum-onnx v0.1.0
-            if "onnx" not in export_configs or model not in ONNX_SUPPORTED_ARCHITECTURES:
-                continue
-            onnx_config = export_configs["onnx"]
-            supported_models[model]["openvino"] = deepcopy(onnx_config)
-
-        setattr(TasksManager, supported_models_config, supported_models)
 
 
 init_model_configs()
