@@ -87,43 +87,6 @@ class GPTBigCodeDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         return pkv
 
 
-class DummyMoonshineAudioInputGenerator(DummyAudioInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("input_values", "attention_mask")
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name == "input_values":  # raw waveform
-            return self.random_float_tensor(
-                shape=[self.batch_size, self.sequence_length],
-                min_value=-1,
-                max_value=1,
-                framework=framework,
-                dtype=float_dtype,
-            )
-        elif input_name == "attention_mask":  # attention mask
-            return self.random_mask_tensor(
-                shape=[self.batch_size, self.sequence_length],
-                framework=framework,
-                dtype=int_dtype,
-            )
-        else:
-            raise ValueError(f"Unsupported input name: {input_name}")
-
-
-class DummySanaTransforemerTextInputGenerator(DummyTransformerTextInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("encoder_hidden_states", "encoder_attention_mask")
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name == "encoder_attention_mask":
-            return self.random_mask_tensor(
-                shape=[self.batch_size, self.sequence_length],
-                framework=framework,
-                dtype=int_dtype,
-            )
-        else:
-            return super().generate(
-                input_name=input_name, framework=framework, int_dtype=int_dtype, float_dtype=float_dtype
-            )
-
 
 class DummyQwen3VLLMInputGenerator(DummyTextInputGenerator):
     SUPPORTED_INPUT_NAMES = (

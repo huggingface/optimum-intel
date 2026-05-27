@@ -333,6 +333,8 @@ def init_model_configs():
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"] = {}
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx-video"] = "LTXPipeline"
 
+    # TODO: add warning to state that architectures from ONNX_SUPPORTED_ARCHITECTURES are deprecated
+
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",
         "_DIFFUSERS_SUPPORTED_MODEL_TYPE",
