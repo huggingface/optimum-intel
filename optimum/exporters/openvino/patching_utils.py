@@ -27,6 +27,7 @@ from transformers import PreTrainedModel
 from transformers.cache_utils import DynamicCache, EncoderDecoderCache
 from transformers.modeling_outputs import BaseModelOutput
 
+from optimum.exporters.base import ExporterConfig
 from optimum.intel.utils.import_utils import is_torch_version, is_transformers_version
 
 
@@ -578,7 +579,7 @@ UNSUPPORTED_OPS_PATCHING_SPEC = [
 class ModelPatcher:
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: ExporterConfig,
         model: PreTrainedModel,
         model_kwargs: dict[str, Any] | None = None,
     ):
