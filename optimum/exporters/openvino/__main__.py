@@ -102,9 +102,22 @@ def infer_task(
             except KeyError as e:
                 try:
                     config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
-                    with_past_arch_list = ["MistralForCausalLM", "Zamba2ForCausalLM"]
+                    with_past_arch_list = [
+                        "MistralForCausalLM",
+                        "Zamba2ForCausalLM",
+                        "LlamaForCausalLMEagle3",
+                        "Eagle3LlamaForCausalLM",
+                    ]
                     if any(arch in config.architectures for arch in with_past_arch_list):
-                        task = "text-generation-with-past"
+                        # VLM Eagle3 models (targeting VLM architectures like Qwen3-VL)
+                        # should use image-text-to-text task for proper inputs_embeds/3D position_ids export.
+                        if "Eagle3LlamaForCausalLM" in config.architectures and (
+                            getattr(config, "modal_type", "") == "VLM"
+                            or getattr(config, "target_model_type", "") in {"qwen2_vl", "qwen3_vl"}
+                        ):
+                            task = "image-text-to-text"
+                        else:
+                            task = "text-generation-with-past"
                 except Exception:
                     raise KeyError(
                         f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
@@ -340,9 +353,10 @@ def main_export(
         quantization_config = getattr(config, "quantization_config", None)
         quant_method = quantization_config.get("quant_method", None) if quantization_config else None
 
-        # update config to load eagle3 models
+        # update config to load eagle3 models (both text-only and VLM variants)
         archs = getattr(config, "architectures", None)
-        if isinstance(archs, list) and len(archs) > 0 and archs[0] == "LlamaForCausalLMEagle3":
+        _eagle3_archs = {"LlamaForCausalLMEagle3", "Eagle3LlamaForCausalLM"}
+        if isinstance(archs, list) and len(archs) > 0 and archs[0] in _eagle3_archs:
             loading_kwargs["config"] = update_config_for_eagle3(config)
 
         # mxfp4 quantized model will be dequantized to bf16

@@ -73,6 +73,8 @@ if is_transformers_version(">=", "4.54"):
     from transformers.masking_utils import create_causal_mask
 if is_transformers_version(">=", "4.56"):
     import transformers.masking_utils
+if is_transformers_version(">=", "4.57"):
+    from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLTextRotaryEmbedding
 if is_transformers_version(">=", "5"):
     from transformers.modeling_rope_utils import RotaryEmbeddingConfigMixin
 
@@ -148,6 +150,105 @@ for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
         "scaled_dot_product_attention",
     }:
         UNSUPPORTED_OPS_PATCHING_SPEC.pop(idx)
+
+
+# Original code: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/integrations/moe.py#L98
+# Method needs to be patched to match the pattern that OpenVINO MoE optimization transformation expect.
+# The difference is that this method packs hidden states and routing weight to dense representation,
+# instead of usage of indexed tensors.
+# Also, original method adds squeeze/unsqueeze operations around MatMul's which also break expected pattern.
+def batched_mm_experts_forward_patched(
+    self: torch.nn.Module,
+    hidden_states: torch.Tensor,
+    top_k_index: torch.Tensor,
+    top_k_weights: torch.Tensor,
+) -> torch.Tensor:
+    num_tokens = hidden_states.size(0)
+    hidden_dim = hidden_states.size(-1)
+    num_experts = self.gate_up_proj.size(0)
+
+    if not self.is_transposed:
+        gate_up_proj = self.gate_up_proj.transpose(1, 2)
+        down_proj = self.down_proj.transpose(1, 2)
+    else:
+        gate_up_proj = self.gate_up_proj
+        down_proj = self.down_proj
+
+    dense_routing_weights = torch.zeros(
+        num_tokens,
+        num_experts,
+        device=hidden_states.device,
+        dtype=hidden_states.dtype,
+    )
+    dense_routing_weights.scatter_(dim=1, index=top_k_index, src=top_k_weights)
+    hidden_states_expanded = hidden_states.repeat(num_experts, 1)  # (num_experts * num_tokens, hidden_dim)
+    hidden_states_expanded = hidden_states_expanded.view(
+        num_experts, -1, hidden_dim
+    )  # (num_experts, num_tokens, hidden_dim)
+
+    # --- Up projection per expert (batched) ---
+    gate_up_out = torch.bmm(hidden_states_expanded, gate_up_proj)
+    # (S, 2 * intermediate_dim)
+
+    if self.has_bias:
+        gate_up_out = gate_up_out + self.gate_up_proj_bias[..., None, :]
+
+    # Apply gating
+    # gate, up = gate_up_out[..., ::2], gate_up_out[..., 1::2]
+    # gate = gate.clamp(min=None, max=self.limit)
+    # up = up.clamp(min=-self.limit, max=self.limit)
+    # gated_out = gate * torch.sigmoid(gate * self.alpha)
+    gated_out = self._apply_gate(gate_up_out)
+
+    # --- Down projection per expert (batched) ---
+    next_states = torch.bmm(gated_out, down_proj)  # (S, hidden_dim)
+
+    if self.has_bias:
+        next_states = next_states + self.down_proj_bias[..., None, :]
+
+    next_states = next_states.view(num_experts, num_tokens, -1, hidden_dim)
+
+    # Apply routing weights
+    next_states = next_states * dense_routing_weights.transpose(0, 1).view(num_experts, num_tokens, -1)[..., None]
+    next_states = next_states.sum(dim=0)
+
+    return next_states
+
+
+# Original code: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/modeling_utils.py#L1930
+# The patch is needed to add "ov_batched_mm" to the applicable_experts list.
+def get_correct_experts_implementation_patched(self, requested_experts: str | None) -> str:
+    applicable_experts = "grouped_mm" if requested_experts is None else requested_experts
+    if applicable_experts not in ["eager", "grouped_mm", "batched_mm", "ov_batched_mm"]:
+        message = (
+            f'Specified `experts_implementation="{applicable_experts}"` is not supported. The only possible arguments are '
+            '`experts_implementation="eager"`, `"experts_implementation=grouped_mm"` and `"experts_implementation=batched_mm"`.'
+        )
+        raise ValueError(message)
+
+    # Perform relevant checks
+    if applicable_experts == "grouped_mm":
+        try:
+            self._grouped_mm_can_dispatch()
+        except (ValueError, ImportError) as e:
+            if requested_experts == "grouped_mm":
+                raise e
+            applicable_experts = "eager"
+
+    return applicable_experts
+
+
+def register_ov_batched_mm(patcher):
+    from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
+
+    if is_transformers_version("<", "5.7"):
+        patcher.get_correct_experts_implementation_orig = patcher._model.get_correct_experts_implementation
+        patcher._model.get_correct_experts_implementation = types.MethodType(
+            get_correct_experts_implementation_patched, patcher._model
+        )
+
+    ALL_EXPERTS_FUNCTIONS.register("ov_batched_mm", batched_mm_experts_forward_patched)
+    patcher._model.set_experts_implementation("ov_batched_mm")
 
 
 def patch_update_causal_mask(
@@ -437,7 +538,10 @@ class MixtralModelPatcher(OVDecoderModelPatcher):
                     _mixtral_sparse_moe_block_forward, layer.block_sparse_moe
                 )
         else:
-            self._model.set_experts_implementation("batched_mm")
+            from transformers.models.mixtral.modeling_mixtral import MixtralExperts
+
+            self.original_moe_forward = MixtralExperts.forward
+            MixtralExperts.forward = lfm2_moe_experts_forward
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -445,6 +549,10 @@ class MixtralModelPatcher(OVDecoderModelPatcher):
         if is_transformers_version("<", "5"):
             for layer in self._model.model.layers:
                 layer.block_sparse_moe.forward = layer.block_sparse_moe._unpatched_forward
+        else:
+            from transformers.models.mixtral.modeling_mixtral import MixtralExperts
+
+            MixtralExperts.forward = self.original_moe_forward
 
 
 class ArcticModelPatcher(MixtralModelPatcher):
@@ -1757,7 +1865,10 @@ class PhiMoEModelPatcher(Phi3ModelPatcher):
                     _phi_moe_sparse_moe_block_forward, layer.block_sparse_moe
                 )
         else:
-            self._model.set_experts_implementation("batched_mm")
+            from transformers.models.phimoe.modeling_phimoe import PhimoeExperts
+
+            self.original_moe_forward = PhimoeExperts.forward
+            PhimoeExperts.forward = lfm2_moe_experts_forward
 
         # fixed in https://github.com/huggingface/transformers/pull/43445, still needed for v5.0
         if is_transformers_version("==", "5.0"):
@@ -1774,6 +1885,10 @@ class PhiMoEModelPatcher(Phi3ModelPatcher):
         if is_transformers_version("<", "5"):
             for layer in self._model.model.layers:
                 layer.block_sparse_moe.forward = layer.block_sparse_moe._orig_forward
+        else:
+            from transformers.models.phimoe.modeling_phimoe import PhimoeExperts
+
+            PhimoeExperts.forward = self.original_moe_forward
 
 
 def _aquila_self_attn_sdpa_forward(
@@ -5796,20 +5911,28 @@ class Qwen2MoEPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        if is_transformers_version(">=", "4.52.0") and is_transformers_version("<", "5"):
-            from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeSparseMoeBlock
+        if is_transformers_version(">=", "4.52.0"):
+            if is_transformers_version("<", "5"):
+                from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeSparseMoeBlock
 
-            modulewise_patch(self._model, Qwen2MoeSparseMoeBlock, _qwen2moe_sparse_block_forward)
+                modulewise_patch(self._model, Qwen2MoeSparseMoeBlock, _qwen2moe_sparse_block_forward)
+            else:
+                from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeExperts
 
-        if is_transformers_version(">=", "5"):
-            self._model.set_experts_implementation("batched_mm")
+                self.original_moe_forward = Qwen2MoeExperts.forward
+                Qwen2MoeExperts.forward = lfm2_moe_experts_forward
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if is_transformers_version(">=", "4.52.0") and is_transformers_version("<", "5"):
-            from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeSparseMoeBlock
+        if is_transformers_version(">=", "4.52.0"):
+            if is_transformers_version("<", "5"):
+                from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeSparseMoeBlock
 
-            modulewise_unpatch(self._model, Qwen2MoeSparseMoeBlock)
+                modulewise_unpatch(self._model, Qwen2MoeSparseMoeBlock)
+            else:
+                from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeExperts
+
+                Qwen2MoeExperts.forward = self.original_moe_forward
 
 
 class MarianModelPatcher(OVSeq2SeqModelPatcher):
@@ -7173,17 +7296,26 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        if is_transformers_version(">=", "4.53") and is_transformers_version("<", "5"):
-            self.original_moe_forward = Qwen3MoeSparseMoeBlock.forward
-            Qwen3MoeSparseMoeBlock.forward = qwen3_moe_forward_patched
-        if is_transformers_version(">=", "5"):
-            self._model.set_experts_implementation("batched_mm")
+        if is_transformers_version(">=", "4.53"):
+            if is_transformers_version("<", "5"):
+                self.original_moe_forward = Qwen3MoeSparseMoeBlock.forward
+                Qwen3MoeSparseMoeBlock.forward = qwen3_moe_forward_patched
+            else:
+                from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeExperts
+
+                self.original_moe_forward = Qwen3MoeExperts.forward
+                Qwen3MoeExperts.forward = lfm2_moe_experts_forward
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if is_transformers_version(">=", "4.53") and is_transformers_version("<", "5"):
-            Qwen3MoeSparseMoeBlock.forward = self.original_moe_forward
+        if is_transformers_version(">=", "4.53"):
+            if is_transformers_version("<", "5"):
+                Qwen3MoeSparseMoeBlock.forward = self.original_moe_forward
+            else:
+                from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeExperts
+
+                Qwen3MoeExperts.forward = self.original_moe_forward
 
 
 # The original implementation of this forward method can be found at:
@@ -7858,22 +7990,23 @@ class GptOssModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "5"):
-            from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
+        if is_transformers_version(">=", "4.55.0"):
+            if is_transformers_version("<", "5"):
+                from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
 
-            self.original_gpt_oss_forward = GptOssExperts.forward
-            GptOssExperts.forward = gpt_oss_forward
-
-        if is_transformers_version(">=", "5"):
-            self._model.set_experts_implementation("batched_mm")
+                self.original_gpt_oss_forward = GptOssExperts.forward
+                GptOssExperts.forward = gpt_oss_forward
+            else:
+                register_ov_batched_mm(self)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "5"):
-            from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
+        if is_transformers_version(">=", "4.55.0"):
+            if is_transformers_version("<", "5"):
+                from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
 
-            GptOssExperts.forward = self.original_gpt_oss_forward
+                GptOssExperts.forward = self.original_gpt_oss_forward
 
 
 # This patch overrides the following line in Transformers:
@@ -8339,7 +8472,19 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
         self.hidden_size = config.hidden_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, config.pad_token_id)
-        self.rotary_emb = LlamaRotaryEmbedding(config=config)
+        # Select rotary embedding based on the target model's RoPE configuration:
+        #   - LlamaRotaryEmbedding for standard Eagle-3 draft models
+        #     (e.g. AngelSlim/Qwen3-1.7B_eagle3).
+        #   - Qwen3VLTextRotaryEmbedding for VLM Eagle-3 draft models that
+        #     require interleaved multimodal RoPE / MRoPE
+        #     (e.g. AngelSlim/Qwen3-VL-4B-Instruct_eagle3).
+        # adopted from https://github.com/Tencent/AngelSlim/blob/main/angelslim/compressor/speculative/train/models/draft/llama_eagle3.py#L258
+        rope_scaling = getattr(config, "rope_scaling", None) or {}
+        rope_type = rope_scaling.get("rope_type") or rope_scaling.get("type")
+        if rope_type == "mrope" or rope_scaling.get("mrope_section") is not None:
+            self.rotary_emb = Qwen3VLTextRotaryEmbedding(config=config)
+        else:
+            self.rotary_emb = LlamaRotaryEmbedding(config=config)
 
         self.midlayer = LlamaEagle3DecoderLayer(config)
         self.target_hidden_size = getattr(config, "target_hidden_size", config.hidden_size)
