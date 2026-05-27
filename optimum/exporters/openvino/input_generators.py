@@ -19,14 +19,12 @@ import torch
 from optimum.intel.utils.import_utils import is_diffusers_version
 from optimum.utils import (
     DEFAULT_DUMMY_SHAPES,
-    DummyAudioInputGenerator,
     DummyInputGenerator,
     DummyPastKeyValuesGenerator,
     DummySeq2SeqDecoderTextInputGenerator,
     DummySeq2SeqPastKeyValuesGenerator,
     DummyTextInputGenerator,
     DummyTimestepInputGenerator,
-    DummyTransformerTextInputGenerator,
     DummyVisionInputGenerator,
     FalconDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
@@ -85,7 +83,6 @@ class GPTBigCodeDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             ]
 
         return pkv
-
 
 
 class DummyQwen3VLLMInputGenerator(DummyTextInputGenerator):

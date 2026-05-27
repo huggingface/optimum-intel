@@ -69,7 +69,6 @@ if is_transformers_version(">=", "4.44") and is_transformers_version("<", "4.50"
 
 if is_transformers_version(">=", "4.48"):
     from transformers.cache_utils import DynamicCache, EncoderDecoderCache
-    from transformers.models.moonshine.modeling_moonshine import MoonshinePreTrainedModel
 if is_transformers_version(">=", "4.53"):
     from transformers.masking_utils import (
         ALL_MASK_ATTENTION_FUNCTIONS,
@@ -82,7 +81,6 @@ if is_transformers_version(">=", "4.53"):
         sdpa_mask,
     )
     from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
-
 
 
 if is_transformers_version(">=", "4.53.1"):
@@ -817,7 +815,6 @@ class BigBirdPegasusModelPatcher(ModelPatcher):
             self._model.set_attention_type("block_sparse")
 
 
-
 class SAMModelPatcher(ModelPatcher):
     def __init__(
         self,
@@ -957,9 +954,6 @@ class SentenceTransformersTransformerPatcher(ModelPatcher):
         self.patched_forward = patched_forward
 
 
-
-
-
 class CLIPModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
@@ -971,7 +965,6 @@ class CLIPModelPatcher(ModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         if is_transformers_version(">=", "4.43") and is_transformers_version("<", "4.48"):
             CLIPSdpaAttention.forward = self.original_sdpa_forward
-
 
 
 class Qwen3MoeModelPatcher(ModelPatcher):
@@ -1000,8 +993,6 @@ def _get_feat_extract_output_lengths_patched(self, input_lengths: torch.LongTens
     output_conv2_length = (output_conv1_length - 7) // 3 + 1
     output_conv3_length = (output_conv2_length - 3) // 2 + 1
     return output_conv3_length
-
-
 
 
 class GptOssModelPatcher(ModelPatcher):
@@ -9947,7 +9938,6 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
                 sparse_moe_block = decoder_layer.mlp
                 decoder_layer.mlp.forward = decoder_layer.mlp._orig_forward
                 del sparse_moe_block.down_projs, sparse_moe_block.gate_projs, sparse_moe_block.up_projs
-
 
 
 class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
