@@ -9211,6 +9211,14 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
                 del sparse_moe_block.down_projs, sparse_moe_block.gate_projs, sparse_moe_block.up_projs
 
 
+# OpenVINO has a bug due to which Clamp(-inf, inf) doesn't work correctly: CVS-185473.
+# When min == -inf and max == inf, Clamp is equivalent to an identity operation and
+# can be removed from the model, which serves as a workaround for the issue.
+def patched_gemma4_clippable_linear_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    hidden_states = self.linear(hidden_states)
+    return hidden_states
+
+
 class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
     def __init__(self, config, model, model_kwargs):
         super().__init__(config, model, model_kwargs)

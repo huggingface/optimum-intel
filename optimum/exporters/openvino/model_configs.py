@@ -23,7 +23,6 @@ from optimum.exporters.openvino.config import (
     AudioOnnxConfig,
     AudioToTextOnnxConfig,
     EncoderDecoderBaseOnnxConfig,
-    OnnxConfig,
     TextAndVisionOnnxConfig,
     TextDecoderOnnxConfig,
     TextDecoderWithPositionIdsOnnxConfig,
