@@ -71,7 +71,6 @@ from optimum.exporters.openvino.input_generators import (
     MambaCacheDummyInputGenerator,
     OVFalconDummyPastKeyValuesGenerator,
     OVMiniCPM3DummyPastKeyValuesGenerator,
-    OVMistralDummyPastKeyValuesGenerator,
     PooledProjectionsDummyInputGenerator,
     Qwen3_5DummyPastKeyValuesGenerator,
     Qwen3ASRDummySeq2SeqPastKeyValuesGenerator,
@@ -191,7 +190,6 @@ from optimum.utils.input_generators import (
     DummyVisionEncoderDecoderPastKeyValuesGenerator,
     DummyVisionInputGenerator,
     GemmaDummyPastKeyValuesGenerator,
-    GPTBigCodeDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
     PerceiverDummyInputGenerator,
     T5DummySeq2SeqPastKeyValuesGenerator,
@@ -1208,9 +1206,9 @@ class ArcticOpenVINOConfig(MixtralOpenVINOConfig):
 class MistralOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(num_key_value_heads="num_key_value_heads", allow_new=True)
     DUMMY_INPUT_GENERATOR_CLASSES = (
-        OVMistralDummyPastKeyValuesGenerator,
+        MistralDummyPastKeyValuesGenerator,
     ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
-    DUMMY_PKV_GENERATOR_CLASS = OVMistralDummyPastKeyValuesGenerator
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     _MODEL_PATCHER = MistralModelPatcher
 
 

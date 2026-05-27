@@ -25,6 +25,7 @@ import transformers
 from torch.onnx import symbolic_helper
 from transformers import PreTrainedModel
 from transformers.cache_utils import DynamicCache, EncoderDecoderCache
+from transformers.modeling_outputs import BaseModelOutput
 
 from optimum.intel.utils.import_utils import is_torch_version, is_transformers_version
 

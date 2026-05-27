@@ -344,6 +344,7 @@ class OVFalconDummyPastKeyValuesGenerator(FalconDummyPastKeyValuesGenerator):
         **kwargs,
     ):
         super().__init__(
+
             task=task,
             normalized_config=normalized_config,
             batch_size=batch_size,
@@ -390,44 +391,6 @@ class AquilaDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             self.num_key_value_heads,
             self.sequence_length,
             self.hidden_size // self.num_attention_heads,
-        )
-        return [
-            (
-                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
-                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
-            )
-            for _ in range(self.num_layers)
-        ]
-
-
-class OVMistralDummyPastKeyValuesGenerator(MistralDummyPastKeyValuesGenerator):
-    def __init__(
-        self,
-        task: str,
-        normalized_config: NormalizedTextConfig,
-        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
-        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
-        random_batch_size_range: Optional[Tuple[int, int]] = None,
-        random_sequence_length_range: Optional[Tuple[int, int]] = None,
-        **kwargs,
-    ):
-        super().__init__(
-            task=task,
-            normalized_config=normalized_config,
-            batch_size=batch_size,
-            sequence_length=sequence_length,
-            random_batch_size_range=random_batch_size_range,
-            random_sequence_length_range=random_sequence_length_range,
-            **kwargs,
-        )
-        self.head_dim = getattr(normalized_config, "head_dim", self.hidden_size // self.num_attention_heads)
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        shape = (
-            self.batch_size,
-            self.num_key_value_heads,
-            self.sequence_length,
-            self.head_dim,
         )
         return [
             (

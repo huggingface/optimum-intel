@@ -48,9 +48,12 @@ from transformers.processing_utils import Unpack
 from transformers.utils import ModelOutput
 
 from optimum.exporters.openvino._ov_ops import convert_recurrent_attention_cell
+from optimum.exporters.openvino.base import OnnxConfig
 from optimum.exporters.openvino.patching_utils import (
     UNSUPPORTED_OPS_PATCHING_SPEC,
     ModelPatcher,
+    postprocess_past_key_values,
+    preprocess_past_key_values,
     sdpa_mask_without_vmap,
 )
 from optimum.intel.utils.import_utils import (
@@ -267,25 +270,6 @@ class CLIPModelPatcher(ModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         if is_transformers_version(">=", "4.43") and is_transformers_version("<", "4.48"):
             CLIPSdpaAttention.forward = self.original_sdpa_forward
-
-
-class Qwen3MoeModelPatcher(ModelPatcher):
-    def __enter__(self):
-        super().__enter__()
-
-        # This is a workaround for the Qwen3 Moe Sparse block that is not compatible with ONNX export.
-        # The forward method of the Moe Sparse block is patched to avoid looping only on the experts that are selected
-        # by the router, which fails during execution in ONNX Runtime.
-        # TODO: investigate more on this issue.
-        if is_transformers_version(">=", "4.53"):
-            self.original_moe_forward = Qwen3MoeSparseMoeBlock.forward
-            Qwen3MoeSparseMoeBlock.forward = qwen3_moe_forward_patched
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-
-        if is_transformers_version(">=", "4.53"):
-            Qwen3MoeSparseMoeBlock.forward = self.original_moe_forward
 
 
 # This is a traceable version of the original function,
@@ -5380,8 +5364,6 @@ def gemma4_lm_forward(
     logits_to_keep: Union[int, torch.Tensor] = 0,
     **lm_kwargs,
 ):
-    from optimum.exporters.openvino.patching_utils import preprocess_past_key_values
-
     output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
     output_hidden_states = (
         output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -9281,8 +9263,6 @@ class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
                     position_ids=pixel_position_ids,
                     **kwargs,
                 )
-
-            from transformers.modeling_outputs import BaseModelOutputWithPast
 
             return BaseModelOutputWithPast(last_hidden_state=hidden_states)
 
