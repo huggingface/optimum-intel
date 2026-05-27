@@ -1165,36 +1165,27 @@ def get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
 def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     models_for_export = {}
 
-    # Text encoder (Gemma3) - wrap to always output hidden states
-    # Gemma3 internally creates causal masks via create_causal_mask/create_sliding_window_causal_mask,
-    # which get baked as constants during torch.jit.trace, causing NaN for different sequence lengths.
-    # The fix: pre-compute a 4D attention mask and pass it as a dict to bypass internal mask creation.
+    # Text encoder (Gemma3) - wrap to always output hidden states.
+    # Build explicit float additive masks from the 2D attention_mask so that
+    # mask creation is fully traceable (no data-dependent boolean ops).
+    # SDPA handles float masks correctly on real tokens; padding-position
+    # values differ from standard boolean masks but are unused downstream.
     text_encoder = pipeline.text_encoder
     text_encoder.config.output_hidden_states = True
     orig_forward = text_encoder.forward
 
     def text_encoder_forward(input_ids, attention_mask=None, **kwargs):
-        import torch
-
-        # Build a 4D causal mask from the 2D attention_mask that works with dynamic shapes.
-        # Gemma3 expects attention_mask as a dict with "full_attention" and "sliding_attention" keys;
-        # when it receives a dict, it skips its internal mask creation (which would bake shapes).
         if attention_mask is not None and attention_mask.dim() == 2:
+            import torch
+
             bsz, seq_len = attention_mask.shape
-            # Create a causal mask: [batch, 1, seq_len, seq_len]
-            # Start with the padding mask: 1 where valid, 0 where padding
             causal_mask = attention_mask[:, None, None, :].to(dtype=torch.float32)
-            causal_mask = causal_mask.expand(bsz, 1, seq_len, seq_len)
-            # Apply causal (lower-triangular) pattern
-            causal_positions = torch.tril(torch.ones(seq_len, seq_len, device=attention_mask.device, dtype=torch.float32))
+            causal_mask = causal_mask.expand(bsz, 1, seq_len, seq_len).clone()
+            causal_positions = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.float32))
             causal_mask = causal_mask * causal_positions[None, None, :, :]
-            # Convert to additive mask: 0 for attend, large negative for ignore
             causal_mask = (1.0 - causal_mask) * torch.finfo(torch.float32).min
-            # Pass as dict to bypass Gemma3's internal mask creation
-            mask_dict = {"full_attention": causal_mask, "sliding_attention": causal_mask}
-            outputs = orig_forward(input_ids=input_ids, attention_mask=mask_dict, output_hidden_states=True)
-        else:
-            outputs = orig_forward(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
+            attention_mask = {"full_attention": causal_mask, "sliding_attention": causal_mask}
+        outputs = orig_forward(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
         result = {"last_hidden_state": outputs.hidden_states[-1]}
         for i, hs in enumerate(outputs.hidden_states):
             result[f"hidden_states.{i}"] = hs
