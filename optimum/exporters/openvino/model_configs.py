@@ -4733,13 +4733,6 @@ class GPTBigCodeOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
             flattened_output[f"{name}.{idx}.key_value"] = t
 
 
-@register_in_tasks_manager(
-    "pix2struct",
-    *[
-        "image-to-text",
-        "image-to-text-with-past",
-    ],
-)
 class _Pix2StructNormalizedConfig(NormalizedSeq2SeqConfig):
     ENCODER_NUM_LAYERS = "vision_config.num_hidden_layers"
     DECODER_NUM_LAYERS = "text_config.num_layers"
@@ -4749,6 +4742,13 @@ class _Pix2StructNormalizedConfig(NormalizedSeq2SeqConfig):
     VOCAB_SIZE = "text_config.vocab_size"
 
 
+@register_in_tasks_manager(
+    "pix2struct",
+    *[
+        "image-to-text",
+        "image-to-text-with-past",
+    ],
+)
 class Pix2StructOpenVINOConfig(OnnxSeq2SeqConfigWithPast):
     PAD_ATTENTION_MASK_TO_PAST = True
     NORMALIZED_CONFIG_CLASS = _Pix2StructNormalizedConfig
@@ -4900,11 +4900,6 @@ class XLMOpenVINOConfig(BertOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
 
 
-@register_in_tasks_manager("xlm-roberta", *COMMON_TEXT_TASKS)
-class XLMRobertaOpenVINOConfig(DistilBertOpenVINOConfig):
-    pass
-
-
 @register_in_tasks_manager("distilbert", *COMMON_TEXT_TASKS)
 class DistilBertOpenVINOConfig(TextEncoderOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -4916,6 +4911,11 @@ class DistilBertOpenVINOConfig(TextEncoderOnnxConfig):
         else:
             dynamic_axis = {0: "batch_size", 1: "sequence_length"}
         return {"input_ids": dynamic_axis, "attention_mask": dynamic_axis}
+
+
+@register_in_tasks_manager("xlm-roberta", *COMMON_TEXT_TASKS)
+class XLMRobertaOpenVINOConfig(DistilBertOpenVINOConfig):
+    pass
 
 
 @register_in_tasks_manager("roberta", *COMMON_TEXT_TASKS)
