@@ -1,4 +1,4 @@
-name: Preview Models Support Validation
+name: Test User Installation
 
 on:
   workflow_dispatch:
@@ -25,15 +25,6 @@ env:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        test-pattern:
-          [
-            "*export*",
-            "*seq2seq*",
-            "*quantization*",
-          ]
 
     runs-on: ubuntu-22.04
 
@@ -49,23 +40,16 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip uv
-          uv pip install .[tests] librosa diffusers
+          # test user installation
+          uv pip install .
 
       - name: Login with fork PRs CI token
         if: ${{ env.HF_TOKEN == '' }}
         run: |
           python tests/scripts/login_with_ci_token.py
 
-      - name: Install latest openvino nightly
+      - name: Test Model Exporting
         run: |
-          uv pip install --pre -U openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
-
-      - name: Gemma 4 Validation
-        run: |
-          uv pip install transformers==5.5.0
-          pytest tests/openvino/${{ matrix.test-pattern }} -m gemma4 --durations=0
-
-      - name: Qwen3.5 and Qwen3.5-Moe Validation
-        run: |
-          uv pip install "transformers>=5.2,<5.3"
-          pytest tests/openvino/${{ matrix.test-pattern }} -k "qwen3_5 or qwen3_5_moe" --durations=0
+          optimum-cli export openvino \
+            -m Qwen/Qwen2.5-0.5B \
+            temp_model

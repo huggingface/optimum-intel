@@ -1,9 +1,12 @@
 import copy
 import enum
+import importlib
 import inspect
 import logging
 import math
 import os
+import sys
+import types
 import warnings
 from abc import abstractmethod
 from dataclasses import dataclass
@@ -14,12 +17,13 @@ import numpy as np
 import openvino
 import openvino as ov
 import torch
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from transformers import (
     AutoConfig,
     AutoImageProcessor,
+    AutoModel,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
@@ -188,9 +192,11 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
                 position_ids = np.cumsum(attention_mask, axis=1) - 1
                 position_ids[attention_mask == 0] = 1
             if past_len:
-                position_ids = position_ids[:, -inputs_embeds.shape[1] :]
+                position_ids = position_ids[..., -inputs_embeds.shape[1] :]
 
-            if (self.config.model_type in ["qwen2_vl", "qwen3_vl"]) and position_ids.ndim != 3:
+            if self.config.model_type in ["qwen3_5", "qwen3_5_moe"] and position_ids.ndim != 3:
+                position_ids = np.repeat(np.expand_dims(position_ids, 0), 4, axis=0)
+            elif self.config.model_type in ["qwen2_vl", "qwen3_vl"] and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
 
             inputs["position_ids"] = position_ids
@@ -3450,6 +3456,44 @@ else:
     class Qwen3VLVisionModel:
         pass
 
+    class Qwen3_5Model:
+        pass
+
+    class Qwen3_5VisionModel:
+        pass
+
+
+if is_transformers_version(">=", "5.2.0"):
+    from transformers.models.qwen3_5.modeling_qwen3_5 import (
+        Qwen3_5Model,
+        Qwen3_5VisionModel,
+        Qwen3_5VisionRotaryEmbedding,
+    )
+else:
+
+    class Qwen3_5Model:
+        pass
+
+    class Qwen3_5VisionModel:
+        pass
+
+    class Qwen3_5VisionRotaryEmbedding:
+        pass
+
+
+if is_transformers_version(">=", "5.2.0"):
+    from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
+        Qwen3_5MoeModel,
+        Qwen3_5MoeVisionModel,
+    )
+else:
+
+    class Qwen3_5MoeModel:
+        pass
+
+    class Qwen3_5MoeVisionModel:
+        pass
+
 
 # The inheritance from Qwen3VLModel is needed to get access to methods:
 # get_placeholder_mask(): https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1066
@@ -4917,6 +4961,863 @@ class _OVLlama4ForCausalLM(OVModelForVisualCausalLM):
         return inputs
 
 
+class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
+    auto_model_class = AutoModel
+    additional_parts = ["vision_projection"]
+    _videochat_model_dir_cache = {}  # Cache: model_ref -> model_dir to avoid repeated resolution
+
+    @staticmethod
+    def _resolve_videochat_source_dir(model_ref):
+        if isinstance(model_ref, TemporaryDirectory):
+            model_ref = model_ref.name
+
+        model_dir = None
+        if model_ref is not None:
+            candidate = Path(model_ref).expanduser()
+            if candidate.is_file():
+                model_dir = candidate.parent
+            elif candidate.is_dir():
+                model_dir = candidate
+
+        if model_dir is None and isinstance(model_ref, str) and model_ref:
+            try:
+                snapshot_dir = snapshot_download(
+                    repo_id=model_ref,
+                    allow_patterns=["*.py", "*.json"],
+                    local_files_only=True,
+                )
+                model_dir = Path(snapshot_dir).resolve()
+            except Exception as e:
+                raise ValueError(
+                    "Failed to resolve local model directory from model reference. "
+                    "Pass a local model path, or ensure this Hub model is present in local cache."
+                ) from e
+
+        if not (model_dir and model_dir.is_dir()):
+            raise ValueError("VideoChat model reference must resolve to a valid local model directory.")
+
+        required_source_files = ["mm_utils.py", "vision_tower_builder.py"]
+        missing_source_files = [name for name in required_source_files if not (model_dir / name).is_file()]
+        if missing_source_files:
+            missing_files_text = ", ".join(missing_source_files)
+            raise ValueError(
+                f"Model source directory '{model_dir}' is missing required files: {missing_files_text}. "
+                "Pass a local model directory containing the original remote-code files, or ensure the full Hub snapshot is cached locally."
+            )
+
+        return model_dir
+
+    @classmethod
+    def _import_videochat_module(cls, module_name: str, model_ref):
+        # Use cached model_dir to avoid repeated resolution
+        if model_ref not in cls._videochat_model_dir_cache:
+            cls._videochat_model_dir_cache[model_ref] = cls._resolve_videochat_source_dir(model_ref)
+        model_dir = cls._videochat_model_dir_cache[model_ref]
+
+        package_name = "_videochat_flash_local"
+        local_pkg = sys.modules.get(package_name)
+        if local_pkg is None:
+            local_pkg = types.ModuleType(package_name)
+            local_pkg.__path__ = [str(model_dir)]
+            sys.modules[package_name] = local_pkg
+        elif getattr(local_pkg, "__path__", None) != [str(model_dir)]:
+            local_pkg.__path__ = [str(model_dir)]
+
+        return importlib.import_module(f"{package_name}.{module_name}")
+
+    def _resolve_hf_method_provider_dir(self, model_save_dir):
+        model_dir = model_save_dir.name if isinstance(model_save_dir, TemporaryDirectory) else model_save_dir
+        if model_dir is not None:
+            model_dir_path = Path(model_dir).resolve()
+            if model_dir_path.is_file():
+                model_dir_path = model_dir_path.parent
+            if model_dir_path.is_dir():
+                return model_dir_path
+
+        raise ValueError(
+            "Failed to locate local model directory for building transformers method provider. "
+            "Pass a valid local model_save_dir."
+        )
+
+    def _build_hf_method_provider(self, model_dir):
+        config = AutoConfig.from_pretrained(str(model_dir), trust_remote_code=True, local_files_only=True)
+        try:
+            from accelerate import init_empty_weights
+
+            build_ctx = init_empty_weights()
+        except Exception:
+            from contextlib import nullcontext
+
+            build_ctx = nullcontext()
+
+        with build_ctx:
+            provider = self.auto_model_class.from_config(config, trust_remote_code=True)
+
+        try:
+            provider = self._patch_hf_provider_for_ov_inference(provider)
+        except Exception as e:
+            raise ValueError(f"Failed to patch HF provider for OV inference: {e}")
+
+        return provider
+
+    def _patch_hf_provider_for_ov_inference(self, provider):
+        ov_model = self
+
+        class _OVVisionTowerProxy(torch.nn.Module):
+            def forward(self, images):
+                # Adapted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L822-L832
+                # Upstream preprocessing provides BTCHW, but the vision tower expects BCHWT,
+                # so we permute dimensions before running the visual encoder.
+                # We then keep patch tokens in [B, T*L, C] (dropping cls later) because
+                # downstream token merging/projection operates on a flattened token sequence.
+                T = images.shape[1]
+                images = images.permute(0, 2, 1, 3, 4)
+                if T == 1:
+                    pos_embeds = ov_model.img_pos_embed.detach()
+                else:
+                    pos_embeds = ov_model.pos_embed.detach()
+                image_embeds = ov_model.vision_embeddings(images, rotary_pos_emb=pos_embeds).last_hidden_state
+                image_embeds = image_embeds[:, 1:, :]
+                return torch.from_numpy(image_embeds) if isinstance(image_embeds, np.ndarray) else image_embeds
+
+        class _OVMLPProxy(torch.nn.Module):
+            # Only intercept the final MLP projection step inside mm_projector.forward().
+            # The original mm_projector's reshape and merge_tokens logic runs as-is.
+            def forward(self, x):
+                result = ov_model.vision_projection(x)
+                return torch.from_numpy(result) if isinstance(result, np.ndarray) else result
+
+        # Patch only mm_projector.mlp to route the OV vision projection inference.
+        # The rest of mm_projector.forward() (reshape, merge_tokens) runs from the original model code.
+        mm_projector = provider.model.mm_projector
+        mm_projector.mlp = _OVMLPProxy()
+
+        class _OVMMProjectorProxy:
+            def __init__(self, projector):
+                self._projector = projector
+                self.num_image_patches_per_side = getattr(projector, "num_image_patches_per_side", None)
+
+            def __call__(self, *args, **kwargs):
+                return self._projector(*args, **kwargs)
+
+        class _OVBackboneProxy(torch.nn.Module):
+            # Minimal proxy used only by prepare_inputs_labels_for_multimodal.
+            # Use @property to transparently access OV model attributes instead of copying values.
+            def __init__(self, projector_proxy):
+                super().__init__()
+                self.vision_tower = _OVVisionTowerProxy()
+                self.mm_projector = projector_proxy
+
+            @property
+            def image_newline(self):
+                return ov_model.image_newline if hasattr(ov_model, "image_newline") else None
+
+            @property
+            def frame_newline(self):
+                return ov_model.frame_newline if hasattr(ov_model, "frame_newline") else None
+
+            def get_vision_tower(self):
+                return self.vision_tower
+
+            def embed_tokens(self, input_ids):
+                return torch.from_numpy(ov_model.get_text_embeddings(input_ids.unsqueeze(0))[0])
+
+        backbone_proxy = _OVBackboneProxy(_OVMMProjectorProxy(mm_projector))
+        provider.model = backbone_proxy
+        provider.get_model = lambda: backbone_proxy
+        provider.get_vision_tower = lambda: backbone_proxy.get_vision_tower()
+
+        # Build a CPU-only execution context for prepare_inputs_labels_for_multimodal.
+        # This avoids `x.to(self.device)` turning real tensors into meta tensors.
+        class _HFPrepareContext:
+            pass
+
+        prepare_ctx = _HFPrepareContext()
+        prepare_ctx.config = provider.config
+        prepare_ctx.model = backbone_proxy
+        prepare_ctx.training = False
+        prepare_ctx.device = torch.device("cpu")
+        prepare_ctx.get_model = lambda: backbone_proxy
+        prepare_ctx.get_vision_tower = lambda: backbone_proxy.get_vision_tower()
+        prepare_ctx.encode_video_image = types.MethodType(provider.encode_video_image.__func__, prepare_ctx)
+        prepare_ctx.prepare_inputs_labels_for_multimodal = types.MethodType(
+            provider.prepare_inputs_labels_for_multimodal.__func__, prepare_ctx
+        )
+        provider._ov_prepare_ctx = prepare_ctx
+
+        # Safety guard: this helper provider is only for preprocessing, never for generation.
+        def _forbid_hf_generate(*args, **kwargs):
+            raise RuntimeError("HF generate should not be called here; OV model.generate is the only generation path.")
+
+        provider.generate = _forbid_hf_generate
+
+        return provider
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = None,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+        model_dir = self._resolve_hf_method_provider_dir(model_save_dir)
+
+        # Import position embedding utilities from the original model directory
+        # Only needs to be called once during initialization to get the pos_embed computation function
+        sys.path.insert(0, str(model_dir))
+        try:
+            import vision_tower_builder
+        finally:
+            sys.path.pop(0)
+        vision_tower_builder = sys.modules.pop("vision_tower_builder")
+        get_3d_sincos_pos_embed = vision_tower_builder.get_3d_sincos_pos_embed
+
+        num_frames = config.mm_local_num_frames
+        self.mm_num_attention_heads = config.mm_num_attention_heads
+        self.patch_size = config.patch_size
+        self.image_size = config.image_size
+        self.grid_size = (
+            num_frames,
+            self.image_size // self.patch_size,
+            self.image_size // self.patch_size,
+        )  # (T, H, W)
+        self.num_patches = self.grid_size[0] * self.grid_size[1] * self.grid_size[2]
+        self.num_img_patches = self.grid_size[1] * self.grid_size[2]
+        self.embed_dim = config.mm_hidden_size
+        self.pos_embed = torch.nn.Parameter(torch.zeros(1, self.num_patches + 1, self.embed_dim))
+        self.img_pos_embed = torch.nn.Parameter(torch.zeros(1, self.num_img_patches + 1, self.embed_dim))
+        # Adopted from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L559
+        # pos_embed for video
+        pos_embed = get_3d_sincos_pos_embed(
+            self.pos_embed.shape[-1], self.grid_size[1], self.grid_size[0], cls_token=True
+        )
+        pos_embed = torch.from_numpy(pos_embed) if isinstance(pos_embed, np.ndarray) else pos_embed
+        self.pos_embed.data.copy_(pos_embed.to(dtype=self.pos_embed.dtype).unsqueeze(0))
+
+        # pos_embed for image
+        img_pos_embed = get_3d_sincos_pos_embed(self.pos_embed.shape[-1], self.grid_size[1], 1, cls_token=True)
+        img_pos_embed = torch.from_numpy(img_pos_embed) if isinstance(img_pos_embed, np.ndarray) else img_pos_embed
+        self.img_pos_embed.data.copy_(img_pos_embed.to(dtype=self.img_pos_embed.dtype).unsqueeze(0))
+
+        if "unpad" in getattr(config, "mm_patch_merge_type", ""):
+            self.image_newline = torch.nn.Parameter(torch.empty(config.hidden_size, dtype=self.dtype))
+        if (
+            "nopad" in getattr(config, "mm_patch_merge_type", "")
+            and getattr(self.config, "mm_newline_position", "nothing") != "nothing"
+        ):
+            self.frame_newline = torch.nn.Parameter(torch.empty(config.hidden_size, dtype=self.dtype))
+
+        self._hf_method_provider = self._build_hf_method_provider(model_dir=model_dir)
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if config is None:
+            raise ValueError("Config is required.")
+
+        # Import tokenizer/image utilities from the original model directory.
+        # mm_utils relies on relative imports, so load it via a synthetic package root.
+        model_ref = getattr(config, "_name_or_path", None)
+        mm_utils = _OVVideoChatFlashQwenForCausalLM._import_videochat_module("mm_utils", model_ref)
+        vision_tower_builder = _OVVideoChatFlashQwenForCausalLM._import_videochat_module(
+            "vision_tower_builder", model_ref
+        )
+        tokenizer_image_token = mm_utils.tokenizer_image_token
+        InternVideo2ImageProcessor = vision_tower_builder.InternVideo2ImageProcessor
+
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        if tokenizer is None:
+            raise ValueError("Tokenizer is required.")
+        image_sizes = []
+        frames = []
+        modalities = []
+        results = {}
+        local_num_frames = config.mm_local_num_frames
+        # use default image preprocessing parameters from config
+        # use default image_size from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L682
+        target_image_size = getattr(config, "image_size", 224)
+        target_size = (target_image_size, target_image_size) if target_image_size is not None else None
+        # use default image_mean and image_std from https://huggingface.co/OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B/blob/main/vision_tower_builder.py#L682
+        image_mean = getattr(config, "image_mean", (0.485, 0.456, 0.406))
+        image_std = getattr(config, "image_std", (0.229, 0.224, 0.225))
+
+        # Create image processor once for reuse
+        image_processor = InternVideo2ImageProcessor(size=target_size, image_mean=image_mean, image_std=image_std)
+
+        # preprocess text
+        prompt = f"<image>\n{text}" if (image is not None or video is not None) else text
+        if getattr(tokenizer, "chat_template", None) is not None:
+            messages = [{"role": "user", "content": prompt}]
+            text_prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        else:
+            text_prompt = prompt
+        input_ids = tokenizer_image_token(text_prompt, tokenizer, return_tensors="pt").unsqueeze(0)
+        results["input_ids"] = input_ids
+
+        # preprocess video
+        if video is not None:
+            if isinstance(video, np.ndarray):
+                num_frames = video.shape[0]
+                image_size = video.shape[1:3]
+                if num_frames % local_num_frames != 0:
+                    pad_frames = local_num_frames - (num_frames % local_num_frames)
+                    pad = np.repeat(video[-1:], pad_frames, axis=0)
+                    video = np.concatenate([video, pad], axis=0)
+            elif isinstance(video, list):
+                num_frames = len(video)
+                if isinstance(video[0], np.ndarray):
+                    image_size = video[0].shape[:2]
+                else:
+                    width, height = video[0].size
+                    image_size = (height, width)
+                if num_frames % local_num_frames != 0:
+                    pad_frames = local_num_frames - (num_frames % local_num_frames)
+                    video = video + [video[-1]] * pad_frames
+            else:
+                raise ValueError(f"Unsupported video type: {type(video)}")
+
+            image_sizes.append(image_size)
+            processed_images = image_processor.preprocess(video, return_tensors="pt").pixel_values
+            frames.append(processed_images)
+            modalities.append("video")
+
+        # preprocess image
+        if image is not None:
+            from PIL.Image import Image as PILImage
+
+            if isinstance(image, PILImage):
+                width, height = image.size
+                image_size = (height, width)
+            else:
+                image_size = image.shape[:2]
+            image_frame = image_processor.preprocess(image, return_tensors="pt").pixel_values
+            frames.append(image_frame)
+            image_sizes.append(image_size)
+            modalities.append("image")
+
+        if len(frames) >= 1:
+            results["images"] = frames
+            results["image_sizes"] = image_sizes
+            results["modalities"] = modalities
+
+        if tokenizer.pad_token_id is None and "qwen" in tokenizer.name_or_path.lower():
+            logger.info("Using bos token as pad token for qwen model attention mask.")
+            tokenizer.pad_token_id = tokenizer.bos_token_id
+        attention_masks = (
+            input_ids.ne(tokenizer.pad_token_id).long()
+            if tokenizer.pad_token_id is not None
+            else torch.ones_like(input_ids)
+        )
+        results["attention_mask"] = attention_masks
+
+        return results
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        modalities=None,
+        image_sizes=None,
+        **kwargs,
+    ):
+        images = pixel_values
+
+        if images is None:
+            inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
+            return inputs_embeds, attention_mask, position_ids
+
+        # Call prepare_inputs_labels_for_multimodal from the original transformers model.
+        # This method handles complex multimodal input processing including video/image encoding,
+        # token merging, and embedding preparation.
+        prepare_ctx = self._hf_method_provider._ov_prepare_ctx
+        _, position_ids, attention_mask, _, new_input_embeds, _ = prepare_ctx.prepare_inputs_labels_for_multimodal(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            past_key_values=None,  # Not used in get_multimodal_embeddings context
+            labels=None,  # Labels not needed for embedding extraction
+            images=images,
+            modalities=modalities if modalities is not None else ["image"],
+            image_sizes=image_sizes,
+        )
+        return new_input_embeds, attention_mask, position_ids
+
+    def _update_model_kwargs_for_generation(
+        self,
+        outputs: ModelOutput,
+        model_kwargs: Dict[str, Any],
+        is_encoder_decoder: bool = False,
+        num_new_tokens: int = 1,
+    ) -> Dict[str, Any]:
+        model_kwargs = super()._update_model_kwargs_for_generation(
+            outputs=outputs,
+            model_kwargs=model_kwargs,
+            is_encoder_decoder=is_encoder_decoder,
+            num_new_tokens=num_new_tokens,
+        )
+
+        # Vision inputs are only needed at the first step; later decoding uses cached states.
+        model_kwargs.pop("images", None)
+        model_kwargs.pop("image_sizes", None)
+        past_len = self.language_model._past_length
+        attn = model_kwargs.get("attention_mask")
+        # Keep mask length aligned with cached sequence length during incremental decoding.
+        if attn is not None and attn.shape[1] < past_len + 1:
+            model_kwargs["attention_mask"] = torch.ones(
+                (attn.shape[0], past_len + 1),
+                dtype=attn.dtype,
+                device=attn.device,
+            )
+
+        return model_kwargs
+
+    # Keep modalities compatibility only for VideoChat.
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        image_sizes=None,
+        modalities=None,
+        attention_mask=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            image_sizes=image_sizes,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        model_inputs["modalities"] = modalities
+        return model_inputs
+
+
+# The inheritance from Qwen3_5Model is needed to get access to methods:
+# get_placeholder_mask(), get_rope_index(), get_image_features(), get_video_features(), compute_3d_position_ids()
+#
+# and inheritance from Qwen3_5VisionModel is needed for accessing the following method:
+# rot_pos_emb()
+class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM, Qwen3_5Model, Qwen3_5VisionModel):
+    additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = None,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        if is_transformers_version("<", "5.2.0"):
+            raise Exception("Qwen3.5 requires transformers >= 5.2.0; earlier versions are not supported.")
+
+        super().__init__(
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+        self.rope_deltas = None  # cache rope_deltas here
+
+        self.num_grid_per_side = int(config.vision_config.num_position_embeddings**0.5)
+        self.spatial_merge_size = config.vision_config.spatial_merge_size
+        head_dim = config.vision_config.hidden_size // config.vision_config.num_heads
+        self.rotary_pos_emb = Qwen3_5VisionRotaryEmbedding(head_dim // 2)
+
+    def __setattr__(self, name, value):
+        OVModelForVisualCausalLM.__setattr__(self, name, value)
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        cache_position=None,
+        position_ids=None,
+        use_cache=True,
+        pixel_values=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        **kwargs,
+    ):
+        # Overwritten -- in specific circumstances we don't want to forward image inputs to the model
+        if past_key_values is not None:
+            if inputs_embeds is not None and input_ids.shape[1] == 0:  # Exception 4
+                inputs_embeds = inputs_embeds[:, -cache_position.shape[0] :]
+            elif inputs_embeds is not None:
+                input_ids = input_ids[:, -cache_position.shape[0] :]
+            elif input_ids.shape[1] != cache_position.shape[0]:  # Default case (the "else", a no op, is Exception 2)
+                input_ids = input_ids[:, cache_position]
+
+        if cache_position[0] != 0:
+            pixel_values = None
+            pixel_values_videos = None
+
+        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
+        if inputs_embeds is not None and len(cache_position) == inputs_embeds.shape[1]:
+            model_inputs = {"inputs_embeds": inputs_embeds, "input_ids": None}
+        else:
+            model_inputs = {"input_ids": input_ids, "inputs_embeds": None}
+
+        model_inputs.update(
+            {
+                "position_ids": position_ids,
+                "past_key_values": past_key_values,
+                "use_cache": use_cache,
+                "attention_mask": attention_mask,
+                "pixel_values": pixel_values,
+                "pixel_values_videos": pixel_values_videos,
+                "image_grid_thw": image_grid_thw,
+                "video_grid_thw": video_grid_thw,
+                "cache_position": cache_position,
+            }
+        )
+        return model_inputs
+
+    # Adapted from Qwen3_5VisionModel.fast_pos_embed_interpolate
+    # This method needs to be changed, as instead of running self.pos_embed of type nn.Embedding, openvino model needs to be inferred (self.vision_embeddings_pos)
+    def fast_pos_embed_interpolate(self, grid_thw):
+        grid_ts, grid_hs, grid_ws = grid_thw[:, 0], grid_thw[:, 1], grid_thw[:, 2]
+
+        idx_list = [[] for _ in range(4)]
+        weight_list = [[] for _ in range(4)]
+
+        for t, h, w in zip(grid_ts, grid_hs, grid_ws):
+            h_idxs = torch.linspace(0, self.num_grid_per_side - 1, h)
+            w_idxs = torch.linspace(0, self.num_grid_per_side - 1, w)
+
+            h_idxs_floor = h_idxs.int()
+            w_idxs_floor = w_idxs.int()
+            h_idxs_ceil = (h_idxs.int() + 1).clip(max=self.num_grid_per_side - 1)
+            w_idxs_ceil = (w_idxs.int() + 1).clip(max=self.num_grid_per_side - 1)
+
+            dh = h_idxs - h_idxs_floor
+            dw = w_idxs - w_idxs_floor
+
+            base_h = h_idxs_floor * self.num_grid_per_side
+            base_h_ceil = h_idxs_ceil * self.num_grid_per_side
+
+            indices = [
+                (base_h[None].T + w_idxs_floor[None]).flatten(),
+                (base_h[None].T + w_idxs_ceil[None]).flatten(),
+                (base_h_ceil[None].T + w_idxs_floor[None]).flatten(),
+                (base_h_ceil[None].T + w_idxs_ceil[None]).flatten(),
+            ]
+
+            weights = [
+                ((1 - dh)[None].T * (1 - dw)[None]).flatten(),
+                ((1 - dh)[None].T * dw[None]).flatten(),
+                (dh[None].T * (1 - dw)[None]).flatten(),
+                (dh[None].T * dw[None]).flatten(),
+            ]
+
+            for i in range(4):
+                idx_list[i].extend(indices[i].tolist())
+                weight_list[i].extend(weights[i].tolist())
+
+        idx_tensor = torch.tensor(idx_list)
+        weight_tensor = torch.tensor(weight_list)
+        pos_embeds = torch.from_numpy(self.vision_embeddings_pos(idx_tensor)) * weight_tensor[:, :, None]
+        patch_pos_embeds = pos_embeds[0] + pos_embeds[1] + pos_embeds[2] + pos_embeds[3]
+
+        patch_pos_embeds = patch_pos_embeds.split([h * w for h, w in zip(grid_hs, grid_ws)])
+
+        patch_pos_embeds_permute = []
+        merge_size = self.config.vision_config.spatial_merge_size
+        for pos_embed, t, h, w in zip(patch_pos_embeds, grid_ts, grid_hs, grid_ws):
+            pos_embed = pos_embed.repeat(t, 1)
+            pos_embed = (
+                pos_embed.view(t, h // merge_size, merge_size, w // merge_size, merge_size, -1)
+                .permute(0, 1, 3, 2, 4, 5)
+                .flatten(0, 4)
+            )
+            patch_pos_embeds_permute.append(pos_embed)
+        patch_pos_embeds = torch.cat(patch_pos_embeds_permute)
+        return patch_pos_embeds
+
+    def get_vision_embeddings(self, pixel_values, grid_thw, **kwargs):
+        hidden_states = torch.from_numpy(self.vision_embeddings(pixel_values)[0])
+
+        pos_embeds = self.fast_pos_embed_interpolate(grid_thw)
+        hidden_states = hidden_states + pos_embeds
+
+        rotary_pos_emb = self.rot_pos_emb(grid_thw)
+        seq_len, _ = hidden_states.size()
+        hidden_states = hidden_states.reshape(seq_len, -1)
+        rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
+        cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
+            dim=0, dtype=torch.int32
+        )
+        cu_seqlens = torch.nn.functional.pad(cu_seqlens, (1, 0), value=0)
+        attention_mask = torch.zeros((1, hidden_states.shape[0], hidden_states.shape[0]), dtype=torch.bool)
+        causal_mask = torch.zeros_like(attention_mask, dtype=torch.float32)
+        for i in range(1, len(cu_seqlens)):
+            attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = True
+
+        causal_mask.masked_fill_(torch.logical_not(attention_mask), float("-inf"))
+
+        res = self.vision_embeddings_merger(
+            pixel_values=hidden_states, attention_mask=causal_mask, rotary_pos_emb=rotary_pos_emb
+        )
+        return res[0]
+
+    def get_image_features(self, pixel_values: torch.FloatTensor, image_grid_thw: Optional[torch.LongTensor] = None):
+        """
+        Encodes images into continuous embeddings that can be forwarded to the language model.
+        """
+        image_embeds = torch.from_numpy(self.get_vision_embeddings(pixel_values, image_grid_thw))
+        split_sizes = (image_grid_thw.prod(-1) // self.spatial_merge_size**2).tolist()
+        image_embeds = torch.split(image_embeds, split_sizes)
+        return image_embeds
+
+    def get_video_features(
+        self, pixel_values_videos: torch.FloatTensor, video_grid_thw: Optional[torch.LongTensor] = None
+    ):
+        """
+        Encodes videos into continuous embeddings that can be forwarded to the language model.
+        """
+        return self.get_image_features(pixel_values_videos, video_grid_thw)
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        cache_position=None,
+        **kwargs,
+    ):
+        inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
+        if pixel_values is not None and input_ids.shape[1] != 1:
+            image_embeds = self.get_image_features(pixel_values, image_grid_thw)
+            image_embeds = torch.cat(image_embeds, dim=0)
+            n_image_tokens = (input_ids == self.config.image_token_id).sum().item()
+            n_image_features = image_embeds.shape[0]
+            if n_image_tokens != n_image_features:
+                raise ValueError(
+                    f"Image features and image tokens do not match: tokens: {n_image_tokens}, features {n_image_features}"
+                )
+
+            mask = input_ids == self.config.image_token_id
+            mask_unsqueezed = mask.unsqueeze(-1)
+            mask_expanded = mask_unsqueezed.expand_as(inputs_embeds)
+            image_mask = mask_expanded.to(inputs_embeds.device)
+
+            image_embeds = image_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+            inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
+
+        if pixel_values_videos is not None and input_ids.shape[1] != 1:
+            video_embeds = self.get_video_features(pixel_values_videos, video_grid_thw)
+            video_embeds = torch.cat(video_embeds, dim=0)
+            n_video_tokens = (input_ids == self.config.video_token_id).sum().item()
+            n_video_features = video_embeds.shape[0]
+            if n_video_tokens != n_video_features:
+                raise ValueError(
+                    f"Video features and video tokens do not match: tokens: {n_video_tokens}, features {n_video_features}"
+                )
+
+            mask = input_ids == self.config.video_token_id
+            mask_unsqueezed = mask.unsqueeze(-1)
+            mask_expanded = mask_unsqueezed.expand_as(inputs_embeds)
+            video_mask = mask_expanded.to(inputs_embeds.device)
+
+            video_embeds = video_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+            inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
+
+        if position_ids is None and input_ids is not None and (attention_mask is None or attention_mask.ndim == 2):
+            # calculate RoPE index once per generation in the pre-fill stage only
+            if (cache_position is not None and cache_position[0] == 0) or self.rope_deltas is None:
+                vision_positions, rope_deltas = self.get_rope_index(
+                    input_ids,
+                    image_grid_thw=image_grid_thw,
+                    video_grid_thw=video_grid_thw,
+                    attention_mask=attention_mask,
+                )
+                self.rope_deltas = rope_deltas
+                # Compute text positions (simple cumsum) and concatenate as dim 0
+                # to create shape (4, batch, seq_len): [text_pos, temporal, height, width]
+                if attention_mask is not None:
+                    text_positions = attention_mask.long().cumsum(-1) - 1
+                    text_positions = text_positions.masked_fill(attention_mask == 0, 1)
+                else:
+                    text_positions = (
+                        torch.arange(input_ids.shape[1], device=input_ids.device)
+                        .unsqueeze(0)
+                        .expand(input_ids.shape[0], -1)
+                    )
+                position_ids = torch.cat([text_positions.unsqueeze(0), vision_positions], dim=0)
+            # then use the prev pre-calculated rope-deltas to get the correct position ids
+            else:
+                batch_size, seq_length, _ = inputs_embeds.shape
+                delta = cache_position[0] + self.rope_deltas if cache_position is not None else 0
+                position_ids = torch.arange(seq_length, device=inputs_embeds.device)
+                position_ids = position_ids.view(1, -1).expand(batch_size, -1)
+                if cache_position is not None:  # otherwise `deltas` is an int `0`
+                    delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
+                position_ids = position_ids.add(delta)
+                position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+                # Prepend text positions for shape (4, batch, seq_len)
+                text_positions = torch.arange(seq_length, device=inputs_embeds.device)
+                text_positions = text_positions.view(1, -1).expand(batch_size, -1)
+                if cache_position is not None:
+                    text_positions = text_positions + cache_position[0]
+                position_ids = torch.cat([text_positions.unsqueeze(0), position_ids], dim=0)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+        if video is not None:
+            conversation[0]["content"].insert(0, {"type": "video"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+
+        inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
+        return inputs
+
+    def forward(
+        self,
+        input_ids,
+        pixel_values=None,
+        past_key_values=None,
+        inputs_embeds=None,
+        image_sizes=None,
+        attention_mask=None,
+        position_ids=None,
+        image_bound=None,
+        tgt_sizes=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        rope_deltas=None,
+        **kwargs,
+    ):
+        result = super().forward(
+            input_ids,
+            pixel_values,
+            past_key_values,
+            inputs_embeds,
+            image_sizes,
+            attention_mask,
+            position_ids,
+            image_bound,
+            tgt_sizes,
+            pixel_values_videos,
+            image_grid_thw,
+            video_grid_thw,
+            rope_deltas,
+            **kwargs,
+        )
+        final_result = QWen2VLModelOutputWithPast(
+            logits=result.logits, past_key_values=result.past_key_values, rope_deltas=rope_deltas
+        )
+        return final_result
+
+    def _prepare_position_ids_for_generation(self, inputs_tensor, model_kwargs):
+        # Mirrors Qwen3_5ForConditionalGeneration._prepare_position_ids_for_generation
+        # Creates proper 4D position_ids: [text_positions, temporal, height, width]
+        text_positions = GenerationMixin._prepare_position_ids_for_generation(self, inputs_tensor, model_kwargs)
+
+        if "input_ids" in model_kwargs and model_kwargs["input_ids"].shape[1] > 0:
+            inputs_tensor = model_kwargs["input_ids"]
+
+        is_input_ids = len(inputs_tensor.shape) == 2 and inputs_tensor.dtype in [torch.int, torch.long]
+        if is_input_ids and (
+            model_kwargs.get("image_grid_thw") is not None or model_kwargs.get("video_grid_thw") is not None
+        ):
+            filtered_kwargs = {k: v for k, v in model_kwargs.items() if k != "input_ids"}
+            vision_positions, rope_deltas = self.get_rope_index(inputs_tensor, **filtered_kwargs)
+            self.rope_deltas = rope_deltas
+        else:
+            vision_positions = text_positions.unsqueeze(0).expand(3, -1, -1)
+            self.rope_deltas = torch.zeros(inputs_tensor.shape[0], 1, dtype=torch.long, device=inputs_tensor.device)
+
+        # Concatenate "text + vision" positions into [4, bs, seq-len]
+        text_positions = text_positions[None, ...]
+        position_ids = torch.cat([text_positions, vision_positions], dim=0)
+        return position_ids
+
+    def generate(self, *args, **kwargs):
+        # Clear cached rope delta from previous generations
+        self.rope_deltas = None
+
+        return super().generate(*args, **kwargs)
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
@@ -4939,5 +5840,10 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "phi4_multimodal": _OVPhi4MMForCausalLM,
     "llama4": _OVLlama4ForCausalLM,
     "qwen3_vl": _OVQwen3VLForCausalLM,
+    "qwen3_5": _OVQwen3_5ForCausalLM,
+    "qwen3_5_text": _OVQwen3_5ForCausalLM,
+    "qwen3_5_moe": _OVQwen3_5ForCausalLM,
+    "qwen3_5_moe_text": _OVQwen3_5ForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
+    "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
 }

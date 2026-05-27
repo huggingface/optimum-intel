@@ -63,6 +63,39 @@ core = Core()
 logger = logging.getLogger(__name__)
 
 
+# Mapping of model_type -> python module name that, when imported, registers the
+# model with transformers' AutoConfig/AutoModel. This is used as a fallback for
+# custom model types whose configs do not declare an `auto_map` for trust_remote_code.
+_REMOTE_CODE_MODEL_REGISTRARS = {
+    "qwen3_asr": "qwen_asr",
+}
+
+
+def _maybe_register_remote_code_model(model_id, revision=None, token=None, cache_dir=None):
+    try:
+        config_dict, _ = PretrainedConfig.get_config_dict(
+            model_id, revision=revision, token=token, cache_dir=cache_dir
+        )
+    except Exception:
+        return
+    if "auto_map" in config_dict and "AutoConfig" in config_dict.get("auto_map", {}):
+        # The repo provides remote code itself; nothing to register.
+        return
+    model_type = config_dict.get("model_type")
+    package_name = _REMOTE_CODE_MODEL_REGISTRARS.get(model_type)
+    if package_name is None:
+        return
+    try:
+        import importlib
+
+        importlib.import_module(package_name)
+    except ImportError:
+        logger.warning(
+            f"Model type `{model_type}` requires the `{package_name}` package to be installed. "
+            f"Install it with `pip install {package_name}`."
+        )
+
+
 class OVModelHostMixin:
     """
     Mixin class for models that contain OpenVINO models as submodels.
@@ -576,6 +609,12 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         if is_offline_mode() and not local_files_only:
             logger.info("Offline mode: forcing local_files_only=True")
             local_files_only = True
+
+        # Some custom model types are registered with transformers via a separate
+        # third-party package (e.g. `qwen_asr` for `qwen3_asr`). Try to import it
+        # lazily before AutoConfig is invoked downstream.
+        if trust_remote_code:
+            _maybe_register_remote_code_model(model_id, revision=revision, token=token, cache_dir=cache_dir)
 
         _export = export
         try:

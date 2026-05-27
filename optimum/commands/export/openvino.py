@@ -85,7 +85,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--library",
         type=str,
-        choices=["transformers", "diffusers", "timm", "sentence_transformers", "open_clip"],
+        choices=["transformers", "diffusers", "timm", "sentence_transformers", "open_clip", "kokoro"],
         default=None,
         help="The library used to load the model before export. If not provided, will attempt to infer the local checkpoint's library",
     )
