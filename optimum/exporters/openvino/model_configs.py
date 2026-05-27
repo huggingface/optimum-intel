@@ -73,6 +73,7 @@ from optimum.exporters.onnx.model_configs import (
     MobileViTOnnxConfig,
     MPNetOnnxConfig,
     MPTOnnxConfig,
+    NemotronOnnxConfig,
     NystromformerOnnxConfig,
     Olmo2OnnxConfig,
     OPTOnnxConfig,
@@ -934,6 +935,20 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
         if self.eagle3:
             common_outputs["d2t"] = {0: "vocab_size"}
         return common_outputs
+
+
+@register_in_tasks_manager(
+    "nemotron_labs_diffusion",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class NemotronLabsDiffusionOpenVINOConfig(NemotronOnnxConfig):
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager(
