@@ -30,7 +30,7 @@ import numpy as np
 from transformers import PretrainedConfig, PreTrainedModel
 
 from optimum.exporters.base import ExporterConfig
-from optimum.exporters.openvino.base_patcher import ModelPatcher, PatchingSpec
+from optimum.exporters.openvino.patching_utils import ModelPatcher, PatchingSpec
 from optimum.utils import DEFAULT_DUMMY_SHAPES, DummyInputGenerator, DummySeq2SeqPastKeyValuesGenerator, logging
 from optimum.utils.doc import add_dynamic_docstring
 from optimum.utils.import_utils import (
