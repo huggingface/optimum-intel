@@ -24,11 +24,11 @@ from utils_tests import (
     MODEL_NAMES,
     OPENVINO_DEVICE,
     REMOTE_CODE_MODELS,
+    SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED,
 )
 
-from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
-from optimum.exporters.onnx.model_configs import BertOnnxConfig
 from optimum.exporters.openvino import export_from_model, main_export
+from optimum.exporters.openvino.model_configs import BertOnnxConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVFluxPipeline,

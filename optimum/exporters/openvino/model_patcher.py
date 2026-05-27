@@ -48,7 +48,11 @@ from transformers.processing_utils import Unpack
 from transformers.utils import ModelOutput
 
 from optimum.exporters.openvino._ov_ops import convert_recurrent_attention_cell
-from optimum.exporters.openvino.patching_utils import UNSUPPORTED_OPS_PATCHING_SPEC, ModelPatcher, sdpa_mask_without_vmap
+from optimum.exporters.openvino.patching_utils import (
+    UNSUPPORTED_OPS_PATCHING_SPEC,
+    ModelPatcher,
+    sdpa_mask_without_vmap,
+)
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
     is_openvino_version,
