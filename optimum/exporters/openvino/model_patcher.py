@@ -5376,7 +5376,7 @@ def gemma4_lm_forward(
     logits_to_keep: Union[int, torch.Tensor] = 0,
     **lm_kwargs,
 ):
-    from optimum.exporters.onnx.model_patcher import preprocess_past_key_values
+    from optimum.exporters.openvino.patching_utils import preprocess_past_key_values
 
     output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
     output_hidden_states = (

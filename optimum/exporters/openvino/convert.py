@@ -92,7 +92,7 @@ if is_diffusers_available():
 
 
 if TYPE_CHECKING:
-    from optimum.exporters.onnx.base import OnnxConfig
+    from optimum.exporters.openvino.base import OnnxConfig
     from optimum.intel.openvino.configuration import OVConfig
 
 
