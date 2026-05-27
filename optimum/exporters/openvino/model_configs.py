@@ -499,11 +499,11 @@ class Qwen3VLTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         return common_inputs
 
 
-@register_in_tasks_manager("qwen3_vl_text", *["feature-extraction"], library_name="transformers")
-class Qwen3VLTextFeatureExtractionOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
-    @property
-    def outputs(self) -> Dict[str, Dict[int, str]]:
-        return {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
+# @register_in_tasks_manager("qwen3_vl_text", *["feature-extraction"], library_name="transformers")
+# class Qwen3VLTextFeatureExtractionOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
+#     @property
+#     def outputs(self) -> Dict[str, Dict[int, str]]:
+#         return {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
 
 
 @register_in_tasks_manager(
@@ -1921,19 +1921,19 @@ def get_vlm_internal_text_generation_config(model_type, model_config, int_dtype,
     return export_config
 
 
-def get_vlm_internal_text_feature_config(model_type, model_config, int_dtype, float_dtype):
-    if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
-        raise ValueError(
-            f"Unsupported language model type provided `{model_type}`. Please define custom export config"
-        )
-
-    if "feature-extraction" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
-        raise ValueError(
-            f"Export config for feature extraction for `{model_type}` is not available. Please define custom export config"
-        )
-
-    export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]["feature-extraction"]
-    return export_config_class(model_config, task="feature-extraction", int_dtype=int_dtype, float_dtype=float_dtype)
+# def get_vlm_internal_text_feature_config(model_type, model_config, int_dtype, float_dtype):
+#     if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
+#         raise ValueError(
+#             f"Unsupported language model type provided `{model_type}`. Please define custom export config"
+#         )
+#
+#     if "feature-extraction" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
+#         raise ValueError(
+#             f"Export config for feature extraction for `{model_type}` is not available. Please define custom export config"
+#         )
+#
+#     export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]["feature-extraction"]
+#     return export_config_class(model_config, task="feature-extraction", int_dtype=int_dtype, float_dtype=float_dtype)
 
 
 def get_vlm_text_embeddings_config(model_type, model_config, int_dtype, float_dtype):
@@ -1948,24 +1948,24 @@ def get_vlm_text_embeddings_config(model_type, model_config, int_dtype, float_dt
     return export_config
 
 
-def get_vlm_text_feature_config(
-    model_type,
-    model_config,
-    int_dtype,
-    float_dtype,
-    model_patcher=None,
-    dummy_input_generator=None,
-    inputs_update=None,
-):
-    internal_export_config = get_vlm_internal_text_feature_config(model_type, model_config, int_dtype, float_dtype)
-    export_config = LMInputEmbedsConfigHelper(
-        internal_export_config,
-        patcher_cls=model_patcher,
-        dummy_input_generator=dummy_input_generator,
-        inputs_update=inputs_update,
-    )
-    export_config._normalized_config = internal_export_config._normalized_config
-    return export_config
+# def get_vlm_text_feature_config(
+#     model_type,
+#     model_config,
+#     int_dtype,
+#     float_dtype,
+#     model_patcher=None,
+#     dummy_input_generator=None,
+#     inputs_update=None,
+# ):
+#     internal_export_config = get_vlm_internal_text_feature_config(model_type, model_config, int_dtype, float_dtype)
+#     export_config = LMInputEmbedsConfigHelper(
+#         internal_export_config,
+#         patcher_cls=model_patcher,
+#         dummy_input_generator=dummy_input_generator,
+#         inputs_update=inputs_update,
+#     )
+#     export_config._normalized_config = internal_export_config._normalized_config
+#     return export_config
 
 
 def get_vlm_text_generation_config(
@@ -3906,10 +3906,11 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return vision_emb_merger
 
         if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
-            if hasattr(model, "model") and hasattr(model.model, "embed_tokens"):
-                text_embedding = model.model.embed_tokens
-            else:
-                text_embedding = _get_model_attribute(model, "language_model").embed_tokens
+            text_embedding = (
+                model.model.embed_tokens
+                if hasattr(model.model, "embed_tokens")
+                else _get_model_attribute(model, "language_model").embed_tokens
+            )
             text_embedding.config = model.config
             return text_embedding
 
@@ -4015,7 +4016,7 @@ class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
 
 @register_in_tasks_manager(
     "qwen3_vl",
-    *["feature-extraction", "image-text-to-text"],
+    *["image-text-to-text"],
     library_name="transformers",
 )
 class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
@@ -4045,13 +4046,8 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self._normalized_config.use_embed_dim = True
 
-    def get_model_for_behavior(self, model, behavior: Union[str, QwenVLConfigBehavior]):
-        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
-            behavior = QwenVLConfigBehavior(behavior)
-
-        if behavior == QwenVLConfigBehavior.LANGUAGE and self.task == "feature-extraction":
-            return _get_model_attribute(model, "language_model")
-
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, QwenVLConfigBehavior]):
         if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
             vision_emb_pos = _get_model_attribute(model, "visual").pos_embed
             vision_emb_pos.config = model.config.vision_config
@@ -4078,25 +4074,15 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
             )
 
         if behavior == QwenVLConfigBehavior.LANGUAGE:
-            if self.task == "feature-extraction":
-                config = get_vlm_text_feature_config(
-                    "qwen3_vl_text",
-                    self._orig_config.text_config,
-                    self.int_dtype,
-                    self.float_dtype,
-                    dummy_input_generator=DummyQwen2VLLMInputGenerator,
-                    inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
-                )
-            else:
-                config = get_vlm_text_generation_config(
-                    "qwen3_vl_text",
-                    self._orig_config.text_config,
-                    self.int_dtype,
-                    self.float_dtype,
-                    model_patcher=Qwen3VLLanguageModelPatcher,
-                    dummy_input_generator=DummyQwen2VLLMInputGenerator,
-                    inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
-                )
+            config = get_vlm_text_generation_config(
+                "qwen3_vl_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Qwen3VLLanguageModelPatcher,
+                dummy_input_generator=DummyQwen2VLLMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+            )
             config._normalized_config.deepstack_visual_indexes = (
                 self._orig_config.vision_config.deepstack_visual_indexes
             )
@@ -6277,3 +6263,57 @@ class Qwen3_5MoeOpenVINOConfig(Qwen3_5OpenVINOConfig):
                 "qwen3_5_moe_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
             ).outputs
         return super().outputs
+
+
+# @register_in_tasks_manager("minicpm", *["text-generation", "text-generation-with-past"], library_name="transformers")
+# class MiniCPMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+#     DEFAULT_ONNX_OPSET = 14
+#     MAX_TRANSFORMERS_VERSION = "4.53.3"
+#     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
+#     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+#     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+#     _MODEL_PATCHER = MiniCPMModelPatcher
+#
+# @register_in_tasks_manager(
+#     "qwen3_vl", *["feature-extraction"], library_name="sentence_transformers"
+# )
+# class Qwen3VLEmbeddingsOpenVINOConfig(SentenceTransformersTransformerOpenVINOConfig):
+#     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator)
+#
+#     @property
+#     def inputs(self) -> Dict[str, Dict[int, str]]:
+#         common_inputs = {
+#             "input_ids": {0: "batch_size", 1: "sequence_length"},
+#             "attention_mask": {0: "batch_size", 1: "sequence_length"},
+#             "position_ids": {0: "batch_size", 1: "sequence_length"},
+#         }
+#         # if self.use_past_in_inputs:
+#         #     self.add_past_key_values(common_inputs, direction="inputs")
+#         return common_inputs
+#
+#     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+#         dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
+#
+#         dummy_inputs = {}
+#         input_names = [key for key in self.inputs.keys() if not key.startswith("cache_params")]
+#         # if self.use_past_in_inputs:
+#         #     input_names.extend(["cache_params"])
+#
+#         for input_name in input_names:
+#             input_was_inserted = False
+#             for dummy_input_gen in dummy_inputs_generators:
+#                 if dummy_input_gen.supports_input(input_name):
+#                     dummy_inputs[input_name] = self.overwrite_shape_and_generate_input(
+#                         dummy_input_gen,
+#                         input_name,
+#                         framework,
+#                         input_shapes=kwargs,
+#                     )
+#                     input_was_inserted = True
+#                     break
+#             if not input_was_inserted:
+#                 raise RuntimeError(
+#                     f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model ONNX config.'
+#                 )
+#
+#         return dummy_inputs
