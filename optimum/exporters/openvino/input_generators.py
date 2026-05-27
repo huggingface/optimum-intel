@@ -344,7 +344,6 @@ class OVFalconDummyPastKeyValuesGenerator(FalconDummyPastKeyValuesGenerator):
         **kwargs,
     ):
         super().__init__(
-
             task=task,
             normalized_config=normalized_config,
             batch_size=batch_size,

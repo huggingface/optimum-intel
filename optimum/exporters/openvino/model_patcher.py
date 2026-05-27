@@ -52,6 +52,7 @@ from optimum.exporters.openvino.base import OnnxConfig
 from optimum.exporters.openvino.patching_utils import (
     UNSUPPORTED_OPS_PATCHING_SPEC,
     ModelPatcher,
+    override_arguments,
     postprocess_past_key_values,
     preprocess_past_key_values,
     sdpa_mask_without_vmap,
@@ -85,8 +86,7 @@ if is_transformers_version(">=", "4.54"):
 else:
     TransformersKwargs = object
 
-if is_transformers_version(">=", "4.55"):
-    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
+
 if is_transformers_version(">=", "4.56"):
     import transformers.masking_utils
 
@@ -100,24 +100,6 @@ if is_transformers_version(">=", "5"):
 
 
 logger = logging.getLogger(__name__)
-
-
-class BigBirdPegasusModelPatcher(ModelPatcher):
-    def __enter__(self):
-        super().__enter__()
-
-        if self.real_config._behavior == "encoder" and self._model.config.attention_type == "block_sparse":
-            logger.warning(
-                "BigBirdPegasus model is using block sparse attention, which is not supported in ONNX export. "
-                "The model will be exported with original full attention."
-            )
-            self._model.set_attention_type("original_full")
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-
-        if self.real_config._behavior == "encoder" and self._model.config.attention_type == "block_sparse":
-            self._model.set_attention_type("block_sparse")
 
 
 class SAMModelPatcher(ModelPatcher):
@@ -279,21 +261,6 @@ def _get_feat_extract_output_lengths_patched(self, input_lengths: torch.LongTens
     output_conv2_length = (output_conv1_length - 7) // 3 + 1
     output_conv3_length = (output_conv2_length - 3) // 2 + 1
     return output_conv3_length
-
-
-class GptOssModelPatcher(ModelPatcher):
-    def __enter__(self):
-        super().__enter__()
-
-        if is_transformers_version(">=", "4.55.0"):
-            self.original_gpt_oss_forward = GptOssExperts.forward
-            GptOssExperts.forward = gpt_oss_forward
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-
-        if is_transformers_version(">=", "4.55.0"):
-            GptOssExperts.forward = self.original_gpt_oss_forward
 
 
 def _get_model_attribute(model, name):
@@ -8146,6 +8113,26 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
             else:
                 continue
             conv_layer.slow_forward = conv_layer._orig_forward
+
+
+# Copied from https://github.com/huggingface/transformers/blob/v4.56.0/src/transformers/models/gpt_oss/modeling_gpt_oss.py#L81
+def gpt_oss_forward(self, hidden_states: torch.Tensor, router_indices=None, routing_weights=None) -> torch.Tensor:
+    batch_size = hidden_states.shape[0]
+    hidden_states = hidden_states.reshape(-1, self.hidden_size)
+    num_experts = routing_weights.shape[1]
+    hidden_states = hidden_states.repeat(num_experts, 1)
+    hidden_states = hidden_states.view(num_experts, -1, self.hidden_size)
+    gate_up = torch.bmm(hidden_states, self.gate_up_proj) + self.gate_up_proj_bias[..., None, :]
+    gate, up = gate_up[..., ::2], gate_up[..., 1::2]
+    gate = gate.clamp(min=None, max=self.limit)
+    up = up.clamp(min=-self.limit, max=self.limit)
+    glu = gate * torch.sigmoid(gate * self.alpha)
+    next_states = torch.bmm(((up + 1) * glu), self.down_proj)
+    next_states = next_states + self.down_proj_bias[..., None, :]
+    next_states = next_states.view(num_experts, batch_size, -1, self.hidden_size)
+    next_states = next_states * routing_weights.transpose(0, 1).view(num_experts, batch_size, -1)[..., None]
+    next_states = next_states.sum(dim=0)
+    return next_states
 
 
 class GptOssModelPatcher(OVDecoderModelPatcher):
