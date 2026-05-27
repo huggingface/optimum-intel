@@ -368,6 +368,7 @@ def export_pytorch(
 
         if input_shapes is None:
             input_shapes = {}  # will use the defaults from DEFAULT_DUMMY_SHAPES
+        #TODO get correct value
         config._normalized_config.vocab_size = 50000
         # Check that inputs match, and order them properly
         dummy_inputs = config.generate_dummy_inputs(framework="pt", **input_shapes)
