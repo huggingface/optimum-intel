@@ -4952,6 +4952,25 @@ class DebertaV2OpenVINOConfig(DebertaOpenVINOConfig):
     pass
 
 
+@register_in_tasks_manager("hubert", *["feature-extraction", "automatic-speech-recognition", "audio-classification"])
+class HubertOpenVINOConfig(AudioOnnxConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig
+
+    @property
+    def outputs(self) -> dict:
+        outputs = super().outputs
+
+        # Hubert output formula adapted from:
+        # https://github.com/huggingface/transformers/blob/v4.55.2/src/transformers/models/hubert/modeling_hubert.py#L721
+        if self.task == "automatic-speech-recognition":
+            sequence_length = "sequence_length"
+            for kernel_size, stride in zip(self._config.conv_kernel, self._config.conv_stride):
+                sequence_length = f"( {sequence_length} - {kernel_size} ) // {stride} + 1"
+            outputs["logits"] = {0: "batch_size", 1: sequence_length}
+
+        return outputs
+
+
 @register_in_tasks_manager(
     "data2vec-audio",
     *[
@@ -4970,6 +4989,24 @@ class Data2VecAudioOpenVINOConfig(HubertOpenVINOConfig):
 class Data2VecTextOpenVINOConfig(DistilBertOpenVINOConfig):
     # TODO (@echarlaix): add v5 support
     MAX_TRANSFORMERS_VERSION = "4.57.6"
+
+
+@register_in_tasks_manager("vit", *["feature-extraction", "image-classification", "masked-im"])
+class ViTOpenVINOConfig(VisionOnnxConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+
+    @property
+    def inputs(self) -> dict:
+        return {"pixel_values": {0: "batch_size", 2: "height", 3: "width"}}
+
+    @property
+    def outputs(self) -> dict:
+        common_outputs = super().outputs
+
+        if self.task == "feature-extraction":
+            common_outputs["last_hidden_state"] = {0: "batch_size"}
+
+        return common_outputs
 
 
 @register_in_tasks_manager("data2vec-vision", *["feature-extraction", "image-classification"])
@@ -5116,24 +5153,6 @@ class SwinOpenVINOConfig(ViTOpenVINOConfig):
     pass
 
 
-@register_in_tasks_manager("vit", *["feature-extraction", "image-classification", "masked-im"])
-class ViTOpenVINOConfig(VisionOnnxConfig):
-    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
-
-    @property
-    def inputs(self) -> dict:
-        return {"pixel_values": {0: "batch_size", 2: "height", 3: "width"}}
-
-    @property
-    def outputs(self) -> dict:
-        common_outputs = super().outputs
-
-        if self.task == "feature-extraction":
-            common_outputs["last_hidden_state"] = {0: "batch_size"}
-
-        return common_outputs
-
-
 @register_in_tasks_manager("convnext", *["feature-extraction", "image-classification"])
 class ConvNextOpenVINOConfig(ViTOpenVINOConfig):
     pass
@@ -5170,25 +5189,6 @@ class Wav2Vec2OpenVINOConfig(HubertOpenVINOConfig):
 )
 class Wav2Vec2ConformerOpenVINOConfig(HubertOpenVINOConfig):
     pass
-
-
-@register_in_tasks_manager("hubert", *["feature-extraction", "automatic-speech-recognition", "audio-classification"])
-class HubertOpenVINOConfig(AudioOnnxConfig):
-    NORMALIZED_CONFIG_CLASS = NormalizedConfig
-
-    @property
-    def outputs(self) -> dict:
-        outputs = super().outputs
-
-        # Hubert output formula adapted from:
-        # https://github.com/huggingface/transformers/blob/v4.55.2/src/transformers/models/hubert/modeling_hubert.py#L721
-        if self.task == "automatic-speech-recognition":
-            sequence_length = "sequence_length"
-            for kernel_size, stride in zip(self._config.conv_kernel, self._config.conv_stride):
-                sequence_length = f"( {sequence_length} - {kernel_size} ) // {stride} + 1"
-            outputs["logits"] = {0: "batch_size", 1: sequence_length}
-
-        return outputs
 
 
 @register_in_tasks_manager("sew", *["feature-extraction", "automatic-speech-recognition", "audio-classification"])
