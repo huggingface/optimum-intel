@@ -18,17 +18,17 @@ from typing import Any, Dict, List, Optional, Union
 
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
-from optimum.exporters.openvino.base import ConfigBehavior, OnnxConfig, OnnxConfigWithPast, OnnxSeq2SeqConfigWithPast
+from optimum.exporters.openvino.base import ConfigBehavior, OpenVINOConfig, OpenVINOConfigWithPast, OpenVINOSeq2SeqConfigWithPast
 from optimum.exporters.openvino.config import (
-    AudioOnnxConfig,
-    AudioToTextOnnxConfig,
-    EncoderDecoderBaseOnnxConfig,
-    TextAndVisionOnnxConfig,
-    TextDecoderOnnxConfig,
-    TextDecoderWithPositionIdsOnnxConfig,
-    TextEncoderOnnxConfig,
-    TextSeq2SeqOnnxConfig,
-    VisionOnnxConfig,
+    AudioOpenVINOConfig,
+    AudioToTextOpenVINOConfig,
+    EncoderDecoderBaseOpenVINOConfig,
+    TextAndVisionOpenVINOConfig,
+    TextDecoderOpenVINOConfig,
+    TextDecoderWithPositionIdsOpenVINOConfig,
+    TextEncoderOpenVINOConfig,
+    TextSeq2SeqOpenVINOConfig,
+    VisionOpenVINOConfig,
 )
 from optimum.exporters.openvino.input_generators import (
     AquilaDummyPastKeyValuesGenerator,
@@ -336,8 +336,7 @@ register_in_tasks_manager = TasksManager.create_register("openvino", overwrite_e
 
 
 @register_in_tasks_manager("baichuan", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class BaichaunOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 13
+class BaichaunOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
         num_layers="num_hidden_layers", num_attention_heads="num_attention_heads", hidden_size="hidden_size"
     )
@@ -357,8 +356,7 @@ class BaichaunOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     ],
     library_name="transformers",
 )
-class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -366,8 +364,7 @@ class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 @register_in_tasks_manager("qwen2_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -385,7 +382,7 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     ],
     library_name="transformers",
 )
-class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
@@ -412,7 +409,7 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     ],
     library_name="transformers",
 )
-class Qwen3VLTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class Qwen3VLTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.57.0"
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLLMInputGenerator, GemmaDummyPastKeyValuesGenerator)
@@ -438,8 +435,7 @@ class Qwen3MoEOpenVINOConfig(Qwen3OpenVINOConfig):
 
 
 @register_in_tasks_manager("minicpm", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class MiniCPMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class MiniCPMOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.53.3"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
@@ -448,8 +444,7 @@ class MiniCPMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 @register_in_tasks_manager("minicpm3", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class MiniCPM3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class MiniCPM3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.53.3"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, OVMiniCPM3DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = OVMiniCPM3DummyPastKeyValuesGenerator
@@ -458,8 +453,7 @@ class MiniCPM3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 @register_in_tasks_manager("stablelm", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class StableLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class StableLMOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -467,7 +461,7 @@ class StableLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 @register_in_tasks_manager("chatglm", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(vocab_size="padded_vocab_size", num_layers="num_layers")
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, ChatGLM2DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = ChatGLM2DummyPastKeyValuesGenerator
@@ -496,7 +490,7 @@ class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
                     break
             if not input_was_inserted:
                 raise RuntimeError(
-                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model ONNX config.'
+                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model OpenVINO config.'
                 )
 
         # refer to https://github.com/huggingface/optimum/pull/764
@@ -556,12 +550,10 @@ class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 @register_in_tasks_manager("mixtral", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class MixtralOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    # The ONNX export of this architecture needs the Trilu operator support, available since opset 14
-    DEFAULT_ONNX_OPSET = 14
+class MixtralOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (
         MistralDummyPastKeyValuesGenerator,
-    ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
+    ) + TextDecoderOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(num_key_value_heads="num_key_value_heads", allow_new=True)
     _MODEL_PATCHER = MixtralModelPatcher
@@ -578,7 +570,7 @@ class MixtralOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     ],
     library_name="transformers",
 )
-class GemmaOpenVINOConfig(TextDecoderOnnxConfig):
+class GemmaOpenVINOConfig(TextDecoderOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
@@ -587,7 +579,7 @@ class GemmaOpenVINOConfig(TextDecoderOnnxConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        # position_ids was removed from optimum-onnx's gemma config because
+        # position_ids was removed from optimum-openvino's gemma config because
         # it's not necessary (it's correctly generated inside the model)
         # but openvino genai requires it to be present to work properly
         inputs = super().inputs
@@ -608,7 +600,7 @@ class GemmaOpenVINOConfig(TextDecoderOnnxConfig):
     ],
     library_name="transformers",
 )
-class LlamaOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class LlamaOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -708,7 +700,7 @@ class GptOssOpenVINOConfig(LlamaOpenVINOConfig):
     ],
     library_name="transformers",
 )
-class BitnetOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class BitnetOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -777,8 +769,7 @@ class Cohere2OpenVINOConfig(LlamaOpenVINOConfig):
 
 
 @register_in_tasks_manager("qwen", *["text-generation", "text-generation-with-past"])
-class QwenOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class QwenOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.55.4"
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
         num_layers="num_hidden_layers", num_attention_heads="num_attention_heads", hidden_size="hidden_size"
@@ -809,7 +800,7 @@ class QwenOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
                     break
             if not input_was_inserted:
                 raise RuntimeError(
-                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model ONNX config.'
+                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model OpenVINO config.'
                 )
 
         # refer to https://github.com/huggingface/optimum/pull/764
@@ -859,8 +850,7 @@ class QwenOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 @register_in_tasks_manager(
     "starcoder2", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
-class Starcoder2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class Starcoder2OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -868,8 +858,7 @@ class Starcoder2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 @register_in_tasks_manager("internlm2", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class InternLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class InternLM2OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
@@ -878,8 +867,7 @@ class InternLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 @register_in_tasks_manager("orion", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class OrionOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class OrionOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
@@ -889,14 +877,13 @@ class OrionOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 @register_in_tasks_manager("olmo", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class OlmoOpenVINOConfig(LlamaOpenVINOConfig):
-    DEFAULT_ONNX_OPSET = 14
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
 
 @register_in_tasks_manager(
     "mpt", *["text-generation", "text-generation-with-past", "text-classification"], library_name="transformers"
 )
-class MPTOpenVINOConfig(TextDecoderOnnxConfig):
+class MPTOpenVINOConfig(TextDecoderOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
         num_attention_heads="n_heads", hidden_size="d_model", num_layers="n_layers"
     )
@@ -914,11 +901,11 @@ class MPTOpenVINOConfig(TextDecoderOnnxConfig):
     ],
     library_name="transformers",
 )
-class Phi3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class Phi3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(num_key_value_heads="num_key_value_heads", allow_new=True)
     DUMMY_INPUT_GENERATOR_CLASSES = (
         MistralDummyPastKeyValuesGenerator,
-    ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
+    ) + TextDecoderOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     MIN_TRANSFORMERS_VERSION = "4.36.0"
     _MODEL_PATCHER = Phi3ModelPatcher
@@ -951,7 +938,7 @@ class PhiMoEOpenVINOConfig(Phi3OpenVINOConfig):
     ],
     library_name="transformers",
 )
-class PhiOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class PhiOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     MIN_TRANSFORMERS_VERSION = "4.36.0"
     _MODEL_PATCHER = OVDecoderModelPatcher
@@ -969,11 +956,11 @@ class PhiOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     ],
     library_name="transformers",
 )
-class FalconOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class FalconOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (
         OVFalconDummyPastKeyValuesGenerator,
-    ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
+    ) + TextDecoderOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES
     DUMMY_PKV_GENERATOR_CLASS = OVFalconDummyPastKeyValuesGenerator
     _MODEL_PATCHER = FalconModelPatcher
 
@@ -998,15 +985,14 @@ class FalconOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     ],
     library_name="transformers",
 )
-class PersimmonOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class PersimmonOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = PersimmonModelPatcher
 
 
 @register_in_tasks_manager("biogpt", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class BioGPTOpenVINOConfig(
-    TextDecoderWithPositionIdsOnnxConfig if is_transformers_version(">=", "4.52.0") else TextDecoderOnnxConfig
+    TextDecoderWithPositionIdsOpenVINOConfig if is_transformers_version(">=", "4.52.0") else TextDecoderOpenVINOConfig
 ):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = OVDecoderModelPatcher
@@ -1023,7 +1009,7 @@ class BioGPTOpenVINOConfig(
     ],
     library_name="transformers",
 )
-class GPTNeoOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class GPTNeoOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(num_attention_heads="num_heads")
     _MODEL_PATCHER = GptNeoModelPatcher
 
@@ -1039,7 +1025,7 @@ class GPTNeoOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     ],
     library_name="transformers",
 )
-class GPTJOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class GPTJOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(num_layers="n_layer", num_attention_heads="n_head")
     _MODEL_PATCHER = GptJModelPatcher
 
@@ -1056,7 +1042,7 @@ class GPTJOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     ],
     library_name="transformers",
 )
-class BloomOpenVINOConfig(TextDecoderOnnxConfig):
+class BloomOpenVINOConfig(TextDecoderOpenVINOConfig):
     # Bloom does not require position_ids input.
     MIN_TRANSFORMERS_VERSION = "4.36.0"
     DUMMY_PKV_GENERATOR_CLASS = BloomDummyPastKeyValuesGenerator
@@ -1099,8 +1085,7 @@ class CohereOpenVINOConfig(LlamaOpenVINOConfig):
 
 
 @register_in_tasks_manager("xglm", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class XGLMConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 13
+class XGLMConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
         num_attention_heads="attention_heads", hidden_size="d_model"
     )
@@ -1112,8 +1097,7 @@ class XGLMConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 @register_in_tasks_manager("aquila", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class AquilaMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class AquilaMOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, AquilaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = AquilaDummyPastKeyValuesGenerator
@@ -1122,8 +1106,7 @@ class AquilaMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 @register_in_tasks_manager("xverse", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class XverseMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class XverseMOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = DummyPastKeyValuesGenerator
@@ -1132,8 +1115,7 @@ class XverseMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 @register_in_tasks_manager("internlm", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class InternLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class InternLMOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = DummyPastKeyValuesGenerator
@@ -1146,7 +1128,7 @@ class InternLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     *["feature-extraction", "feature-extraction-with-past", "text-generation", "text-generation-with-past"],
     library_name="transformers",
 )
-class CodeGenOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class CodeGenOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(num_layers="n_layer", num_attention_heads="n_head")
     _MODEL_PATCHER = CodeGenModelPatcher
 
@@ -1156,8 +1138,7 @@ class CodeGenOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     *["text-generation", "text-generation-with-past"],
     library_name="transformers",
 )
-class DBRXOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class DBRXOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
         num_attention_heads="n_heads",
@@ -1176,8 +1157,7 @@ class DBRXOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     *["text-generation", "text-generation-with-past"],
     library_name="transformers",
 )
-class JaisOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class JaisOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyPastKeyValuesGenerator)
@@ -1202,11 +1182,11 @@ class ArcticOpenVINOConfig(MixtralOpenVINOConfig):
     ],
     library_name="transformers",
 )
-class MistralOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class MistralOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(num_key_value_heads="num_key_value_heads", allow_new=True)
     DUMMY_INPUT_GENERATOR_CLASSES = (
         MistralDummyPastKeyValuesGenerator,
-    ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
+    ) + TextDecoderOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     _MODEL_PATCHER = MistralModelPatcher
 
@@ -1222,7 +1202,7 @@ class MistralOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     ],
     library_name="transformers",
 )
-class GPTNeoxOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class GPTNeoxOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = GptNeoxModelPatcher
 
@@ -1230,9 +1210,8 @@ class GPTNeoxOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 @register_in_tasks_manager(
     "gpt_neox_japanese", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
-class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
+class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOpenVINOConfig):
     # GPTNeoxJapanese does not require position_ids input.
-    DEFAULT_ONNX_OPSET = 13
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = GptNeoxModelPatcher
 
@@ -1308,8 +1287,7 @@ class Gemma4TextOpenVINOConfig(Gemma3TextOpenVINOConfig):
 
 
 @register_in_tasks_manager("deci", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class DeciOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class DeciOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DeciDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = DeciDummyPastKeyValuesGenerator
@@ -1327,8 +1305,7 @@ class SiglipNormalizedConfig(CLIPNormalizedConfig):
 
 
 @register_in_tasks_manager("clip", *["zero-shot-image-classification"], library_name="open_clip")
-class OpenCLIPOpenVINOConfig(TextAndVisionOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class OpenCLIPOpenVINOConfig(TextAndVisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = CLIPNormalizedConfig
     _MODEL_PATCHER = CLIPModelPatcher
 
@@ -1359,20 +1336,19 @@ class OpenCLIPOpenVINOConfig(TextAndVisionOnnxConfig):
         return super().generate_dummy_inputs(framework, **kwargs)
 
     def generate_dummy_inputs_for_validation(
-        self, reference_model_inputs: Dict[str, Any], onnx_input_names: Optional[List[str]] = None
+        self, reference_model_inputs: Dict[str, Any], ov_input_names: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         if "attention_mask" in reference_model_inputs:
             reference_model_inputs.pop("attention_mask")
-        if "image" in onnx_input_names and "pixel_values" in reference_model_inputs:
+        if "image" in ov_input_names and "pixel_values" in reference_model_inputs:
             reference_model_inputs["image"] = reference_model_inputs.pop("pixel_values")
-        if "text" in onnx_input_names and "input_ids" in reference_model_inputs:
+        if "text" in ov_input_names and "input_ids" in reference_model_inputs:
             reference_model_inputs["text"] = reference_model_inputs.pop("input_ids")
         return super().generate_dummy_inputs_for_validation(reference_model_inputs)
 
 
 @register_in_tasks_manager("clip_text_model", *["feature-extraction"], library_name="open_clip")
-class OpenCLIPTextOpenVINOConfig(TextEncoderOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class OpenCLIPTextOpenVINOConfig(TextEncoderOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         vocab_size="vocab_size",
         sequence_length="max_position_embeddings",
@@ -1408,9 +1384,7 @@ class OpenCLIPTextOpenVINOConfig(TextEncoderOnnxConfig):
 
 
 @register_in_tasks_manager("clip_vision_model", *["feature-extraction"], library_name="open_clip")
-class OpenCLIPVisualOpenVINOConfig(VisionOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
-
+class OpenCLIPVisualOpenVINOConfig(VisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
 
     @property
@@ -1434,7 +1408,7 @@ class OpenCLIPVisualOpenVINOConfig(VisionOnnxConfig):
 @register_in_tasks_manager(
     "clip", *["feature-extraction", "zero-shot-image-classification"], library_name="transformers"
 )
-class CLIPOpenVINOConfig(TextAndVisionOnnxConfig):
+class CLIPOpenVINOConfig(TextAndVisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = CLIPNormalizedConfig
     _MODEL_PATCHER = CLIPModelPatcher
 
@@ -1467,7 +1441,7 @@ class CLIPOpenVINOConfig(TextAndVisionOnnxConfig):
 
 @register_in_tasks_manager("clip_text_model", *["feature-extraction"], library_name="transformers")
 @register_in_tasks_manager("clip-text", *["feature-extraction"], library_name="diffusers")
-class CLIPTextOpenVINOConfig(TextEncoderOnnxConfig):
+class CLIPTextOpenVINOConfig(TextEncoderOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         vocab_size="vocab_size",
         sequence_length="max_position_embeddings",
@@ -1497,7 +1471,7 @@ class CLIPTextOpenVINOConfig(TextEncoderOnnxConfig):
 
 
 @register_in_tasks_manager("clip-text-with-projection", *["feature-extraction"], library_name="diffusers")
-class CLIPTextWithProjectionOpenVINOConfig(TextEncoderOnnxConfig):
+class CLIPTextWithProjectionOpenVINOConfig(TextEncoderOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         vocab_size="vocab_size",
         sequence_length="max_position_embeddings",
@@ -1526,7 +1500,7 @@ class CLIPTextWithProjectionOpenVINOConfig(TextEncoderOnnxConfig):
 
 
 @register_in_tasks_manager("clip_vision_model", *["feature-extraction"], library_name="transformers")
-class CLIPVisionModelOpenVINOConfig(VisionOnnxConfig):
+class CLIPVisionModelOpenVINOConfig(VisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     _MODEL_PATCHER = CLIPModelPatcher
 
@@ -1555,7 +1529,7 @@ class CLIPVisionModelOpenVINOConfig(VisionOnnxConfig):
     ],
     library_name="transformers",
 )
-class IBertOpenVINOConfig(TextEncoderOnnxConfig):
+class IBertOpenVINOConfig(TextEncoderOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = IBertModelPatcher
 
@@ -1569,7 +1543,7 @@ class IBertOpenVINOConfig(TextEncoderOnnxConfig):
 
 
 # TODO: this is a very confusing class TBH, why not simply decompose the VLM into components, like diffusion models ?
-class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
+class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOpenVINOConfig):
     def __init__(self, export_config, patcher_cls=None, dummy_input_generator=None, inputs_update=None):
         self.orig_export_config = export_config
         if dummy_input_generator is not None:
@@ -1577,7 +1551,6 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
                 dummy_input_generator,
             ) + export_config.DUMMY_INPUT_GENERATOR_CLASSES
         self.DUMMY_INPUT_GENERATOR_CLASSES = export_config.DUMMY_INPUT_GENERATOR_CLASSES
-        self.DEFAULT_ONNX_OPSET = export_config.DEFAULT_ONNX_OPSET
         self.DUMMY_PKV_GENERATOR_CLASS = export_config.DUMMY_PKV_GENERATOR_CLASS
         self._config = export_config._config
         self._normalized_config = export_config._normalized_config
@@ -1638,7 +1611,7 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
         return dummy_inputs
 
 
-class InputEmbedOpenVINOConfig(TextDecoderOnnxConfig):
+class InputEmbedOpenVINOConfig(TextDecoderOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = InputEmbeddingPatcher
 
@@ -1717,7 +1690,7 @@ class VLMConfigBehavior(str, enum.Enum):
     LANGUAGE = "language"
 
 
-class BaseVLMOpenVINOConfig(OnnxConfig):
+class BaseVLMOpenVINOConfig(OpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in VLMConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
@@ -1858,7 +1831,7 @@ class LlavaNextOpenVINOConfig(LlavaOpenVINOConfig):
     _OV_2026_1_MODEL_TYPE = "llava_next"
 
 
-class LLavaMultimodalProjectorOpenVINOConfig(OnnxConfig):
+class LLavaMultimodalProjectorOpenVINOConfig(OpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyLLavaMultiModalProjectorInputGenerator,)
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
 
@@ -2168,7 +2141,7 @@ class LlavaQwen2OpenVINOConfig(BaseVLMOpenVINOConfig):
 
 @register_in_tasks_manager("unet", *["semantic-segmentation"], library_name="diffusers")
 @register_in_tasks_manager("unet-2d-condition", *["semantic-segmentation"], library_name="diffusers")
-class UNetOpenVINOConfig(VisionOnnxConfig):
+class UNetOpenVINOConfig(VisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         image_size="sample_size",
         num_channels="in_channels",
@@ -2210,7 +2183,7 @@ class UNetOpenVINOConfig(VisionOnnxConfig):
         }
 
     @property
-    def torch_to_onnx_output_map(self) -> Dict[str, str]:
+    def torch_to_ov_output_map(self) -> Dict[str, str]:
         return {
             "sample": "out_sample",
         }
@@ -2318,7 +2291,7 @@ class SanaTransformerOpenVINOConfig(UNetOpenVINOConfig):
 
 
 @register_in_tasks_manager("vae-encoder", *["semantic-segmentation"], library_name="diffusers")
-class VaeEncoderOpenVINOConfig(VisionOnnxConfig):
+class VaeEncoderOpenVINOConfig(VisionOpenVINOConfig):
     ATOL_FOR_VALIDATION = 3e-4  # TODO: this only happens in test_export.py
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         num_channels="in_channels", image_size="sample_size", allow_new=True
@@ -2344,7 +2317,7 @@ class VaeEncoderOpenVINOConfig(VisionOnnxConfig):
 
 
 @register_in_tasks_manager("vae-decoder", *["semantic-segmentation"], library_name="diffusers")
-class VaeDecoderOpenVINOConfig(VisionOnnxConfig):
+class VaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
     ATOL_FOR_VALIDATION = 3e-4  # TODO: this only happens in test_export.py
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(num_channels="latent_channels", allow_new=True)
 
@@ -2368,7 +2341,7 @@ class VaeDecoderOpenVINOConfig(VisionOnnxConfig):
 
 
 @register_in_tasks_manager("dcae-encoder", *["semantic-segmentation"], library_name="diffusers")
-class DcaeEncoderOpenVINOConfig(VisionOnnxConfig):
+class DcaeEncoderOpenVINOConfig(VisionOpenVINOConfig):
     ATOL_FOR_VALIDATION = 3e-4  # TODO: this only happens in test_export.py
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         num_channels="in_channels", image_size="sample_size", allow_new=True
@@ -2388,7 +2361,7 @@ class DcaeEncoderOpenVINOConfig(VisionOnnxConfig):
 
 
 @register_in_tasks_manager("dcae-decoder", *["semantic-segmentation"], library_name="diffusers")
-class DcaeDecoderOpenVINOConfig(VisionOnnxConfig):
+class DcaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
     ATOL_FOR_VALIDATION = 3e-4  # TODO: this only happens in test_export.py
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(num_channels="latent_channels", allow_new=True)
 
@@ -2435,7 +2408,7 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
 
 
 @register_in_tasks_manager("ltx-vae-encoder", *["semantic-segmentation"], library_name="diffusers")
-class LTXVaeEncoderOpenVINOConfig(VisionOnnxConfig):
+class LTXVaeEncoderOpenVINOConfig(VisionOpenVINOConfig):
     ATOL_FOR_VALIDATION = 3e-4  # TODO: this only happens in test_export.py
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         num_channels="in_channels", image_size="sample_size", allow_new=True
@@ -2456,7 +2429,7 @@ class LTXVaeEncoderOpenVINOConfig(VisionOnnxConfig):
 
 
 @register_in_tasks_manager("ltx-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
-class LTXVaeDecoderOpenVINOConfig(VisionOnnxConfig):
+class LTXVaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
     ATOL_FOR_VALIDATION = 3e-4  # TODO: this only happens in test_export.py
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(num_channels="latent_channels", allow_new=True)
     DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeDummyInputGenerator,)
@@ -3371,7 +3344,7 @@ class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
     ],
     library_name="transformers",
 )
-class WhisperOpenVINOConfig(AudioToTextOnnxConfig):
+class WhisperOpenVINOConfig(AudioToTextOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedSeq2SeqConfig.with_args(
         encoder_num_layers="encoder_layers",
         decoder_num_layers="decoder_layers",
@@ -3425,7 +3398,7 @@ class WhisperOpenVINOConfig(AudioToTextOnnxConfig):
     ],
     library_name="transformers",
 )
-class Qwen3ASROpenVINOConfig(AudioToTextOnnxConfig):
+class Qwen3ASROpenVINOConfig(AudioToTextOpenVINOConfig):
     """OpenVINO export config for Qwen3-ASR model."""
 
     DUMMY_INPUT_GENERATOR_CLASSES = (
@@ -3509,9 +3482,9 @@ class Qwen3ASROpenVINOConfig(AudioToTextOnnxConfig):
     *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
     library_name="transformers",
 )
-class T5OpenVINOConfig(TextSeq2SeqOnnxConfig):
+class T5OpenVINOConfig(TextSeq2SeqOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (
-        *TextSeq2SeqOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES[:-1],
+        *TextSeq2SeqOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES[:-1],
         T5DummySeq2SeqPastKeyValuesGenerator,
     )
     DUMMY_PKV_GENERATOR_CLASS = T5DummySeq2SeqPastKeyValuesGenerator
@@ -3559,7 +3532,7 @@ class LongT5OpenVINOConfig(T5OpenVINOConfig):
     ],
     library_name="transformers",
 )
-class BartOpenVINOConfig(TextSeq2SeqOnnxConfig):
+class BartOpenVINOConfig(TextSeq2SeqOpenVINOConfig):
     PAD_ATTENTION_MASK_TO_PAST = True
 
     NORMALIZED_CONFIG_CLASS = NormalizedSeq2SeqConfig.with_args(
@@ -3655,7 +3628,7 @@ class BartOpenVINOConfig(TextSeq2SeqOnnxConfig):
         if self.task in ["feature-extraction", "text2text-generation"]:
             common_outputs = super().outputs
         else:
-            common_outputs = super(OnnxConfigWithPast, self).outputs
+            common_outputs = super(OpenVINOConfigWithPast, self).outputs
             if self.use_past:
                 for i in range(
                     self._normalized_config.encoder_num_layers
@@ -3673,7 +3646,7 @@ class BartOpenVINOConfig(TextSeq2SeqOnnxConfig):
         if self.task in ["feature-extraction", "text2text-generation"]:
             flattened_output = super().flatten_past_key_values(flattened_output, name, idx, t)
         else:
-            flattened_output = super(OnnxSeq2SeqConfigWithPast, self).flatten_past_key_values(
+            flattened_output = super(OpenVINOSeq2SeqConfigWithPast, self).flatten_past_key_values(
                 flattened_output, name, idx, t
             )
 
@@ -4165,7 +4138,7 @@ class SpeechT5ConfigBehavior(str, enum.Enum):
     *["text-to-audio", "text-to-audio-with-past"],
     library_name="transformers",
 )
-class SpeechT5OpenVINOConfig(OnnxSeq2SeqConfigWithPast):
+class SpeechT5OpenVINOConfig(OpenVINOSeq2SeqConfigWithPast):
     DUMMY_INPUT_GENERATOR_CLASSES = (
         DummyTextInputGenerator,
         DummySeq2SeqPastKeyValuesGenerator,
@@ -4359,7 +4332,7 @@ class Llama4OpenVINOConfig(GotOCR2OpenVINOConfig):
     "falcon_mamba", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 @register_in_tasks_manager("mamba", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class MambaOpenVINOConfig(TextDecoderOnnxConfig):
+class MambaOpenVINOConfig(TextDecoderOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MambaCacheDummyInputGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MambaCacheDummyInputGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -4426,7 +4399,7 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
                     break
             if not input_was_inserted:
                 raise RuntimeError(
-                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model ONNX config.'
+                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model OpenVINO config.'
                 )
 
         return dummy_inputs
@@ -4444,7 +4417,7 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
     ],
     library_name="transformers",
 )
-class GPT2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class GPT2OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(num_layers="n_layer", num_attention_heads="n_head")
     _MODEL_PATCHER = OVDecoderModelPatcher
 
@@ -4458,7 +4431,7 @@ class GPT2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         "document-question-answering-with-past",
     ],
 )
-class VisionEncoderDecoderOpenVINOConfig(EncoderDecoderBaseOnnxConfig):
+class VisionEncoderDecoderOpenVINOConfig(EncoderDecoderBaseOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedEncoderDecoderConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyVisionEncoderDecoderPastKeyValuesGenerator)
     _MODEL_PATCHER = OVSeq2SeqModelPatcher
@@ -4482,7 +4455,7 @@ class VisionEncoderDecoderOpenVINOConfig(EncoderDecoderBaseOnnxConfig):
     @property
     def outputs(self) -> dict:
         if self._behavior == ConfigBehavior.ENCODER:
-            return self._encoder_onnx_config.outputs
+            return self._encoder_ov_config.outputs
         else:
             return super().outputs
 
@@ -4632,7 +4605,7 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
 
 
 @register_in_tasks_manager("audio-spectrogram-transformer", *["feature-extraction", "audio-classification"])
-class ASTOpenVINOConfig(OnnxConfig):
+class ASTOpenVINOConfig(OpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         num_mel_bins="num_mel_bins", max_length="max_length", allow_new=True
     )
@@ -4661,7 +4634,7 @@ class AfmoeOpenVINOConfig(LlamaOpenVINOConfig):
 
 
 @register_in_tasks_manager("olmo2", *COMMON_TEXT_GENERATION_TASKS, library_name="transformers")
-class Olmo2OOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class Olmo2OOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -4670,7 +4643,7 @@ class Olmo2OOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 @register_in_tasks_manager("opt", *[*COMMON_TEXT_GENERATION_TASKS, "text-classification", "question-answering"])
 class OPTOpenVINOConfig(
-    TextDecoderWithPositionIdsOnnxConfig if is_transformers_version(">=", "4.46.0") else TextDecoderOnnxConfig
+    TextDecoderWithPositionIdsOpenVINOConfig if is_transformers_version(">=", "4.46.0") else TextDecoderOpenVINOConfig
 ):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
@@ -4682,7 +4655,7 @@ class OPTOpenVINOConfig(
 @register_in_tasks_manager(
     "gpt_bigcode", *[*COMMON_TEXT_GENERATION_TASKS, "text-classification", "token-classification"]
 )
-class GPTBigCodeOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class GPTBigCodeOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GPTBigCodeDummyPastKeyValuesGenerator)
     NORMALIZED_CONFIG_CLASS = NormalizedConfigManager.get_normalized_config_class("gpt_bigcode")
     DUMMY_PKV_GENERATOR_CLASS = GPTBigCodeDummyPastKeyValuesGenerator
@@ -4735,7 +4708,7 @@ class _Pix2StructNormalizedConfig(NormalizedSeq2SeqConfig):
         "image-to-text-with-past",
     ],
 )
-class Pix2StructOpenVINOConfig(OnnxSeq2SeqConfigWithPast):
+class Pix2StructOpenVINOConfig(OpenVINOSeq2SeqConfigWithPast):
     PAD_ATTENTION_MASK_TO_PAST = True
     NORMALIZED_CONFIG_CLASS = _Pix2StructNormalizedConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (
@@ -4791,7 +4764,7 @@ class Pix2StructOpenVINOConfig(OnnxSeq2SeqConfigWithPast):
     def _create_dummy_input_generator_classes(self, **kwargs):
         if self._preprocessors is None or len(self._preprocessors) < 2:
             raise ValueError(
-                f"Preprocessors for pix2struct need to be available for the ONNX export to infer input static shapes. Got: {self._preprocessors}"
+                f"Preprocessors for pix2struct need to be available for the OpenVINO export to infer input static shapes. Got: {self._preprocessors}"
             )
 
         dummy_inputs_generators = []
@@ -4810,7 +4783,7 @@ class Pix2StructOpenVINOConfig(OnnxSeq2SeqConfigWithPast):
     def overwrite_shape_and_generate_input(self, dummy_input_gen, input_name: str, framework: str, input_shapes: dict):
         if self._preprocessors is None or len(self._preprocessors) < 2:
             raise ValueError(
-                f"Preprocessors for pix2struct need to be available for the ONNX export to infer input static shapes. Got: {self._preprocessors}"
+                f"Preprocessors for pix2struct need to be available for the OpenVINO export to infer input static shapes. Got: {self._preprocessors}"
             )
 
         if input_name in ["encoder_outputs", "attention_mask"]:
@@ -4829,7 +4802,7 @@ class Pix2StructOpenVINOConfig(OnnxSeq2SeqConfigWithPast):
 
 
 @register_in_tasks_manager("bert", *COMMON_TEXT_TASKS)
-class BertOpenVINOConfig(TextEncoderOnnxConfig):
+class BertOpenVINOConfig(TextEncoderOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
     @property
@@ -4887,7 +4860,7 @@ class XLMOpenVINOConfig(BertOpenVINOConfig):
 
 
 @register_in_tasks_manager("distilbert", *COMMON_TEXT_TASKS)
-class DistilBertOpenVINOConfig(TextEncoderOnnxConfig):
+class DistilBertOpenVINOConfig(TextEncoderOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
     @property
@@ -4939,7 +4912,7 @@ class DebertaV2OpenVINOConfig(DebertaOpenVINOConfig):
 
 
 @register_in_tasks_manager("hubert", *["feature-extraction", "automatic-speech-recognition", "audio-classification"])
-class HubertOpenVINOConfig(AudioOnnxConfig):
+class HubertOpenVINOConfig(AudioOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig
 
     @property
@@ -4978,7 +4951,7 @@ class Data2VecTextOpenVINOConfig(DistilBertOpenVINOConfig):
 
 
 @register_in_tasks_manager("vit", *["feature-extraction", "image-classification", "masked-im"])
-class ViTOpenVINOConfig(VisionOnnxConfig):
+class ViTOpenVINOConfig(VisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
 
     @property
@@ -5001,11 +4974,11 @@ class Data2VecVisionOpenVINOConfig(ViTOpenVINOConfig):
 
 
 @register_in_tasks_manager("perceiver", *["fill-mask", "text-classification", "image-classification"])
-class PerceiverOpenVINOConfig(TextAndVisionOnnxConfig):
+class PerceiverOpenVINOConfig(TextAndVisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (
         PerceiverDummyInputGenerator,
-        *TextAndVisionOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES,
+        *TextAndVisionOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES,
     )
 
     def __init__(
@@ -5066,7 +5039,7 @@ class PerceiverOpenVINOConfig(TextAndVisionOnnxConfig):
 
 
 @register_in_tasks_manager("esm", *["feature-extraction", "fill-mask", "text-classification", "token-classification"])
-class EsmOpenVINOConfig(TextEncoderOnnxConfig):
+class EsmOpenVINOConfig(TextEncoderOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
     @property
@@ -5228,7 +5201,7 @@ class WavLMOpenVINOConfig(HubertOpenVINOConfig):
 
 
 @register_in_tasks_manager("sam", *["feature-extraction"])
-class SamOpenVINOConfig(OnnxConfig):
+class SamOpenVINOConfig(OpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedEncoderDecoderConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyPointsGenerator, DummyVisionEmbeddingsGenerator)
     VARIANTS = {  # noqa: RUF012
@@ -5291,7 +5264,7 @@ class SamOpenVINOConfig(OnnxConfig):
 
 
 @register_in_tasks_manager("siglip", *["feature-extraction", "zero-shot-image-classification"])
-class SiglipOpenVINOConfig(TextAndVisionOnnxConfig):
+class SiglipOpenVINOConfig(TextAndVisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = SiglipNormalizedConfig
     _MODEL_PATCHER = CLIPModelPatcher
 
@@ -5319,7 +5292,7 @@ class SiglipOpenVINOConfig(TextAndVisionOnnxConfig):
 @register_in_tasks_manager(
     "transformer", *["feature-extraction", "sentence-similarity"], library_name="sentence_transformers"
 )
-class SentenceTransformersTransformerOpenVINOConfig(TextEncoderOnnxConfig):
+class SentenceTransformersTransformerOpenVINOConfig(TextEncoderOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = SentenceTransformersTransformerPatcher
 
@@ -5344,7 +5317,7 @@ class RemBertOpenVINOConfig(BertOpenVINOConfig):
 
 
 @register_in_tasks_manager("siglip-text-with-projection", *["feature-extraction"])
-class SiglipTextWithProjectionOpenVINOConfig(TextEncoderOnnxConfig):
+class SiglipTextWithProjectionOpenVINOConfig(TextEncoderOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         vocab_size="vocab_size",
         sequence_length="max_position_embeddings",
@@ -5390,7 +5363,7 @@ class SiglipTextOpenVINOConfig(SiglipTextWithProjectionOpenVINOConfig):
         return common_outputs
 
 
-class VideoChatFlashQwenProjectorOpenVINOConfig(OnnxConfig):
+class VideoChatFlashQwenProjectorOpenVINOConfig(OpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVideoChatFlashQwenProjectorInputGenerator,)
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
 
@@ -5611,7 +5584,7 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
                     break
             if not input_was_inserted:
                 raise RuntimeError(
-                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model ONNX config.'
+                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model OpenVINO config.'
                 )
 
         return dummy_inputs
@@ -5698,7 +5671,7 @@ class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
                     break
             if not input_was_inserted:
                 raise RuntimeError(
-                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model ONNX config.'
+                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model OpenVINO config.'
                 )
 
         return dummy_inputs
@@ -5869,8 +5842,7 @@ class Qwen3_5MoeOpenVINOConfig(Qwen3_5OpenVINOConfig):
     *["text-to-audio"],
     library_name="kokoro",
 )
-class KokoroOpenVINOConfig(OnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
+class KokoroOpenVINOConfig(OpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyKokoroInputGenerator,)
     NORMALIZED_CONFIG_CLASS = NormalizedConfig
     _MODEL_PATCHER = KokoroModelPatcher
@@ -5914,7 +5886,7 @@ class KokoroOpenVINOConfig(OnnxConfig):
         "feature-extraction-with-past",
     ],
 )
-class TrOCROpenVINOConfig(TextSeq2SeqOnnxConfig):
+class TrOCROpenVINOConfig(TextSeq2SeqOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedSeq2SeqConfig.with_args(
         decoder_num_layers="decoder_layers",
         num_layers="decoder_layers",

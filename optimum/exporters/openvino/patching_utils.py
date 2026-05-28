@@ -649,11 +649,11 @@ class ModelPatcher:
             output_names = list(config.outputs.keys())
             if isinstance(outputs, dict):
                 for name, value in outputs.items():
-                    onnx_output_name = config.torch_to_onnx_output_map.get(name, name)
+                    ov_output_name = config.torch_to_ov_output_map.get(name, name)
                     if (
-                        onnx_output_name in output_names
+                        ov_output_name in output_names
                         or (use_cache and name.startswith("past_key_values"))
-                        or any(key.startswith(onnx_output_name) for key in output_names)
+                        or any(key.startswith(ov_output_name) for key in output_names)
                     ):
                         filtered_outputs[name] = value
             elif isinstance(outputs, (list, tuple)):

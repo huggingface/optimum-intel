@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Common ONNX configuration classes that handle most of the features for building model specific configurations."""
+"""Common OpenVINO configuration classes that handle most of the features for building model specific configurations."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from typing import Any
 
 from transformers import PretrainedConfig
 
-from optimum.exporters.openvino.base import ConfigBehavior, OnnxConfig, OnnxConfigWithPast, OnnxSeq2SeqConfigWithPast
+from optimum.exporters.openvino.base import ConfigBehavior, OpenVINOConfig, OpenVINOConfigWithPast, OpenVINOSeq2SeqConfigWithPast
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import (
     DummyAudioInputGenerator,
@@ -39,13 +39,13 @@ from optimum.utils import (
 logger = logging.get_logger(__name__)
 
 
-class TextEncoderOnnxConfig(OnnxConfig):
+class TextEncoderOpenVINOConfig(OpenVINOConfig):
     """Handles encoder-based text architectures."""
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator,)
 
 
-class TextDecoderOnnxConfig(OnnxConfigWithPast):
+class TextDecoderOpenVINOConfig(OpenVINOConfigWithPast):
     """Handles decoder-based text architectures."""
 
     PAD_ATTENTION_MASK_TO_PAST = True
@@ -97,7 +97,7 @@ class TextDecoderOnnxConfig(OnnxConfigWithPast):
         return common_outputs
 
 
-class TextDecoderWithPositionIdsOnnxConfig(TextDecoderOnnxConfig):
+class TextDecoderWithPositionIdsOpenVINOConfig(TextDecoderOpenVINOConfig):
     @property
     def inputs(self) -> dict[str, dict[int, str]]:
         common_inputs = super().inputs
@@ -110,7 +110,7 @@ class TextDecoderWithPositionIdsOnnxConfig(TextDecoderOnnxConfig):
         return common_inputs
 
 
-class TextSeq2SeqOnnxConfig(OnnxSeq2SeqConfigWithPast):
+class TextSeq2SeqOpenVINOConfig(OpenVINOSeq2SeqConfigWithPast):
     """Handles encoder-decoder-based text architectures."""
 
     DUMMY_INPUT_GENERATOR_CLASSES = (
@@ -159,19 +159,19 @@ class TextSeq2SeqOnnxConfig(OnnxSeq2SeqConfigWithPast):
         return dummy_inputs_generators
 
 
-class VisionOnnxConfig(OnnxConfig):
+class VisionOpenVINOConfig(OpenVINOConfig):
     """Handles vision architectures."""
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
 
 
-class TextAndVisionOnnxConfig(OnnxConfig):
+class TextAndVisionOpenVINOConfig(OpenVINOConfig):
     """Handles multi-modal text and vision architectures."""
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyVisionInputGenerator, DummyBboxInputGenerator)
 
 
-class AudioOnnxConfig(OnnxConfig):
+class AudioOpenVINOConfig(OpenVINOConfig):
     """Handles audio architectures."""
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyAudioInputGenerator,)
@@ -181,7 +181,7 @@ class AudioOnnxConfig(OnnxConfig):
         return {"input_values": {0: "batch_size", 1: "sequence_length"}}
 
 
-class AudioToTextOnnxConfig(OnnxSeq2SeqConfigWithPast):
+class AudioToTextOpenVINOConfig(OpenVINOSeq2SeqConfigWithPast):
     DUMMY_INPUT_GENERATOR_CLASSES = (
         DummyAudioInputGenerator,
         DummySeq2SeqDecoderTextInputGenerator,
@@ -205,7 +205,7 @@ class AudioToTextOnnxConfig(OnnxSeq2SeqConfigWithPast):
         return common_inputs
 
 
-class EncoderDecoderBaseOnnxConfig(OnnxSeq2SeqConfigWithPast):
+class EncoderDecoderBaseOpenVINOConfig(OpenVINOSeq2SeqConfigWithPast):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator,)
 
     def __init__(
@@ -233,26 +233,26 @@ class EncoderDecoderBaseOnnxConfig(OnnxSeq2SeqConfigWithPast):
         self.is_decoder_with_past = False
 
         # Set up the encoder openvino config.
-        encoder_onnx_config_constructor = TasksManager.get_exporter_config_constructor(
+        encoder_ov_config_constructor = TasksManager.get_exporter_config_constructor(
             exporter="openvino",
             task="feature-extraction",
             model_type=config.encoder.model_type,
             library_name="transformers",
         )
-        self._encoder_onnx_config = encoder_onnx_config_constructor(
+        self._encoder_ov_config = encoder_ov_config_constructor(
             config.encoder, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors
         )
-        self._normalized_config.ENCODER_NORMALIZED_CONFIG_CLASS = self._encoder_onnx_config._normalized_config
+        self._normalized_config.ENCODER_NORMALIZED_CONFIG_CLASS = self._encoder_ov_config._normalized_config
 
         # Set up the decoder openvino config.
-        decoder_onnx_config_constructor = TasksManager.get_exporter_config_constructor(
+        decoder_ov_config_constructor = TasksManager.get_exporter_config_constructor(
             exporter="openvino",
             task="feature-extraction",
             model_type=config.decoder.model_type,
             library_name="transformers",
         )
         kwargs = {}
-        if issubclass(decoder_onnx_config_constructor.func, OnnxConfigWithPast):
+        if issubclass(decoder_ov_config_constructor.func, OpenVINOConfigWithPast):
             self.is_decoder_with_past = True
             kwargs["use_past"] = use_past
         else:
@@ -264,24 +264,24 @@ class EncoderDecoderBaseOnnxConfig(OnnxSeq2SeqConfigWithPast):
                 "past key values."
             )
 
-        self._decoder_onnx_config = decoder_onnx_config_constructor(
+        self._decoder_ov_config = decoder_ov_config_constructor(
             config.decoder, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors, **kwargs
         )
-        if issubclass(decoder_onnx_config_constructor.func, OnnxSeq2SeqConfigWithPast):
-            self._decoder_onnx_config = self._decoder_onnx_config.with_behavior(
+        if issubclass(decoder_ov_config_constructor.func, OpenVINOSeq2SeqConfigWithPast):
+            self._decoder_ov_config = self._decoder_ov_config.with_behavior(
                 self._behavior, use_past=kwargs["use_past"], use_past_in_inputs=use_past_in_inputs
             )
 
-        self._normalized_config.DECODER_NORMALIZED_CONFIG_CLASS = self._decoder_onnx_config._normalized_config
-        self._normalized_config.DECODER_NORMALIZED_CONFIG_CLASS = self._decoder_onnx_config._normalized_config
+        self._normalized_config.DECODER_NORMALIZED_CONFIG_CLASS = self._decoder_ov_config._normalized_config
+        self._normalized_config.DECODER_NORMALIZED_CONFIG_CLASS = self._decoder_ov_config._normalized_config
         self._normalized_config.DECODER_NORMALIZED_CONFIG_CLASS.encoder_num_attention_heads = (
-            self._decoder_onnx_config._normalized_config.num_attention_heads
+            self._decoder_ov_config._normalized_config.num_attention_heads
         )
         self._normalized_config.DECODER_NORMALIZED_CONFIG_CLASS.decoder_num_attention_heads = (
-            self._decoder_onnx_config._normalized_config.num_attention_heads
+            self._decoder_ov_config._normalized_config.num_attention_heads
         )
 
-        if isinstance(self._decoder_onnx_config, OnnxSeq2SeqConfigWithPast):
+        if isinstance(self._decoder_ov_config, OpenVINOSeq2SeqConfigWithPast):
             self._past_key_values_generator = (
                 DummySeq2SeqDecoderTextInputGenerator,
                 DummySeq2SeqPastKeyValuesGenerator,
@@ -312,21 +312,21 @@ class EncoderDecoderBaseOnnxConfig(OnnxSeq2SeqConfigWithPast):
 
     def add_past_key_values(self, inputs_or_outputs: dict[str, dict[int, str]], direction: str):
         if self.is_decoder_with_past:
-            return self._decoder_onnx_config.add_past_key_values(inputs_or_outputs, direction)
+            return self._decoder_ov_config.add_past_key_values(inputs_or_outputs, direction)
 
     def flatten_past_key_values(self, flattened_output, name, idx, t):
         if self.is_decoder_with_past:
-            return self._decoder_onnx_config.flatten_past_key_values(flattened_output, name, idx, t)
+            return self._decoder_ov_config.flatten_past_key_values(flattened_output, name, idx, t)
 
     def flatten_output_collection_property(self, name: str, field: Iterable[Any]) -> dict[str, Any]:
-        return self._decoder_onnx_config.flatten_output_collection_property(name, field)
+        return self._decoder_ov_config.flatten_output_collection_property(name, field)
 
     def generate_dummy_inputs_for_validation(
-        self, reference_model_inputs: dict[str, Any], onnx_input_names: list[str]
+        self, reference_model_inputs: dict[str, Any], ov_input_names: list[str]
     ) -> dict[str, Any]:
         if self._behavior is ConfigBehavior.ENCODER:
-            return self._encoder_onnx_config.generate_dummy_inputs_for_validation(
-                reference_model_inputs, onnx_input_names
+            return self._encoder_ov_config.generate_dummy_inputs_for_validation(
+                reference_model_inputs, ov_input_names
             )
         else:
             if self._behavior is ConfigBehavior.DECODER:
@@ -335,13 +335,13 @@ class EncoderDecoderBaseOnnxConfig(OnnxSeq2SeqConfigWithPast):
                 if "attention_mask" in reference_model_inputs:
                     reference_model_inputs["encoder_attention_mask"] = reference_model_inputs.pop("attention_mask")
                 if "encoder_outputs" in reference_model_inputs:
-                    if "encoder_hidden_states" in onnx_input_names:
+                    if "encoder_hidden_states" in ov_input_names:
                         reference_model_inputs["encoder_hidden_states"] = reference_model_inputs.pop(
                             "encoder_outputs"
                         )[0]
                     else:
                         reference_model_inputs.pop("encoder_outputs")
 
-            return self._decoder_onnx_config.generate_dummy_inputs_for_validation(
-                reference_model_inputs, onnx_input_names
+            return self._decoder_ov_config.generate_dummy_inputs_for_validation(
+                reference_model_inputs, ov_input_names
             )

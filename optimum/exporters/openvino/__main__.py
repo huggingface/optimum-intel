@@ -28,7 +28,7 @@ from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, Pro
 from transformers.utils import is_torch_available
 
 from openvino import Core, Type, save_model
-from optimum.exporters.openvino.base import OnnxConfig
+from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     DIFFUSERS_IMPORT_ERROR,
@@ -227,7 +227,7 @@ def main_export(
     local_files_only: bool = False,
     token: Optional[Union[bool, str]] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    custom_export_configs: Optional[Dict[str, "OnnxConfig"]] = None,
+    custom_export_configs: Optional[Dict[str, "OpenVINOConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
     ov_config: "OVConfig" = None,
     stateful: bool = True,
@@ -283,7 +283,7 @@ def main_export(
             the export. This argument should be used along the `custom_export_configs` argument
             in case, for example, the model inputs/outputs are changed (for example, if
             `model_kwargs={"output_attentions": True}` is passed).
-        custom_export_configs (`Optional[Dict[str, OnnxConfig]]`, defaults to `None`):
+        custom_export_configs (`Optional[Dict[str, OpenVINOConfig]]`, defaults to `None`):
             Experimental usage: override the default export config used for the given model. This argument may be useful for advanced users that desire a finer-grained control on the export. An example is available [here](https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model).
         fn_get_submodels (`Optional[Callable]`, defaults to `None`):
             Experimental usage: Override the default submodels that are used at the export. This is

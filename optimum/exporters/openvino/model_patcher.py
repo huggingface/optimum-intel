@@ -48,7 +48,7 @@ from transformers.processing_utils import Unpack
 from transformers.utils import ModelOutput
 
 from optimum.exporters.openvino._ov_ops import convert_recurrent_attention_cell
-from optimum.exporters.openvino.base import OnnxConfig
+from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.openvino.patching_utils import (
     UNSUPPORTED_OPS_PATCHING_SPEC,
     ModelPatcher,
@@ -105,7 +105,7 @@ logger = logging.getLogger(__name__)
 class SAMModelPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: PreTrainedModel,
         model_kwargs: dict[str, Any] | None = None,
     ):
@@ -161,17 +161,17 @@ class SAMModelPatcher(ModelPatcher):
                     sparse_embeddings, dense_embeddings = model.prompt_encoder(
                         input_points=input_points,
                         input_labels=input_labels,
-                        input_boxes=None,  # Not supported in the ONNX export
-                        input_masks=None,  # Not supported in the ONNX export
+                        input_boxes=None,  # Not supported in the OpenVINO export
+                        input_masks=None,  # Not supported in the OpenVINO export
                     )
                     outputs = model.mask_decoder(
                         image_embeddings=image_embeddings,
                         image_positional_embeddings=image_positional_embeddings,
                         sparse_prompt_embeddings=sparse_embeddings,
                         dense_prompt_embeddings=dense_embeddings,
-                        multimask_output=True,  # Not supported in the ONNX export
-                        attention_similarity=None,  # Not supported in the ONNX export
-                        target_embedding=None,  # Not supported in the ONNX export
+                        multimask_output=True,  # Not supported in the OpenVINO export
+                        attention_similarity=None,  # Not supported in the OpenVINO export
+                        target_embedding=None,  # Not supported in the OpenVINO export
                     )
                     low_res_masks, iou_predictions = outputs[:2]
 
@@ -194,8 +194,8 @@ def patched_speecht5_prenet_forward(
     for layer in self.layers:
         inputs_embeds = torch.nn.functional.relu(layer(inputs_embeds))
 
-        # NOTE: we patch the prenet to avoid using torch.nn.functional.dropout, that is exported as a `Dropout` node in the ONNX
-        # that is ignored during inference by some runtimes as ONNX Runtime.
+        # NOTE: we patch the prenet to avoid using torch.nn.functional.dropout, that is exported as a `Dropout` node in the OpenVINO
+        # that is ignored during inference by some runtimes as OpenVINO Runtime.
         # Reference: https://github.com/microsoft/onnxruntime/issues/9333 & https://github.com/microsoft/onnxruntime/issues/5549
         mask = torch.rand(inputs_embeds.shape, device=inputs_embeds.device) > self.config.speech_decoder_prenet_dropout
         inputs_embeds = inputs_embeds * mask / (1 - self.config.speech_decoder_prenet_dropout)
@@ -220,7 +220,7 @@ def patched_speecht5_prenet_forward(
 class SentenceTransformersTransformerPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: PreTrainedModel,
         model_kwargs: dict[str, Any],
     ):
@@ -270,7 +270,7 @@ def _get_model_attribute(model, name):
 
 for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
     if spec.name in {
-        # onnx-exporter-specific fixes
+        # openvino-exporter-specific fixes
         "triu",
         "tril",
         "norm",
@@ -828,7 +828,7 @@ def _glm4_core_attention_forward(self, query_layer, key_layer, value_layer, atte
 class ChatGLMModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
@@ -1212,7 +1212,7 @@ def _qwen_attention_forward(
 class QwenModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
@@ -1373,7 +1373,7 @@ def _baichuan7b_attn_forward(
 class BaichuanModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
@@ -3306,7 +3306,7 @@ class GptNeoModelPatcher(OVDecoderModelPatcher):
 class Gemma2ModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -3495,7 +3495,7 @@ class DeciLMModelPatcher(OVDecoderModelPatcher):
 class IBertModelPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
@@ -3513,7 +3513,7 @@ class IBertModelPatcher(ModelPatcher):
 class InternVLChatImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
@@ -3536,7 +3536,7 @@ class InternVLChatImageEmbeddingModelPatcher(ModelPatcher):
 
 
 class InternVL2ChatLangModelPatcher(OVDecoderModelPatcher):
-    def __init__(self, config: "OnnxConfig", model: "PreTrainedModel", model_kwargs: Dict[str, Any]):
+    def __init__(self, config: "OpenVINOConfig", model: "PreTrainedModel", model_kwargs: Dict[str, Any]):
         model_type = model.config.model_type
         patcher_for_model_type = {
             "llama": OVDecoderModelPatcher,
@@ -3656,7 +3656,7 @@ def maira_vision_embed_forward(self, pixel_values):
 class LlavaImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
@@ -3672,7 +3672,7 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
 class MairaImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
@@ -3689,7 +3689,7 @@ class MairaImageEmbeddingModelPatcher(ModelPatcher):
 class LlavaNextVideoImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
@@ -3906,7 +3906,7 @@ def _minicpmv_siglip_transformer_forward(
 class MiniCPMVResamplerModelPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
@@ -3923,7 +3923,7 @@ class MiniCPMVResamplerModelPatcher(ModelPatcher):
 class MiniCPMVImageEmbeddingsModelPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
@@ -3954,7 +3954,7 @@ class MiniCPMVImageEmbeddingsModelPatcher(ModelPatcher):
 class LlavaQwen2ImageEmbeddingsModelPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
@@ -3972,7 +3972,7 @@ class LlavaQwen2ImageEmbeddingsModelPatcher(ModelPatcher):
 class InputEmbeddingPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
@@ -3997,7 +3997,7 @@ def phi3_vision_embeddings_forward(self, pixel_values: torch.FloatTensor):
 class Phi3VisionImageEmbeddingsPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
@@ -4449,7 +4449,7 @@ def deepseek_moe_infer(self, x, topk_ids, topk_weight):
 class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any] = None,
     ):
@@ -4492,7 +4492,7 @@ class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
 class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: Union["PreTrainedModel"],
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -4658,7 +4658,7 @@ def patch_qwen2vl_vision_blocks(model, force_new_behaviour=False):
 class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any] = None,
     ):
@@ -4692,7 +4692,7 @@ class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
 class Qwen2_5_VLVisionEmbMergerPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any] = None,
     ):
@@ -4754,7 +4754,7 @@ class Qwen2_5_VLVisionEmbMergerPatcher(ModelPatcher):
 class Qwen3VLVisionEmbMergerPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: Union["PreTrainedModel"],
         model_kwargs: Dict[str, Any] = None,
     ):
@@ -4867,7 +4867,7 @@ class GraniteMoEModelPatcher(OVDecoderModelPatcher):
 class OVSeq2SeqModelPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -4913,7 +4913,7 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
 
             outputs = self.super_patched_forward(*args, **kwargs)
 
-            # the optimum-onnx seq2seq model patcher only converts to tuple starting from 4.48
+            # the seq2seq model patcher only converts to tuple starting from 4.48
             if isinstance(outputs.get("past_key_values"), (DynamicCache, EncoderDecoderCache)):
                 outputs["past_key_values"] = postprocess_past_key_values(outputs["past_key_values"])
 
@@ -4992,7 +4992,7 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
 class MiniCPMModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -5007,7 +5007,7 @@ class MiniCPMModelPatcher(OVDecoderModelPatcher):
 class CommonImageEmbeddingsModelPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
@@ -5091,7 +5091,7 @@ def _gemma3_mm_update_causal_mask(
 class Gemma3LMModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -5525,7 +5525,7 @@ class Gemma4LMModelPatcher(Gemma3LMModelPatcher):
 class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -6341,7 +6341,7 @@ class SpeechT5ModelPatcher(ModelPatcher):
 
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
@@ -6456,7 +6456,7 @@ class SpeechT5ModelPatcher(ModelPatcher):
 class Phi4MMLanguageModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -6497,7 +6497,7 @@ class Phi4MMLanguageModelPatcher(OVDecoderModelPatcher):
 class Phi4MMAudioForwardEmbeddingsPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -6521,7 +6521,7 @@ class Phi4MMAudioForwardEmbeddingsPatcher(ModelPatcher):
 class Phi4MMAudioEncoderPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -6562,7 +6562,7 @@ class Phi4MMAudioEncoderPatcher(ModelPatcher):
 class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -6871,7 +6871,7 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
 class Llama4ImageEmbeddingsModelPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
@@ -7236,7 +7236,7 @@ def mamba_mixer_forward(
 class MambaPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -7743,7 +7743,7 @@ def zamba2_mamba_mixer(
 class Zamba2ModelPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -7956,7 +7956,7 @@ def lfm2_short_conv_forward_patched(
 class Lfm2ModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -8201,7 +8201,7 @@ def granite_moe_hybrid_update_causal_mask(
 class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -8383,7 +8383,7 @@ class BigBirdPegasusModelPatcher(OVSeq2SeqModelPatcher):
 
         if self.real_config._behavior == "encoder" and self._model.config.attention_type == "block_sparse":
             logger.warning(
-                "BigBirdPegasus model is using block sparse attention, which is not supported in ONNX export. "
+                "BigBirdPegasus model is using block sparse attention, which is not supported in OpenVINO export. "
                 "The model will be exported with original full attention."
             )
             self._model.set_attention_type("original_full")
@@ -8483,7 +8483,7 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
 class VideoChatFlashQwenVisionEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any] = None,
     ):
@@ -9033,7 +9033,7 @@ class RecurrentAttentionCell(torch.nn.Module):
 class Qwen3NextModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -9487,7 +9487,7 @@ def qwen3_5_gated_delta_net_forward(
 class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -9672,7 +9672,7 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
 class Qwen3_5VisionEmbMergerPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any] = None,
     ):
@@ -9746,7 +9746,7 @@ def patched_qwen3_5_moe_sparse_moe_block(self, hidden_states: torch.Tensor) -> t
 class Qwen3_5MoeModelPatcher(Qwen3_5ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -9782,7 +9782,7 @@ class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
 
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):

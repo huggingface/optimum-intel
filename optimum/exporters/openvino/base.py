@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""ONNX configuration base classes."""
+"""OpenVINO configuration base classes."""
 
 from __future__ import annotations
 
@@ -66,9 +66,8 @@ GENERATE_DUMMY_DOCSTRING = r"""
 """
 
 
-class OnnxConfig(ExporterConfig, ABC):
-    DEFAULT_ONNX_OPSET = 18
-    VARIANTS: ClassVar[dict[str, str]] = {"default": "The default ONNX variant."}
+class OpenVINOConfig(ExporterConfig, ABC):
+    VARIANTS: ClassVar[dict[str, str]] = {"default": "The default OpenVINO variant."}
     DEFAULT_VARIANT = "default"
     PATCHING_SPECS: list[PatchingSpec] | None = None
     _MODEL_PATCHER = ModelPatcher
@@ -146,10 +145,10 @@ class OnnxConfig(ExporterConfig, ABC):
 
     @property
     def variant(self) -> str:
-        """For a given ONNX config, the variant of the model to export.
+        """For a given OpenVINO config, the variant of the model to export.
 
         This property allows to define variants of a given model, in case
-        different users would like to export the model differently (with different inputs/outputs, model split in several ONNX or not, etc.).
+        different users would like to export the model differently (with different inputs/outputs, model split in several OpenVINO or not, etc.).
         """
         return self._variant
 
@@ -158,28 +157,28 @@ class OnnxConfig(ExporterConfig, ABC):
         if value == "default" and hasattr(self, "DEFAULT_VARIANT"):
             value = self.DEFAULT_VARIANT
         if value not in self.VARIANTS:
-            raise ValueError(f"The variant {value} is not supported for the ONNX config {self.__class__.__name__}.")
+            raise ValueError(f"The variant {value} is not supported for the OpenVINO config {self.__class__.__name__}.")
         self._variant = value
 
     @property
-    def torch_to_onnx_input_map(self) -> dict[str, str]:
-        """Dictionary mapping input names from the PyTorch model to input names from the exported ONNX model.
+    def torch_to_ov_input_map(self) -> dict[str, str]:
+        """Dictionary mapping input names from the PyTorch model to input names from the exported OpenVINO model.
 
-        Override the function when the input names and the exported ONNX input names are different.
+        Override the function when the input names and the exported OpenVINO input names are different.
 
         Returns:
-            `Dict[str, str]`: A dictionary mapping the PyTorch model input names to the exported ONNX model input names.
+            `Dict[str, str]`: A dictionary mapping the PyTorch model input names to the exported OpenVINO model input names.
         """
         return {}
 
     @property
-    def torch_to_onnx_output_map(self) -> dict[str, str]:
-        """Dictionary mapping output names from the PyTorch model to output names from the exported ONNX model.
+    def torch_to_ov_output_map(self) -> dict[str, str]:
+        """Dictionary mapping output names from the PyTorch model to output names from the exported OpenVINO model.
 
-        Override the function when the output names and the exported ONNX output names are different.
+        Override the function when the output names and the exported OpenVINO output names are different.
 
         Returns:
-            `Dict[str, str]`: A dictionary mapping the PyTorch model output names to the exported ONNX model output names.
+            `Dict[str, str]`: A dictionary mapping the PyTorch model output names to the exported OpenVINO model output names.
         """
         return {}
 
@@ -198,7 +197,7 @@ class OnnxConfig(ExporterConfig, ABC):
 
         Args:
             model ([`transformers.PreTrainedModel`]):
-                The model for which we will use the OnnxConfig.
+                The model for which we will use the OpenVINOConfig.
 
         Returns:
             `Dict[str, Dict[int, str]]`: The properly ordered inputs.
@@ -221,7 +220,7 @@ class OnnxConfig(ExporterConfig, ABC):
             # TODO: figure out a smart way of re-ordering potential nested structures.
             # to_insert = sorted(to_insert, key=lambda t: t[0])
             for name, dynamic_axes in to_insert:
-                name = self.torch_to_onnx_input_map.get(name, name)
+                name = self.torch_to_ov_input_map.get(name, name)
                 ordered_inputs[name] = dynamic_axes
         return ordered_inputs
 
@@ -245,18 +244,18 @@ class OnnxConfig(ExporterConfig, ABC):
             return {f"{name}.{idx}": item for idx, item in enumerate(field)}
 
     def generate_dummy_inputs_for_validation(
-        self, reference_model_inputs: dict[str, Any], onnx_input_names: list[str]
+        self, reference_model_inputs: dict[str, Any], ov_input_names: list[str]
     ) -> dict[str, Any]:
-        """Generates inputs for ONNX Runtime using the reference model inputs.
+        """Generates inputs for OpenVINO Runtime using the reference model inputs.
 
         Override this to run inference with seq2seq
-        models which have the encoder and decoder exported as separate ONNX files.
+        models which have the encoder and decoder exported as separate OpenVINO files.
 
         Args:
             reference_model_inputs (`Dict[str, Tensor]`):
                 Reference inputs for the model.
-            onnx_input_names (`Optional[List[str]]`, defaults to `None`):
-                Names of the actual inputs to the ONNX model. This argument may be required as an unused
+            ov_input_names (`Optional[List[str]]`, defaults to `None`):
+                Names of the actual inputs to the OpenVINO model. This argument may be required as an unused
                 input to the model is automatically removed by torch.onnx.export (e.g. encoder_outputs in the decoder with past)
 
         Returns:
@@ -270,8 +269,8 @@ class OnnxConfig(ExporterConfig, ABC):
         return self._MODEL_PATCHER(self, model, model_kwargs=model_kwargs)
 
 
-class OnnxConfigWithPast(OnnxConfig, ABC):
-    """Inherits from [`~exporters.onnx.OnnxConfig`]. A base class to handle the ONNX configuration of decoder-only models."""
+class OpenVINOConfigWithPast(OpenVINOConfig, ABC):
+    """Inherits from [`~exporters.onnx.OpenVINOConfig`]. A base class to handle the OpenVINO configuration of decoder-only models."""
 
     PAD_ATTENTION_MASK_TO_PAST: bool = False
     SUPPORTS_PAST: bool = True
@@ -341,7 +340,7 @@ class OnnxConfigWithPast(OnnxConfig, ABC):
                     break
             if not input_was_inserted:
                 raise RuntimeError(
-                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model ONNX config.'
+                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model OpenVINO config.'
                 )
 
         # refer to https://github.com/huggingface/optimum/pull/764
@@ -368,11 +367,11 @@ class OnnxConfigWithPast(OnnxConfig, ABC):
         This method allows
         to overwrite some shapes, and generate the dummy input. This should probably be refactored more elegantly.
         """
-        # models from TextSeq2SeqOnnxConfig use decoder_input_ids as input name
-        # while models from TextDecoderOnnxConfig use input_ids, hence the check for both
+        # models from TextSeq2SeqOpenVINOConfig use decoder_input_ids as input name
+        # while models from TextDecoderOpenVINOConfig use input_ids, hence the check for both
 
-        # NOTE: The check `self.task != "text-generation" is added following the use of a single ONNX for both without/with KV cache, without subgraphs.
-        # This overwrite may be moved to OnnxSeq2SeqConfigWithPast, but I am afraid it would break encoder-decoder models.
+        # NOTE: The check `self.task != "text-generation" is added following the use of a single OpenVINO for both without/with KV cache, without subgraphs.
+        # This overwrite may be moved to OpenVINOSeq2SeqConfigWithPast, but I am afraid it would break encoder-decoder models.
         if (
             self.use_past
             and self.use_past_in_inputs
@@ -433,7 +432,7 @@ class OnnxConfigWithPast(OnnxConfig, ABC):
         return flattened_output
 
     def generate_dummy_inputs_for_validation(
-        self, reference_model_inputs: dict[str, Any], onnx_input_names: list[str]
+        self, reference_model_inputs: dict[str, Any], ov_input_names: list[str]
     ) -> dict[str, Any]:
         if self.is_merged is True and self.use_cache_branch is True:
             reference_model_inputs["use_cache_branch"] = DummyInputGenerator.constant_tensor(shape=[1], value=True)
@@ -450,11 +449,11 @@ class OnnxConfigWithPast(OnnxConfig, ABC):
                 "past_key_values", framework="pt", int_dtype=self.int_dtype, float_dtype=self.float_dtype
             )
 
-        return super().generate_dummy_inputs_for_validation(reference_model_inputs, onnx_input_names)
+        return super().generate_dummy_inputs_for_validation(reference_model_inputs, ov_input_names)
 
 
 class ConfigBehavior(str, enum.Enum):
-    """Specifies the behavior of the [`~exporters.onnx.base.OnnxSeq2SeqConfigWithPast`].
+    """Specifies the behavior of the [`~exporters.onnx.base.OpenVINOSeq2SeqConfigWithPast`].
 
     - MONOLITH: the config can be used to export the whole seq2seq model as a single file.
     - ENCODER: the config can be used to export the encoder part of the seq2seq model.
@@ -466,8 +465,8 @@ class ConfigBehavior(str, enum.Enum):
     DECODER = "decoder"
 
 
-class OnnxSeq2SeqConfigWithPast(OnnxConfigWithPast):
-    """Inherits from [`~exporters.onnx.OnnxConfigWithPast`]. A base class to handle the ONNX configuration of encoder-decoder models."""
+class OpenVINOSeq2SeqConfigWithPast(OpenVINOConfigWithPast):
+    """Inherits from [`~exporters.onnx.OpenVINOConfigWithPast`]. A base class to handle the OpenVINO configuration of encoder-decoder models."""
 
     DUMMY_PKV_GENERATOR_CLASS = DummySeq2SeqPastKeyValuesGenerator
 
@@ -502,24 +501,24 @@ class OnnxSeq2SeqConfigWithPast(OnnxConfigWithPast):
         behavior: str | ConfigBehavior,
         use_past: bool = False,
         use_past_in_inputs: bool = False,
-    ) -> OnnxSeq2SeqConfigWithPast:
-        """Creates a copy of the current OnnxConfig but with a different `ConfigBehavior` and `use_past` value.
+    ) -> OpenVINOSeq2SeqConfigWithPast:
+        """Creates a copy of the current OpenVINOConfig but with a different `ConfigBehavior` and `use_past` value.
 
         Args:
             behavior ([`ConfigBehavior`]):
                 The behavior to use for the new instance.
             use_past (`bool`, defaults to `False`):
-                Whether or not the ONNX config to instantiate is for a model using KV cache.
+                Whether or not the OpenVINO config to instantiate is for a model using KV cache.
             use_past_in_inputs (`bool`, defaults to `False`):
-                Whether the KV cache is to be passed as an input to the ONNX.
+                Whether the KV cache is to be passed as an input to the OpenVINO.
 
         Returns:
-            `OnnxSeq2SeqConfigWithPast`
+            `OpenVINOSeq2SeqConfigWithPast`
         """
         if isinstance(behavior, str) and not isinstance(behavior, ConfigBehavior):
             behavior = ConfigBehavior(behavior)
 
-        onnx_config = self.__class__(
+        ov_config = self.__class__(
             self._config,
             task=self.task,
             int_dtype=self.int_dtype,
@@ -529,11 +528,11 @@ class OnnxSeq2SeqConfigWithPast(OnnxConfigWithPast):
             behavior=behavior,
             preprocessors=self._preprocessors,
         )
-        onnx_config.variant = self.variant
-        return onnx_config
+        ov_config.variant = self.variant
+        return ov_config
 
     @property
-    def torch_to_onnx_input_map(self) -> dict[str, str]:
+    def torch_to_ov_input_map(self) -> dict[str, str]:
         if self._behavior is ConfigBehavior.DECODER:
             return {
                 "decoder_input_ids": "input_ids",
@@ -545,7 +544,7 @@ class OnnxSeq2SeqConfigWithPast(OnnxConfigWithPast):
 
     @property
     def outputs(self) -> dict[str, dict[int, str]]:
-        common_outputs = super(OnnxConfigWithPast, self).outputs
+        common_outputs = super(OpenVINOConfigWithPast, self).outputs
         # Renaming the outputs axes properly.
         for name, axes_names in common_outputs.items():
             if self._behavior is ConfigBehavior.ENCODER or "encoder" in name:
@@ -559,7 +558,7 @@ class OnnxSeq2SeqConfigWithPast(OnnxConfigWithPast):
                     if self.use_past_in_inputs is False or self.is_merged is True:
                         new_axes_names[axis_idx] = sequence_name
                     else:
-                        # Trick to force it since ONNX sometimes infer a dynamic axis where it's not.
+                        # Trick to force it since OpenVINO sometimes infer a dynamic axis where it's not.
                         new_axes_names[axis_idx] = "1"
                 else:
                     new_axes_names[axis_idx] = axis_name
@@ -624,7 +623,7 @@ class OnnxSeq2SeqConfigWithPast(OnnxConfigWithPast):
         return dummy_inputs
 
     def generate_dummy_inputs_for_validation(
-        self, reference_model_inputs: dict[str, Any], onnx_input_names: list[str]
+        self, reference_model_inputs: dict[str, Any], ov_input_names: list[str]
     ) -> dict[str, Any]:
         if self._behavior is ConfigBehavior.DECODER:
             if "decoder_input_ids" in reference_model_inputs:
@@ -634,9 +633,9 @@ class OnnxSeq2SeqConfigWithPast(OnnxConfigWithPast):
             if "decoder_attention_mask" in reference_model_inputs:
                 reference_model_inputs["attention_mask"] = reference_model_inputs.pop("decoder_attention_mask")
             if "encoder_outputs" in reference_model_inputs:
-                if "encoder_hidden_states" in onnx_input_names:
+                if "encoder_hidden_states" in ov_input_names:
                     reference_model_inputs["encoder_hidden_states"] = reference_model_inputs.pop("encoder_outputs")[0]
                 else:
                     reference_model_inputs.pop("encoder_outputs")
 
-        return super().generate_dummy_inputs_for_validation(reference_model_inputs, onnx_input_names)
+        return super().generate_dummy_inputs_for_validation(reference_model_inputs, ov_input_names)

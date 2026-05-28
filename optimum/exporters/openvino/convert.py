@@ -93,14 +93,14 @@ if is_diffusers_available():
 
 
 if TYPE_CHECKING:
-    from optimum.exporters.openvino.base import OnnxConfig
+    from optimum.exporters.openvino.base import OpenVINOConfig
     from optimum.intel.openvino.configuration import OVConfig
 
 
 def _set_runtime_options(
     models_and_export_configs: Dict[
         str,
-        Tuple[Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"],
+        Tuple[Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OpenVINOConfig"],
     ],
     task: str,
     library_name: str,
@@ -129,7 +129,7 @@ def _save_model(
     path: str,
     ov_config: Optional["OVConfig"] = None,
     library_name: Optional[str] = None,
-    config: "OnnxConfig" = None,
+    config: "OpenVINOConfig" = None,
 ):
     compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
     model = _add_version_info_to_model(model, library_name)
@@ -147,9 +147,8 @@ def _save_model(
 
 def export(
     model: Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"],
-    config: "OnnxConfig",
+    config: "OpenVINOConfig",
     output: Path,
-    opset: Optional[int] = None,
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
@@ -164,12 +163,10 @@ def export(
     Args:
         model ([`PreTrainedModel`]):
             The model to export.
-        config ([`~exporters.onnx.config.OnnxConfig`]):
-            The ONNX configuration associated with the exported model.
+        config ([`~exporters.onnx.config.OpenVINOConfig`]):
+            The OpenVINO configuration associated with the exported model.
         output (`Path`):
             Directory to store the exported model.
-        opset (`Optional[int]`, defaults to `None`):
-            The version of the ONNX operator set to use.
         device (`str`, *optional*, defaults to `cpu`):
             The device on which the model will be exported. Either `cpu` or `cuda`. Only PyTorch is supported for
             export on CUDA devices.
@@ -182,7 +179,7 @@ def export(
 
     Returns:
         `Tuple[List[str], List[str]]`: A tuple with an ordered list of the model's inputs, and the named inputs from
-        the ONNX configuration.
+        the OpenVINO configuration.
     """
     if not is_torch_available():
         raise ImportError(
@@ -222,7 +219,6 @@ def export(
         return export_pytorch(
             model,
             config,
-            opset,
             output,
             device=device,
             input_shapes=input_shapes,
@@ -238,8 +234,7 @@ def export(
 
 def export_pytorch(
     model: Union["PreTrainedModel", "ModelMixin"],
-    config: "OnnxConfig",
-    opset: int,
+    config: "OpenVINOConfig",
     output: Path,
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
@@ -255,10 +250,8 @@ def export_pytorch(
     Args:
         model ([`PreTrainedModel`]):
             The model to export.
-        config ([`~exporters.onnx.config.OnnxConfig`]):
+        config ([`~exporters.onnx.config.OpenVINOConfig`]):
             The configuration associated with the exported model.
-        opset (`int`):
-            The version of the ONNX operator set to use.
         output (`Path`):
             Directory to store the exported model.
         device (`str`, defaults to `"cpu"`):
@@ -275,7 +268,7 @@ def export_pytorch(
 
     Returns:
         `Tuple[List[str], List[str], bool]`: A tuple with an ordered list of the model's inputs, and the named inputs from
-        the ONNX configuration and boolean flag - was legacy ONNX path were applied to model or not.
+        the OpenVINO configuration and boolean flag - was legacy OpenVINO path were applied to model or not.
     """
     import torch
     from torch.utils._pytree import tree_map
@@ -416,10 +409,9 @@ def export_pytorch(
 
 def export_models(
     models_and_export_configs: Dict[
-        str, Tuple[Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"]
+        str, Tuple[Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OpenVINOConfig"]
     ],
     output_dir: Path,
-    opset: Optional[int] = None,
     output_names: Optional[List[str]] = None,
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
@@ -433,9 +425,8 @@ def export_models(
     Export the models to OpenVINO IR format
 
     Args:
-        models_and_export_configs (Dict[ str, Tuple[Union["PreTrainedModel", "ModelMixin"], "OnnxConfig"]):
+        models_and_export_configs (Dict[ str, Tuple[Union["PreTrainedModel", "ModelMixin"], "OpenVINOConfig"]):
         output_dir (Path): output directory for saving models
-        opset (Optional[int], optional, Default to None): ONNX export opset
         output_names (Optional[List[str]], optional, Defaults to None): model output names
         device (str, optional, Defaults to "cpu"):
             The device on which the model will be exported. Either `cpu` or `cuda`. Only PyTorch is supported for
@@ -453,7 +444,7 @@ def export_models(
         ValueError: if custom names set not equal of number of models
 
     Returns:
-        list of input_names and output_names from ONNX configuration
+        list of input_names and output_names from OpenVINO configuration
     """
 
     outputs = []
@@ -473,7 +464,6 @@ def export_models(
                 model=submodel,
                 config=sub_export_config,
                 output=output_path,
-                opset=opset,
                 device=device,
                 input_shapes=input_shapes,
                 model_kwargs=model_kwargs,
@@ -580,9 +570,8 @@ def export_from_model(
     task: Optional[str] = None,
     ov_config: Optional["OVConfig"] = None,
     stateful: bool = True,
-    opset: Optional[int] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    custom_export_configs: Optional[Dict[str, "OnnxConfig"]] = None,
+    custom_export_configs: Optional[Dict[str, "OpenVINOConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
     preprocessors: List = None,
     device: str = "cpu",
@@ -658,7 +647,7 @@ def export_from_model(
         and not getattr(model, "_supports_cache_class", is_transformers_version(">=", "4.54"))
     ):
         stateful = False
-    # TODO: support onnx_config.py in the model repo
+    # TODO: support ov_config.py in the model repo
     if custom_architecture and custom_export_configs is None:
         raise ValueError(
             f"Trying to export a {model_type} model, that is a custom or unsupported architecture, but no custom export configuration was passed as `custom_export_configs`. Please refer to https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models for an example on how to export custom models. Please open an issue at https://github.com/huggingface/optimum-intel/issues if you would like the model type {model_type} to be supported natively in the OpenVINO export."
@@ -822,7 +811,6 @@ def export_from_model(
         device=device,
         ov_config=ov_config,
         stateful=stateful_submodels,
-        opset=opset,
         model_kwargs=model_kwargs,
         patch_16bit_model=patch_16bit_model,
         library_name=library_name,
