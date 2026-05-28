@@ -118,44 +118,7 @@ class OVSentenceTransformer(OVModel):
             try:
                 processor = AutoProcessor.from_pretrained(model_id, **tokenizer_args)
             except (OSError, ValueError, KeyError, EnvironmentError):
-                processor = None
-
-            # Load sentence-transformers prompts/default_prompt_name from config_sentence_transformers.json,
-            # so that SentenceTransformer.encode's prompt resolution behaves the same as the reference model.
-            st_prompts: Dict[str, str] = {}
-            st_default_prompt_name: Optional[str] = None
-            st_config_path: Optional[str] = None
-            try:
-                if os.path.isdir(model_id):
-                    candidate = (
-                        os.path.join(model_id, subfolder, "config_sentence_transformers.json")
-                        if subfolder
-                        else os.path.join(model_id, "config_sentence_transformers.json")
-                    )
-                    if os.path.isfile(candidate):
-                        st_config_path = candidate
-                else:
-                    st_config_path = hf_hub_download(
-                        repo_id=str(model_id),
-                        filename="config_sentence_transformers.json",
-                        subfolder=subfolder or None,
-                        revision=revision,
-                        cache_dir=cache_dir,
-                        token=token,
-                        local_files_only=local_files_only,
-                        force_download=force_download,
-                    )
-            except (EntryNotFoundError, OSError, ValueError):
-                st_config_path = None
-
-            if st_config_path is not None:
-                try:
-                    with open(st_config_path, "r", encoding="utf-8") as f:
-                        st_cfg = json.load(f)
-                    st_prompts = st_cfg.get("prompts", {}) or {}
-                    st_default_prompt_name = st_cfg.get("default_prompt_name", None)
-                except (OSError, json.JSONDecodeError):
-                    pass
+                pass
 
         model = super()._from_pretrained(
             model_id=model_id,
@@ -175,8 +138,6 @@ class OVSentenceTransformer(OVModel):
         )
 
         if is_sentence_transformers_version(">=", "5.4.0"):
-            model.prompts = st_prompts
-            model.default_prompt_name = st_default_prompt_name
             model.processor = processor
 
         return model
@@ -298,8 +259,6 @@ class OVSentenceTransformer(OVModel):
                 ]
             preprocessed = self.tokenize(inputs, **kwargs)
             preprocessed["modality"] = modality
-
-        print("inputs_ids {}".format(preprocessed["input_ids"]))
         return preprocessed
 
     @staticmethod
