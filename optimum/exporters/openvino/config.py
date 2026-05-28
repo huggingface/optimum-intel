@@ -1,4 +1,4 @@
-# Copyright 2022 The HuggingFace Team. All rights reserved.
+# Copyright 2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -232,9 +232,9 @@ class EncoderDecoderBaseOnnxConfig(OnnxSeq2SeqConfigWithPast):
 
         self.is_decoder_with_past = False
 
-        # Set up the encoder ONNX config.
+        # Set up the encoder openvino config.
         encoder_onnx_config_constructor = TasksManager.get_exporter_config_constructor(
-            exporter="onnx",
+            exporter="openvino",
             task="feature-extraction",
             model_type=config.encoder.model_type,
             library_name="transformers",
@@ -244,9 +244,9 @@ class EncoderDecoderBaseOnnxConfig(OnnxSeq2SeqConfigWithPast):
         )
         self._normalized_config.ENCODER_NORMALIZED_CONFIG_CLASS = self._encoder_onnx_config._normalized_config
 
-        # Set up the decoder ONNX config.
+        # Set up the decoder openvino config.
         decoder_onnx_config_constructor = TasksManager.get_exporter_config_constructor(
-            exporter="onnx",
+            exporter="openvino",
             task="feature-extraction",
             model_type=config.decoder.model_type,
             library_name="transformers",

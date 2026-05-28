@@ -5128,6 +5128,11 @@ class SwinOpenVINOConfig(ViTOpenVINOConfig):
     pass
 
 
+@register_in_tasks_manager("donut-swin", *["feature-extraction"])
+class DonutSwinOpenVINOConfig(ViTOpenVINOConfig):
+    pass
+
+
 @register_in_tasks_manager("convnext", *["feature-extraction", "image-classification"])
 class ConvNextOpenVINOConfig(ViTOpenVINOConfig):
     pass

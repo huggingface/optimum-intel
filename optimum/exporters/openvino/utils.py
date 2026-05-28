@@ -363,7 +363,6 @@ ONNX_SUPPORTED_ARCHITECTURES = {
     "default-timm-config",
     "detr",
     "dinov2",
-    "donut-swin",
     "dpt",
     "efficientnet",
     "encoder-decoder",
