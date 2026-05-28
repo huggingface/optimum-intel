@@ -69,6 +69,7 @@ TESTS_REQUIRE = [
     "decord",
     "imageio",
     "kokoro",
+    "protobuf",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
