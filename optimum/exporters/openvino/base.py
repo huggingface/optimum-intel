@@ -33,11 +33,6 @@ from optimum.exporters.base import ExporterConfig
 from optimum.exporters.openvino.patching_utils import ModelPatcher, PatchingSpec
 from optimum.utils import DEFAULT_DUMMY_SHAPES, DummyInputGenerator, DummySeq2SeqPastKeyValuesGenerator, logging
 from optimum.utils.doc import add_dynamic_docstring
-from optimum.utils.import_utils import (
-    is_onnx_available,
-    is_onnxruntime_available,
-    is_transformers_version,
-)
 
 
 logger = logging.get_logger(__name__)
@@ -100,9 +95,7 @@ class OnnxConfig(ExporterConfig, ABC):
             {"heatmaps": {0: "batch_size", 1: "num_keypoints", 2: "height", 3: "width"}}
         ),
         "mask-generation": OrderedDict({"logits": {0: "batch_size"}}),
-        "masked-im": OrderedDict(
-            {"reconstruction" if is_transformers_version(">=", "4.29.0") else "logits": {0: "batch_size"}}
-        ),
+        "masked-im": OrderedDict({"reconstruction": {0: "batch_size"}}),
         "multiple-choice": OrderedDict({"logits": {0: "batch_size", 1: "num_choices"}}),
         "object-detection": OrderedDict(
             {
@@ -170,93 +163,6 @@ class OnnxConfig(ExporterConfig, ABC):
         if value not in self.VARIANTS:
             raise ValueError(f"The variant {value} is not supported for the ONNX config {self.__class__.__name__}.")
         self._variant = value
-
-    def fix_dynamic_axes(
-        self, model_path: Path, device: str = "cpu", dtype: str | None = None, input_shapes: dict | None = None
-    ):
-        """Fixes potential issues with dynamic axes.
-
-        During the export, ONNX will infer some axes to be dynamic which are actually static. This method is called
-        right after the export to fix such issues.
-
-        Args:
-            model_path (`Path`):
-                The path of the freshly exported ONNX model.
-            device (`str`, defaults to `"cpu"`):
-                The device on which the model will be run. This is used to determine the ONNX Runtime provider.
-            dtype (`Optional[str]`, defaults to `None`):
-                The data type of the model inputs. If `None`, it will be inferred from the model inputs.
-            input_shapes (`Optional[Dict[str, Any]]`, defaults to `None`):
-                The shapes of the model inputs. If `None`, it will be inferred from the model inputs.
-        """
-        if not (is_onnx_available() and is_onnxruntime_available()):
-            raise RuntimeError(
-                "The onnx and onnxruntime packages are necessary to fix the dynamic shapes of the exported model. "
-                "You can install them by doing: pip install onnx onnxruntime"
-            )
-
-        import onnx
-        from onnxruntime import GraphOptimizationLevel, InferenceSession, SessionOptions
-
-        allowed_dynamic_axes = set()
-        for input_ in self.inputs.values():
-            allowed_dynamic_axes |= set(input_.values())
-        for output in self.outputs.values():
-            allowed_dynamic_axes |= set(output.values())
-
-        if device.startswith("cuda"):
-            providers = ["CUDAExecutionProvider"]
-        else:
-            providers = ["CPUExecutionProvider"]
-
-        session_options = SessionOptions()
-        session_options.graph_optimization_level = GraphOptimizationLevel.ORT_DISABLE_ALL  # no need to optimize here
-        session = InferenceSession(model_path.as_posix(), providers=providers, sess_options=session_options)
-
-        to_fix = []
-        for output_idx, node in enumerate(session.get_outputs()):
-            for idx, axis in enumerate(node.shape):
-                if isinstance(axis, str) and axis not in allowed_dynamic_axes:
-                    to_fix.append((output_idx, idx))
-
-        # We branch here to avoid doing an unnecessary forward pass.
-        if to_fix:
-            if input_shapes is None:
-                input_shapes = {}
-
-            onnx_input_names = [inp.name for inp in session.get_inputs()]
-            dummy_inputs = self.generate_dummy_inputs(framework="np", **input_shapes)
-            dummy_inputs = self.generate_dummy_inputs_for_validation(dummy_inputs, onnx_input_names)
-            dummy_inputs = self.rename_ambiguous_inputs(dummy_inputs)
-
-            onnx_inputs = {}
-            for name, value in dummy_inputs.items():
-                if isinstance(value, (list, tuple)):
-                    value = self.flatten_output_collection_property(name, value)
-                    onnx_inputs.update(dict(value.items()))
-                else:
-                    onnx_inputs[name] = value
-
-            for name, value in onnx_inputs.items():
-                if value.dtype == np.float32 and dtype == "fp16":
-                    onnx_inputs[name] = onnx_inputs[name].astype(np.float16)
-
-            outputs = session.run(None, onnx_inputs)
-            del session
-
-            onnx_model = onnx.load(model_path.as_posix(), load_external_data=False)
-
-            for output_idx, dim_idx in to_fix:
-                dims = onnx_model.graph.output[output_idx].type.tensor_type.shape.dim
-                dims[dim_idx].dim_value = outputs[output_idx].shape[dim_idx]
-
-            onnx.save(
-                onnx_model,
-                model_path.as_posix(),
-                convert_attribute=True,
-            )
-            del onnx_model
-            gc.collect()
 
     @property
     def torch_to_onnx_input_map(self) -> dict[str, str]:
