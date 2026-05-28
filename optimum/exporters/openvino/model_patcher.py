@@ -9812,6 +9812,9 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
             text_config = self._text_config
             num_full_attn_layers = text_config.layer_types.count("full_attention")
             num_linear_attn_layers = text_config.layer_types.count("linear_attention")
+            output_hidden_states = getattr(self._model.config, "output_hidden_states", False) or getattr(
+                text_config, "output_hidden_states", False
+            )
 
             use_cache = False
             wrapped_cache_params = None
@@ -9843,19 +9846,23 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
                     position_ids=position_ids,
                     past_key_values=wrapped_cache_params,
                     use_cache=use_cache,
+                    output_hidden_states=output_hidden_states,
                 )
-                hidden_states = outputs_lm[0]
-                logits = self._model.lm_head(hidden_states)
+                last_hidden_state = outputs_lm[0]
+                logits = self._model.lm_head(last_hidden_state)
                 past_kv = outputs_lm.past_key_values
+                hidden_states = outputs_lm.hidden_states
             else:
                 causal_lm_output = self.model_orig_forward(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     past_key_values=wrapped_cache_params,
                     use_cache=use_cache,
+                    output_hidden_states=output_hidden_states,
                 )
                 logits = causal_lm_output.logits
                 past_kv = causal_lm_output.past_key_values
+                hidden_states = causal_lm_output.hidden_states
             outputs = {
                 "logits": logits,
             }
@@ -9871,6 +9878,9 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
                     present_key_values.append(past_kv.value_cache[idx])
 
                 outputs["present_key_values"] = present_key_values
+
+            if hidden_states is not None:
+                outputs["hidden_states"] = hidden_states
 
             return outputs
 
