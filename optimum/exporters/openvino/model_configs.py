@@ -18,7 +18,12 @@ from typing import Any, Dict, List, Optional, Union
 
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
-from optimum.exporters.openvino.base import ConfigBehavior, OpenVINOConfig, OpenVINOConfigWithPast, OpenVINOSeq2SeqConfigWithPast
+from optimum.exporters.openvino.base import (
+    ConfigBehavior,
+    OpenVINOConfig,
+    OpenVINOConfigWithPast,
+    OpenVINOSeq2SeqConfigWithPast,
+)
 from optimum.exporters.openvino.config import (
     AudioOpenVINOConfig,
     AudioToTextOpenVINOConfig,

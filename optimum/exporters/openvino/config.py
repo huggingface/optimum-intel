@@ -21,7 +21,12 @@ from typing import Any
 
 from transformers import PretrainedConfig
 
-from optimum.exporters.openvino.base import ConfigBehavior, OpenVINOConfig, OpenVINOConfigWithPast, OpenVINOSeq2SeqConfigWithPast
+from optimum.exporters.openvino.base import (
+    ConfigBehavior,
+    OpenVINOConfig,
+    OpenVINOConfigWithPast,
+    OpenVINOSeq2SeqConfigWithPast,
+)
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import (
     DummyAudioInputGenerator,
@@ -325,9 +330,7 @@ class EncoderDecoderBaseOpenVINOConfig(OpenVINOSeq2SeqConfigWithPast):
         self, reference_model_inputs: dict[str, Any], ov_input_names: list[str]
     ) -> dict[str, Any]:
         if self._behavior is ConfigBehavior.ENCODER:
-            return self._encoder_ov_config.generate_dummy_inputs_for_validation(
-                reference_model_inputs, ov_input_names
-            )
+            return self._encoder_ov_config.generate_dummy_inputs_for_validation(reference_model_inputs, ov_input_names)
         else:
             if self._behavior is ConfigBehavior.DECODER:
                 if "decoder_input_ids" in reference_model_inputs:
@@ -342,6 +345,4 @@ class EncoderDecoderBaseOpenVINOConfig(OpenVINOSeq2SeqConfigWithPast):
                     else:
                         reference_model_inputs.pop("encoder_outputs")
 
-            return self._decoder_ov_config.generate_dummy_inputs_for_validation(
-                reference_model_inputs, ov_input_names
-            )
+            return self._decoder_ov_config.generate_dummy_inputs_for_validation(reference_model_inputs, ov_input_names)

@@ -157,7 +157,9 @@ class OpenVINOConfig(ExporterConfig, ABC):
         if value == "default" and hasattr(self, "DEFAULT_VARIANT"):
             value = self.DEFAULT_VARIANT
         if value not in self.VARIANTS:
-            raise ValueError(f"The variant {value} is not supported for the OpenVINO config {self.__class__.__name__}.")
+            raise ValueError(
+                f"The variant {value} is not supported for the OpenVINO config {self.__class__.__name__}."
+            )
         self._variant = value
 
     @property
