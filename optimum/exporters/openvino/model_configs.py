@@ -4166,6 +4166,13 @@ class SpeechT5ConfigBehavior(str, enum.Enum):
     library_name="transformers",
 )
 class SpeechT5OpenVINOConfig(OnnxSeq2SeqConfigWithPast):
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummyTextInputGenerator,
+        DummySeq2SeqPastKeyValuesGenerator,
+        DummySpeechT5InputGenerator,
+    )
+    _MODEL_PATCHER = SpeechT5ModelPatcher
+
     NORMALIZED_CONFIG_CLASS = NormalizedSeq2SeqConfig.with_args(
         hidden_size="hidden_size",
         num_attention_heads="encoder_attention_heads",
@@ -4173,18 +4180,12 @@ class SpeechT5OpenVINOConfig(OnnxSeq2SeqConfigWithPast):
         decoder_num_layers="decoder_layers",
         allow_new=True,
     )
-    DUMMY_INPUT_GENERATOR_CLASSES = (
-        DummyTextInputGenerator,
-        DummySeq2SeqPastKeyValuesGenerator,
-        DummySpeechT5InputGenerator,
-    )
     DUMMY_PKV_GENERATOR_CLASS = DummySeq2SeqPastKeyValuesGenerator
     VARIANTS = {  # noqa: RUF012
         "with-past": "The export follows the Transformers implementation using the KV cache.",
         "without-past": "The same as `with-past`, just without KV cache support.",
     }
     DEFAULT_VARIANT = "with-past"
-    _MODEL_PATCHER = SpeechT5ModelPatcher
 
     def __init__(
         self,
@@ -4206,8 +4207,9 @@ class SpeechT5OpenVINOConfig(OnnxSeq2SeqConfigWithPast):
             use_past_in_inputs=use_past_in_inputs,
             behavior=behavior,
             preprocessors=preprocessors,
-            is_postnet_and_vocoder=False,
         )
+
+        self.is_postnet_and_vocoder = False
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
@@ -4311,6 +4313,15 @@ class SpeechT5OpenVINOConfig(OnnxSeq2SeqConfigWithPast):
             raise ValueError(
                 "self._behavior is neither encoder, decoder, postnet, or vocoder. This should not happen."
             )
+
+    def overwrite_shape_and_generate_input(
+        self, dummy_input_gen: DummyInputGenerator, input_name: str, framework: str, input_shapes: dict
+    ):
+        dummy_input_gen.batch_size = 1
+        dummy_input = dummy_input_gen.generate(
+            input_name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
+        )
+        return dummy_input
 
 
 @register_in_tasks_manager(
