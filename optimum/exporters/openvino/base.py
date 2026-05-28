@@ -16,17 +16,14 @@
 from __future__ import annotations
 
 import enum
-import gc
 import inspect
 import itertools
 import re
 from abc import ABC
 from collections import OrderedDict
 from collections.abc import Iterable
-from pathlib import Path
 from typing import Any, ClassVar
 
-import numpy as np
 from transformers import PretrainedConfig, PreTrainedModel
 
 from optimum.exporters.base import ExporterConfig
