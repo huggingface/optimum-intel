@@ -5746,7 +5746,9 @@ class SiglipOpenVINOConfig(SiglipOnnxConfig):
     "transformer", *["feature-extraction", "sentence-similarity"], library_name="sentence_transformers"
 )
 class SentenceTransformersTransformerOpenVINOConfig(SentenceTransformersTransformerOnnxConfig):
-    pass
+    def __init__(self, config, **kwargs):
+        super().__init__(config, **kwargs)
+        config.vocab_size = config.get_text_config().vocab_size
 
 
 @register_in_tasks_manager("rembert", *COMMON_TEXT_TASKS)

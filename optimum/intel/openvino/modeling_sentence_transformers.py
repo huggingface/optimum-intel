@@ -13,10 +13,11 @@ from sentence_transformers import SentenceTransformer
 from transformers import AutoProcessor, AutoTokenizer, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
+from optimum.intel.utils.import_utils import is_sentence_transformers_version
+
 from .configuration import OVQuantizationConfigBase
 from .modeling import MODEL_START_DOCSTRING, OVModel
 
-from optimum.intel.utils.import_utils import is_sentence_transformers_version
 
 @add_start_docstrings(
     """
@@ -37,7 +38,7 @@ class OVSentenceTransformer(OVModel):
             self._input_length = SentenceTransformer._input_length
             self._resolve_prompt = MethodType(SentenceTransformer._resolve_prompt, self)
             self.is_singular_input = MethodType(SentenceTransformer.is_singular_input, self)
-            self.modalities = ['text', 'image', 'video', 'message']
+            self.modalities = ["text", "image", "video", "message"]
             self.default_prompt_name = kwargs.get("default_prompt_name", None)
             self.prompts = kwargs.get("prompts", {}) or {}
             self.processor = kwargs.get("processor", None)
@@ -126,7 +127,11 @@ class OVSentenceTransformer(OVModel):
             st_config_path: Optional[str] = None
             try:
                 if os.path.isdir(model_id):
-                    candidate = os.path.join(model_id, subfolder, "config_sentence_transformers.json") if subfolder else os.path.join(model_id, "config_sentence_transformers.json")
+                    candidate = (
+                        os.path.join(model_id, subfolder, "config_sentence_transformers.json")
+                        if subfolder
+                        else os.path.join(model_id, "config_sentence_transformers.json")
+                    )
                     if os.path.isfile(candidate):
                         st_config_path = candidate
                 else:
@@ -289,8 +294,7 @@ class OVSentenceTransformer(OVModel):
             # Fallback: plain tokenization (e.g. for text-only models without a chat template).
             if prompt and modality == "text":
                 inputs = [
-                    (prompt + inp[0],) + tuple(inp[1:]) if isinstance(inp, tuple) else prompt + inp
-                    for inp in inputs
+                    (prompt + inp[0],) + tuple(inp[1:]) if isinstance(inp, tuple) else prompt + inp for inp in inputs
                 ]
             preprocessed = self.tokenize(inputs, **kwargs)
             preprocessed["modality"] = modality
@@ -336,9 +340,7 @@ class OVSentenceTransformer(OVModel):
             user_message = {"role": "user", "content": _content_for_item(inp)}
             sample_messages: List[Dict[str, Any]] = []
             if prompt:
-                sample_messages.append(
-                    {"role": "system", "content": [{"type": "text", "text": prompt}]}
-                )
+                sample_messages.append({"role": "system", "content": [{"type": "text", "text": prompt}]})
             sample_messages.append(user_message)
             messages_batch.append(sample_messages)
         return messages_batch
