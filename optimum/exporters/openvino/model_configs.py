@@ -5905,3 +5905,19 @@ class KokoroOpenVINOConfig(OnnxConfig):
             "waveform": {0: "batch_size", 1: "audio_length"},
             "phonemes": {0: "batch_size", 1: "phoneme_length"},
         }
+
+
+@register_in_tasks_manager(
+    "trocr",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+    ],
+)
+class TrOCROpenVINOConfig(TextSeq2SeqOnnxConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedSeq2SeqConfig.with_args(
+        decoder_num_layers="decoder_layers",
+        num_layers="decoder_layers",
+        decoder_num_attention_heads="decoder_attention_heads",
+        hidden_size="hidden_size",
+    )

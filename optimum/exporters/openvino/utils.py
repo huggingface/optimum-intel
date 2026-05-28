@@ -400,7 +400,6 @@ ONNX_SUPPORTED_ARCHITECTURES = {
     "swin2sr",
     "swinv2",
     "table-transformer",
-    "trocr",
     "visual_bert",
     "vit_mae",
     "vit_msn",
