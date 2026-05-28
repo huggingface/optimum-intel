@@ -226,8 +226,8 @@ def preprocess_past_key_values(past_key_values):
     return past_key_values
 
 
-def postprocess_past_key_values(past_key_values, output_names: list[str]):
-    if is_transformers_version(">=", "4.48") and isinstance(past_key_values, (EncoderDecoderCache, DynamicCache)):
+def postprocess_past_key_values(past_key_values):
+    if isinstance(past_key_values, (EncoderDecoderCache, DynamicCache)):
         if hasattr(past_key_values, "to_legacy_cache"):
             past_key_values = past_key_values.to_legacy_cache()
         elif isinstance(past_key_values, DynamicCache):
@@ -240,16 +240,6 @@ def postprocess_past_key_values(past_key_values, output_names: list[str]):
                     past_key_values.cross_attention_cache.layers,
                 )
             ]
-        else:
-            raise NotImplementedError(f"Unable to serialize class {type(past_key_values)}.")
-
-    if (
-        isinstance(past_key_values, (list, tuple))
-        and isinstance(past_key_values[0], (list, tuple))
-        and not any("encoder.key" in output_name for output_name in output_names)
-    ):
-        past_key_values = tuple(pkv[:2] for pkv in past_key_values)
-
     return past_key_values
 
 
@@ -681,9 +671,7 @@ class ModelPatcher:
                 filtered_outputs[output_name] = outputs
 
             if filtered_outputs.get("past_key_values") is not None:
-                filtered_outputs["past_key_values"] = postprocess_past_key_values(
-                    filtered_outputs["past_key_values"], output_names=output_names
-                )
+                filtered_outputs["past_key_values"] = postprocess_past_key_values(filtered_outputs["past_key_values"])
 
             return filtered_outputs
 
