@@ -20,13 +20,12 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import (
     AutoConfig,
     AutoImageProcessor,
-    AutoModel,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
     PreTrainedTokenizer,
 )
-from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPooling
+from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
 from transformers.utils import ModelOutput
 
@@ -4963,8 +4962,6 @@ class _OVLlama4ForCausalLM(OVModelForVisualCausalLM):
 #
 # and inheritance from Qwen3_5VisionModel is needed for accessing the following method:
 # rot_pos_emb()
-
-
 class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM, Qwen3_5Model, Qwen3_5VisionModel):
     additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
 

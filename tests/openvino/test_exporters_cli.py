@@ -1478,7 +1478,6 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = OVSentenceTransformer.from_pretrained(tmpdir, compile=False, device=OPENVINO_DEVICE)
             self.assertFalse("last_hidden_state" in model.output_names)
 
-
     def test_exporters_cli_open_clip(self):
         model_id = MODEL_NAMES["open-clip"]
         with TemporaryDirectory() as tmpdir:
