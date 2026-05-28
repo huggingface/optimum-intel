@@ -8717,11 +8717,12 @@ def _dflash_resolve_tensor_file(config: PretrainedConfig, tensor_name: str) -> s
             token=token,
             local_files_only=local_files_only,
         )
+    except Exception:
+        filename = "model.safetensors"
+    else:
         with open(index_path) as f:
             weight_map = json.load(f)["weight_map"]
         filename = weight_map[tensor_name]
-    except Exception:
-        filename = "model.safetensors"
 
     return hf_hub_download(
         target_model,
@@ -8746,6 +8747,13 @@ def _dflash_load_target_tensor(config: PretrainedConfig, tensor_names: Tuple[str
         except Exception as error:
             last_error = error
     raise ValueError(f"Could not load any of {tensor_names} from DFlash target model.") from last_error
+
+
+_DFLASH_EMBED_TENSOR_NAMES = (
+    "model.language_model.embed_tokens.weight",
+    "model.embed_tokens.weight",
+    "embed_tokens.weight",
+)
 
 
 class Qwen3DFlashAttention(nn.Module):
@@ -8949,7 +8957,7 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
     def _load_target_weights(self, config):
-        embed_weight = _dflash_load_target_tensor(config, ("model.embed_tokens.weight", "embed_tokens.weight"))
+        embed_weight = _dflash_load_target_tensor(config, _DFLASH_EMBED_TENSOR_NAMES)
         try:
             lm_head_weight = _dflash_load_target_tensor(config, ("lm_head.weight",))
         except ValueError:
