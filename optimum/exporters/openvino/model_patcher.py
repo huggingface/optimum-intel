@@ -294,7 +294,7 @@ def eager_mask_without_vmap(*args, **kwargs) -> Optional[torch.Tensor]:
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/3c307e380ad07ca16903a39e09a47d532cb782d9/src/transformers/models/phimoe/modular_phimoe.py#L57
-def _longrope_forward(self, x, position_ids=None, layer_type=None):
+def _longrope_forward(self, x, position_ids=None, layer_type=None, **kwargs):
     # _compute_longrope_parameters https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/modeling_rope_utils.py#L391
     # transformers >= 5 stores RoPE settings under config.rope_parameters; transformers < 5 (e.g. 4.57) stores
     # them under config.rope_scaling and as plain attributes on the config.
@@ -311,6 +311,7 @@ def _longrope_forward(self, x, position_ids=None, layer_type=None):
             getattr(self.config, "original_max_position_embeddings", self.config.max_position_embeddings),
         )
         rope_parameters.setdefault("partial_rotary_factor", getattr(self.config, "partial_rotary_factor", 1.0))
+
     rope_theta = rope_parameters["rope_theta"]
     long_factor = rope_parameters["long_factor"]
     short_factor = rope_parameters["short_factor"]
@@ -321,9 +322,11 @@ def _longrope_forward(self, x, position_ids=None, layer_type=None):
     head_dim = getattr(self.config, "head_dim", self.config.hidden_size // self.config.num_attention_heads)
     dim = int(head_dim * partial_rotary_factor)
 
-    seq_len = torch.max(position_ids) + 1
+    # needed for transformers < v5 for phimoe
+    seq_len = kwargs.get("seq_len", None)
+    _seq_len = seq_len if position_ids is None else torch.max(position_ids) + 1
     # bool tensor to avoid only one path getting traced
-    is_long = seq_len > original_max
+    is_long = _seq_len > original_max
 
     # Compute the inverse frequencies -- scaled based on the target sequence length
     long_factors = torch.tensor(long_factor, dtype=torch.float32, device=x.device)
@@ -345,12 +348,20 @@ def _longrope_forward(self, x, position_ids=None, layer_type=None):
             attention_factor = 1.0 if factor <= 1.0 else math.sqrt(1 + math.log(factor) / math.log(original_max))
         mscale = attention_factor
 
-    # https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/phimoe/modeling_phimoe.py#L116
-    inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-    position_ids_expanded = position_ids[:, None, :].float()
-    device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-    with torch.autocast(device_type=device_type, enabled=False):
-        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+    if is_transformers_version(">=", "5") or position_ids is not None:
+        # https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/phimoe/modeling_phimoe.py#L116
+        inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
+        position_ids_expanded = position_ids[:, None, :].float()
+        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
+        with torch.autocast(device_type=device_type, enabled=False):
+            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+            emb = torch.cat((freqs, freqs), dim=-1)
+            cos = emb.cos() * mscale
+            sin = emb.sin() * mscale
+    else:
+        # needed for transformers < v5 for phimoe
+        t = torch.arange(_seq_len, device=x.device, dtype=torch.float32)
+        freqs = torch.outer(t, inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1)
         cos = emb.cos() * mscale
         sin = emb.sin() * mscale
@@ -379,18 +390,14 @@ class OVDecoderModelPatcher(ModelPatcher):
             # non-stateful models on cpu and stateful models on npu
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
 
-        if is_transformers_version(">=", "5"):
-            for module in self._model.modules():
-                rope_type = getattr(module, "rope_type", None)
-                if rope_type == "longrope" and isinstance(getattr(module, "config", None), RotaryEmbeddingConfigMixin):
-                    module._rope_orig_forward = module.forward
-                    module.forward = types.MethodType(_longrope_forward, module)
-        else:
-            for module in self._model.modules():
-                rope_type = getattr(module, "rope_type", None)
-                if rope_type == "longrope":
-                    module._rope_orig_forward = module.forward
-                    module.forward = types.MethodType(_longrope_forward, module)
+        for module in self._model.modules():
+            rope_type = getattr(module, "rope_type", None)
+            if rope_type == "longrope" and (
+                is_transformers_version("<", "5")
+                or isinstance(getattr(module, "config", None), RotaryEmbeddingConfigMixin)
+            ):
+                module._rope_orig_forward = module.forward
+                module.forward = types.MethodType(_longrope_forward, module)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
