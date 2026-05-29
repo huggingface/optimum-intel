@@ -79,7 +79,7 @@ class TimmConfig(PretrainedConfig):
         return cls.from_dict(config_dict, **kwargs)
 
 
-class TimmOnnxConfig(VisionOpenVINOConfig):
+class TimmOpenVINOConfig(VisionOpenVINOConfig):
     DEFAULT_TIMM_ONNX_OPSET = 13
     outputs = OrderedDict([("logits", {0: "batch_size"})])
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig

@@ -928,7 +928,6 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         export(
             model=model,
             config=onnx_config,
-            opset=onnx_config.DEFAULT_ONNX_OPSET,
             output=save_dir_path / cls._all_ov_model_paths["model"],
             stateful=stateful,
         )

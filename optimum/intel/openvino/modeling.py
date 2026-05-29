@@ -571,14 +571,14 @@ class OVModelForImageClassification(OVModel):
                     "To load a timm model, please make sure to upgrade your `timm` version to at least 0.9.0, you can upgrade it by running `pip install --upgrade timm`"
                 )
 
-            from .modeling_timm import TimmConfig, TimmForImageClassification, TimmOnnxConfig
+            from .modeling_timm import TimmConfig, TimmForImageClassification, TimmOpenVINOConfig
 
             config = TimmConfig.from_pretrained(model_id, **kwargs)
             #  If locally saved timm model, directly load
             if local_timm_model:
                 return super()._from_pretrained(model_id=model_id, config=config)
             model = TimmForImageClassification.from_pretrained(model_id, **kwargs)
-            onnx_config = TimmOnnxConfig(model.config)
+            onnx_config = TimmOpenVINOConfig(model.config)
 
             return cls._to_load(model=model, config=config, onnx_config=onnx_config, stateful=False, **kwargs)
         else:
