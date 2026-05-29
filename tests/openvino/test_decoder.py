@@ -78,13 +78,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "cohere",
         "qwen2",
         "qwen2_moe",
-        "phi3",
         "gemma2",
         "granite",
         "granitemoe",
     )
 
     SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon_mamba")
+
+    if is_transformers_version(">=", "4.49"):
+        SUPPORTED_ARCHITECTURES += ("phi3",)
 
     if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
