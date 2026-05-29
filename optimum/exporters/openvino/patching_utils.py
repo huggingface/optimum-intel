@@ -459,11 +459,18 @@ def sdpa_mask_without_vmap(batch_size, q_length=None, kv_length=None, q_offset=0
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/masking_utils.py#L433
-def eager_mask_without_vmap(*args, **kwargs) -> torch.Tensor:
+# Specifically for OpenVINO, we use torch.finfo(torch.float16).min instead of torch.finfo(dtype).min
+def eager_mask_without_vmap(*args, **kwargs) -> Optional[torch.Tensor]:
     kwargs.pop("allow_is_causal_skip", None)
     dtype = kwargs.get("dtype", torch.float32)
     mask = sdpa_mask_without_vmap(*args, allow_is_causal_skip=False, **kwargs)
-    mask = torch.where(mask, torch.tensor(0.0, device=mask.device, dtype=dtype), torch.finfo(dtype).min)
+    # we use torch.finfo(torch.float16).min instead torch.finfo(dtype).min to avoid an overflow but not
+    # sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
+    mask = torch.where(
+        mask,
+        torch.tensor(0.0, device=mask.device, dtype=dtype),
+        torch.tensor(torch.finfo(torch.float16).min, device=mask.device, dtype=dtype),
+    )
     return mask
 
 

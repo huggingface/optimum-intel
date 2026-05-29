@@ -52,10 +52,10 @@ from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.openvino.patching_utils import (
     UNSUPPORTED_OPS_PATCHING_SPEC,
     ModelPatcher,
+    eager_mask_without_vmap,
     override_arguments,
     postprocess_past_key_values,
     preprocess_past_key_values,
-    sdpa_mask_without_vmap,
 )
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
@@ -505,22 +505,6 @@ def patch_cos_sin_cached_fp32(model):
                     device=layer.self_attn.rotary_emb.inv_freq.device,
                     dtype=torch.float32,
                 )
-
-
-# Adapted from https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/masking_utils.py#L433
-# Specifically for OpenVINO, we use torch.finfo(torch.float16).min instead of torch.finfo(dtype).min
-def eager_mask_without_vmap(*args, **kwargs) -> Optional[torch.Tensor]:
-    kwargs.pop("allow_is_causal_skip", None)
-    dtype = kwargs.get("dtype", torch.float32)
-    mask = sdpa_mask_without_vmap(*args, allow_is_causal_skip=False, **kwargs)
-    # we use torch.finfo(torch.float16).min instead torch.finfo(dtype).min to avoid an overflow but not
-    # sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
-    mask = torch.where(
-        mask,
-        torch.tensor(0.0, device=mask.device, dtype=dtype),
-        torch.tensor(torch.finfo(torch.float16).min, device=mask.device, dtype=dtype),
-    )
-    return mask
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/3c307e380ad07ca16903a39e09a47d532cb782d9/src/transformers/models/phimoe/modular_phimoe.py#L57
