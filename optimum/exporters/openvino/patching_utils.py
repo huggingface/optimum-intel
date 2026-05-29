@@ -414,11 +414,6 @@ def traceable_scaled_dot_product_attention(
     return attn_weights
 
 
-# No-op bfloat16 casting to avoid issues with legacy ONNX export which cast to complex128
-def noop_bfloat16_casting(self):
-    return self
-
-
 original_movedim = torch.Tensor.movedim
 
 
@@ -452,7 +447,6 @@ UNSUPPORTED_OPS_PATCHING_SPEC = [
     PatchingSpec(torch, "rms_norm", onnx_compatible_rms_norm, torch.rms_norm),
     PatchingSpec(torch.Tensor, "unfold", onnx_compatible_unfold, torch.Tensor.unfold),
     PatchingSpec(torch.linalg, "norm", onnx_compatible_linalg_norm, torch.linalg.norm),
-    PatchingSpec(torch.Tensor, "bfloat16", noop_bfloat16_casting, torch.Tensor.bfloat16),
     PatchingSpec(torch.Tensor, "movedim", onnx_compatible_movedim, torch.Tensor.movedim),
     PatchingSpec(torch.Tensor, "repeat_interleave", onnx_compatible_repeat_interleave, torch.Tensor.repeat_interleave),
     # TracerWarning: Using len to get tensor shape might cause the trace to be incorrect. Recommended usage would be tensor.shape[0]. Passing a tensor of different shape might lead to errors or silently give incorrect results.
