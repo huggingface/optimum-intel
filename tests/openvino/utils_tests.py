@@ -352,15 +352,11 @@ MODEL_NAMES = {
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
-    "qwen3_coder_dflash": "z-lab/Qwen3-Coder-30B-A3B-DFlash",
     "qwen3_vl_eagle3": "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
     "videochat_flash_qwen": "optimum-intel-internal-testing/tiny-videochat-flash-qwen",
 }
 
 EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7B")}
-DFLASH_MODELS = {
-    "qwen3_coder_dflash": ("z-lab/Qwen3-Coder-30B-A3B-DFlash", "Qwen/Qwen3-Coder-30B-A3B-Instruct")
-}
 
 # VLM-based Eagle3 draft models (AngelSlim Eagle3LlamaForCausalLM architecture).
 # These use Qwen3-VL MRoPE and target VLM models for speculative decoding.
@@ -578,7 +574,6 @@ REMOTE_CODE_MODELS = (
     "minicpm3",
     "deepseek",
     "qwen3_eagle3",
-    "qwen3_coder_dflash",
     "qwen3_vl_eagle3",
     "qwen3_asr",
     "videochat_flash_qwen",

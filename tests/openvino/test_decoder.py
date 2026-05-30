@@ -11,7 +11,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, 
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
 from utils_tests import (
-    DFLASH_MODELS,
     EAGLE3_MODELS,
     F32_CONFIG,
     MODEL_NAMES,
@@ -936,116 +935,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_outputs.past_key_values, tuple)
         self.assertEqual(ov_model.stateful, True)
         self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
-
-        del ov_model
-        gc.collect()
-
-    @parameterized.expand(DFLASH_MODELS.items())
-    @pytest.mark.skipif(is_transformers_version("<", "4.57"), reason="DFlash requires transformers >= 4.57")
-    @pytest.mark.skipif("DFLASH_DEBUG_BUNDLE" not in os.environ, reason="Set DFLASH_DEBUG_BUNDLE to run DFlash tests")
-    @pytest.mark.run_slow
-    @slow
-    def test_load_and_infer_stateful_with_dflash_debug_bundle(self, model_arch, model_pair):
-        draft_model_id, target_model_id = model_pair
-        bundle = torch.load(os.environ["DFLASH_DEBUG_BUNDLE"], map_location="cpu")
-
-        ov_model_path = os.environ.get("DFLASH_OV_MODEL_DIR")
-        if ov_model_path:
-            ov_model = OVModelForCausalLM.from_pretrained(
-                ov_model_path,
-                use_cache=True,
-                stateful=True,
-                device=OPENVINO_DEVICE,
-            )
-        else:
-            ov_model = OVModelForCausalLM.from_pretrained(
-                draft_model_id,
-                export=True,
-                trust_remote_code=True,
-                dflash_target_model=target_model_id,
-                use_cache=True,
-                stateful=True,
-                device=OPENVINO_DEVICE,
-            )
-        self.assertTrue(ov_model.stateful)
-        if hasattr(ov_model, "model"):
-            self.assertEqual(ov_model.model.get_rt_info(["dflash", "cache_policy"]).value, "committed_prefix")
-            input_names = {name for model_input in ov_model.model.inputs for name in model_input.get_names()}
-            output_names = {name for model_output in ov_model.model.outputs for name in model_output.get_names()}
-            self.assertFalse(any("past_key_values" in name for name in input_names))
-            self.assertFalse(any("present" in name for name in output_names))
-
-        steps = bundle.get("steps")
-        if steps is None:
-            steps = [
-                {
-                    "input_ids": bundle["input_ids"],
-                    "hidden_states": bundle["hidden_states"],
-                    "position_ids": bundle["position_ids"],
-                    "expected_logits": bundle["expected_logits"],
-                }
-            ]
-            if "next_input_ids" in bundle:
-                steps.append(
-                    {
-                        "input_ids": bundle["next_input_ids"],
-                        "hidden_states": bundle["next_hidden_states"],
-                        "position_ids": bundle["next_position_ids"],
-                        "expected_logits": bundle["next_expected_logits"],
-                    }
-                )
-        min_debug_steps = int(os.environ.get("DFLASH_MIN_DEBUG_STEPS", "3"))
-        self.assertGreaterEqual(
-            len(steps),
-            min_debug_steps,
-            "Regenerate DFLASH_DEBUG_BUNDLE with the updated multi-step extractor.",
-        )
-
-        past_key_values = None
-        for idx, step in enumerate(steps):
-            with self.subTest(step=idx):
-                ov_outputs = ov_model(
-                    input_ids=step["input_ids"],
-                    hidden_states=step["hidden_states"],
-                    position_ids=step["position_ids"],
-                    past_key_values=past_key_values,
-                )
-                expected_logits = step.get(
-                    "original_cached_logits", step.get("expected_logits_cached", step["expected_logits"])
-                )
-                if "expected_logits_full_prefix" in step:
-                    torch.testing.assert_close(
-                        step["expected_logits_full_prefix"].float(),
-                        expected_logits.float(),
-                        rtol=float(os.environ.get("DFLASH_PYTORCH_CACHE_RTOL", os.environ.get("DFLASH_RTOL", "5e-2"))),
-                        atol=float(os.environ.get("DFLASH_PYTORCH_CACHE_ATOL", os.environ.get("DFLASH_ATOL", "5e-2"))),
-                    )
-                self.assertEqual(tuple(ov_outputs.logits.shape), tuple(expected_logits.shape))
-                torch.testing.assert_close(
-                    ov_outputs.logits.float(),
-                    expected_logits.float(),
-                    rtol=float(os.environ.get("DFLASH_RTOL", "5e-2")),
-                    atol=float(os.environ.get("DFLASH_ATOL", "5e-2")),
-                )
-                self.assertTrue("past_key_values" in ov_outputs)
-                self.assertIsInstance(ov_outputs.past_key_values, tuple)
-                self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
-                past_key_values = ov_outputs.past_key_values
-
-        first_step = steps[0]
-        reset_outputs = ov_model(
-            input_ids=first_step["input_ids"],
-            hidden_states=first_step["hidden_states"],
-            position_ids=first_step["position_ids"],
-        )
-        torch.testing.assert_close(
-            reset_outputs.logits.float(),
-            first_step.get(
-                "original_cached_logits", first_step.get("expected_logits_cached", first_step["expected_logits"])
-            ).float(),
-            rtol=float(os.environ.get("DFLASH_RTOL", "5e-2")),
-            atol=float(os.environ.get("DFLASH_ATOL", "5e-2")),
-        )
 
         del ov_model
         gc.collect()
