@@ -263,6 +263,7 @@ class LLMPipelineTestCase(unittest.TestCase):
         set_seed(42)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=trust_remote_code).eval()
 
+
         set_seed(42)
         main_export(
             model_name_or_path=model_id,
@@ -272,6 +273,7 @@ class LLMPipelineTestCase(unittest.TestCase):
             output=self.temp_dir,
         )
         genai_model = LLMPipeline(self.temp_dir, device=OPENVINO_DEVICE, **TEST_CONFIG)
+
 
         prompt = "Paris is the capital of"
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
