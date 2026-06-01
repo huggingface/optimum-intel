@@ -294,6 +294,15 @@ def parse_args_openvino(parser: "ArgumentParser"):
         type=json.loads,
         help=("Any kwargs passed to the model forward, or used to customize the export for a given model."),
     )
+    optional_group.add_argument(
+        "--dflash-target-model",
+        type=str,
+        default=None,
+        help=(
+            "Target model ID or local path used when exporting DFlash draft models. Only the target token "
+            "embedding and lm_head weights are loaded."
+        ),
+    )
 
 
 def no_compression_parameter_provided(args):
@@ -479,6 +488,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 library_name=library_name,
                 variant=self.args.variant,
                 model_kwargs=self.args.model_kwargs,
+                dflash_target_model=self.args.dflash_target_model,
                 # **input_shapes,
             )
             if apply_main_quantize:

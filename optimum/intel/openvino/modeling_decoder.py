@@ -347,6 +347,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             model_loading_kwargs["torch_dtype"] = torch_dtype
 
         variant = kwargs.pop("variant", None)
+        dflash_target_model = kwargs.pop("dflash_target_model", None)
 
         main_export(
             model_name_or_path=model_id,
@@ -364,6 +365,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             model_loading_kwargs=model_loading_kwargs,
             library_name=cls._library_name,
             variant=variant,
+            dflash_target_model=dflash_target_model,
         )
 
         if config.model_type == "phi3" and config.max_position_embeddings != getattr(
@@ -553,7 +555,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             else:
                 position_ids = np.cumsum(attention_mask, axis=1) - 1
                 position_ids[attention_mask == 0] = 1
-            if past_key_values:
+            dflash_hidden_states = kwargs.get("hidden_states", None)
+            if past_key_values and dflash_hidden_states is not None and "hidden_states" in self.input_names:
+                position_ids = position_ids[:, -(input_ids.shape[1] + dflash_hidden_states.shape[1]) :]
+            elif past_key_values:
                 position_ids = position_ids[:, -input_ids.shape[1] :]
 
             inputs["position_ids"] = position_ids
@@ -568,7 +573,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if "hidden_states" in self.input_names:
             hidden_states = kwargs.get("hidden_states", None)
             if hidden_states is None:
-                hs_shape = (batch_size, input_ids.shape[1], self.config.hidden_size * 3)
+                dflash_config = getattr(self.config, "dflash_config", None)
+                if dflash_config is not None:
+                    raise ValueError("DFlash draft models require `hidden_states` to be passed to the forward call.")
+                else:
+                    hidden_size = self.config.hidden_size * 3
+                hs_shape = (batch_size, input_ids.shape[1], hidden_size)
                 hidden_states = torch.zeros(hs_shape, device=self.device, dtype=torch.float32)
             inputs["hidden_states"] = hidden_states
 
