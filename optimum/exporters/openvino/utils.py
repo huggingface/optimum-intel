@@ -324,6 +324,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "qwen2_vl",
     "qwen2_5_vl",
     "qwen3_vl",
+    "qwen3_vl_moe",
     "qwen3_5",
     "qwen3_5_moe",
     "got_ocr2",

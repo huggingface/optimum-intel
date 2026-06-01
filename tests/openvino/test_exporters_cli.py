@@ -192,6 +192,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             [
                 ("text-generation", "lfm2_moe"),
                 ("text-generation-with-past", "lfm2_moe"),
+                ("image-text-to-text", "qwen3_vl_moe"),
             ]
         )
 
@@ -229,6 +230,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "bitnet": 2,
         "granitemoehybrid": 2,
         "qwen3_vl_eagle3": 0,
+        "qwen3_vl_moe": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {

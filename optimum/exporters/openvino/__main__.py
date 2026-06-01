@@ -113,7 +113,7 @@ def infer_task(
                         # should use image-text-to-text task for proper inputs_embeds/3D position_ids export.
                         if "Eagle3LlamaForCausalLM" in config.architectures and (
                             getattr(config, "modal_type", "") == "VLM"
-                            or getattr(config, "target_model_type", "") in {"qwen2_vl", "qwen3_vl"}
+                            or getattr(config, "target_model_type", "") in {"qwen2_vl", "qwen3_vl", "qwen3_vl_moe"}
                         ):
                             task = "image-text-to-text"
                         else:

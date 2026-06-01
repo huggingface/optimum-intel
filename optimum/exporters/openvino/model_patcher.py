@@ -4406,6 +4406,41 @@ class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
+class Qwen3VLMoeTextModelPatcher(OVDecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        from transformers.models.qwen3_vl_moe.modeling_qwen3_vl_moe import Qwen3VLMoeTextExperts
+
+        self._orig_experts_forward = Qwen3VLMoeTextExperts.forward
+        Qwen3VLMoeTextExperts.forward = lfm2_moe_experts_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        from transformers.models.qwen3_vl_moe.modeling_qwen3_vl_moe import Qwen3VLMoeTextExperts
+
+        Qwen3VLMoeTextExperts.forward = self._orig_experts_forward
+        super().__exit__(exc_type, exc_value, traceback)
+
+
+class Qwen3VLMoeLanguageModelPatcher(Qwen3VLLanguageModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+        from transformers.models.qwen3_vl_moe.modeling_qwen3_vl_moe import Qwen3VLMoeTextExperts
+
+        self._orig_experts_forward = Qwen3VLMoeTextExperts.forward
+        Qwen3VLMoeTextExperts.forward = lfm2_moe_experts_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        from transformers.models.qwen3_vl_moe.modeling_qwen3_vl_moe import Qwen3VLMoeTextExperts
+
+        Qwen3VLMoeTextExperts.forward = self._orig_experts_forward
+        super().__exit__(exc_type, exc_value, traceback)
+
+
 def patch_qwen2vl_vision_blocks(model, force_new_behaviour=False):
     if not force_new_behaviour and is_transformers_version("<=", "4.48.99"):
         # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L390
@@ -4645,7 +4680,11 @@ class Qwen3VLVisionEmbMergerPatcher(ModelPatcher):
                     )
                     deepstack_feature_lists.append(deepstack_feature)
             last_hidden_state = self.merger(hidden_states)
-            return last_hidden_state, torch.stack(deepstack_feature_lists, dim=0)
+            if len(deepstack_feature_lists) == 0:
+                deepstack_feature_tensor = hidden_states.new_empty((0,) + hidden_states.shape)
+            else:
+                deepstack_feature_tensor = torch.stack(deepstack_feature_lists, dim=0)
+            return last_hidden_state, deepstack_feature_tensor
 
         model.forward = types.MethodType(image_embed_forward, model)
         super().__init__(config, model, model_kwargs)

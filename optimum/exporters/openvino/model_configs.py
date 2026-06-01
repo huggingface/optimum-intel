@@ -218,6 +218,8 @@ from .model_patcher import (
     Qwen3ASRModelPatcher,
     Qwen3MoeModelPatcher,
     Qwen3NextModelPatcher,
+    Qwen3VLMoeLanguageModelPatcher,
+    Qwen3VLMoeTextModelPatcher,
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
     QwenModelPatcher,
@@ -497,6 +499,13 @@ class DummyQwen3VLLMInputGenerator(DummyTextInputGenerator):
         float_dtype: str = "fp32",
         bool_dtype: str = "bool",
     ):
+        if input_name == "position_ids":
+            return self.constant_tensor(
+                shape=[3, self.batch_size, self.sequence_length],
+                framework=framework,
+                value=0,
+                dtype=DTYPE_MAPPER.pt(int_dtype),
+            )
         if input_name == "deepstack_visual_embeds":
             return self.random_float_tensor(
                 [self.num_layers, 2 * self.sequence_length, self.embed_dim], framework=framework, dtype=float_dtype
@@ -533,6 +542,19 @@ class Qwen3VLTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         common_inputs["visual_pos_masks"] = {0: "batch_size", 1: "sequence_length"}
         common_inputs["deepstack_visual_embeds"] = {0: "num_layers", 1: "visual_seqlen"}
         return common_inputs
+
+
+@register_in_tasks_manager(
+    "qwen3_vl_moe_text",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class Qwen3VLMoeTextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "5.0.0"
+    _MODEL_PATCHER = Qwen3VLMoeTextModelPatcher
 
 
 @register_in_tasks_manager(
@@ -4189,6 +4211,62 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
                 "qwen3_vl_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
             ).outputs
         raise Exception("Unknown Qwen3VL behavior type.")
+
+
+@register_in_tasks_manager(
+    "qwen3_vl_moe",
+    *["image-text-to-text"],
+    library_name="transformers",
+)
+class Qwen3VLMoeOpenVINOConfig(Qwen3VLOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "5.0.0"
+
+    def with_behavior(
+        self,
+        behavior: Union[str, QwenVLConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
+
+        if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "qwen3_vl_moe_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == QwenVLConfigBehavior.LANGUAGE:
+            config = get_vlm_text_generation_config(
+                "qwen3_vl_moe_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Qwen3VLMoeLanguageModelPatcher,
+                dummy_input_generator=DummyQwen3VLLMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+            )
+            config._normalized_config.deepstack_visual_indexes = self._orig_config.vision_config.deepstack_visual_indexes
+            return config
+
+        if behavior in (
+            QwenVLConfigBehavior.VISION_EMBEDDINGS,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS_POS,
+        ):
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == QwenVLConfigBehavior.LANGUAGE:
+            return get_vlm_internal_text_generation_config(
+                "qwen3_vl_moe_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
+            ).outputs
+        return super().outputs
 
 
 @register_in_tasks_manager(

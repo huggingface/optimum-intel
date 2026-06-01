@@ -196,7 +196,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
             if self.config.model_type in ["qwen3_5", "qwen3_5_moe"] and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 4, axis=0)
-            elif self.config.model_type in ["qwen2_vl", "qwen3_vl"] and position_ids.ndim != 3:
+            elif self.config.model_type in ["qwen2_vl", "qwen3_vl", "qwen3_vl_moe"] and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
 
             inputs["position_ids"] = position_ids
@@ -209,7 +209,12 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
         if "deepstack_visual_embeds" in self.input_names:
             if deepstack_visual_embeds is not None:
-                inputs["deepstack_visual_embeds"] = torch.Tensor(deepstack_visual_embeds)
+                deepstack_tensor = torch.Tensor(deepstack_visual_embeds)
+                if deepstack_tensor.numel() == 0:
+                    num_layers = len(self.config.vision_config.deepstack_visual_indexes)
+                    emd_dim = self.config.text_config.hidden_size
+                    deepstack_tensor = torch.zeros((num_layers, 1, emd_dim), dtype=torch.float32)
+                inputs["deepstack_visual_embeds"] = deepstack_tensor
             else:
                 num_layers = len(self.config.vision_config.deepstack_visual_indexes)
                 emd_dim = self.config.text_config.hidden_size
@@ -795,7 +800,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
         # Prepare additional kwargs for qwen3_vl models
         additional_kwargs = {}
-        if self.config.model_type in ("qwen3_vl",) and extra_outputs:
+        if self.config.model_type in ("qwen3_vl", "qwen3_vl_moe") and extra_outputs:
             additional_kwargs["visual_pos_masks"] = extra_outputs[0]
             additional_kwargs["deepstack_visual_embeds"] = extra_outputs[1]
 
@@ -5840,6 +5845,8 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "phi4_multimodal": _OVPhi4MMForCausalLM,
     "llama4": _OVLlama4ForCausalLM,
     "qwen3_vl": _OVQwen3VLForCausalLM,
+    "qwen3_vl_moe": _OVQwen3VLForCausalLM,
+    "qwen3_vl_moe_text": _OVQwen3VLForCausalLM,
     "qwen3_5": _OVQwen3_5ForCausalLM,
     "qwen3_5_text": _OVQwen3_5ForCausalLM,
     "qwen3_5_moe": _OVQwen3_5ForCausalLM,
