@@ -841,6 +841,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     "Could not identify `in_channels` from the VAE encoder configuration, to statically reshape the VAE encoder please provide a configuration."
                 )
                 self.is_dynamic = True
+        if self.__class__.__name__ == "OVLTXImageToVideoPipeline":
+            num_frames = 1
         shapes = {
             model.inputs[0]: [batch_size, in_channels, height, width]
             if model.inputs[0].get_partial_shape().rank.get_length() == 4
