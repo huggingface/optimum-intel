@@ -164,13 +164,57 @@ else:
     _prepare_padding_mask_slice = False
 
 
+# Custom vectorized implementation of sdpa_mask without using vmap
+def _orig_sdpa_mask_without_vmap(
+    batch_size: int,
+    cache_position: torch.Tensor,
+    kv_length: int,
+    kv_offset: int = 0,
+    mask_function: Callable | None = None,
+    attention_mask: torch.Tensor | None = None,
+    local_size: int | None = None,
+    allow_is_causal_skip: bool = True,
+    **kwargs,
+) -> torch.Tensor | None:
+    if mask_function is None:
+        mask_function = causal_mask_function
+
+    q_length = cache_position.shape[0]
+    # Potentially pad the 2D mask, and slice it correctly
+    if _prepare_padding_mask_slice:
+        padding_mask = prepare_padding_mask(attention_mask, kv_length, kv_offset, _slice=False)
+    else:
+        padding_mask = prepare_padding_mask(attention_mask, kv_length, kv_offset)
+
+    # Under specific conditions, we can avoid materializing the mask, instead relying on the `is_causal` argument
+    if allow_is_causal_skip and _ignore_causal_mask_sdpa(padding_mask, q_length, kv_length, kv_offset, local_size):
+        return None
+
+    # Potentially add the padding 2D mask
+    if padding_mask is not None:
+        mask_function = and_masks(mask_function, padding_mask_function(padding_mask))
+
+    # Create broadcatable indices
+    device = cache_position.device
+    q_indices = cache_position[None, None, :, None]
+    head_indices = torch.arange(1, dtype=torch.long, device=device)[None, :, None, None]
+    batch_indices = torch.arange(batch_size, dtype=torch.long, device=device)[:, None, None, None]
+    kv_indices = torch.arange(kv_length, dtype=torch.long, device=device)[None, None, None, :] + kv_offset
+    # Apply mask function element-wise through broadcasting
+    causal_mask = mask_function(batch_indices, head_indices, q_indices, kv_indices)
+    # Expand the mask to match batch size and query length if they weren't used in the mask function
+    causal_mask = causal_mask.expand(batch_size, -1, q_length, kv_length)
+
+    return causal_mask
+
+
 # Compatibility wrapper for sdpa_mask_without_vmap from optimum.
 # The installed optimum version expects (batch_size, cache_position: Tensor, kv_length, ...),
 # but transformers >= 5.5 passes (batch_size, q_length: int, kv_length: int, q_offset: int, ...).
 def sdpa_mask_without_vmap(**kwargs):
     kwargs.pop("use_vmap", None)
     if is_transformers_version("<", "5"):
-        return sdpa_mask_without_vmap_legacy(**kwargs)
+        return _orig_sdpa_mask_without_vmap(**kwargs)
     elif (
         is_transformers_version(">=", "5.4")
         and is_transformers_version("<", "5.9")
