@@ -905,7 +905,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         cls,
         model,
         config: PretrainedConfig,
-        onnx_config: ExportConfig,
+        exporter_config: ExportConfig,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -924,10 +924,10 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             )
             compile_only = False
 
-        # Export the model to the ONNX format
+        # Export the model to the OpenVINO format
         export(
             model=model,
-            config=onnx_config,
+            config=exporter_config,
             output=save_dir_path / cls._all_ov_model_paths["model"],
             stateful=stateful,
         )
