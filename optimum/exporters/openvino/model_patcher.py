@@ -50,7 +50,6 @@ from transformers.utils import ModelOutput
 from optimum.exporters.openvino._ov_ops import convert_recurrent_attention_cell
 from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.openvino.patching_utils import (
-    UNSUPPORTED_OPS_PATCHING_SPEC,
     ModelPatcher,
     eager_mask_without_vmap,
     override_arguments,
@@ -266,21 +265,6 @@ def _get_feat_extract_output_lengths_patched(self, input_lengths: torch.LongTens
 def _get_model_attribute(model, name):
     target = getattr(model, "model", model) if is_transformers_version(">=", "5") else model
     return getattr(target, name)
-
-
-for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
-    if spec.name in {
-        # openvino-exporter-specific fixes
-        "triu",
-        "tril",
-        "norm",
-        "unfold",
-        "movedim",
-        "rms_norm",
-        "repeat_interleave",
-        "scaled_dot_product_attention",
-    }:
-        UNSUPPORTED_OPS_PATCHING_SPEC.pop(idx)
 
 
 # Original code: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/integrations/moe.py#L98

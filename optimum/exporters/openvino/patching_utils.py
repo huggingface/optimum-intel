@@ -156,123 +156,6 @@ class PatchingSpec:
     op_wrapper: Callable | None = None
 
 
-# An ONNX-export-compatible version of `tensor.unfold`. Without this, we get:
-# torch.onnx.errors.SymbolicValueError: Unsupported: ONNX export of operator Unfold, input size not accessible.
-# See https://github.com/pytorch/pytorch/issues/81871 for more information
-def onnx_compatible_unfold(input_tensor, dimension, size, step):
-    """Custom implementation of torch.unfold without using torch.unfold.
-
-    Args:
-        input_tensor (torch.Tensor): The input tensor.
-        dimension (int): The dimension to unfold.
-        size (int): The size of each slice.
-        step (int): The step size between slices.
-
-    Returns:
-        torch.Tensor: The unfolded tensor.
-    """
-    # Check if dimension is within the valid range
-    if not (-input_tensor.dim() <= dimension < input_tensor.dim()):
-        raise ValueError(
-            f"Dimension out of range (expected to be in range of [{-input_tensor.dim()}, {input_tensor.dim() - 1}], but got {dimension})"
-        )
-
-    # Normalize negative dimension
-    dimension = dimension % input_tensor.dim()
-
-    # Compute the shape of the unfolded output
-    input_size = input_tensor.size(dimension)
-    num_slices = (input_size - size) // step + 1
-
-    # Permute dimension to the end for easier indexing
-    input_tensor = input_tensor.transpose(dimension, -1)
-
-    # Extract slices
-    slices = []
-    for i in range(num_slices):
-        start = i * step
-        end = start + size
-        slices.append(input_tensor[..., start:end])
-
-    # Stack slices and permute dimensions back
-    result = torch.stack(slices, dim=-2).transpose(dimension, -2)
-    return result
-
-
-# An ONNX-export-compatible version of `tensor.repeat_interleave`.
-# Without this, we get the following error: https://github.com/pytorch/pytorch/issues/145100
-# NOTE: This implementation is only necessary for export with dynamo=False (dynamo=True works correctly).
-# and can be removed once Optimum switches to dynamo-based exports
-def onnx_compatible_repeat_interleave(input_tensor, repeats, dim=None, output_size=None):  # noqa: D417
-    """Custom implementation of torch.repeat_interleave without using torch.repeat_interleave.
-
-    Args:
-        input_tensor (torch.Tensor): The input tensor.
-        repeats (int or torch.Tensor): The number of repetitions for each element.
-        dim (int, optional): The dimension along which to repeat. Defaults to None.
-
-    Returns:
-        torch.Tensor: The repeated tensor.
-    """
-    if isinstance(repeats, int) or (torch.is_tensor(repeats) and repeats.dim() == 0):
-        if dim is None:
-            return input_tensor.flatten().unsqueeze(1).expand(-1, repeats).flatten()
-        repeats = torch.full((input_tensor.shape[dim],), repeats, dtype=torch.long, device=input_tensor.device)
-
-    if dim is None:
-        return onnx_compatible_repeat_interleave(input_tensor.flatten(), repeats, 0)
-
-    if dim != 0:
-        input_tensor = input_tensor.transpose(0, dim)
-
-    # Create expand mask
-    max_repeats = repeats.max()
-    expanded = input_tensor.unsqueeze(1).expand(-1, max_repeats, *input_tensor.shape[1:])
-    mask = torch.arange(max_repeats, device=input_tensor.device) < repeats.unsqueeze(1)
-    result = expanded[mask]
-
-    if dim != 0:
-        result = result.transpose(0, dim)
-
-    return result
-
-
-# Custom implementation of torch.linalg.matrix_norm not using torch.linalg.matrix_norm, torch.norm or torch.linalg.norm.
-def onnx_compatible_linalg_norm(x, ord=2, dim=None, keepdim=False, *, dtype=None, out=None) -> torch.Tensor:
-    if ord != 2:
-        raise ValueError(
-            f"Only ord=2 is supported by onnx_compatible_linalg_norm, but got ord={ord}. "
-            "Please extend this function to support other norms."
-        )
-
-    if dim is None:
-        dim = (-2, -1)
-
-    norm = torch.sqrt(torch.sum(torch.square(x), dim=dim, keepdim=keepdim))
-
-    if dtype is not None:
-        norm = norm.to(dtype)
-    if out is not None:
-        out.copy_(norm)
-
-    return norm
-
-
-def onnx_compatible_rms_norm(input, normalized_shape, weight=None, eps=None):
-    if eps is None:
-        eps = torch.finfo(input.dtype).eps
-
-    axis = -len(normalized_shape)
-    mean_square = torch.mean(torch.square(input), dim=axis, keepdim=True)
-    rms = torch.sqrt(mean_square + eps)
-    output = input / rms
-
-    if weight is not None:
-        output = output * weight
-
-    return output
-
-
 # A patched version of https://github.com/huggingface/transformers/blob/v4.53.2/src/transformers/masking_utils.py#L602
 # That returns a tensor of zeros with the same shape as position_ids indicating no packed sequence indices.
 def find_packed_sequence_indices_patched(position_ids: torch.Tensor) -> torch.Tensor:
@@ -367,65 +250,6 @@ def eager_mask_without_vmap(*args, **kwargs):
     return mask
 
 
-original_triu = torch.triu
-original_tril = torch.tril
-
-
-# Custom implementation of torch.tril that doesn't fail on int32 tensors.
-def onnx_compatible_tril(input_tensor: torch.Tensor, *args, **kwargs) -> torch.Tensor:
-    if input_tensor.dtype == torch.int32:
-        return original_tril(input_tensor.to(torch.int64), *args, **kwargs).to(torch.int32)
-    else:
-        return original_tril(input_tensor, *args, **kwargs)
-
-
-# Custom implementation of torch.triu that doesn't fail on int32 tensors.
-def onnx_compatible_triu(input_tensor: torch.Tensor, *args, **kwargs) -> torch.Tensor:
-    if input_tensor.dtype == torch.int32:
-        return original_triu(input_tensor.to(torch.int64), *args, **kwargs).to(torch.int32)
-    else:
-        return original_triu(input_tensor, *args, **kwargs)
-
-
-original_scaled_dot_product_attention = torch.nn.functional.scaled_dot_product_attention
-
-
-# A patched `torch.nn.functional.scaled_dot_product_attention` that doesn't fail during tracing
-# from passing `is_causal` as a tensor (which is usually obtained with tensor shapes comparisons).
-def traceable_scaled_dot_product_attention(
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    attn_mask: torch.Tensor | None = None,
-    dropout_p: float = 0.0,
-    is_causal: bool = False,
-    **kwargs,
-) -> torch.Tensor:
-    if isinstance(is_causal, torch.Tensor):
-        is_causal = is_causal.item()
-
-    if "enable_gqa" in kwargs:
-        kwargs.pop("enable_gqa")
-
-    attn_weights = original_scaled_dot_product_attention(
-        query=query, key=key, value=value, attn_mask=attn_mask, dropout_p=dropout_p, is_causal=is_causal, **kwargs
-    )
-
-    return attn_weights
-
-
-original_movedim = torch.Tensor.movedim
-
-
-def onnx_compatible_movedim(self: torch.Tensor, dim1, dim2) -> torch.Tensor:
-    dim = self.dim()
-    if dim1 < 0:
-        dim1 += dim
-    if dim2 < 0:
-        dim2 += dim
-    return original_movedim(self, dim1, dim2)
-
-
 def patched_dynamic_layer_update(
     self, key_states: torch.Tensor, value_states: torch.Tensor, cache_kwargs: dict[str, Any] | None = None
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -442,21 +266,8 @@ def patched_dynamic_layer_update(
 
 
 UNSUPPORTED_OPS_PATCHING_SPEC = [
-    PatchingSpec(torch, "tril", onnx_compatible_tril, torch.tril),
-    PatchingSpec(torch, "triu", onnx_compatible_triu, torch.triu),
-    PatchingSpec(torch, "rms_norm", onnx_compatible_rms_norm, torch.rms_norm),
-    PatchingSpec(torch.Tensor, "unfold", onnx_compatible_unfold, torch.Tensor.unfold),
-    PatchingSpec(torch.linalg, "norm", onnx_compatible_linalg_norm, torch.linalg.norm),
-    PatchingSpec(torch.Tensor, "movedim", onnx_compatible_movedim, torch.Tensor.movedim),
-    PatchingSpec(torch.Tensor, "repeat_interleave", onnx_compatible_repeat_interleave, torch.Tensor.repeat_interleave),
     # TracerWarning: Using len to get tensor shape might cause the trace to be incorrect. Recommended usage would be tensor.shape[0]. Passing a tensor of different shape might lead to errors or silently give incorrect results.
     PatchingSpec(torch.Tensor, "__len__", lambda x: x.shape[0], torch.Tensor.__len__),
-    PatchingSpec(
-        torch.nn.functional,
-        "scaled_dot_product_attention",
-        traceable_scaled_dot_product_attention,
-        torch.nn.functional.scaled_dot_product_attention,
-    ),
 ]
 
 
