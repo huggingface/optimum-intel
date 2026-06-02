@@ -173,6 +173,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "4.57") and is_transformers_version("<", "5.0.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("image-text-to-text", "qwen3_vl_eagle3"),
+            ]
+        )
+
     if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.extend(
             [
@@ -221,6 +228,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "exaone4": 2,
         "bitnet": 2,
         "granitemoehybrid": 2,
+        "qwen3_vl_eagle3": 0,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -918,11 +926,15 @@ class OVCLIExportTestCase(unittest.TestCase):
             if model_type in REMOTE_CODE_MODELS:
                 model_kwargs["trust_remote_code"] = True
 
-            eval(
-                _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
-                if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
-                else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
-            ).from_pretrained(tmpdir, **model_kwargs)
+            # VLM Eagle3 exports a single causal LM (not a multi-component VLM)
+            # so it must be loaded with OVModelForCausalLM rather than OVModelForVisualCausalLM.
+            if model_type == "qwen3_vl_eagle3":
+                automodel_cls = "OVModelForCausalLM"
+            elif task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS:
+                automodel_cls = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+            else:
+                automodel_cls = _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
+            eval(automodel_cls).from_pretrained(tmpdir, **model_kwargs)
 
     @parameterized.expand(
         arch
@@ -934,6 +946,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":
                 add_ops = '--model-kwargs "{\\"vocoder\\": \\"fxmarty/speecht5-hifigan-tiny\\"}"'
+            if model_type in REMOTE_CODE_MODELS:
+                add_ops = "--trust-remote-code"
             output = subprocess.check_output(
                 f"TRANSFORMERS_VERBOSITY=debug optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} {tmpdir}",
                 shell=True,
@@ -1106,16 +1120,20 @@ class OVCLIExportTestCase(unittest.TestCase):
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
             if model_type in REMOTE_CODE_MODELS:
                 model_kwargs["trust_remote_code"] = True
-            eval(
-                _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
-                if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
-                else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
-            ).from_pretrained(tmpdir, **model_kwargs)
+            if model_type == "qwen3_vl_eagle3":
+                automodel_cls = "OVModelForCausalLM"
+            elif task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS:
+                automodel_cls = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+            else:
+                automodel_cls = _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
+            eval(automodel_cls).from_pretrained(tmpdir, **model_kwargs)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_int8(self, task: str, model_type: str):
         if model_type in ["bitnet"]:
             self.skipTest("CVS-176501 INT8 compression fails for BitNet; need to compress remaining BF16 weights")
+        if model_type == "qwen3_vl_eagle3":
+            self.skipTest("Skipped, no compression and quantiozation are needed for the draft Eagle3 model.")
         with TemporaryDirectory() as tmpdir:
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":
@@ -1131,11 +1149,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
             if model_type in REMOTE_CODE_MODELS:
                 model_kwargs["trust_remote_code"] = True
-            model = eval(
-                _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
-                if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
-                else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
-            ).from_pretrained(tmpdir, **model_kwargs)
+            if model_type == "qwen3_vl_eagle3":
+                automodel_cls = "OVModelForCausalLM"
+            elif task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS:
+                automodel_cls = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+            else:
+                automodel_cls = _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
+            model = eval(automodel_cls).from_pretrained(tmpdir, **model_kwargs)
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
             expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
@@ -1311,6 +1331,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         expected_num_weight_nodes_per_model,
         expected_fake_nodes_per_model,
     ):
+        if model_name in ["gpt_oss"]:
+            self.skipTest("CVS-186980 int4 compression fails for tiny gpt_oss, full model works fine.")
         with TemporaryDirectory() as tmpdir:
             pt_model = auto_model_cls.from_pretrained(MODEL_NAMES[model_name])
             # overload for matching with default configuration

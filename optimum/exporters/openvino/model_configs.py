@@ -819,6 +819,40 @@ class Eagle3DummyGenerator(DummyInputGenerator):
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
 
+class Eagle3VLMDummyGenerator(DummyInputGenerator):
+    """
+    Dummy input generator for VLM Eagle-3 speculative decoding.
+
+    Produces `inputs_embeds` (float) and 3D `position_ids` (MRoPE)
+    required by VLM Eagle-3 draft models targeting Qwen3-VL.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("inputs_embeds", "position_ids")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.hidden_size = normalized_config.hidden_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "inputs_embeds":
+            shape = (self.batch_size, self.sequence_length, self.hidden_size)
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "position_ids":
+            # The rotary embedding is MRoPE (Multimodal RoPE)
+            # MRoPE encodes position along three independent axes: temporal, height, and width
+            # https://github.com/Tencent/AngelSlim/blob/main/angelslim/compressor/speculative/train/models/draft/llama_eagle3.py#L211
+            shape = (3, self.batch_size, self.sequence_length)
+            return self.random_int_tensor(shape, max_value=self.sequence_length, framework=framework, dtype=int_dtype)
+
+
 @register_in_tasks_manager(
     "llama",
     *[
@@ -827,6 +861,7 @@ class Eagle3DummyGenerator(DummyInputGenerator):
         "text-generation",
         "text-generation-with-past",
         "text-classification",
+        "image-text-to-text",
     ],
     library_name="transformers",
 )
@@ -854,10 +889,30 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
         )
         archs = getattr(config, "architectures", None)
         self.eagle3 = False
+        self.eagle3_vlm = False
         if isinstance(archs, list) and len(archs) > 0 and "eagle3" in archs[0].lower():
-            self.DUMMY_INPUT_GENERATOR_CLASSES += (Eagle3DummyGenerator,)
             self.MIN_TRANSFORMERS_VERSION = "4.54.0"
             self.eagle3 = True
+            # VLM Eagle3 targets a VLM model (e.g. Qwen3-VL) and requires
+            # inputs_embeds instead of input_ids and 3D MRoPE position_ids.
+            target_model_type = getattr(config, "target_model_type", "")
+            modal_type = getattr(config, "modal_type", "")
+            if modal_type == "VLM" or target_model_type in {"qwen2_vl", "qwen3_vl"}:
+                self.eagle3_vlm = True
+                # VLM Eagle3 always needs KV cache for speculative decoding,
+                # regardless of whether the task includes "-with-past".
+                self.use_past = True
+                self.use_past_in_inputs = True
+                # Eagle3VLMDummyGenerator must precede DummyTextInputGenerator
+                # so it wins for inputs_embeds and position_ids generation.
+                self.DUMMY_INPUT_GENERATOR_CLASSES = (
+                    (Eagle3VLMDummyGenerator,) + self.DUMMY_INPUT_GENERATOR_CLASSES + (Eagle3DummyGenerator,)
+                )
+                self.MIN_TRANSFORMERS_VERSION = "4.57.0"
+                # VLM Eagle3 export uses transformers modeling APIs that changed in 5.0.
+                self.MAX_TRANSFORMERS_VERSION = "4.57.6"
+            else:
+                self.DUMMY_INPUT_GENERATOR_CLASSES += (Eagle3DummyGenerator,)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -865,6 +920,11 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
         # Eagle3 model has additional conditional input
         if self.eagle3:
             common_inputs["hidden_states"] = {0: "batch_size", 1: "sequence_length", 2: "hidden_size"}
+        # VLM Eagle3 uses inputs_embeds (not input_ids) and 3D MRoPE position_ids
+        if self.eagle3_vlm:
+            common_inputs.pop("input_ids", None)
+            common_inputs["inputs_embeds"] = {0: "batch_size", 1: "sequence_length", 2: "hidden_size"}
+            common_inputs["position_ids"] = {0: "num_dims", 1: "batch_size", 2: "sequence_length"}
         return common_inputs
 
     @property
