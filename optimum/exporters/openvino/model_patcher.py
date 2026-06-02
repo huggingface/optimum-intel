@@ -182,40 +182,6 @@ class SAMModelPatcher(ModelPatcher):
         self.patched_forward = patched_forward
 
 
-def patched_speecht5_prenet_forward(
-    self,
-    input_values: torch.Tensor,
-    speaker_embeddings: torch.Tensor | None = None,
-):
-    # Dropout is always applied, even when evaluating. See §2.2 in https://arxiv.org/abs/1712.05884.
-
-    inputs_embeds = input_values
-    for layer in self.layers:
-        inputs_embeds = torch.nn.functional.relu(layer(inputs_embeds))
-
-        # NOTE: we patch the prenet to avoid using torch.nn.functional.dropout, that is exported as a `Dropout` node in the OpenVINO
-        # that is ignored during inference by some runtimes as OpenVINO Runtime.
-        # Reference: https://github.com/microsoft/onnxruntime/issues/9333 & https://github.com/microsoft/onnxruntime/issues/5549
-        mask = torch.rand(inputs_embeds.shape, device=inputs_embeds.device) > self.config.speech_decoder_prenet_dropout
-        inputs_embeds = inputs_embeds * mask / (1 - self.config.speech_decoder_prenet_dropout)
-
-        # inputs_embeds = nn.functional.dropout(
-        #     inputs_embeds, self.config.speech_decoder_prenet_dropout, training=True
-        # )
-
-    inputs_embeds = self.final_layer(inputs_embeds)
-    inputs_embeds = self.encode_positions(inputs_embeds)
-
-    if speaker_embeddings is not None:
-        speaker_embeddings = torch.nn.functional.normalize(speaker_embeddings)
-        speaker_embeddings = speaker_embeddings.unsqueeze(1)
-        speaker_embeddings = speaker_embeddings.expand(-1, inputs_embeds.size(1), -1)
-        inputs_embeds = torch.cat([inputs_embeds, speaker_embeddings], dim=-1)
-        inputs_embeds = torch.nn.functional.relu(self.speaker_embeds_layer(inputs_embeds))
-
-    return inputs_embeds
-
-
 class SentenceTransformersTransformerPatcher(ModelPatcher):
     def __init__(
         self,
