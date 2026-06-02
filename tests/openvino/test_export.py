@@ -24,11 +24,11 @@ from utils_tests import (
     MODEL_NAMES,
     OPENVINO_DEVICE,
     REMOTE_CODE_MODELS,
+    SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED,
 )
 
-from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
-from optimum.exporters.onnx.model_configs import BertOnnxConfig
 from optimum.exporters.openvino import export_from_model, main_export
+from optimum.exporters.openvino.model_configs import BertOpenVINOConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVFluxPipeline,
@@ -369,7 +369,7 @@ class ExportModelTest(unittest.TestCase):
 
 class CustomExportModelTest(unittest.TestCase):
     def test_custom_export_config_model(self):
-        class BertOnnxConfigWithPooler(BertOnnxConfig):
+        class BertOpenVINOConfigWithPooler(BertOpenVINOConfig):
             @property
             def outputs(self):
                 if self.task == "feature-extraction-with-pooler":
@@ -386,7 +386,7 @@ class CustomExportModelTest(unittest.TestCase):
         model_id = "sentence-transformers/all-MiniLM-L6-v2"
 
         config = AutoConfig.from_pretrained(model_id)
-        custom_export_configs = {"model": BertOnnxConfigWithPooler(config, task=custom_task)}
+        custom_export_configs = {"model": BertOpenVINOConfigWithPooler(config, task=custom_task)}
 
         with TemporaryDirectory() as tmpdirname:
             main_export(
