@@ -28,7 +28,7 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=2.1",
-    "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git@transformers-v5.5",
+    "optimum@git+https://github.com/huggingface/optimum.git",
     "transformers>=4.57,<5.5",
     "setuptools",
     "huggingface-hub>=0.23.2,<2.0",
@@ -69,6 +69,7 @@ TESTS_REQUIRE = [
     "decord",
     "imageio",
     "kokoro",
+    "protobuf",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
