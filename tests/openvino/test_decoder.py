@@ -63,7 +63,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mistral",
         "mixtral",
         "mpt",
-        "mbart",
         "opt",
         "pegasus",
         "phi",
@@ -74,7 +73,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neox_japanese",
         "xglm",
         "gemma",
-        "olmo",
         "stablelm",
         "starcoder2",
         "cohere",
@@ -87,6 +85,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     )
 
     SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon_mamba")
+
+    # config loading failing coming from type mismatch coming from transformers v5.4
+    if is_transformers_version("!=", "5.4"):
+        SUPPORTED_ARCHITECTURES += ("mbart", "olmo")
 
     if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
