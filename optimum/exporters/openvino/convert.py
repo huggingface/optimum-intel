@@ -597,7 +597,7 @@ def export_from_model(
 
     if model_type in ONNX_SUPPORTED_ARCHITECTURES:
         raise ValueError(
-            f"The OpenVINO export of {model_type} models is not officially supported by optimum-intel and has been deprecated."
+            f"The OpenVINO export of {model_type} models is not officially supported by optimum-intel and has been removed."
         )
 
     custom_architecture = library_name == "transformers" and model_type not in TasksManager._SUPPORTED_MODEL_TYPE
