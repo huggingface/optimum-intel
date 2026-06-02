@@ -230,7 +230,7 @@ def sdpa_mask_without_vmap(**kwargs):
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/masking_utils.py#L433
 # Specifically for OpenVINO, we use torch.finfo(torch.float16).min instead of torch.finfo(dtype).min
-def eager_mask_without_vmap(**kwargs) -> Optional[torch.Tensor]:
+def eager_mask_without_vmap(**kwargs):
     kwargs.pop("allow_is_causal_skip", None)
     kwargs.pop("allow_torch_fix", None)
     dtype = kwargs.pop("dtype", torch.float32)
