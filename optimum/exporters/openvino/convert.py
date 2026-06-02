@@ -163,7 +163,7 @@ def export(
     Args:
         model ([`PreTrainedModel`]):
             The model to export.
-        config ([`~exporters.onnx.config.OpenVINOConfig`]):
+        config ([`~exporters.openvino.config.OpenVINOConfig`]):
             The OpenVINO configuration associated with the exported model.
         output (`Path`):
             Directory to store the exported model.
@@ -250,7 +250,7 @@ def export_pytorch(
     Args:
         model ([`PreTrainedModel`]):
             The model to export.
-        config ([`~exporters.onnx.config.OpenVINOConfig`]):
+        config ([`~exporters.openvino.config.OpenVINOConfig`]):
             The configuration associated with the exported model.
         output (`Path`):
             Directory to store the exported model.

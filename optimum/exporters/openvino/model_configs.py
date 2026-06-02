@@ -5210,8 +5210,8 @@ class SamOpenVINOConfig(OpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedEncoderDecoderConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyPointsGenerator, DummyVisionEmbeddingsGenerator)
     VARIANTS = {  # noqa: RUF012
-        "monolith": "All the SAM model components are exported as a single model.onnx.",
-        "split": "The vision encoder is exported as a separate vision_encoder.onnx, and the prompt encoder and mask decoder are exported as a prompt_encoder_mask_decoder.onnx. This allows to encoder the image only once for multiple point queries.",
+        "monolith": "All the SAM model components are exported as a single model.",
+        "split": "The vision encoder is exported as a separate vision_encoder, and the prompt encoder and mask decoder are exported as a prompt_encoder_mask_decoder. This allows to encoder the image only once for multiple point queries.",
     }
     DEFAULT_VARIANT = "split"
     _MODEL_PATCHER = SAMModelPatcher

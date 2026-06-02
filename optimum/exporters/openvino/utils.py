@@ -350,8 +350,7 @@ SSM_MODELS = [
     "qwen3_5_moe_text",
 ]
 
-# All transformers, diffusers, timm and sentence transformers models that are supported via optimum-onnx OnnxConfigs but that have currently no test
-# TODO: add tests for all models that are compatible and remove support for all others
+# All transformers, diffusers, timm and sentence transformers models that were supported via optimum-onnx OnnxConfigs for which support is now removed
 ONNX_SUPPORTED_ARCHITECTURES = {
     "big_bird",
     "chinese_clip",
