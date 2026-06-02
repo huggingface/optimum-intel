@@ -38,7 +38,11 @@ if is_transformers_version(">=", "4.48"):
 if is_transformers_version(">=", "4.53"):
     from transformers.masking_utils import (
         ALL_MASK_ATTENTION_FUNCTIONS,
+        _ignore_causal_mask_sdpa,
+        and_masks,
+        causal_mask_function,
         eager_mask,
+        padding_mask_function,
         prepare_padding_mask,
         sdpa_mask,
     )
