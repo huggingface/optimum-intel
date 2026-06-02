@@ -3,11 +3,14 @@ import gc
 import os
 import platform
 import unittest
+from unittest.mock import patch
 
 import pytest
 import torch
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, PretrainedConfig, pipeline, set_seed
+from transformers.generation import GenerationMixin
+from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
 from utils_tests import (
@@ -699,6 +702,28 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.allclose(outs_step2.logits, outs_without_attn_mask_step2.logits))
         del model_with_cache
         gc.collect()
+
+    def test_update_model_kwargs_for_generation_does_not_double_append_position_ids(self):
+        model = OVModelForCausalLM.__new__(OVModelForCausalLM)
+        outputs = CausalLMOutputWithPast(
+            logits=torch.zeros(1, 1, 1),
+            past_key_values=((torch.zeros(1, 1, 1, 1), torch.zeros(1, 1, 1, 1)),),
+        )
+        model_kwargs = {
+            "position_ids": torch.tensor([[0, 1, 2]]),
+            "attention_mask": torch.ones((1, 3), dtype=torch.long),
+        }
+        expected_kwargs = {
+            "position_ids": torch.tensor([[0, 1, 2, 3]]),
+            "attention_mask": torch.ones((1, 4), dtype=torch.long),
+        }
+
+        with patch.object(GenerationMixin, "_update_model_kwargs_for_generation", return_value=expected_kwargs) as patched:
+            updated_kwargs = OVModelForCausalLM._update_model_kwargs_for_generation(model, outputs, model_kwargs)
+
+        patched.assert_called_once()
+        self.assertEqual(updated_kwargs["position_ids"].tolist(), [[0, 1, 2, 3]])
+        self.assertEqual(updated_kwargs["attention_mask"].tolist(), [[1, 1, 1, 1]])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow

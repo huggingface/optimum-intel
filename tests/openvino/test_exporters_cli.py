@@ -195,6 +195,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "4.57.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "smollm3"),
+            ]
+        )
+
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
         "t5": 2,
@@ -870,11 +877,15 @@ class OVCLIExportTestCase(unittest.TestCase):
         task: str,
         model_kwargs: Dict = None,
         loading_kwargs: Dict = None,
+        expected_files=None,
     ):
         with TemporaryDirectory() as tmpdir:
             main_export(
                 model_name_or_path=model_name, output=tmpdir, task=task, model_kwargs=model_kwargs, **loading_kwargs
             )
+            if expected_files is not None:
+                for expected_file in expected_files:
+                    self.assertTrue((Path(tmpdir) / expected_file).is_file())
 
     def test_filtered_architectures(cls):
         if is_transformers_version("<", "4.49"):
@@ -905,7 +916,15 @@ class OVCLIExportTestCase(unittest.TestCase):
         if model_type in REMOTE_CODE_MODELS:
             loading_kwargs["trust_remote_code"] = True
 
-        self._openvino_export(MODEL_NAMES[model_type], task, model_kwargs=model_kwargs, loading_kwargs=loading_kwargs)
+        expected_files = ("openvino_model.bin", "openvino_model.xml") if model_type == "smollm3" else None
+
+        self._openvino_export(
+            MODEL_NAMES[model_type],
+            task,
+            model_kwargs=model_kwargs,
+            loading_kwargs=loading_kwargs,
+            expected_files=expected_files,
+        )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli(self, task: str, model_type: str):

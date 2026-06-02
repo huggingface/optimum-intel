@@ -675,16 +675,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         is_encoder_decoder: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
-        model_kwargs = super()._update_model_kwargs_for_generation(
+        return super()._update_model_kwargs_for_generation(
             outputs=outputs, model_kwargs=model_kwargs, is_encoder_decoder=is_encoder_decoder, **kwargs
         )
-
-        if "position_ids" in model_kwargs:
-            position_ids = model_kwargs["position_ids"]
-            new_position_id = position_ids[..., -1:].clone()
-            new_position_id += 1
-            model_kwargs["position_ids"] = torch.cat([position_ids, new_position_id], dim=-1)
-        return model_kwargs
 
     def _expand_outputs_for_generation(self, indicies, logits: torch.Tensor, past_key_values: Tuple):
         batch_size = logits.shape[0]
