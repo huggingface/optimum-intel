@@ -455,7 +455,7 @@ class OpenVINOConfigWithPast(OpenVINOConfig, ABC):
 
 
 class ConfigBehavior(str, enum.Enum):
-    """Specifies the behavior of the [`~exporters.onnx.base.OpenVINOSeq2SeqConfigWithPast`].
+    """Specifies the behavior of the [`~exporters.openvino.base.OpenVINOSeq2SeqConfigWithPast`].
 
     - MONOLITH: the config can be used to export the whole seq2seq model as a single file.
     - ENCODER: the config can be used to export the encoder part of the seq2seq model.
