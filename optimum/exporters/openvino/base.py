@@ -468,7 +468,7 @@ class ConfigBehavior(str, enum.Enum):
 
 
 class OpenVINOSeq2SeqConfigWithPast(OpenVINOConfigWithPast):
-    """Inherits from [`~exporters.onnx.OpenVINOConfigWithPast`]. A base class to handle the OpenVINO configuration of encoder-decoder models."""
+    """Inherits from [`~exporters.openvino.OpenVINOConfigWithPast`]. A base class to handle the OpenVINO configuration of encoder-decoder models."""
 
     DUMMY_PKV_GENERATOR_CLASS = DummySeq2SeqPastKeyValuesGenerator
 
