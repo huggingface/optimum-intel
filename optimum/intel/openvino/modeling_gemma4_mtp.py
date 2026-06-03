@@ -107,10 +107,10 @@ _TARGET_EXTRA_OUTPUTS = (
 _ASSISTANT_REQUIRED_INPUTS = (
     "inputs_embeds",
     "position_ids",
-    "full_attention.key",
-    "full_attention.value",
-    "sliding_attention.key",
-    "sliding_attention.value",
+    "full_attention_key",
+    "full_attention_value",
+    "sliding_attention_key",
+    "sliding_attention_value",
 )
 _ASSISTANT_REQUIRED_OUTPUTS = ("logits", "last_hidden_state")
 
@@ -141,6 +141,56 @@ class Gemma4AssistantOVOutput(BaseModelOutput):
 # ---------------------------------------------------------------------------
 # OVGemma4ForCausalLM — target subclass of OVModelForCausalLM
 # ---------------------------------------------------------------------------
+
+
+class _OVStatefulCache:
+    """Cache-like wrapper around the OpenVINO stateful target request.
+
+    ``transformers.generation.utils._assisted_decoding`` calls
+    ``outputs.past_key_values.crop(new_cur_len - 1)`` to roll the target's KV
+    cache back when not all drafted tokens are accepted. The OpenVINO
+    stateful model keeps its KV cache internally as ``ReadValue`` states,
+    so we implement ``crop`` by trimming each state tensor along its
+    sequence axis (axis -2 for ``[B, num_kv, S, head_dim]`` tensors) and
+    pushing it back via :py:meth:`openvino.runtime.VariableState.state`.
+    """
+
+    def __init__(self, ov_model):
+        self._ov_model = ov_model
+
+    def __bool__(self) -> bool:  # truthy so the parent treats us as a real cache
+        return True
+
+    def __len__(self) -> int:
+        return 1
+
+    def get_seq_length(self, layer_idx: int = 0) -> int:
+        return int(getattr(self._ov_model, "_past_length", 0))
+
+    def crop(self, max_length: int) -> None:
+        import openvino as _ov
+
+        request = self._ov_model.request
+        for state in request.query_state():
+            tensor = state.state
+            arr = tensor.data
+            # Skip non-sequence-shaped states (e.g. scalar counters).
+            if arr.ndim < 2:
+                continue
+            seq_axis = -2 if arr.ndim >= 3 else -1
+            cur_len = arr.shape[seq_axis]
+            if cur_len <= max_length:
+                continue
+            slicer: list = [slice(None)] * arr.ndim
+            slicer[seq_axis] = slice(0, max_length)
+            new_arr = arr[tuple(slicer)].copy()
+            state.state = _ov.Tensor(new_arr)
+        self._ov_model._past_length = max_length
+
+    def reorder_cache(self, beam_idx):  # not used in greedy MTP path
+        raise NotImplementedError(
+            "reorder_cache is not implemented for the OpenVINO stateful target cache."
+        )
 
 
 def _import_ov_causal_lm():
@@ -236,12 +286,128 @@ def _build_ov_gemma4_class():
 
             return Gemma4OVCausalLMOutput(
                 logits=outputs.logits,
-                past_key_values=outputs.past_key_values,
+                past_key_values=_OVStatefulCache(self),
                 hidden_states=(last_hidden_state,),  # tuple of one is enough — MTP only reads [-1]
                 shared_kv_states=shared_kv_states,
             )
 
+        # ---- input embeddings (needed by MTP candidate generator) ----
+        #
+        # ``transformers.generation.utils._get_candidate_generator`` calls
+        # ``self.get_input_embeddings()`` on the target model when assembling a
+        # ``SinglePositionMultiTokenCandidateGenerator``. The candidate
+        # generator then invokes ``target_model_input_embeddings(last_token_id)``
+        # at each draft step to translate the newly verified token id into the
+        # embedding fed to the assistant. The OpenVINO target IR bakes
+        # ``embed_tokens`` into its graph and does not expose the embedding
+        # table as a Python module, so we lazy-load the weight tensor from the
+        # original HF checkpoint and wrap it in an :class:`nn.Embedding`.
+        def get_input_embeddings(self):
+            if getattr(self, "_input_embeddings", None) is not None:
+                return self._input_embeddings
+            self._input_embeddings = _load_input_embeddings_from_hf(
+                getattr(self.config, "name_or_path", None),
+                self.config,
+            )
+            return self._input_embeddings
+
     return Gemma4OVForCausalLM
+
+
+def _load_input_embeddings_from_hf(model_id: Optional[str], config) -> torch.nn.Embedding:
+    """Load ``embed_tokens`` weights from the original HF checkpoint.
+
+    Reads only the safetensors shard that contains the embedding tensor so we
+    do not pay the cost of loading the whole model. Supports both pure
+    text-generation Gemma 4 checkpoints (``model.embed_tokens.weight``) and
+    multimodal Gemma 4 VLM checkpoints
+    (``language_model.model.embed_tokens.weight``).
+    """
+    import json
+
+    from huggingface_hub import hf_hub_download
+    from safetensors import safe_open
+
+    if not model_id:
+        raise RuntimeError(
+            "Cannot load input embeddings: ``config.name_or_path`` is empty. "
+            "MTP assisted decoding requires access to the original HF checkpoint "
+            "to fetch the target model's embedding table."
+        )
+
+    candidate_keys = (
+        "language_model.model.embed_tokens.weight",
+        "model.language_model.embed_tokens.weight",
+        "model.embed_tokens.weight",
+    )
+
+    # Resolve where the embedding tensor lives. Try the sharded index first,
+    # then fall back to a single-shard model.safetensors.
+    shard_file: Optional[str] = None
+    tensor_key: Optional[str] = None
+
+    def _resolve_from_local(local_dir: Path):
+        nonlocal shard_file, tensor_key
+        idx = local_dir / "model.safetensors.index.json"
+        if idx.is_file():
+            with open(idx) as fh:
+                weight_map = json.load(fh).get("weight_map", {})
+            for key in candidate_keys:
+                if key in weight_map:
+                    return str(local_dir / weight_map[key]), key
+        single = local_dir / "model.safetensors"
+        if single.is_file():
+            with safe_open(str(single), framework="pt") as f:
+                keys_in_shard = set(f.keys())
+            for key in candidate_keys:
+                if key in keys_in_shard:
+                    return str(single), key
+        return None, None
+
+    model_path = Path(model_id)
+    if model_path.is_dir():
+        shard_file, tensor_key = _resolve_from_local(model_path)
+
+    if shard_file is None:
+        # Remote HF model_id: try index first, fall back to single shard.
+        try:
+            idx_path = hf_hub_download(model_id, "model.safetensors.index.json")
+            with open(idx_path) as fh:
+                weight_map = json.load(fh).get("weight_map", {})
+            for key in candidate_keys:
+                if key in weight_map:
+                    shard_file = hf_hub_download(model_id, weight_map[key])
+                    tensor_key = key
+                    break
+        except Exception:  # noqa: BLE001
+            pass
+
+    if shard_file is None:
+        try:
+            single_path = hf_hub_download(model_id, "model.safetensors")
+            with safe_open(single_path, framework="pt") as f:
+                keys_in_shard = set(f.keys())
+            for key in candidate_keys:
+                if key in keys_in_shard:
+                    shard_file = single_path
+                    tensor_key = key
+                    break
+        except Exception:  # noqa: BLE001
+            pass
+
+    if shard_file is None or tensor_key is None:
+        raise RuntimeError(
+            f"Could not locate ``embed_tokens.weight`` in the safetensors of '{model_id}'. "
+            "MTP assisted decoding needs the target model's embedding table."
+        )
+
+    with safe_open(shard_file, framework="pt") as f:
+        weight = f.get_tensor(tensor_key)
+
+    num_embeddings, embedding_dim = weight.shape
+    embedding = torch.nn.Embedding(num_embeddings, embedding_dim, _weight=weight, _freeze=True)
+    embedding.eval()
+    return embedding
 
 
 # Lazy singleton — built on first attribute access.
@@ -280,7 +446,10 @@ class Gemma4AssistantOVForCausalLM(OVModel, GenerationMixin):
 
     # Expose under the transformers AutoModel registry name so the candidate
     # generator's ``startswith("Gemma4Assistant")`` check passes.
-    export_feature = "gemma4-assistant"
+    # ``export_feature = "text-generation"`` routes the export through the
+    # ``Gemma4AssistantOpenVINOConfig`` registered for the ``gemma4_assistant``
+    # model type.
+    export_feature = "text-generation"
     base_model_prefix = "openvino_assistant_model"
     main_input_name = "inputs_embeds"
 
@@ -388,20 +557,27 @@ class Gemma4AssistantOVForCausalLM(OVModel, GenerationMixin):
         inputs = {
             "inputs_embeds": self._to_numpy(inputs_embeds),
             "position_ids": self._to_numpy(position_ids),
-            "full_attention.key": self._to_numpy(full_k),
-            "full_attention.value": self._to_numpy(full_v),
-            "sliding_attention.key": self._to_numpy(slid_k),
-            "sliding_attention.value": self._to_numpy(slid_v),
+            "full_attention_key": self._to_numpy(full_k),
+            "full_attention_value": self._to_numpy(full_v),
+            "sliding_attention_key": self._to_numpy(slid_k),
+            "sliding_attention_value": self._to_numpy(slid_v),
         }
         if attention_mask is not None:
             inputs["attention_mask"] = self._to_numpy(attention_mask)
 
-        self.request.start_async(inputs, share_inputs=True)
-        self.request.wait()
+        # ``self.request`` here is a :class:`openvino.runtime.CompiledModel`
+        # (see :class:`OVModel.compile`). Lazily build an :class:`InferRequest`
+        # so we can use the ``start_async`` / ``get_tensor`` API and keep state
+        # across draft calls if the IR were stateful in the future.
+        if getattr(self, "_infer_request", None) is None:
+            self._infer_request = self.request.create_infer_request()
 
-        logits = torch.from_numpy(self.request.get_tensor("logits").data.copy()).to(self.device)
+        self._infer_request.start_async(inputs, share_inputs=True)
+        self._infer_request.wait()
+
+        logits = torch.from_numpy(self._infer_request.get_tensor("logits").data.copy()).to(self.device)
         last_hidden_state = torch.from_numpy(
-            self.request.get_tensor("last_hidden_state").data.copy()
+            self._infer_request.get_tensor("last_hidden_state").data.copy()
         ).to(self.device)
 
         return Gemma4AssistantOVOutput(logits=logits, last_hidden_state=last_hidden_state)
