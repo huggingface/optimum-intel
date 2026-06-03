@@ -1,19 +1,14 @@
-import json
-import os
 from pathlib import Path
 from types import MethodType
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
-from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
-from huggingface_hub.utils import EntryNotFoundError
 from sentence_transformers import SentenceTransformer
-from transformers import AutoProcessor, AutoTokenizer, PretrainedConfig
+from transformers import AutoTokenizer, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
-from optimum.intel.utils.import_utils import is_sentence_transformers_version
 
 from .configuration import OVQuantizationConfigBase
 from .modeling import MODEL_START_DOCSTRING, OVModel
@@ -33,17 +28,7 @@ class OVSentenceTransformer(OVModel):
         super().__init__(model, config, **kwargs)
 
         self.encode = MethodType(SentenceTransformer.encode, self)
-        if is_sentence_transformers_version(">=", "5.4.0"):
-            self.supports = MethodType(SentenceTransformer.supports, self)
-            self._input_length = SentenceTransformer._input_length
-            self._resolve_prompt = MethodType(SentenceTransformer._resolve_prompt, self)
-            self.is_singular_input = MethodType(SentenceTransformer.is_singular_input, self)
-            self.modalities = ["text", "image", "video", "message"]
-            self.default_prompt_name = kwargs.get("default_prompt_name", None)
-            self.prompts = kwargs.get("prompts", {}) or {}
-            self.processor = kwargs.get("processor", None)
-        else:
-            self._text_length = MethodType(SentenceTransformer._text_length, self)
+        self._text_length = MethodType(SentenceTransformer._text_length, self)
         self.default_prompt_name = None
         self.truncate_dim = None
         self.tokenizer = tokenizer
@@ -51,9 +36,6 @@ class OVSentenceTransformer(OVModel):
     def _save_pretrained(self, save_directory: Union[str, Path]):
         super()._save_pretrained(save_directory)
         self.tokenizer.save_pretrained(save_directory)
-
-    def _can_flatten_inputs(self):
-        return False
 
     def forward(self, inputs: Dict[str, torch.Tensor]):
         self.compile()
@@ -113,13 +95,6 @@ class OVSentenceTransformer(OVModel):
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, **tokenizer_args)
 
-        if is_sentence_transformers_version(">=", "5.4.0"):
-            processor = None
-            try:
-                processor = AutoProcessor.from_pretrained(model_id, **tokenizer_args)
-            except (OSError, ValueError, KeyError, EnvironmentError):
-                pass
-
         model = super()._from_pretrained(
             model_id=model_id,
             config=config,
@@ -136,9 +111,6 @@ class OVSentenceTransformer(OVModel):
             quantization_config=quantization_config,
             **kwargs,
         )
-
-        if is_sentence_transformers_version(">=", "5.4.0"):
-            model.processor = processor
 
         return model
 
@@ -189,117 +161,3 @@ class OVSentenceTransformer(OVModel):
             quantization_config = quantization_config.clone()
             quantization_config.tokenizer = model_name_or_path
         return quantization_config
-
-    def preprocess(
-        self,
-        inputs,
-        prompt,
-        **kwargs,
-    ):
-        """
-        Preprocesses the inputs for the model.
-
-        Mirrors :meth:`sentence_transformers.base.modules.transformer.Transformer.preprocess`
-        for the text/message modalities so that tokenization matches the reference
-        SentenceTransformer model when a chat template is used (e.g. Qwen3-VL-Embedding).
-        """
-        from sentence_transformers.base.modality import format_modality, infer_batch_modality
-
-        if not inputs:
-            return {}
-
-        # Infer modality (used both for validation and to decide preprocessing path).
-        modality = None
-        try:
-            modality = infer_batch_modality(inputs, supported_modalities=self.modalities)
-        except (ValueError, TypeError):
-            pass
-
-        if modality is not None and not self.supports(modality):
-            supported = ", ".join(format_modality(m) for m in self.modalities)
-            message = (
-                f"Modality '{format_modality(modality)}' is not supported by this {type(self).__name__} model. "
-                f"Supported modalities: {supported}"
-            )
-            if isinstance(modality, tuple) and all(part in self.modalities for part in modality):
-                message += (
-                    f"\nThis model supports {' and '.join(modality)} individually, "
-                    "but not in the same input. Please process each modality separately."
-                )
-            raise ValueError(message)
-
-        # If the model has a chat template, route inputs through apply_chat_template so the output
-        # matches the reference SentenceTransformer (which uses the processor when available).
-        tokenizer = self.tokenizer
-        processor = getattr(self, "processor", None)
-        chat_template_owner = None
-        if processor is not None and getattr(processor, "chat_template", None) is not None:
-            chat_template_owner = processor
-        elif tokenizer is not None and getattr(tokenizer, "chat_template", None) is not None:
-            chat_template_owner = tokenizer
-
-        if chat_template_owner is not None and "message" in self.modalities:
-            messages_batch = self._build_messages_batch(inputs, modality, prompt)
-            preprocessed = chat_template_owner.apply_chat_template(
-                messages_batch,
-                tokenize=True,
-                return_dict=True,
-                add_generation_prompt=True,
-                padding=True,
-                truncation="longest_first",
-                return_tensors="pt",
-            )
-            preprocessed = dict(preprocessed)
-            preprocessed["modality"] = "message"
-        else:
-            # Fallback: plain tokenization (e.g. for text-only models without a chat template).
-            if prompt and modality == "text":
-                inputs = [
-                    (prompt + inp[0],) + tuple(inp[1:]) if isinstance(inp, tuple) else prompt + inp for inp in inputs
-                ]
-            preprocessed = self.tokenize(inputs, **kwargs)
-            preprocessed["modality"] = modality
-        return preprocessed
-
-    @staticmethod
-    def _build_messages_batch(
-        inputs: List[Any],
-        modality: Any,
-        prompt: Optional[str],
-    ) -> List[List[Dict[str, Any]]]:
-        """Convert SentenceTransformer-style inputs into a list of chat-template message lists.
-
-        Each text input becomes a ``user`` message with structured content; if ``prompt`` is
-        provided it is prepended as a ``system`` message (matching
-        ``InputFormatter.prepend_prompt_to_messages``).
-        """
-
-        def _content_for_item(item: Any) -> List[Dict[str, Any]]:
-            if isinstance(item, str):
-                return [{"type": "text", "text": item}]
-            if isinstance(item, dict):
-                content: List[Dict[str, Any]] = []
-                for key, value in item.items():
-                    if key == "text":
-                        content.append({"type": "text", "text": value})
-                    elif key in ("image", "image_url"):
-                        content.append({"type": "image", "image": value})
-                    elif key == "video":
-                        content.append({"type": "video", "video": value})
-                    else:
-                        content.append({"type": key, key: value})
-                return content
-            # Tuples/lists (e.g. text pairs) - flatten into separate text parts.
-            if isinstance(item, (tuple, list)):
-                return [{"type": "text", "text": str(v)} for v in item]
-            return [{"type": "text", "text": str(item)}]
-
-        messages_batch: List[List[Dict[str, Any]]] = []
-        for inp in inputs:
-            user_message = {"role": "user", "content": _content_for_item(inp)}
-            sample_messages: List[Dict[str, Any]] = []
-            if prompt:
-                sample_messages.append({"role": "system", "content": [{"type": "text", "text": prompt}]})
-            sample_messages.append(user_message)
-            messages_batch.append(sample_messages)
-        return messages_batch
