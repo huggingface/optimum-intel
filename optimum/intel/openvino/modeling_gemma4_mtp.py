@@ -239,6 +239,12 @@ def _build_ov_gemma4_class():
             token_type_ids=None,
             **kwargs,
         ):
+            # NB: Detect prefill via ``past_key_values is None`` rather than
+            # by reading ``self._past_length`` before calling ``super().forward``.
+            # The parent forward resets ``self._past_length`` to 0 internally when
+            # ``past_key_values is None``, so a stale value from a previous
+            # ``generate()`` call cannot be trusted to recognise prefill.
+            is_prefill = past_key_values is None
             outputs = super().forward(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -259,6 +265,16 @@ def _build_ov_gemma4_class():
                 last_hidden_state = torch.from_numpy(
                     request.get_tensor("mtp_last_hidden_state").data.copy()
                 ).to(self.device)
+                # Upstream `SinglePositionMultiTokenCandidateGenerator.get_candidates`
+                # indexes ``model_outputs.hidden_states[-1][:, n_last_matches:n_last_matches+1]``
+                # assuming the returned hidden_state covers only the most recent
+                # ``candidate_length + 1`` positions. On the initial prefill the
+                # OV target processes the full prompt, so ``last_hidden_state`` has
+                # shape ``(B, prompt_len, hidden)`` while upstream expects
+                # ``(B, 1, hidden)`` corresponding to the last prompt position.
+                # Slice to the last position only in that case.
+                if is_prefill and last_hidden_state.shape[1] > 1:
+                    last_hidden_state = last_hidden_state[:, -1:, :].contiguous()
                 shared_kv_states = {
                     "full_attention": (
                         torch.from_numpy(
@@ -403,6 +419,18 @@ def _load_input_embeddings_from_hf(model_id: Optional[str], config) -> torch.nn.
 
     with safe_open(shard_file, framework="pt") as f:
         weight = f.get_tensor(tensor_key)
+
+    # Gemma 4 scales embeddings by ``sqrt(hidden_size)`` inside
+    # ``Gemma4TextScaledWordEmbedding.forward`` (see
+    # ``transformers/models/gemma4/modeling_gemma4.py``). The
+    # ``SinglePositionMultiTokenCandidateGenerator`` calls
+    # ``target_model_input_embeddings(token_id)`` directly without applying
+    # this scaling, so we have to bake it into the weight tensor here for the
+    # drafted token embeddings to match what the assistant was trained on.
+    text_config = getattr(config, "text_config", None) or config
+    hidden_size = getattr(text_config, "hidden_size", None) or weight.shape[1]
+    embed_scale = float(hidden_size) ** 0.5
+    weight = weight.to(torch.float32) * embed_scale
 
     num_embeddings, embedding_dim = weight.shape
     embedding = torch.nn.Embedding(num_embeddings, embedding_dim, _weight=weight, _freeze=True)
