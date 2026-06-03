@@ -1159,10 +1159,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             else:
                 automodel_cls = _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             model = eval(automodel_cls).from_pretrained(tmpdir, **model_kwargs)
-            expected_int8 = (
-                _ARCHITECTURES_INT8_TASK_OVERRIDES.get(model_type, {}).get(task)
-                or _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
-            )
+            expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
             expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
                 del expected_int8["decoder_with_past"]

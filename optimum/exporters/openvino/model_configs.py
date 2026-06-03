@@ -615,7 +615,7 @@ class MiniCPM3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     ],
     library_name="transformers",
 )
-class SmolLM3OpenVINOConfig(LlamaOnnxConfig):
+class SmolLM3OpenVINOConfig(BitnetOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.53.0"
     _MODEL_PATCHER = OVDecoderModelPatcher
 
