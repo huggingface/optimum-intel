@@ -1671,7 +1671,7 @@ class OVModelLTXTransformer(OVModelTransformer):
         # T2V passes timestep as [B]; if the exported IR expects [B, S], broadcast here.
         # The rank check makes this backward-compatible with older 1D-timestep exports.
         if timestep is not None and timestep.ndim == 1 and self._timestep_rank == 2:
-            timestep = timestep.unsqueeze(-1).expand(-1, hidden_states.shape[1])
+            timestep = timestep.unsqueeze(-1).expand(-1, hidden_states.shape[1]).contiguous()
         return super().forward(hidden_states=hidden_states, timestep=timestep, **kwargs)
 
     @property
