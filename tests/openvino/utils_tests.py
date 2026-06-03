@@ -584,6 +584,13 @@ if is_transformers_version("<", "5"):
     REMOTE_CODE_MODELS += ("afmoe",)
 
 
+SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED = [
+    "bart",
+    "musicgen",
+    "whisper",
+]
+
+
 def get_num_quantized_nodes(model):
     num_fake_nodes = 0
     types_map = {
