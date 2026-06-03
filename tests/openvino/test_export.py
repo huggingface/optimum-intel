@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import os
 import unittest
 from pathlib import Path
 
@@ -36,6 +37,7 @@ from optimum.intel import (
     OVLTXPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
+    OVModelForCTC,
     OVModelForCustomTasks,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
@@ -133,6 +135,9 @@ class ExportModelTest(unittest.TestCase):
 
     if is_transformers_version(">=", "5.0"):
         SUPPORTED_ARCHITECTURES.update({"lfm2_moe": OVModelForCausalLM})
+
+    if os.environ.get("RUN_SLOW_EXPORT_TESTS") == "1" and is_transformers_version(">=", "5.0"):
+        SUPPORTED_ARCHITECTURES.update({"lasr_ctc": OVModelForCTC})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},

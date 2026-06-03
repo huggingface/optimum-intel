@@ -728,6 +728,16 @@ class OVModelForCTC(OVModel):
     auto_model_class = AutoModelForCTC
     export_feature = "automatic-speech-recognition"
 
+    def _preprocess_quantization_config(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        model_name_or_path: str,
+    ) -> OVQuantizationConfigBase:
+        if model_name_or_path is not None and quantization_config.processor is None:
+            quantization_config = quantization_config.clone()
+            quantization_config.processor = model_name_or_path
+        return quantization_config
+
     @add_start_docstrings_to_model_forward(
         AUDIO_INPUTS_DOCSTRING.format("batch_size, sequence_length")
         + CTC_EXAMPLE.format(
@@ -742,13 +752,20 @@ class OVModelForCTC(OVModel):
         attention_mask: Optional[Union[torch.Tensor, np.ndarray]] = None,
         **kwargs,
     ):
+        # Support models using input_features (e.g. MedASR/lasr_ctc) instead of input_values
+        input_features = kwargs.get("input_features", None)
+        if input_values is None and input_features is not None:
+            input_values = input_features
+
         np_inputs = isinstance(input_values, np.ndarray)
 
         input_values = ensure_numpy(input_values)
         attention_mask = ensure_numpy(attention_mask)
 
+        # Use the actual input name expected by the model
+        input_name = "input_features" if "input_features" in self.input_names else "input_values"
         inputs = {
-            "input_values": input_values,
+            input_name: input_values,
         }
 
         # Add the attention_mask when needed

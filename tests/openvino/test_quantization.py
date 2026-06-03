@@ -13,6 +13,7 @@
 #  limitations under the License.
 import dataclasses
 import inspect
+import os
 
 # ruff: noqa
 
@@ -45,6 +46,7 @@ from optimum.intel import (
     OVLatentConsistencyModelPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
+    OVModelForCTC,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
@@ -1102,6 +1104,9 @@ class OVWeightCompressionTest(unittest.TestCase):
     if is_transformers_version(">=", "5.5.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "gemma4", False))
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "gemma4_moe", False))
+
+    if os.environ.get("RUN_SLOW_EXPORT_TESTS") == "1" and is_transformers_version(">=", "5.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCTC, "lasr_ctc", True))
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
