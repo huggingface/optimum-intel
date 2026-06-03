@@ -3400,6 +3400,69 @@ class Gemma4TextMTPModelPatcher(Gemma2ModelPatcher):
         self.patched_forward = mtp_patched_forward
 
 
+# ---------------------------------------------------------------------------
+# Gemma 4 Assistant (MTP draft model) exporter
+# ---------------------------------------------------------------------------
+#
+# The assistant model has ``num_kv_shared_layers == num_hidden_layers`` so it
+# consumes ``shared_kv_states`` from the target on every layer and has no
+# past-key-value cache of its own. The OnnxConfig declares its inputs as a
+# flat list of tensors; this patcher reassembles the ``shared_kv_states``
+# dictionary expected by ``Gemma4AssistantForCausalLM.forward`` and returns
+# the two tensors the runtime needs (``logits`` + post-projected
+# ``last_hidden_state``).
+class Gemma4AssistantModelPatcher(ModelPatcher):
+    """Patcher for the Gemma 4 assistant (draft) model.
+
+    Rewrites the model's forward so its Python signature matches the flat
+    inputs declared by :class:`Gemma4AssistantOpenVINOConfig` and packs the
+    shared KV tensors back into the dict the model's original forward expects.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def forward(
+            self,
+            inputs_embeds,
+            position_ids,
+            attention_mask,
+            full_attention_key,
+            full_attention_value,
+            sliding_attention_key,
+            sliding_attention_value,
+        ):
+            shared_kv_states = {
+                "full_attention": (full_attention_key, full_attention_value),
+                "sliding_attention": (sliding_attention_key, sliding_attention_value),
+            }
+            out = self.__orig_forward(
+                input_ids=None,
+                inputs_embeds=inputs_embeds,
+                position_ids=position_ids,
+                attention_mask=attention_mask,
+                shared_kv_states=shared_kv_states,
+                use_cache=False,
+            )
+            # ``Gemma4AssistantOutput.last_hidden_state`` is the post-projected
+            # state, which is what the runtime feeds back as ``inputs_embeds``
+            # on the next draft step.
+            return OrderedDict([("logits", out.logits), ("last_hidden_state", out.last_hidden_state)])
+
+        model.forward = types.MethodType(forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
 def _decilm_attn_forward(
     self,
     hidden_states: torch.Tensor,

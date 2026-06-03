@@ -473,6 +473,74 @@ class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         return past_kv_values
 
 
+class Gemma4AssistantDummyInputGenerator(DummyInputGenerator):
+    """Dummy input generator for ``Gemma4AssistantForCausalLM`` OpenVINO export.
+
+    Produces flat tensors for:
+      * ``inputs_embeds``: (B, S, 2 * backbone_hidden_size) — the concatenated
+        backbone hidden states fed by ``SinglePositionMultiTokenCandidateGenerator``.
+      * ``position_ids``: (B, S)
+      * ``attention_mask``: (B, S) — kv-length attention mask (target's
+        prompt mask); equals query length in the dummy inputs so q/kv share
+        a single ``sequence_length`` axis during tracing.  At runtime
+        OpenVINO's dynamic axes let it grow independently.
+      * ``full_attention_key``/``full_attention_value``: shared KV from the
+        target's last full-attention layer, shape (B, num_kv_heads, S, global_head_dim).
+      * ``sliding_attention_key``/``sliding_attention_value``: shared KV from
+        the target's last sliding-attention layer, shape (B, num_kv_heads, S, head_dim).
+    """
+
+    SUPPORTED_INPUT_NAMES = (
+        "inputs_embeds",
+        "position_ids",
+        "attention_mask",
+        "full_attention_key",
+        "full_attention_value",
+        "sliding_attention_key",
+        "sliding_attention_value",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        cfg = normalized_config.config
+        text_cfg = cfg.text_config if hasattr(cfg, "text_config") else cfg
+        self.backbone_hidden_size = (
+            getattr(cfg, "backbone_hidden_size", None) or text_cfg.hidden_size
+        )
+        self.num_key_value_heads = text_cfg.num_key_value_heads
+        self.head_dim = text_cfg.head_dim
+        self.global_head_dim = getattr(text_cfg, "global_head_dim", self.head_dim)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "inputs_embeds":
+            shape = (self.batch_size, self.sequence_length, 2 * self.backbone_hidden_size)
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "position_ids":
+            shape = (self.batch_size, self.sequence_length)
+            return self.random_int_tensor(
+                shape, max_value=self.sequence_length, framework=framework, dtype=int_dtype
+            )
+        if input_name == "attention_mask":
+            shape = (self.batch_size, self.sequence_length)
+            return self.random_int_tensor(shape, max_value=2, framework=framework, dtype=int_dtype)
+        if input_name in ("full_attention_key", "full_attention_value"):
+            shape = (self.batch_size, self.num_key_value_heads, self.sequence_length, self.global_head_dim)
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name in ("sliding_attention_key", "sliding_attention_value"):
+            shape = (self.batch_size, self.num_key_value_heads, self.sequence_length, self.head_dim)
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        raise ValueError(f"Unsupported input name for Gemma4AssistantDummyInputGenerator: {input_name}")
+
+
 class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
         self,

@@ -67,6 +67,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyVisionPositionIdsPhi4InputGenerator,
     Eagle3DummyGenerator,
     Eagle3VLMDummyGenerator,
+    Gemma4AssistantDummyInputGenerator,
     Gemma4DummyPastKeyValuesGenerator,
     GPTBigCodeDummyPastKeyValuesGenerator,
     Lfm2DummyPastKeyValuesGenerator,
@@ -1374,6 +1375,69 @@ class Gemma4TextOpenVINOConfig(Gemma3TextOpenVINOConfig):
             # Preserve tensor names on the new Result tensor.
             result.output(0).get_tensor().set_names(set(names))
         ov_model.validate_nodes_and_infer_types()
+
+
+@register_in_tasks_manager(
+    "gemma4_assistant",
+    *["text-generation"],
+    library_name="transformers",
+)
+class Gemma4AssistantOpenVINOConfig(OpenVINOConfig):
+    """OpenVINO export config for ``Gemma4AssistantForCausalLM``.
+
+    The assistant model is the *small* half of the MTP-style speculative
+    decoding pair documented in transformers' ``gemma4_assistant``: it has
+    ``num_kv_shared_layers == num_hidden_layers`` so every layer consumes
+    ``shared_kv_states`` provided by the (large) target model. Consequently
+    the IR has *no* past-key-value inputs/outputs; instead its inputs are
+    flat ``full_attention_*`` / ``sliding_attention_*`` tensors plus
+    ``inputs_embeds`` (the concatenated backbone hidden states) and the
+    usual ``position_ids`` / ``attention_mask`` pair. Outputs are ``logits``
+    and the post-projected ``last_hidden_state``.
+    """
+
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (Gemma4AssistantDummyInputGenerator,)
+    MIN_TRANSFORMERS_VERSION = "5.5"
+    # The assistant has no past-KV cache (every layer is a shared-KV layer);
+    # declare ``use_past = False`` so the generic ``get_decoder_models_for_export``
+    # routing in optimum's text-generation path is a no-op.
+    use_past = False
+    use_past_in_inputs = False
+
+    def __init__(self, config, *args, **kwargs):
+        # ``get_decoder_models_for_export`` reconstructs the config with
+        # ``use_past`` / ``use_past_in_inputs`` keyword arguments which the
+        # base :class:`OpenVINOConfig.__init__` does not accept. Swallow them
+        # here since the assistant never uses a KV cache.
+        kwargs.pop("use_past", None)
+        kwargs.pop("use_past_in_inputs", None)
+        super().__init__(config, *args, **kwargs)
+
+    @property
+    def _MODEL_PATCHER(self):  # type: ignore[override]
+        from .model_patcher import Gemma4AssistantModelPatcher
+
+        return Gemma4AssistantModelPatcher
+
+    @property
+    def inputs(self) -> dict[str, dict[int, str]]:
+        return {
+            "inputs_embeds": {0: "batch_size", 1: "sequence_length"},
+            "position_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "kv_sequence_length"},
+            "full_attention_key": {0: "batch_size", 2: "kv_sequence_length"},
+            "full_attention_value": {0: "batch_size", 2: "kv_sequence_length"},
+            "sliding_attention_key": {0: "batch_size", 2: "kv_sequence_length"},
+            "sliding_attention_value": {0: "batch_size", 2: "kv_sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> dict[str, dict[int, str]]:
+        return {
+            "logits": {0: "batch_size", 1: "sequence_length"},
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+        }
 
 
 @register_in_tasks_manager("deci", *["text-generation", "text-generation-with-past"], library_name="transformers")
