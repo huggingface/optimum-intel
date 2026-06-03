@@ -9,7 +9,6 @@ from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
-
 from .configuration import OVQuantizationConfigBase
 from .modeling import MODEL_START_DOCSTRING, OVModel
 

@@ -3974,10 +3974,11 @@ class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
 
 @register_in_tasks_manager(
     "qwen3_vl",
-    *["image-text-to-text",
-      "feature-extraction",
-      "feature-extraction-with-past",
-      ],
+    *[
+        "image-text-to-text",
+        "feature-extraction",
+        "feature-extraction-with-past",
+    ],
     library_name="transformers",
 )
 class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
