@@ -439,10 +439,22 @@ class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         past_kv_values = []
         for layer_type in layer_types:
             if layer_type == "sliding_attention":
+                # Cap the sliding-attention past-KV length to the dummy past
+                # sequence length rather than the full sliding_window
+                # capacity.  With recent transformers, the model concatenates
+                # past_k with current_k at runtime, so past_k of size
+                # sliding_window would produce a key length of
+                # (sliding_window + seq) that does not match the dummy
+                # `attention_mask` of length (past_seq + seq), causing an
+                # sdpa shape mismatch during tracing.  Using
+                # min(sequence_length, sliding_window) keeps the dummy inputs
+                # consistent; at runtime OpenVINO's dynamic axes allow the
+                # KV-cache dim to grow up to sliding_window.
+                past_seq_len = min(self.sequence_length, self.sliding_window)
                 shape = (
                     self.batch_size,
                     self.num_key_value_heads,
-                    self.sliding_window,
+                    past_seq_len,
                     self.head_dim,
                 )
             else:

@@ -900,6 +900,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = OVGPTBigCodeForCausalLM
         elif model_type in SSM_MODELS:
             init_cls = OVModelWithMambaForCausalLM
+        elif model_type is not None and model_type.startswith("gemma4"):
+            # Lazy import to avoid circular dependency with modeling_gemma4_mtp,
+            # which itself imports OVModelForCausalLM.
+            from .modeling_gemma4_mtp import Gemma4OVForCausalLM  # noqa: F401
+
+            init_cls = Gemma4OVForCausalLM
         else:
             init_cls = cls
 
