@@ -81,6 +81,12 @@ from .modeling import (
     OVModelForZeroShotImageClassification,
 )
 from .modeling_decoder import OVModelForCausalLM
+from .modeling_gemma4_mtp import (
+    Gemma4AssistantOVForCausalLM,
+    OVAssistantForCausalLM,
+)
+# lazy via module __getattr__ — must be reachable as attributes of this package
+from .modeling_gemma4_mtp import Gemma4OVForCausalLM, OVGemma4ForCausalLM  # noqa: F401
 from .modeling_open_clip import (
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelOpenCLIPText,
