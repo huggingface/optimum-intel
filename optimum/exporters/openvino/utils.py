@@ -24,7 +24,7 @@ from transformers.utils import is_torch_available
 
 from openvino import Dimension, PartialShape, Symbol
 from openvino.utils.types import get_element_type
-from optimum.exporters.onnx.base import OnnxConfig
+from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import is_safetensors_available
 from optimum.utils import is_diffusers_available
@@ -87,7 +87,7 @@ def flattenize_inputs(inputs: List[Any]):
 
 
 def _get_input_info(
-    model: Union["PreTrainedModel", "ModelMixin"], config: OnnxConfig, dummy_inputs: Dict[str, Any]
+    model: Union["PreTrainedModel", "ModelMixin"], config: OpenVINOConfig, dummy_inputs: Dict[str, Any]
 ) -> List[InputInfo]:
     sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
     inputs = config.ordered_inputs(model)
@@ -129,7 +129,7 @@ def _get_input_info(
 
 
 def _get_dynamic_shapes_info(
-    model: Union["PreTrainedModel", "ModelMixin"], config: OnnxConfig, dummy_inputs: Dict[str, Any]
+    model: Union["PreTrainedModel", "ModelMixin"], config: OpenVINOConfig, dummy_inputs: Dict[str, Any]
 ) -> List[InputInfo]:
     import torch
 
@@ -248,7 +248,7 @@ def _get_open_clip_submodels_fn_and_export_configs(
     library_name: str = "open_clip",
     task: Optional[str] = None,
     preprocessors: List = None,
-    custom_export_configs: Dict[str, "OnnxConfig"] = None,
+    custom_export_configs: Dict[str, "OpenVINOConfig"] = None,
     fn_get_submodels: Callable = None,
 ):
     custom_export = {}
@@ -295,7 +295,7 @@ def _get_kokoro_submodels_fn_and_export_configs(
     library_name: str = "kokoro",
     task: Optional[str] = None,
     preprocessors: List = None,
-    custom_export_configs: Dict[str, "OnnxConfig"] = None,
+    custom_export_configs: Dict[str, "OpenVINOConfig"] = None,
     fn_get_submodels: Callable = None,
 ):
     export_config_constructor = TasksManager.get_exporter_config_constructor(
@@ -350,8 +350,7 @@ SSM_MODELS = [
     "qwen3_5_moe_text",
 ]
 
-# All transformers, diffusers, timm and sentence transformers models that are supported via optimum-onnx OnnxConfigs but that have currently no test
-# TODO: add tests for all models that are compatible and remove support for all others
+# All transformers, diffusers, timm and sentence transformers models that were supported via optimum-onnx OnnxConfigs for which support is now removed
 ONNX_SUPPORTED_ARCHITECTURES = {
     "big_bird",
     "chinese_clip",
@@ -363,7 +362,6 @@ ONNX_SUPPORTED_ARCHITECTURES = {
     "default-timm-config",
     "detr",
     "dinov2",
-    "donut-swin",
     "dpt",
     "efficientnet",
     "encoder-decoder",
@@ -400,7 +398,6 @@ ONNX_SUPPORTED_ARCHITECTURES = {
     "swin2sr",
     "swinv2",
     "table-transformer",
-    "trocr",
     "visual_bert",
     "vit_mae",
     "vit_msn",
