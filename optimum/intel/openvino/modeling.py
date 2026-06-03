@@ -14,7 +14,8 @@
 import logging
 import os
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, Dict
+from .configuration import OVWeightQuantizationConfig
 
 import numpy as np
 import openvino
@@ -56,6 +57,21 @@ from .configuration import OVQuantizationConfigBase
 from .modeling_base import OVBaseModel
 from .modeling_sam import OVSamModel
 from .utils import _is_timm_ov_dir, ensure_numpy
+from .utils import (
+    OV_LANGUAGE_MODEL_NAME,
+    OV_TEXT_EMBEDDINGS_MODEL_NAME,
+    OV_VISION_EMBEDDINGS_MODEL_NAME,
+    classproperty)
+from huggingface_hub import hf_hub_download
+from transformers import (
+    AutoConfig,
+    AutoImageProcessor,
+    AutoModel,
+    GenerationConfig,
+    GenerationMixin,
+    PretrainedConfig,
+    PreTrainedTokenizer,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -410,6 +426,9 @@ class OVModelForFeatureExtraction(OVModel):
     def _from_pretrained(cls, model_id: Union[str, Path], config: PretrainedConfig, *args, **kwargs):
         if config.model_type == "sam":
             return OVSamModel._from_pretrained(model_id, config, *args, **kwargs)
+        if config.model_type == "qwen3_vl":
+            from .modeling_visual_language import OVModelForVisualCausalLM
+            return OVModelForVisualCausalLM.from_pretrained(model_id, config=config, *args, **kwargs)
         else:
             return super()._from_pretrained(model_id, config, *args, **kwargs)
 

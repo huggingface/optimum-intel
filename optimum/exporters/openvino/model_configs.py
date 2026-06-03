@@ -3866,7 +3866,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = (
                 model.model.embed_tokens
-                if hasattr(model.model, "embed_tokens")
+                if hasattr(model, "model") and hasattr(model.model, "embed_tokens")
                 else _get_model_attribute(model, "language_model").embed_tokens
             )
             text_embedding.config = model.config
@@ -3974,7 +3974,10 @@ class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
 
 @register_in_tasks_manager(
     "qwen3_vl",
-    *["image-text-to-text"],
+    *["image-text-to-text",
+      "feature-extraction",
+      "feature-extraction-with-past",
+      ],
     library_name="transformers",
 )
 class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
