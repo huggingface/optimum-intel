@@ -468,7 +468,10 @@ class MiniCPM3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     ],
     library_name="transformers",
 )
-class SmolLM3OpenVINOConfig(BitnetOpenVINOConfig):
+class SmolLM3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     MIN_TRANSFORMERS_VERSION = "4.53.0"
     _MODEL_PATCHER = OVDecoderModelPatcher
 
