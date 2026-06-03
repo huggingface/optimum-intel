@@ -818,7 +818,7 @@ class LTXVaeDummyInputGenerator(DummyVisionInputGenerator):
 
 
 class LTXTransformerDummyInputGenerator(DummyVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("hidden_states", "width", "height", "num_frames", "rope_interpolation_scale")
+    SUPPORTED_INPUT_NAMES = ("hidden_states", "width", "height", "num_frames", "rope_interpolation_scale", "timestep")
 
     def __init__(
         self,
@@ -861,6 +861,9 @@ class LTXTransformerDummyInputGenerator(DummyVisionInputGenerator):
                     self.vae_spatial_compression_ratio,
                 ]
             )
+        if input_name == "timestep":
+            seq_len = self.num_frames * self.height * self.width
+            return self.random_float_tensor([self.batch_size, seq_len], framework=framework, dtype=float_dtype)
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
