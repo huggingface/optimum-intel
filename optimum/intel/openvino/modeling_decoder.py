@@ -679,7 +679,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             outputs=outputs, model_kwargs=model_kwargs, is_encoder_decoder=is_encoder_decoder, **kwargs
         )
 
-        if "position_ids" in model_kwargs:
+        # Starting from transformers 5.5, the base ``_update_model_kwargs_for_generation`` already
+        # appends the next position id to ``position_ids`` (see GenerationMixin in transformers
+        # ``generation/utils.py``). Avoid appending a second time on newer transformers to prevent
+        # ``position_ids`` from growing by 2 per decoding step.
+        if "position_ids" in model_kwargs and is_transformers_version("<", "5.5"):
             position_ids = model_kwargs["position_ids"]
             new_position_id = position_ids[..., -1:].clone()
             new_position_id += 1
