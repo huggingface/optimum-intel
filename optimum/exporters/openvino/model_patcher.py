@@ -7859,6 +7859,9 @@ def lfm2_short_conv_forward_patched(
     # in transformers < v5 attention_mask was never applied in Lfm2ShortConv https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/lfm2/modeling_lfm2.py#L485
     # until a fix was added in https://github.com/huggingface/transformers/pull/41790/
     if is_transformers_version(">=", "5"):
+        # since transformers v5.4, Lfm2ShortConv.slow_forward passes attention_mask as 3 positional arg
+        if attention_mask is None and is_transformers_version(">=", "5.4"):
+            attention_mask = cache_position
         dtype = x.dtype
         is_decoding = torch.tensor(seqlen == 1, dtype=dtype)
         x = (x * (attention_mask[:, :seqlen, None] * (1 - is_decoding) + is_decoding)).to(dtype)
