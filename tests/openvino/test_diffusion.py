@@ -1257,7 +1257,7 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
                 for width in [96, 128]:
                     for num_videos_per_prompt in [1, 2]:
                         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-                        outputs = pipeline(**inputs, num_videos_per_prompt=num_videos_per_prompt).frames
+                        outputs = np.array(pipeline(**inputs, num_videos_per_prompt=num_videos_per_prompt).frames)
                         self.assertEqual(outputs.shape, (batch_size * num_videos_per_prompt, 1, height, width, 3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
@@ -1338,10 +1338,10 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
     @require_diffusers
     def test_static_shape_generation(self, model_arch):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], compile=False, device=OPENVINO_DEVICE)
-        pipeline.reshape(batch_size=1, height=32, width=48)
+        pipeline.reshape(batch_size=1, height=64, width=96)
         pipeline.compile()
         # generation with incompatible size
-        height, width, batch_size = 64, 96, 1
+        height, width, batch_size = 96, 128, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
         from optimum.intel.openvino.modeling_diffusion import logger as diffusers_logger
 
@@ -1353,9 +1353,9 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
                     for log in warning_log.output
                 )
             )
-        self.assertTupleEqual(image.shape[-3:-1], (32, 48))
+        self.assertTupleEqual(image.shape[-3:-1], (64, 96))
         # generation without height / width provided
         inputs.pop("height")
         inputs.pop("width")
         image = pipeline(**inputs).frames[0]
-        self.assertTupleEqual(image.shape[-3:-1], (32, 48))
+        self.assertTupleEqual(image.shape[-3:-1], (64, 96))
