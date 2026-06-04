@@ -1430,12 +1430,11 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         self, outputs: ModelOutput, model_kwargs: Dict[str, Any], num_new_tokens: int = 1, **kwargs
     ) -> Dict[str, Any]:
         model_kwargs["cache_params"] = outputs.get("cache_params", None)
-        if (
-            model_kwargs.get("use_cache", True)
-            and "cache_position" in model_kwargs
-            and model_kwargs["cache_position"] is not None
-        ):
-            model_kwargs["cache_position"] = model_kwargs["cache_position"][-1:] + num_new_tokens
+        if model_kwargs.get("use_cache", True):
+            if "cache_position" in model_kwargs and model_kwargs["cache_position"] is not None:
+                model_kwargs["cache_position"] = model_kwargs["cache_position"][-1:] + num_new_tokens
+            elif model_kwargs.get("cache_params") is not None:
+                model_kwargs["cache_position"] = torch.tensor([num_new_tokens], dtype=torch.long)
 
         if "attention_mask" in model_kwargs:
             attention_mask = model_kwargs["attention_mask"]
@@ -1458,13 +1457,15 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         # Overwitten -- uses `cache_params` as opposed to `past_key_values`
 
         if self.use_cache:
-            # `cache_position` should have been initialized in `generate`
             if cache_position is None:
-                raise ValueError(
-                    "`cache_position` should not be None as it should have been initialized in "
-                    "`model.generate`, you are responsible for passing in a valid `cache_position` if "
-                    "you are calling `prepare_inputs_for_generation` directly with `use_cache=True`"
-                )
+                if is_transformers_version("<", "5.4"):
+                    raise ValueError(
+                        "`cache_position` should not be None as it should have been initialized in "
+                        "`model.generate`, you are responsible for passing in a valid `cache_position` if "
+                        "you are calling `prepare_inputs_for_generation` directly with `use_cache=True`"
+                    )
+                # infer from cache_params: None means prefill (0), otherwise means decoding stage
+                cache_position = torch.tensor([0 if cache_params is None else 1], device=input_ids.device, dtype=torch.long)
             if cache_position[0] > 0:
                 # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)
