@@ -1688,6 +1688,11 @@ class OVLTXPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTXPipel
     auto_model_class = LTXPipeline
 
     def __init__(self, *args, **kwargs):
+        # LTX-Video transformer cross-attention saturates in bf16 on bf16-capable CPUs,
+        # producing corduroy artifacts amplified by CFG. Default to fp32 unless overridden.
+        ov_config = kwargs.get("ov_config") or {}
+        if "INFERENCE_PRECISION_HINT" not in ov_config:
+            kwargs["ov_config"] = {**ov_config, "INFERENCE_PRECISION_HINT": "f32"}
         super().__init__(*args, **kwargs)
         if self.transformer is not None:
             self.transformer.__class__ = OVModelLTXTransformer
@@ -1699,6 +1704,9 @@ class OVLTXImageToVideoPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMix
     auto_model_class = LTXImageToVideoPipeline
 
     def __init__(self, *args, **kwargs):
+        ov_config = kwargs.get("ov_config") or {}
+        if "INFERENCE_PRECISION_HINT" not in ov_config:
+            kwargs["ov_config"] = {**ov_config, "INFERENCE_PRECISION_HINT": "f32"}
         super().__init__(*args, **kwargs)
         if self.transformer is not None:
             self.transformer.__class__ = OVModelLTXTransformer
