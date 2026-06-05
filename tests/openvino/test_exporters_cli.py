@@ -130,17 +130,10 @@ class OVCLIExportTestCase(unittest.TestCase):
                 ("text-generation-with-past", "exaone4"),
                 ("text-generation-with-past", "bitnet"),
                 ("text-generation-with-past", "qwen3_next"),
-            ]
-        )
-
-    if is_transformers_version("<", "5.0.0"):
-        SUPPORTED_ARCHITECTURES.extend(
-            [
                 ("image-text-to-text", "qwen3_vl_eagle3"),
             ]
         )
-
-    if is_transformers_version(">=", "5.0"):
+    else:
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation", "lfm2_moe"),

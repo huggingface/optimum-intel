@@ -672,12 +672,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     OVMODEL_CLASS = OVModelForVisualCausalLM
     TASK = "image-text-to-text"
 
-    if is_transformers_version("<=", "4.57.6"):
+    if is_transformers_version("<", "5"):
         # remote code models incompatible before transformers v4.54 and after transformers v4.57.6
         SUPPORTED_ARCHITECTURES += ["videochat_flash_qwen"]
         SUPPORT_VIDEO += ["videochat_flash_qwen"]
-
-    if is_transformers_version("<", "5"):
         # remote code models incompatible after transformers v5
         SUPPORTED_ARCHITECTURES += ["internvl_chat", "minicpmv"]
 

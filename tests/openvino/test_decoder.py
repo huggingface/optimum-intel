@@ -86,19 +86,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gemma2",
         "granite",
         "granitemoe",
-    )
-
-    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon_mamba", "granitemoehybrid", "lfm2")
-    if is_transformers_version("<", "5"):
-        SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version("<", "5"):
-        SUPPORTED_SSM_ARCHITECTURES += ("qwen3_next",)
-    if is_transformers_version(">=", "5.0"):
-        SUPPORTED_SSM_ARCHITECTURES += ("lfm2_moe",)
-
-    SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
-    SUPPORTED_ARCHITECTURES += (
         "glm",
         "mistral-nemo",
         "gemma3_text",
@@ -109,13 +96,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_oss",
         "gpt_oss_mxfp4",
         "afmoe",
+        "hunyuan_v1_dense",
     )
 
     # config loading failing coming from type mismatch coming from transformers v5.4
     if is_transformers_version("!=", "5.4"):
         SUPPORTED_ARCHITECTURES += ("mbart", "olmo", "cohere2", "phimoe", "olmo2")
-
-    SUPPORTED_ARCHITECTURES += ("hunyuan_v1_dense",)
 
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += (
@@ -141,6 +127,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "dbrx",
             "marian",
         )
+
+    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon_mamba", "granitemoehybrid", "lfm2")
+    if is_transformers_version("<", "5"):
+        SUPPORTED_SSM_ARCHITECTURES += ("zamba2", "qwen3_next")
+    else:
+        SUPPORTED_SSM_ARCHITECTURES += ("lfm2_moe",)
+
+    SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
+
     GENERATION_LENGTH = 100
 
     EXPECTED_NUM_SDPA = {

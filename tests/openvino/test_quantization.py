@@ -395,35 +395,30 @@ class OVQuantizerTest(unittest.TestCase):
                 "vision_embeddings_merger_model": {"f8e4m3": 2, "int4": 16},
             },
         ),
-    ]
-
-    SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET.extend(
-        [
-            (
-                OVModelForVisualCausalLM,
-                "qwen3_vl",
-                OVQuantizationConfig(
-                    bits=8,
-                    dataset="contextual",
-                    num_samples=1,
-                ),
-                {
-                    "lm_model": 14,
-                    "text_embeddings_model": 0,
-                    "vision_embeddings_model": 1,
-                    "vision_embeddings_merger_model": 44,
-                    "vision_embeddings_pos_model": 0,
-                },
-                {
-                    "lm_model": {"int8": 15},
-                    "text_embeddings_model": {"int8": 1},
-                    "vision_embeddings_model": {"int8": 1},
-                    "vision_embeddings_merger_model": {"int8": 32},
-                    "vision_embeddings_pos_model": {"int8": 1},
-                },
+        (
+            OVModelForVisualCausalLM,
+            "qwen3_vl",
+            OVQuantizationConfig(
+                bits=8,
+                dataset="contextual",
+                num_samples=1,
             ),
-        ]
-    )
+            {
+                "lm_model": 14,
+                "text_embeddings_model": 0,
+                "vision_embeddings_model": 1,
+                "vision_embeddings_merger_model": 44,
+                "vision_embeddings_pos_model": 0,
+            },
+            {
+                "lm_model": {"int8": 15},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 32},
+                "vision_embeddings_pos_model": {"int8": 1},
+            },
+        ),
+    ]
 
     @staticmethod
     def get_calibration_dataset(
