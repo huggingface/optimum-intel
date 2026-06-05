@@ -44,6 +44,7 @@ from transformers import (
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
+from transformers.video_utils import load_video
 from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TEST_IMAGE_URL, Timer
 
 from optimum.exporters.openvino.stateful import model_has_state
@@ -926,8 +927,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         )
 
         if model_arch in self.SUPPORT_VIDEO:
-            from transformers.video_utils import load_video
-
             video_path = hf_hub_download(
                 repo_id="raushan-testing-hf/videos-test",
                 filename="sample_demo_1.mp4",
@@ -1041,8 +1040,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             self.assertIsInstance(outputs[0], str)
 
             if model_arch in self.SUPPORT_VIDEO:
-                from transformers.video_utils import load_video
-
                 video_path = hf_hub_download(
                     repo_id="raushan-testing-hf/videos-test",
                     filename="sample_demo_1.mp4",

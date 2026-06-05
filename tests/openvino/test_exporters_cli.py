@@ -210,20 +210,15 @@ class OVCLIExportTestCase(unittest.TestCase):
             "expected_chat_template": True,
             "remote_code": False,
         },
+        "glm": {  # transformers, no processor, no simplified chat template
+            "num_tokenizers": 2,
+            "task": "text-generation-with-past",
+            "expected_chat_template": True,
+            "simplified_chat_template": False,
+            "processor_chat_template": False,
+            "remote_code": True,
+        },
     }
-
-    TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
-        {
-            "glm": {  # transformers, no processor, no simplified chat template
-                "num_tokenizers": 2,
-                "task": "text-generation-with-past",
-                "expected_chat_template": True,
-                "simplified_chat_template": False,
-                "processor_chat_template": False,
-                "remote_code": True,
-            },
-        }
-    )
 
     SUPPORTED_SD_HYBRID_ARCHITECTURES = [
         ("flux", 7, 56),
@@ -781,10 +776,8 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     def test_filtered_architectures(cls):
         expected = {"llava-qwen2", "phi3_v", "phi4mm", "minicpmo"}
-        if is_transformers_version(">", "4.57.6"):
-            expected.add("videochat_flash_qwen")
         if is_transformers_version(">=", "5"):
-            expected.update({"llama4", "llava_next_video", "minicpmv", "internvl_chat"})
+            expected.update({"videochat_flash_qwen", "llama4", "llava_next_video", "minicpmv", "internvl_chat"})
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.SUPPORTED_4BIT_CONFIGURATIONS}
