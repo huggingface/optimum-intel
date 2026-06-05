@@ -1129,7 +1129,8 @@ def get_diffusion_models_for_export_ext(
 ):
     is_sdxl = pipeline.__class__.__name__.startswith("StableDiffusionXL")
     is_sd3 = pipeline.__class__.__name__.startswith("StableDiffusion3")
-    is_flux = pipeline.__class__.__name__.startswith("Flux")
+    is_flux2 = pipeline.__class__.__name__.startswith("Flux2")
+    is_flux = pipeline.__class__.__name__.startswith("Flux") and not is_flux2
     is_sana = pipeline.__class__.__name__.startswith("Sana")
     is_ltx_video = pipeline.__class__.__name__.startswith("LTX")
     is_sd = pipeline.__class__.__name__.startswith("StableDiffusion") and not is_sd3
@@ -1151,6 +1152,8 @@ def get_diffusion_models_for_export_ext(
 
     elif is_sd3:
         models_for_export = get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+    elif is_flux2:
+        models_for_export = get_flux2_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_flux:
         models_for_export = get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_sana:
@@ -1397,6 +1400,128 @@ def get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype):
         )
         export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
         models_for_export["text_encoder_3"] = (text_encoder_3, export_config)
+
+    return models_for_export
+
+
+class _Flux2Qwen3TextEncoderWrapper(nn.Module):
+    """
+    Wraps the FLUX.2-klein Qwen3 text encoder so the exported OpenVINO model emits the
+    prompt embedding the transformer actually consumes.
+
+    The FLUX.2 pipeline (``Flux2KleinPipeline._get_qwen3_prompt_embeds``) does not use
+    Qwen3's final ``last_hidden_state``. Instead it stacks the hidden states of a few
+    intermediate layers (default 9, 18, 27) and reshapes them to
+    ``(batch, seq_len, n_layers * hidden_size)`` — e.g. ``3 * 2560 = 7680``, which equals
+    the transformer's ``joint_attention_dim``. This wrapper bakes that computation into
+    the graph so the text-encoder IR is self-contained and correct.
+
+    Implementation notes:
+    - Uses the base ``Qwen3Model`` (``text_encoder.model``), skipping the LM head: the
+      logits are unused and tied weights / the large vocab projection only bloat the IR.
+    - ``use_cache=False`` so there are no nested ``past_key_values`` tuples (which would
+      otherwise produce ``prim::TupleConstruct`` nodes OpenVINO cannot mark).
+    - Returns a single-key dict so the traced forward yields one clean tensor output.
+    """
+
+    def __init__(self, text_encoder, hidden_states_layers=(9, 18, 27)):
+        super().__init__()
+        self.model = text_encoder.model  # base Qwen3Model (no LM head)
+        self.config = text_encoder.config
+        self.hidden_states_layers = tuple(hidden_states_layers)
+
+    def forward(self, input_ids, attention_mask=None):
+        import torch
+
+        output = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            use_cache=False,
+        )
+        out = torch.stack([output.hidden_states[k] for k in self.hidden_states_layers], dim=1)
+        batch_size, num_layers, seq_len, hidden_dim = out.shape
+        prompt_embeds = out.permute(0, 2, 1, 3).reshape(batch_size, seq_len, num_layers * hidden_dim)
+        return {"last_hidden_state": prompt_embeds}
+
+
+def get_flux2_models_for_export(pipeline, exporter, int_dtype, float_dtype):
+    """
+    Build the export configs for a FLUX.2 pipeline (``Flux2KleinPipeline`` etc.).
+
+    Mirrors ``get_flux_models_for_export`` but accounts for FLUX.2 using a Qwen3 text
+    encoder (no pooled CLIP embedding) and a 4-axis RoPE transformer:
+    - text_encoder: Qwen3 wrapped to emit the stacked prompt embedding (``qwen3-text-encoder``).
+    - transformer: ``flux2-transformer`` config (no ``pooled_projections``, 4 RoPE axes).
+    - vae encoder/decoder: identical to FLUX.1 (``AutoencoderKLFlux2`` exposes ``latent_dist``).
+    """
+    models_for_export = {}
+
+    # Text encoder (Qwen3): export the stacked intermediate-layer prompt embedding.
+    text_encoder = getattr(pipeline, "text_encoder", None)
+    if text_encoder is not None:
+        wrapped_text_encoder = _Flux2Qwen3TextEncoderWrapper(text_encoder)
+        text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=wrapped_text_encoder,
+            exporter=exporter,
+            library_name="diffusers",
+            task="feature-extraction",
+            model_type="qwen3-text-encoder",
+        )
+        text_encoder_export_config = text_encoder_config_constructor(
+            wrapped_text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        text_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+        models_for_export["text_encoder"] = (wrapped_text_encoder, text_encoder_export_config)
+
+    transformer = pipeline.transformer
+    transformer.config.text_encoder_projection_dim = transformer.config.joint_attention_dim
+    transformer.config.requires_aesthetics_score = getattr(pipeline.config, "requires_aesthetics_score", False)
+    transformer.config.time_cond_proj_dim = None
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=transformer,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="flux2-transformer",
+    )
+    transformer_export_config = export_config_constructor(
+        pipeline.transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    transformer_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["transformer"] = (transformer, transformer_export_config)
+
+    # VAE Encoder
+    vae_encoder = copy.deepcopy(pipeline.vae)
+    vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="vae-encoder",
+    )
+    vae_encoder_export_config = vae_config_constructor(
+        vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
+
+    # VAE Decoder
+    vae_decoder = copy.deepcopy(pipeline.vae)
+    vae_decoder.forward = lambda latent_sample: vae_decoder.decode(z=latent_sample)
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_decoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="vae-decoder",
+    )
+    vae_decoder_export_config = vae_config_constructor(
+        vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
 
     return models_for_export
 

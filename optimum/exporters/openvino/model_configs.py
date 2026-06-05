@@ -2886,6 +2886,94 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
         return common_inputs
 
 
+def _num_rope_axes(normalized_config) -> int:
+    # FLUX.1 uses 3 RoPE axes (T, H, W); FLUX.2 uses len(axes_dims_rope) axes
+    # (e.g. [32, 32, 32, 32] -> 4 axes for T, H, W, L). img_ids / txt_ids must
+    # therefore carry that many coordinate columns.
+    axes_dims = getattr(normalized_config, "axes_dims_rope", None)
+    return len(axes_dims) if axes_dims else 3
+
+
+class DummyFlux2TransformerVisionInputGenerator(DummyFluxTransformerInputGenerator):
+    """`img_ids` generator for FLUX.2: uses len(axes_dims_rope) coordinate columns."""
+
+    def __init__(self, task, normalized_config, **kwargs):
+        super().__init__(task, normalized_config, **kwargs)
+        self.num_rope_axes = _num_rope_axes(normalized_config)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "img_ids":
+            img_ids_height = self.height // 2
+            img_ids_width = self.width // 2
+            return self.random_int_tensor(
+                [img_ids_height * img_ids_width, self.num_rope_axes],
+                min_value=0,
+                max_value=min(img_ids_height, img_ids_width),
+                framework=framework,
+                dtype=float_dtype,
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyFlux2TextInputGenerator(DummyFluxTextInputGenerator):
+    """`txt_ids` generator for FLUX.2: uses len(axes_dims_rope) coordinate columns."""
+
+    def __init__(self, task, normalized_config, **kwargs):
+        super().__init__(task, normalized_config, **kwargs)
+        self.num_rope_axes = _num_rope_axes(normalized_config)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "txt_ids":
+            import torch
+
+            shape = [self.sequence_length, self.num_rope_axes]
+            return torch.full(shape, 0, dtype=DTYPE_MAPPER.pt(float_dtype))
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+@register_in_tasks_manager("flux2-transformer", *["semantic-segmentation"], library_name="diffusers")
+@register_in_tasks_manager("flux2-transformer-2d", *["semantic-segmentation"], library_name="diffusers")
+class Flux2TransformerOpenVINOConfig(FluxTransformerOpenVINOConfig):
+    """
+    Export config for ``Flux2Transformer2DModel`` (FLUX.2-klein / -dev).
+
+    Differs from FLUX.1 in two ways:
+    - The text encoder is Qwen3 (not CLIP), so there is no pooled text embedding;
+      ``pooled_projections`` is dropped from both the dummy generators and the inputs.
+    - ``axes_dims_rope`` has 4 entries, so ``img_ids`` / ``txt_ids`` carry 4 coordinate
+      columns (handled by the FLUX.2 dummy generators above).
+    """
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummyTransformerTimestpsInputGenerator,
+        DummyFlux2TransformerVisionInputGenerator,
+        DummyFlux2TextInputGenerator,
+    )
+
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        common_inputs.pop("pooled_projections", None)
+        return common_inputs
+
+
+@register_in_tasks_manager("qwen3-text-encoder", *["feature-extraction"], library_name="diffusers")
+class Flux2Qwen3TextEncoderOpenVINOConfig(Gemma2TextEncoderOpenVINOConfig):
+    """
+    Export config for the FLUX.2-klein Qwen3 text encoder.
+
+    Inherits the ``input_ids`` / ``attention_mask`` inputs and the LLM-style
+    ``SanaTextEncoderModelPatcher`` from the gemma2 text-encoder config. The model
+    passed for export is a thin wrapper (see ``get_flux2_models_for_export``) that
+    stacks the configured Qwen3 hidden-state layers into a single prompt-embedding
+    tensor, hence the single ``last_hidden_state`` output.
+    """
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
+
+
 class LTXVaeDummyInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("pixel_values", "pixel_mask", "sample", "latent_sample", "timestep")
 

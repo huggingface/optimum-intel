@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import functools
 import importlib
 import inspect
 import logging
@@ -119,6 +120,13 @@ if is_diffusers_version(">=", "0.33.0"):
     from diffusers import SanaSprintPipeline
 else:
     SanaSprintPipeline = object
+
+# FLUX.2-klein landed on a diffusers dev branch (0.39.0.dev0); guard on importability
+# rather than a fixed version so dev tags before/after the feature are handled gracefully.
+try:
+    from diffusers import Flux2KleinPipeline
+except ImportError:
+    Flux2KleinPipeline = object
 
 
 if is_diffusers_version(">=", "0.35.0"):
@@ -799,13 +807,18 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             elif inputs.get_any_name() == "pooled_projections":
                 shapes[inputs] = [batch_size, self.transformer.config["pooled_projection_dim"]]
             elif inputs.get_any_name() == "img_ids":
+                # Number of RoPE coordinate axes: 3 for FLUX.1 (T,H,W), 4 for FLUX.2 (T,H,W,L).
+                num_rope_axes = len(self.transformer.config.get("axes_dims_rope", [None, None, None]))
                 shapes[inputs] = (
-                    [batch_size, packed_height_width, 3]
+                    [batch_size, packed_height_width, num_rope_axes]
                     if is_diffusers_version("<", "0.31.0")
-                    else [packed_height_width, 3]
+                    else [packed_height_width, num_rope_axes]
                 )
             elif inputs.get_any_name() == "txt_ids":
-                shapes[inputs] = [batch_size, -1, 3] if is_diffusers_version("<", "0.31.0") else [-1, 3]
+                num_rope_axes = len(self.transformer.config.get("axes_dims_rope", [None, None, None]))
+                shapes[inputs] = (
+                    [batch_size, -1, num_rope_axes] if is_diffusers_version("<", "0.31.0") else [-1, num_rope_axes]
+                )
             elif inputs.get_any_name() in ["height", "width", "num_frames", "rope_interpolation_scale"]:
                 shapes[inputs] = inputs.get_partial_shape()
             else:
@@ -1657,6 +1670,177 @@ class OVSanaSprintPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, S
     auto_model_class = SanaSprintPipeline
 
 
+class OVFlux2Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, Flux2KleinPipeline):
+    """
+    OpenVINO runtime pipeline for FLUX.2-klein (Flux2KleinPipeline).
+
+    FLUX.2-klein differs fundamentally from FLUX.1 (which OVFluxPipeline targets): the text
+    encoder is Qwen3 (not CLIP+T5), there is no pooled text embedding, the transformer uses 4
+    RoPE axes, and the VAE de-normalizes latents with a BatchNorm rather than a scaling_factor.
+    Because this class composes the diffusers ``Flux2KleinPipeline`` (its 3rd base), the bulk of
+    the FLUX.2 logic — ``prepare_latents``, the 4-column id helpers, the denoise loop, packing,
+    ``check_inputs`` — is inherited unchanged. Only the pieces that touch the OpenVINO components
+    are overridden here:
+
+    - ``encode_prompt`` / ``_get_qwen3_prompt_embeds_ov``: the Qwen3 layer-stack -> 7680-dim
+      projection is baked into the exported text-encoder IR, so encode_prompt just chat-templates,
+      tokenizes (int64, padded to ``max_sequence_length``) and runs the IR once, reading
+      ``last_hidden_state`` (shape ``[B, L, 7680]``) directly.
+    - ``__init__`` attaches a ``vae.bn`` shim (the BatchNorm running stats live in the source VAE
+      checkpoint, baked into ``vae_decoder/config.json`` at export) and wraps the OV transformer
+      so the diffusers-produced 3-D ``img_ids``/``txt_ids`` ([B, S, 4]) are squeezed to the 2-D
+      ([S, 4]) shape the transformer IR declares.
+    """
+
+    main_input_name = "prompt"
+    export_feature = "text-to-image"
+    auto_model_class = Flux2KleinPipeline
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._attach_vae_bn()
+        self._wrap_transformer_ids()
+
+    def _attach_vae_bn(self):
+        """
+        Expose ``self.vae.bn.running_mean`` / ``running_var`` so the inherited __call__ can
+        de-normalize latents before decode (FLUX.2 VAE has no scaling_factor; it uses a BN).
+
+        Stats are read from the exported ``vae_decoder`` config (baked there at export time as
+        ``latents_bn_mean`` / ``latents_bn_var``); if absent, fall back to the source VAE
+        ``diffusion_pytorch_model.safetensors`` sibling of the IR directory.
+        """
+        if getattr(self.vae, "bn", None) is not None and getattr(self.vae.bn, "running_mean", None) is not None:
+            return
+
+        decoder_config = self.vae_decoder.config
+        mean = decoder_config.get("latents_bn_mean", None)
+        var = decoder_config.get("latents_bn_var", None)
+
+        if mean is not None and var is not None:
+            running_mean = torch.tensor(mean, dtype=torch.float32)
+            running_var = torch.tensor(var, dtype=torch.float32)
+        else:
+            running_mean, running_var = self._load_vae_bn_from_source()
+
+        class _VaeBatchNormStats:
+            pass
+
+        bn = _VaeBatchNormStats()
+        bn.running_mean = running_mean
+        bn.running_var = running_var
+        self.vae.bn = bn
+
+        if "batch_norm_eps" not in self.vae.config:
+            self.vae_decoder.register_to_config(batch_norm_eps=1e-4)
+
+    def _load_vae_bn_from_source(self):
+        save_dir = self.model_save_dir
+        save_dir = save_dir.name if isinstance(save_dir, TemporaryDirectory) else str(save_dir)
+        candidates = [
+            os.path.join(save_dir, "vae", "diffusion_pytorch_model.safetensors"),
+            os.path.join(save_dir, os.pardir, "vae", "diffusion_pytorch_model.safetensors"),
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                from safetensors import safe_open
+
+                with safe_open(path, framework="pt") as f:
+                    keys = set(f.keys())
+                    if "bn.running_mean" in keys and "bn.running_var" in keys:
+                        return (
+                            f.get_tensor("bn.running_mean").float(),
+                            f.get_tensor("bn.running_var").float(),
+                        )
+        raise ValueError(
+            "FLUX.2 VAE BatchNorm statistics (bn.running_mean / bn.running_var) were not found in the "
+            "exported vae_decoder config nor in a sibling vae/diffusion_pytorch_model.safetensors. "
+            "Re-export with an optimum-intel that bakes latents_bn_mean/latents_bn_var into the "
+            "vae_decoder config, or place the source VAE checkpoint next to the IR."
+        )
+
+    def _wrap_transformer_ids(self):
+        """
+        The transformer IR declares ``img_ids`` / ``txt_ids`` as rank-2 ``[seq, 4]`` (the batch
+        dim is stripped inside the traced Flux2Transformer2DModel.forward), but the inherited
+        diffusers __call__ passes rank-3 ``[B, seq, 4]``. Squeeze the batch dim at the OV
+        transformer boundary (the per-batch id rows are identical), leaving the 3-D ``latent_ids``
+        used elsewhere (e.g. _unpack_latents_with_ids) untouched.
+        """
+        transformer = self.transformer
+        original_forward = transformer.forward
+
+        @functools.wraps(original_forward)
+        def forward_with_squeezed_ids(*args, **kwargs):
+            for name in ("img_ids", "txt_ids"):
+                value = kwargs.get(name, None)
+                if value is not None and getattr(value, "ndim", 2) == 3:
+                    kwargs[name] = value[0]
+            return original_forward(*args, **kwargs)
+
+        transformer.forward = forward_with_squeezed_ids
+
+    def _get_qwen3_prompt_embeds_ov(self, prompt, max_sequence_length=512):
+        """
+        OpenVINO replacement for Flux2KleinPipeline._get_qwen3_prompt_embeds.
+
+        The exported text-encoder IR already performs the (9, 18, 27) hidden-state stack and the
+        reshape to 7680, so this only chat-templates + tokenizes and runs the IR once per prompt.
+        """
+        embeds = []
+        for single_prompt in prompt:
+            text = self.tokenizer.apply_chat_template(
+                [{"role": "user", "content": single_prompt}],
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+            inputs = self.tokenizer(
+                text,
+                return_tensors="pt",
+                padding="max_length",
+                truncation=True,
+                max_length=max_sequence_length,
+            )
+            # The text-encoder IR declares int64 input_ids / attention_mask.
+            outputs = self.text_encoder(
+                input_ids=inputs.input_ids.to(torch.int64),
+                attention_mask=inputs.attention_mask.to(torch.int64),
+            )
+            embeds.append(outputs.last_hidden_state)
+        prompt_embeds = torch.cat(embeds, dim=0)
+        return prompt_embeds.to(dtype=self.transformer.dtype)
+
+    def encode_prompt(
+        self,
+        prompt,
+        device=None,
+        num_images_per_prompt=1,
+        prompt_embeds=None,
+        max_sequence_length=512,
+        text_encoder_out_layers=(9, 18, 27),
+    ):
+        """
+        FLUX.2 prompt encoding over the OpenVINO Qwen3 text encoder. ``text_encoder_out_layers`` is
+        accepted for signature compatibility but is informational only: the layer selection is fixed
+        inside the exported IR.
+        """
+        device = device or self._execution_device
+        if prompt is None:
+            prompt = ""
+        prompt = [prompt] if isinstance(prompt, str) else prompt
+
+        if prompt_embeds is None:
+            prompt_embeds = self._get_qwen3_prompt_embeds_ov(prompt, max_sequence_length=max_sequence_length)
+
+        batch_size, seq_len, _ = prompt_embeds.shape
+        prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
+        prompt_embeds = prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
+
+        text_ids = self._prepare_text_ids(prompt_embeds).to(device)
+        return prompt_embeds, text_ids
+
+
 class OVLTXPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTXPipeline):
     main_input_name = "prompt"
     export_feature = "text-to-video"
@@ -1747,6 +1931,10 @@ if is_diffusers_version(">=", "0.32.0"):
 if is_diffusers_version(">=", "0.33.0"):
     SUPPORTED_OV_PIPELINES.append(OVSanaSprintPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana-sprint"] = OVSanaSprintPipeline
+
+if Flux2KleinPipeline is not object:
+    SUPPORTED_OV_PIPELINES.append(OVFlux2Pipeline)
+    OV_TEXT2IMAGE_PIPELINES_MAPPING["flux2"] = OVFlux2Pipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,
