@@ -411,12 +411,14 @@ class OVModelForFeatureExtraction(OVModel):
 
     @classmethod
     def _from_pretrained(cls, model_id: Union[str, Path], config: PretrainedConfig, *args, **kwargs):
+        from .modeling_visual_language import MODEL_TYPE_TO_FEATURE_EXTRACTION_CLS_MAPPING
+
         if config.model_type == "sam":
             return OVSamModel._from_pretrained(model_id, config, *args, **kwargs)
-        if config.model_type == "qwen3_vl":
-            from .modeling_visual_language import OVModelForVisualCausalLM
+        if config.model_type in MODEL_TYPE_TO_FEATURE_EXTRACTION_CLS_MAPPING.keys():
+            from .modeling_visual_language import _OVModelForVisualFeatureExtraction
 
-            return OVModelForVisualCausalLM.from_pretrained(model_id, config=config, *args, **kwargs)
+            return _OVModelForVisualFeatureExtraction.from_pretrained(model_id, config=config, *args, **kwargs)
         else:
             return super()._from_pretrained(model_id, config, *args, **kwargs)
 

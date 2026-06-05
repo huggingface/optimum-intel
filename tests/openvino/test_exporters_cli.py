@@ -103,6 +103,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("audio-classification", "wav2vec2"),
         ("fill-mask", "bert"),
         ("feature-extraction", "blenderbot"),
+        ("feature-extraction", "qwen3_vl_embedding"),
         ("text-to-image", "stable-diffusion"),
         ("text-to-image", "stable-diffusion-xl"),
         ("image-to-image", "stable-diffusion-xl-refiner"),
