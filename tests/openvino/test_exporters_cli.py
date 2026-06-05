@@ -103,7 +103,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("audio-classification", "wav2vec2"),
         ("fill-mask", "bert"),
         ("feature-extraction", "blenderbot"),
-        ("feature-extraction", "qwen3_vl_embedding"),
         ("text-to-image", "stable-diffusion"),
         ("text-to-image", "stable-diffusion-xl"),
         ("image-to-image", "stable-diffusion-xl-refiner"),
@@ -122,6 +121,13 @@ class OVCLIExportTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "cohere2"),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.57"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("feature-extraction", "qwen3_vl_embedding"),
             ]
         )
 

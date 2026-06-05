@@ -1063,7 +1063,6 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelOpenCLIPForZeroShotImageClassification, "open-clip", False),
         (OVModelForVisualCausalLM, "llava", False),
         (OVModelForVisualCausalLM, "qwen2_vl", False),
-        (OVModelForFeatureExtraction, "qwen3_vl_embedding", False),
     ]
 
     if is_transformers_version("<", "4.54.0"):
@@ -1081,6 +1080,11 @@ class OVWeightCompressionTest(unittest.TestCase):
     if is_transformers_version(">=", "4.57.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen3_vl", False))
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "hunyuan_v1_dense", False))
+
+    if is_transformers_version(">=", "4.57"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append(
+            (OVModelForFeatureExtraction, "qwen3_vl_embedding", False)
+        )
 
     if is_transformers_version("==", "4.57.6"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForSpeechSeq2Seq, "qwen3_asr", True))
@@ -1341,7 +1345,9 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     @parameterized.expand(
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION,
-        name_func=lambda testcase_func, param_num, params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[1])}",
+        name_func=lambda testcase_func,
+        param_num,
+        params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[1])}",
     )
     def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type, trust_remote_code):
         model = model_cls.from_pretrained(
@@ -1566,7 +1572,9 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     @parameterized.expand(
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION,
-        name_func=lambda testcase_func, param_num, params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[1])}",
+        name_func=lambda testcase_func,
+        param_num,
+        params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[1])}",
     )
     def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type, trust_remote_code):
         model = model_cls.from_pretrained(
@@ -1699,7 +1707,9 @@ class OVWeightCompressionTest(unittest.TestCase):
         if is_transformers_version(">=", "5.5.0")
         else [],
         skip_on_empty=True,
-        name_func=lambda testcase_func, param_num, params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[0])}",
+        name_func=lambda testcase_func,
+        param_num,
+        params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[0])}",
     )
     def test_build_dataset(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
