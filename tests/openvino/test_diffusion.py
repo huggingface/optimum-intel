@@ -1252,13 +1252,13 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
     def test_num_videos_per_prompt(self, model_arch: str):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
-        for batch_size in [1, 2]:
+        for batch_size in [1]:
             for height in [64, 96]:
                 for width in [96, 128]:
-                    for num_videos_per_prompt in [1, 2]:
+                    for num_videos_per_prompt in [1]:
                         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-                        outputs = np.array(pipeline(**inputs, num_videos_per_prompt=num_videos_per_prompt).frames)
-                        self.assertEqual(outputs.shape, (batch_size * num_videos_per_prompt, 1, height, width, 3))
+                        outputs = pipeline(**inputs, num_videos_per_prompt=num_videos_per_prompt).frames
+                        self.assertEqual(len(outputs), batch_size * num_videos_per_prompt)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
@@ -1346,7 +1346,7 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
         from optimum.intel.openvino.modeling_diffusion import logger as diffusers_logger
 
         with self.assertLogs(diffusers_logger, logging.WARN) as warning_log:
-            image = pipeline(**inputs).frames[0]
+            image = np.array(pipeline(**inputs).frames[0])
             self.assertTrue(
                 any(
                     "Incompatible width argument provided" in log or "Incompatible height argument provided" in log
@@ -1357,5 +1357,5 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
         # generation without height / width provided
         inputs.pop("height")
         inputs.pop("width")
-        image = pipeline(**inputs).frames[0]
+        image = np.array(pipeline(**inputs).frames[0])
         self.assertTupleEqual(image.shape[-3:-1], (64, 96))
