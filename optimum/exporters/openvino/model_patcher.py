@@ -9992,3 +9992,85 @@ class KokoroModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model._orig_forward
+
+
+class Qwen3TTSTalkerModelWrapper(nn.Module):
+    """Structural holder for the Qwen3-TTS talker decoder stack used during export.
+
+    It exposes the talker decoder layers and final norm with an export-friendly
+    forward signature whose parameters match the stateless graph inputs
+    (``inputs_embeds``, ``attention_mask``, ``cos``, ``sin``, ``past_key``, ``past_value``).
+    The actual stateless computation is installed by :class:`Qwen3TTSTalkerModelPatcher`.
+    """
+
+    def __init__(self, talker_model):
+        super().__init__()
+        self.layers = talker_model.layers
+        self.norm = talker_model.norm
+        self.config = talker_model.config
+        self.num_attention_heads = self.config.num_attention_heads
+        self.num_key_value_heads = self.config.num_key_value_heads
+        self.head_dim = getattr(self.config, "head_dim", self.config.hidden_size // self.num_attention_heads)
+        self.scaling = self.head_dim**-0.5
+
+    def forward(self, inputs_embeds, attention_mask, cos, sin, past_key, past_value):
+        raise RuntimeError(
+            "Qwen3TTSTalkerModelWrapper must be used within Qwen3TTSTalkerModelPatcher for OpenVINO export."
+        )
+
+
+class Qwen3TTSTalkerModelPatcher(ModelPatcher):
+    """Rewrites the Qwen3-TTS talker stack into a stateless, KV-explicit forward.
+
+    The talker decoder (28 layers + final norm) dominates Qwen3-TTS inference. For
+    OpenVINO export it is traced as a stateless graph whose rotary ``cos``/``sin`` and
+    per-layer key/value cache are passed explicitly. The attention/rotary math reuses the
+    ``qwen_tts`` helpers (``rotate_half``, ``eager_attention_forward``) and the model's own
+    weight modules, so nothing is re-implemented.
+    """
+
+    def __init__(self, config, model, model_kwargs=None):
+        super().__init__(config, model, model_kwargs)
+        from qwen_tts.core.models.modeling_qwen3_tts import eager_attention_forward, rotate_half
+
+        wrapper = self._model
+        num_heads = wrapper.num_attention_heads
+        num_kv = wrapper.num_key_value_heads
+        head_dim = wrapper.head_dim
+        scaling = wrapper.scaling
+
+        def patched_forward(inputs_embeds, attention_mask, cos, sin, past_key, past_value):
+            cos_u = cos.unsqueeze(1)
+            sin_u = sin.unsqueeze(1)
+            hidden = inputs_embeds
+            new_k_list = []
+            new_v_list = []
+            for idx, layer in enumerate(wrapper.layers):
+                attn = layer.self_attn
+                bs, seq, _ = hidden.shape
+                residual = hidden
+                h = layer.input_layernorm(hidden)
+                q = attn.q_norm(attn.q_proj(h).view(bs, seq, num_heads, head_dim)).transpose(1, 2)
+                k = attn.k_norm(attn.k_proj(h).view(bs, seq, num_kv, head_dim)).transpose(1, 2)
+                v = attn.v_proj(h).view(bs, seq, num_kv, head_dim).transpose(1, 2)
+                q = (q * cos_u) + (rotate_half(q) * sin_u)
+                k = (k * cos_u) + (rotate_half(k) * sin_u)
+                new_k_list.append(k)
+                new_v_list.append(v)
+                k = torch.cat([past_key[idx], k], dim=2)
+                v = torch.cat([past_value[idx], v], dim=2)
+                attn_out, _ = eager_attention_forward(attn, q, k, v, attention_mask, scaling)
+                attn_out = attn_out.reshape(bs, seq, -1)
+                attn_out = attn.o_proj(attn_out)
+                hidden = residual + attn_out
+                residual = hidden
+                h = layer.post_attention_layernorm(hidden)
+                hidden = residual + layer.mlp(h)
+            hidden = wrapper.norm(hidden)
+            return {
+                "last_hidden_state": hidden,
+                "present_key": torch.stack(new_k_list, dim=0),
+                "present_value": torch.stack(new_v_list, dim=0),
+            }
+
+        self.patched_forward = patched_forward
