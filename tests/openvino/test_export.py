@@ -101,7 +101,14 @@ class ExportModelTest(unittest.TestCase):
     }
 
     if is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM, "exaone4": OVModelForCausalLM, "lfm2": OVModelForCausalLM, "qwen3_next": OVModelForCausalLM})
+        SUPPORTED_ARCHITECTURES.update(
+            {
+                "zamba2": OVModelForCausalLM,
+                "exaone4": OVModelForCausalLM,
+                "lfm2": OVModelForCausalLM,
+                "qwen3_next": OVModelForCausalLM,
+            }
+        )
 
     if is_transformers_version("<", "4.58.0"):
         SUPPORTED_ARCHITECTURES.update({"afmoe": OVModelForCausalLM})

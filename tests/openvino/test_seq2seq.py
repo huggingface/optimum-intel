@@ -159,9 +159,17 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
     UNSUPPORTED_ARCHITECTURES = {arch for arch, supported in _is_model_supported.items() if not supported}
 
     SUPPORT_STATEFUL = (
-        "t5", "mt5", "longt5",
-        "bart", "blenderbot", "blenderbot-small", "m2m_100", "marian", "mbart",
-        "pegasus", "bigbird_pegasus",
+        "t5",
+        "mt5",
+        "longt5",
+        "bart",
+        "blenderbot",
+        "blenderbot-small",
+        "m2m_100",
+        "marian",
+        "mbart",
+        "pegasus",
+        "bigbird_pegasus",
     )
 
     def test_find_untested_architectures(self):

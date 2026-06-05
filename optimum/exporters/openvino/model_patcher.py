@@ -15,7 +15,6 @@
 import functools
 import inspect
 import logging
-import logging as log
 import math
 import types
 from dataclasses import dataclass
