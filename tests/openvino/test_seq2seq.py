@@ -26,9 +26,6 @@ import torch
 from huggingface_hub import hf_hub_download
 from parameterized import parameterized
 from PIL import Image
-
-# AutoModelForVision2Seq is deprecated since v4.54
-# https://github.com/huggingface/transformers/blob/v4.54.0/src/transformers/models/auto/modeling_auto.py#L2151
 from transformers import (
     AutoConfig,
     AutoImageProcessor,
@@ -69,9 +66,6 @@ from optimum.intel.openvino.modeling_text2speech import (
 from optimum.intel.openvino.modeling_visual_language import MODEL_PARTS_CLS_MAPPING, MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
-
-
-transformers_auto_class = AutoModelForImageTextToText
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -552,7 +546,7 @@ class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
     TASK = "image-to-text"
     OVMODEL_CLASS = OVModelForVision2Seq
-    AUTOMODEL_CLASS = transformers_auto_class
+    AUTOMODEL_CLASS = AutoModelForImageTextToText
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
@@ -674,24 +668,22 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     if is_transformers_version("<", "5"):
         # remote code models incompatible before transformers v4.54 and after transformers v4.57.6
-        SUPPORTED_ARCHITECTURES += ["videochat_flash_qwen"]
         SUPPORT_VIDEO += ["videochat_flash_qwen"]
-        # remote code models incompatible after transformers v5
-        SUPPORTED_ARCHITECTURES += ["internvl_chat", "minicpmv"]
 
-    if is_transformers_version(">=", "5.5"):
-        SUPPORTED_ARCHITECTURES += ["gemma4", "gemma4_moe"]
-
-    if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen3_5", "qwen3_5_moe"]
-
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     _is_model_supported = {
         "idefics3": is_transformers_version("<", "5"),
         "got_ocr2": is_transformers_version("<", "5"),
         "smolvlm": is_transformers_version("<", "5"),
         "llama4": is_transformers_version("<", "5"),
         "llava_next_video": is_transformers_version("<", "5"),
+        # remote code models incompatible after transformers v5
+        "videochat_flash_qwen": is_transformers_version("<", "5"),
+        "internvl_chat": is_transformers_version("<", "5"),
+        "minicpmv": is_transformers_version("<", "5"),
+        "gemma4": is_transformers_version(">=", "5.5"),
+        "gemma4_moe": is_transformers_version(">=", "5.5"),
+        "qwen3_5": is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"),
+        "qwen3_5_moe": is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"),
     }
     SUPPORTED_ARCHITECTURES += [arch for arch, supported in _is_model_supported.items() if supported]
     UNSUPPORTED_ARCHITECTURES.update(arch for arch, supported in _is_model_supported.items() if not supported)
@@ -1255,7 +1247,7 @@ class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ["pix2struct"]
     TASK = "image-to-text"  # is it fine as well with visual-question-answering?
     OVMODEL_CLASS = OVModelForVision2Seq
-    AUTOMODEL_CLASS = transformers_auto_class
+    AUTOMODEL_CLASS = AutoModelForImageTextToText
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 

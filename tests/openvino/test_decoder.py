@@ -732,6 +732,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             # group_beam_search_gen_config,
             # constrained_beam_search_gen_config,
         ]
+
+        if is_transformers_version("<", "4.57.0"):
+            # currently broken in transformers == 4.57.*
+            gen_configs.extend([group_beam_search_gen_config, constrained_beam_search_gen_config])
+
         set_seed(SEED)
         ov_model_stateful = OVModelForCausalLM.from_pretrained(
             model_id, export=True, use_cache=True, stateful=True, device=OPENVINO_DEVICE, **model_kwargs
@@ -883,10 +888,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del ov_model
         gc.collect()
 
-    HYBRID_ARCHITECTURES = []
-    HYBRID_ARCHITECTURES.append("granitemoehybrid")
-    HYBRID_ARCHITECTURES.append("lfm2")
-    HYBRID_ARCHITECTURES.append("qwen3_next")
+    HYBRID_ARCHITECTURES = ["granitemoehybrid", "lfm2", "qwen3_next"]
     # not including zamba2 - the Mamba mixer's torch_forward crashes on the second chunk
 
     @parameterized.expand(HYBRID_ARCHITECTURES, skip_on_empty=True)

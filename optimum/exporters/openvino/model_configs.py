@@ -4717,7 +4717,7 @@ class AlbertOpenVINOConfig(BertOpenVINOConfig):
 
 @register_in_tasks_manager("nystromformer", *COMMON_TEXT_TASKS)
 class NystromformerOpenVINOConfig(BertOpenVINOConfig):
-    pass
+    MAX_TRANSFORMERS_VERSION = "4.50.3"
 
 
 @register_in_tasks_manager("convbert", *COMMON_TEXT_TASKS)
