@@ -872,7 +872,7 @@ class OVCalibrationDatasetBuilder:
                     "position_ids": position_ids,
                     "inputs_embeds": inputs_embeds,
                 }
-                if self.model.language_model.config.model_type == "gemma4":
+                if self.model.language_model.config.model_type in ("gemma4", "gemma4_unified_text"):
                     prepare_inputs_kwargs["per_layer_inputs"] = extra_outputs[0]
 
                 language_model_inputs = self.model.language_model.prepare_inputs(**prepare_inputs_kwargs)
@@ -1780,7 +1780,7 @@ def _weight_only_quantization(
     if config.dq_group_size is not None:
         compressed_model.set_rt_info(str(config.dq_group_size), ["runtime_options", "DYNAMIC_QUANTIZATION_GROUP_SIZE"])
 
-    _remove_f16_kv_cache_precision_flag(compressed_model)
+    _set_f16_kv_cache_precision(compressed_model)
     _add_nncf_version_flag(compressed_model)
 
     return compressed_model
@@ -1961,6 +1961,18 @@ def _verify_not_optimized(ov_model):
             raise RuntimeError(message_template.format(model_weight_compression_config))
         elif model_quantization_config is not None:
             raise RuntimeError(message_template.format(model_quantization_config))
+
+
+def _set_f16_kv_cache_precision(model: openvino.Model) -> openvino.Model:
+    """Preserve f16 KV cache precision for weight-compressed decoder models.
+
+    Stateful text-generation models already carry the KV cache hint before weight
+    compression. Keep it as f16 so CPU does not fall back to u8 and introduce
+    double-quantization, while leaving models without KV cache metadata untouched.
+    """
+    if model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]):
+        model.set_rt_info("f16", ["runtime_options", "KV_CACHE_PRECISION"])
+    return model
 
 
 def _remove_f16_kv_cache_precision_flag(model: openvino.Model) -> openvino.Model:

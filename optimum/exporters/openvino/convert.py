@@ -42,6 +42,7 @@ from optimum.exporters.openvino.utils import (
     allow_skip_tracing_check,
     clear_class_registry,
     remove_none_from_dummy_inputs,
+    patch_gemma4_export_configs,
     save_config,
     save_preprocessors,
     set_simplified_chat_template,
@@ -758,6 +759,7 @@ def export_from_model(
                 )
 
         save_preprocessors(preprocessors, model.config, output, trust_remote_code)
+        patch_gemma4_export_configs(output, getattr(model.config, "model_type", None))
 
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
 

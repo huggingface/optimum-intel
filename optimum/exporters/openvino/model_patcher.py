@@ -9156,7 +9156,16 @@ def patched_gemma4_clippable_linear_forward(self, hidden_states: torch.Tensor) -
 class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
     def __init__(self, config, model, model_kwargs):
         super().__init__(config, model, model_kwargs)
+        self._vision_encoder = None
+        self._orig_encoder_forward = None
+        self._gemma4_clippable_linear_cls = None
+
+        if not hasattr(model.model, "vision_tower"):
+            return
+
         from transformers.models.gemma4.modeling_gemma4 import Gemma4ClippableLinear
+
+        self._gemma4_clippable_linear_cls = Gemma4ClippableLinear
 
         # Get the vision encoder - it's at model.model.vision_tower.encoder
         vision_model = model.model.vision_tower if is_transformers_version(">=", "5") else model.vision_tower
@@ -9211,14 +9220,17 @@ class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
                         module.forward = types.MethodType(patched_gemma4_clippable_linear_forward, module)
 
     def __exit__(self, exc_type, exc_value, traceback):
-        from transformers.models.gemma4.modeling_gemma4 import Gemma4ClippableLinear
+        if self._vision_encoder is not None:
+            self._vision_encoder.forward = self._orig_encoder_forward
 
-        self._vision_encoder.forward = self._orig_encoder_forward
         super().__exit__(exc_type, exc_value, traceback)
+
+        if self._vision_encoder is None:
+            return
 
         for layer in self._vision_encoder.layers:
             for module in layer.modules():
-                if isinstance(module, Gemma4ClippableLinear) and module.use_clipped_linears:
+                if isinstance(module, self._gemma4_clippable_linear_cls) and module.use_clipped_linears:
                     if (
                         module.input_min == -float("inf")
                         and module.input_max == float("inf")

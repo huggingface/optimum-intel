@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import inspect
+import json
 import logging
 import re
 from collections import namedtuple
@@ -329,6 +330,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "got_ocr2",
     "gemma3",
     "gemma4",
+    "gemma4_unified",
     "idefics3",
     "smolvlm",
     "phi4mm",
@@ -519,6 +521,18 @@ COMPLEX_CHAT_TEMPLATES = {
 }
 
 
+GEMMA4_SIMPLIFIED_CHAT_TEMPLATE = (
+    "{{ bos_token }}"
+    "{% for message in messages %}"
+    "{% if message['role'] == 'system' and message['content'] %}{{ message['content'] + '\\n' }}"
+    "{% elif message['role'] == 'user' %}{{ '<start_of_turn>user\\n' + message['content'] + '<end_of_turn>\\n' }}"
+    "{% elif message['role'] == 'assistant' %}{{ '<start_of_turn>model\\n' + message['content'] + '<end_of_turn>\\n' }}"
+    "{% endif %}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}{{ '<start_of_turn>model\\n' }}{% endif %}"
+)
+
+
 def set_simplified_chat_template(ov_tokenizer_model, processor_chat_template=None):
     tokenizer_chat_template = None
     if processor_chat_template is not None:
@@ -535,6 +549,27 @@ def set_simplified_chat_template(ov_tokenizer_model, processor_chat_template=Non
                 ov_tokenizer_model.set_rt_info(simplified_chat_template, "simplified_chat_template")
                 break
     return ov_tokenizer_model
+
+
+def patch_gemma4_export_configs(output: Path, model_type: Optional[str]):
+    if model_type not in {"gemma4", "gemma4_unified"}:
+        return
+
+    tokenizer_config_path = output / "tokenizer_config.json"
+    if tokenizer_config_path.exists():
+        tokenizer_config = json.loads(tokenizer_config_path.read_text())
+        tokenizer_config["chat_template"] = GEMMA4_SIMPLIFIED_CHAT_TEMPLATE
+        tokenizer_config_path.write_text(json.dumps(tokenizer_config, indent=2) + "\n")
+
+    generation_config_path = output / "generation_config.json"
+    if generation_config_path.exists():
+        generation_config = json.loads(generation_config_path.read_text())
+        stop_strings = list(generation_config.get("stop_strings") or [])
+        if "<end_of_turn>" not in stop_strings:
+            stop_strings.append("<end_of_turn>")
+        generation_config["stop_strings"] = stop_strings
+        generation_config["include_stop_str_in_output"] = False
+        generation_config_path.write_text(json.dumps(generation_config, indent=2) + "\n")
 
 
 SKIP_CHECK_TRACE_MODELS = (

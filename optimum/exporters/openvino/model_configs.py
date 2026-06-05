@@ -1253,6 +1253,17 @@ class Gemma3TextOpenVINOConfig(Gemma2OpenVINOConfig):
 
 
 @register_in_tasks_manager(
+    "gemma4_unified_text",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+@register_in_tasks_manager(
     "gemma4_text",
     *[
         "feature-extraction",
@@ -3806,6 +3817,7 @@ class Gemma4ConfigBehavior(str, enum.Enum):
     TEXT_EMBEDDINGS_PER_LAYER = "text_embeddings_per_layer"
 
 
+@register_in_tasks_manager("gemma4_unified", *["image-text-to-text"], library_name="transformers")
 @register_in_tasks_manager("gemma4", *["image-text-to-text"], library_name="transformers")
 class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Gemma4ConfigBehavior]

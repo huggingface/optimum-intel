@@ -1200,15 +1200,19 @@ class DummyGemma4VisionInputGenerator(DummyVisionInputGenerator):
 
     def __init__(self, task, normalized_config, batch_size=DEFAULT_DUMMY_SHAPES["batch_size"], **kwargs):
         super().__init__(task, normalized_config, batch_size, **kwargs)
-        self.patch_size = getattr(normalized_config, "patch_size", 16)
+        self.is_unified = hasattr(normalized_config, "model_patch_size")
+        self.patch_size = getattr(normalized_config, "model_patch_size", getattr(normalized_config, "patch_size", 16))
         self.pooling_kernel_size = getattr(normalized_config, "pooling_kernel_size", 3)
-        # Gemma4 processor always pads pixel_values to max_soft_tokens * pooling_kernel_size^2 patches.
-        # The vision model's pooling uses shape-dependent Python operations that get baked in during tracing,
-        # so the dummy input must match the actual inference shapes.
         max_soft_tokens = getattr(normalized_config, "image_seq_length", None)
         if max_soft_tokens is None:
             max_soft_tokens = getattr(normalized_config, "max_soft_tokens", 280)
-        self.num_patches = max_soft_tokens * self.pooling_kernel_size**2
+        if self.is_unified:
+            self.num_patches = max_soft_tokens
+        else:
+            # Gemma4 processor pads pixel_values to max_soft_tokens * pooling_kernel_size^2 patches.
+            # The vision model's pooling uses shape-dependent Python operations that get baked in during tracing,
+            # so the dummy input must match the actual inference shapes.
+            self.num_patches = max_soft_tokens * self.pooling_kernel_size**2
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "pixel_values":
@@ -1219,24 +1223,33 @@ class DummyGemma4VisionInputGenerator(DummyVisionInputGenerator):
                 dtype=float_dtype,
             )
         if input_name == "image_position_ids":
-            # Create position ids as a grid. The patch count = h_patches * w_patches
-            # where both are divisible by pooling_kernel_size for correct pooling.
             import math
 
-            k = self.pooling_kernel_size
-            total_pooled = self.num_patches // (k * k)
-            # Find roughly square grid for pooled side
-            pooled_side = int(math.sqrt(total_pooled))
-            if pooled_side * pooled_side < total_pooled:
-                pooled_h = pooled_side
-                pooled_w = total_pooled // pooled_h
+            if self.is_unified:
+                side = max(int(math.sqrt(self.num_patches)), 1)
+                width = math.ceil(self.num_patches / side)
+                pos_ids = torch.stack(
+                    torch.meshgrid(torch.arange(side), torch.arange(width), indexing="ij"), dim=-1
+                ).reshape(1, -1, 2)
+                pos_ids = pos_ids[:, : self.num_patches, :]
             else:
-                pooled_h = pooled_w = pooled_side
-            h_patches = pooled_h * k
-            w_patches = pooled_w * k
-            pos_ids = torch.stack(
-                torch.meshgrid(torch.arange(h_patches), torch.arange(w_patches), indexing="ij"), dim=-1
-            ).reshape(1, -1, 2)
+                # Create position ids as a grid. The patch count = h_patches * w_patches
+                # where both are divisible by pooling_kernel_size for correct pooling.
+                k = self.pooling_kernel_size
+                total_pooled = self.num_patches // (k * k)
+                # Find roughly square grid for pooled side
+                pooled_side = int(math.sqrt(total_pooled))
+                if pooled_side * pooled_side < total_pooled:
+                    pooled_h = pooled_side
+                    pooled_w = total_pooled // pooled_h
+                else:
+                    pooled_h = pooled_w = pooled_side
+                h_patches = pooled_h * k
+                w_patches = pooled_w * k
+                pos_ids = torch.stack(
+                    torch.meshgrid(torch.arange(h_patches), torch.arange(w_patches), indexing="ij"), dim=-1
+                ).reshape(1, -1, 2)
+
             # Pad to num_patches with -1 (padding position)
             if pos_ids.shape[1] < self.num_patches:
                 pad = torch.full((1, self.num_patches - pos_ids.shape[1], 2), -1, dtype=pos_ids.dtype)

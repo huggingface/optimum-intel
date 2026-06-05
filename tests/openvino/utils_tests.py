@@ -677,10 +677,12 @@ def check_compression_state_per_model(
     models: Dict[str, ov.Model],
     expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
     expected_num_fake_nodes_per_model: Optional[Dict[str, int]] = None,
+    expected_kv_cache_precision_per_model: Optional[Dict[str, str]] = None,
 ):
     test_case.assertEqual(len(models), len(expected_num_weight_nodes_per_model))
     actual_num_weights_per_model = {}
     actual_num_fake_nodes_per_model = {}
+    expected_kv_cache_precision_per_model = expected_kv_cache_precision_per_model or {}
     for ov_model_name, ov_model in models.items():
         expected_num_weight_nodes = expected_num_weight_nodes_per_model[ov_model_name]
         num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(ov_model)
@@ -689,7 +691,15 @@ def check_compression_state_per_model(
         actual_num_weights_per_model[ov_model_name] = num_weight_nodes
         actual_num_fake_nodes_per_model[ov_model_name] = num_fake_nodes
 
-        test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+        expected_kv_cache_precision = expected_kv_cache_precision_per_model.get(ov_model_name)
+        if expected_kv_cache_precision is None:
+            test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+        else:
+            test_case.assertTrue(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+            test_case.assertEqual(
+                ov_model.get_rt_info(["runtime_options", "KV_CACHE_PRECISION"]).value,
+                expected_kv_cache_precision,
+            )
 
     # Check weight nodes
     test_case.assertEqual(expected_num_weight_nodes_per_model, actual_num_weights_per_model)

@@ -1282,7 +1282,11 @@ class OVWeightCompressionTest(unittest.TestCase):
             # Verify that the configuration is correctly saved and loaded
             loaded_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.assertEqual(OVWeightQuantizationConfig().to_dict(), loaded_config.quantization_config.to_dict())
-            self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+            if task == "text-generation":
+                self.assertTrue(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+                self.assertEqual(model.model.get_rt_info(["runtime_options", "KV_CACHE_PRECISION"]).value, "f16")
+            else:
+                self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS)
     def test_ovmodel_4bit_weight_compression(self, model_cls, model_name, expected_int8_nodes, expected_int4_nodes):
@@ -1310,7 +1314,11 @@ class OVWeightCompressionTest(unittest.TestCase):
             # Verify that the configuration is correctly saved and loaded
             loaded_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
-            self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+            if task == "text-generation":
+                self.assertTrue(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+                self.assertEqual(model.model.get_rt_info(["runtime_options", "KV_CACHE_PRECISION"]).value, "f16")
+            else:
+                self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     def test_ovmodel_8bit_weight_compression_stateful(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
@@ -1336,7 +1344,11 @@ class OVWeightCompressionTest(unittest.TestCase):
             # Verify that the configuration is correctly saved and loaded
             loaded_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.assertEqual(OVWeightQuantizationConfig().to_dict(), loaded_config.quantization_config.to_dict())
-            self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+            if task == "text-generation":
+                self.assertTrue(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+                self.assertEqual(model.model.get_rt_info(["runtime_options", "KV_CACHE_PRECISION"]).value, "f16")
+            else:
+                self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     @parameterized.expand(
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION,
@@ -1369,7 +1381,13 @@ class OVWeightCompressionTest(unittest.TestCase):
 
         expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
         expected_ov_int8 = {k: {"int8": v} for k, v in expected_ov_int8.items()}
-        check_compression_state_per_model(self, model.ov_models, expected_ov_int8)
+        expected_kv_cache_precision = {"lm_model": "f16"} if model_type in {"gemma4", "gemma4_moe"} else None
+        check_compression_state_per_model(
+            self,
+            model.ov_models,
+            expected_ov_int8,
+            expected_kv_cache_precision_per_model=expected_kv_cache_precision,
+        )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
     def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_fake_nodes, expected_int8_nodes):
