@@ -1082,6 +1082,9 @@ class OVWeightCompressionTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen3_vl", False))
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "hunyuan_v1_dense", False))
 
+    if is_transformers_version("==", "4.57.6"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForSpeechSeq2Seq, "qwen3_asr", True))
+
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.extend(
             [
@@ -1089,6 +1092,9 @@ class OVWeightCompressionTest(unittest.TestCase):
                 (OVModelForVisualCausalLM, "minicpmv", True),
             ]
         )
+
+    if is_transformers_version(">=", "4.49.0") and is_transformers_version("<=", "4.57.6"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "videochat_flash_qwen", True))
 
     if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen3_5", False))
@@ -1685,6 +1691,35 @@ class OVWeightCompressionTest(unittest.TestCase):
         )
         self.assertTrue(all(len(sample["input_ids"][0]) == 64 for sample in dataset["model"].get_data()))
 
+    @parameterized.expand(
+        [
+            ("gemma4",),
+            ("gemma4_moe",),
+        ]
+        if is_transformers_version(">=", "5.5.0")
+        else [],
+        skip_on_empty=True,
+        name_func=lambda testcase_func, param_num, params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[0])}",
+    )
+    def test_build_dataset(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForVisualCausalLM.from_pretrained(model_id, export=True, load_in_8bit=False)
+        dataset_builder = OVCalibrationDatasetBuilder(model)
+        dataset = dataset_builder.build_from_quantization_config(
+            OVPipelineQuantizationConfig(
+                quantization_configs={
+                    "lm_model": OVWeightQuantizationConfig(
+                        bits=4,
+                        group_size=64,
+                        num_samples=1,
+                        scale_estimation=True,
+                        dataset="contextual",
+                        processor=model_id,
+                    )
+                }
+            ),
+        )
+
 
 class OVPipelineQuantizationTest(unittest.TestCase):
     maxDiff = None
@@ -2042,7 +2077,7 @@ class OVQuantizerQATest(unittest.TestCase):
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             quantizer = OVQuantizer.from_pretrained(transformers_model, device=OPENVINO_DEVICE)
             calibration_dataset = quantizer.get_calibration_dataset(
-                "squadshifts",
+                "ludwigschmidt/squadshifts",
                 dataset_config_name="new_wiki",
                 preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
                 num_samples=10,

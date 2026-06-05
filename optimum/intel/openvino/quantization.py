@@ -866,12 +866,16 @@ class OVCalibrationDatasetBuilder:
                     **inputs
                 )
 
-                language_model_inputs = self.model.language_model.prepare_inputs(
-                    input_ids=None,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    inputs_embeds=inputs_embeds,
-                )
+                prepare_inputs_kwargs = {
+                    "input_ids": None,
+                    "attention_mask": attention_mask,
+                    "position_ids": position_ids,
+                    "inputs_embeds": inputs_embeds,
+                }
+                if self.model.language_model.config.model_type == "gemma4":
+                    prepare_inputs_kwargs["per_layer_inputs"] = extra_outputs[0]
+
+                language_model_inputs = self.model.language_model.prepare_inputs(**prepare_inputs_kwargs)
 
                 collected_inputs["lm_model"].append(language_model_inputs)
 
@@ -1303,7 +1307,6 @@ class OVQuantizer(OptimumQuantizer):
         ] = None,
         save_directory: Optional[Union[str, Path]] = None,
         ov_config: OVConfig = None,
-        file_name: Optional[str] = None,
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = False,
@@ -1322,8 +1325,6 @@ class OVQuantizer(OptimumQuantizer):
             ov_config (`OVConfig`, *optional*):
                 The configuration containing the parameters related to quantization. If not provided, 8-bit symmetric
                 weight-only quantization will be applied.
-            file_name (`str`, *optional*):
-                The model file name to use when saving the model. Overwrites the default file name `"model.onnx"`.
             batch_size (`int`, defaults to 1):
                 The number of calibration samples to load per batch.
             data_collator (`DataCollator`, *optional*):
@@ -1472,6 +1473,13 @@ class OVQuantizer(OptimumQuantizer):
                 ov_model_name, pipeline_quantization_config.default_config
             )
             if config is None:
+                if immediate_save:
+                    # The submodels being quantized is unloaded after quantization,
+                    # so the skipped submodels should also be unloaded to avoid keeping their IR files open on Windows.
+                    # This can avoid later _merge_move failures caused by locked .bin files.
+                    ov_model = self.model.ov_models[ov_model_name]
+                    if ov_model is not None:
+                        self.model._unload_ov_model(ov_model)
                 continue
             ov_model = self.model.ov_models[ov_model_name]
             nncf_dataset = calibration_dataset.get(ov_model_name, None) if calibration_dataset else None

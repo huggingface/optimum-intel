@@ -428,6 +428,18 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "weight_only": True,
         },
     },
+    "OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B": {
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 128,
+                "ratio": 1.0,
+            },
+            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+            "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+        },
+    },
     "qnguyen3/nanoLLaVA": {
         "bits": 4,
         "sym": False,
@@ -440,20 +452,32 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "bits": 4,
         "sym": False,
         "group_size": 64,
+        "quant_method": OVQuantizationMethod.AWQ,
         "group_size_fallback": "adjust",
+        "dq_group_size": 64,
     },
     "google/gemma-4-26B-A4B": {
         "bits": 4,
         "sym": False,
         "group_size": 64,
+        "quant_method": OVQuantizationMethod.AWQ,
         "group_size_fallback": "adjust",
+    },
+    "google/gemma-4-E4B-it": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "dataset": "contextual",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
     },
     "Qwen/Qwen3.5-35B-A3B": {
         "quantization_configs": {
             "lm_model": {
                 "bits": 4,
                 "sym": False,
-                "group_size": 128,
+                "backup_precision": "int8_sym",
+                "group_size": 64,
             },
             "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
             "vision_embeddings_merger_model": {"bits": 8, "sym": True, "weight_only": True},
@@ -464,11 +488,18 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "lm_model": {
                 "bits": 4,
                 "sym": False,
-                "group_size": 128,
+                "backup_precision": "int8_sym",
+                "group_size": 64,
             },
             "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
             "vision_embeddings_merger_model": {"bits": 8, "sym": True, "weight_only": True},
         },
+    },
+    "hexgrad/Kokoro-82M": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "group_size_fallback": "adjust",
     },
 }
 
@@ -609,16 +640,6 @@ _DEFAULT_IGNORED_SCOPE_CONFIGS = {
     "google/gemma-4-26B-A4B": {
         "lm_model": {
             "patterns": [".*router.*"],
-        },
-    },
-    "Qwen/Qwen3.5-35B-A3B": {
-        "lm_model": {
-            "patterns": [".*shared_expert.*", ".*attn.*"],
-        },
-    },
-    "Qwen/Qwen3.6-35B-A3B": {
-        "lm_model": {
-            "patterns": [".*shared_expert.*", ".*attn.*"],
         },
     },
 }

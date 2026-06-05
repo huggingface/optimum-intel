@@ -28,13 +28,14 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=2.1",
-    "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git@transformers-v5",
+    "optimum@git+https://github.com/huggingface/optimum.git",
     "transformers>=4.45,<5.1",
     "setuptools",
     "huggingface-hub>=0.23.2,<2.0",
     "nncf>=2.19.0",
     "openvino>=2026.0",
     "openvino-tokenizers>=2026.0",
+    "requests>=2.33,<3.0",
 ]
 
 TESTS_REQUIRE = [
@@ -64,6 +65,11 @@ TESTS_REQUIRE = [
     "vocos",
     "vector_quantize_pytorch",
     "openvino-genai",
+    "av",
+    "decord",
+    "imageio",
+    "kokoro",
+    "protobuf",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]

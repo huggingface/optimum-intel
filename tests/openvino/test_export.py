@@ -24,11 +24,11 @@ from utils_tests import (
     MODEL_NAMES,
     OPENVINO_DEVICE,
     REMOTE_CODE_MODELS,
+    SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED,
 )
 
-from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
-from optimum.exporters.onnx.model_configs import BertOnnxConfig
 from optimum.exporters.openvino import export_from_model, main_export
+from optimum.exporters.openvino.model_configs import BertOpenVINOConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVFluxPipeline,
@@ -93,6 +93,7 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-3": OVStableDiffusion3Pipeline,
         "flux": OVFluxPipeline,
         "ltx-video": OVLTXPipeline,
+        "kokoro": OVModelForTextToSpeechSeq2Seq,
     }
 
     if is_transformers_version(">=", "4.48.0"):
@@ -110,6 +111,9 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "4.58.0"):
         SUPPORTED_ARCHITECTURES.update({"afmoe": OVModelForCausalLM})
 
+    if is_transformers_version("==", "4.57.6"):
+        SUPPORTED_ARCHITECTURES.update({"qwen3_asr": OVModelForSpeechSeq2Seq})
+
     if is_transformers_version(">=", "5.5.0"):
         SUPPORTED_ARCHITECTURES.update({"gemma4": OVModelForVisualCausalLM})
         SUPPORTED_ARCHITECTURES.update({"gemma4_moe": OVModelForVisualCausalLM})
@@ -123,6 +127,9 @@ class ExportModelTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.update({"qwen3_next": OVModelForCausalLM})
+
+    if is_transformers_version(">=", "4.49") and is_transformers_version("<=", "4.57.6"):
+        SUPPORTED_ARCHITECTURES.update({"videochat_flash_qwen": OVModelForVisualCausalLM})
 
     if is_transformers_version(">=", "5.0"):
         SUPPORTED_ARCHITECTURES.update({"lfm2_moe": OVModelForCausalLM})
@@ -160,9 +167,20 @@ class ExportModelTest(unittest.TestCase):
             model_class = TasksManager.get_model_class_for_task(task, library=library_name)
             model = model_class(f"hf_hub:{model_name}", pretrained=True, exportable=True)
             TasksManager.standardize_model_attributes(model_name, model, library_name=library_name)
-        elif model_type == "llava":
+        elif model_type in ["llava", "videochat_flash_qwen"]:
             model = MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
                 model_name, **loading_kwargs
+            )
+        elif model_type == "qwen3_asr":
+            from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
+
+            model = Qwen3ASRForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
+        elif model_type == "kokoro":
+            model = TasksManager.get_model_from_task(
+                task=task,
+                model_name_or_path=model_name,
+                framework="pt",
+                library_name="kokoro",
             )
         else:
             model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
@@ -351,7 +369,7 @@ class ExportModelTest(unittest.TestCase):
 
 class CustomExportModelTest(unittest.TestCase):
     def test_custom_export_config_model(self):
-        class BertOnnxConfigWithPooler(BertOnnxConfig):
+        class BertOpenVINOConfigWithPooler(BertOpenVINOConfig):
             @property
             def outputs(self):
                 if self.task == "feature-extraction-with-pooler":
@@ -368,7 +386,7 @@ class CustomExportModelTest(unittest.TestCase):
         model_id = "sentence-transformers/all-MiniLM-L6-v2"
 
         config = AutoConfig.from_pretrained(model_id)
-        custom_export_configs = {"model": BertOnnxConfigWithPooler(config, task=custom_task)}
+        custom_export_configs = {"model": BertOpenVINOConfigWithPooler(config, task=custom_task)}
 
         with TemporaryDirectory() as tmpdirname:
             main_export(

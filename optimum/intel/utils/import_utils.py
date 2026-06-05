@@ -109,7 +109,13 @@ if _huggingface_hub_available:
         _huggingface_hub_version = importlib_metadata.version("huggingface_hub")
     except importlib_metadata.PackageNotFoundError:
         _huggingface_hub_available = False
-
+_kokoro_available = importlib.util.find_spec("kokoro") is not None
+_kokoro_version = "N/A"
+if _kokoro_available:
+    try:
+        _kokoro_version = importlib_metadata.version("kokoro")
+    except importlib_metadata.PackageNotFoundError:
+        _kokoro_available = False
 
 _safetensors_version = "N/A"
 _safetensors_available = importlib.util.find_spec("safetensors") is not None
@@ -290,6 +296,10 @@ def is_diffusers_available():
 
 def is_open_clip_available():
     return _open_clip_available
+
+
+def is_kokoro_available():
+    return _kokoro_available
 
 
 def is_safetensors_available():
