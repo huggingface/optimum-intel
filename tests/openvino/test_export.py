@@ -106,27 +106,24 @@ class ExportModelTest(unittest.TestCase):
                 "zamba2": OVModelForCausalLM,
                 "exaone4": OVModelForCausalLM,
                 "lfm2": OVModelForCausalLM,
+                "afmoe": OVModelForCausalLM,
                 "qwen3_next": OVModelForCausalLM,
+                "videochat_flash_qwen": OVModelForVisualCausalLM,
             }
         )
-
-    if is_transformers_version("<", "4.58.0"):
-        SUPPORTED_ARCHITECTURES.update({"afmoe": OVModelForCausalLM})
+    else:
+        SUPPORTED_ARCHITECTURES.update({"lfm2_moe": OVModelForCausalLM})
 
     if is_transformers_version("==", "4.57.6"):
         SUPPORTED_ARCHITECTURES.update({"qwen3_asr": OVModelForSpeechSeq2Seq})
 
-    if is_transformers_version("<=", "4.57.6"):
-        SUPPORTED_ARCHITECTURES.update({"videochat_flash_qwen": OVModelForVisualCausalLM})
-
-    if is_transformers_version(">=", "5.0"):
-        SUPPORTED_ARCHITECTURES.update({"lfm2_moe": OVModelForCausalLM})
+    if is_transformers_version(">=", "5.5.0"):
+        SUPPORTED_ARCHITECTURES.update({"gemma4": OVModelForVisualCausalLM})
+        SUPPORTED_ARCHITECTURES.update({"gemma4_moe": OVModelForVisualCausalLM})
 
     if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
-        SUPPORTED_ARCHITECTURES.update({"qwen3_5": OVModelForVisualCausalLM, "qwen3_5_moe": OVModelForVisualCausalLM})
-
-    if is_transformers_version(">=", "5.5.0"):
-        SUPPORTED_ARCHITECTURES.update({"gemma4": OVModelForVisualCausalLM, "gemma4_moe": OVModelForVisualCausalLM})
+        SUPPORTED_ARCHITECTURES.update({"qwen3_5": OVModelForVisualCausalLM})
+        SUPPORTED_ARCHITECTURES.update({"qwen3_5_moe": OVModelForVisualCausalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
