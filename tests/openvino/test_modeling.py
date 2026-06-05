@@ -218,10 +218,6 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     def test_load_from_hub_and_save_visual_language_model(self):
         model_ids = [self.OV_VLM_MODEL_ID]
-        if is_transformers_version(">=", "4.51") and is_transformers_version("<", "4.57"):
-            # the phi4 auto-processor can't be loaded in offline mode
-            # anymore due to an internal bug in transformers
-            model_ids.append("katuni4ka/phi-4-multimodal-ov")
         for model_id in model_ids:
             processor = AutoProcessor.from_pretrained(model_id)
             prompt = "What is shown in this image?"
@@ -1035,10 +1031,8 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         "distilbert",
         "roberta",
         "sentence-transformers-bert",
+        "qwen3",
     )
-
-    if is_transformers_version(">=", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("qwen3",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1128,10 +1122,6 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "squeezebert",
         "xlm-roberta",
     )
-
-    # accuracy issue, need additional investigation
-    if is_transformers_version("<", "4.51"):
-        SUPPORTED_ARCHITECTURES += ("nystromformer",)
 
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):

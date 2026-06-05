@@ -63,14 +63,7 @@ if is_transformers_version(">=", "5.2"):
     )
 
 
-if is_transformers_version(">=", "4.46.0"):
-    from transformers import AutoModelForImageTextToText
-
-    transformers_auto_class = AutoModelForImageTextToText
-else:
-    from transformers import AutoModelForVision2Seq
-
-    transformers_auto_class = AutoModelForVision2Seq
+from transformers import AutoModelForImageTextToText
 
 
 if TYPE_CHECKING:
@@ -392,7 +385,7 @@ MODEL_PARTS_CLS_MAPPING = {
 class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     export_feature = "image-text-to-text"
     additional_parts = []
-    auto_model_class = transformers_auto_class
+    auto_model_class = AutoModelForImageTextToText
 
     @classproperty
     def _all_ov_model_paths(cls) -> Dict[str, str]:
@@ -1167,7 +1160,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
             else:
                 prompt = text
 
-        if is_transformers_version(">", "4.47.99") and getattr(processor, "patch_size", None) is None:
+        if getattr(processor, "patch_size", None) is None:
             if (
                 getattr(config, "vision_config", None) is not None
                 and getattr(config.vision_config, "patch_size", None) is not None
@@ -1590,7 +1583,7 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
             if video is not None and "<video>" not in prompt:
                 prompt = "<video>\n" + prompt
 
-        if is_transformers_version(">", "4.47.99") and getattr(processor, "patch_size", None) is None:
+        if getattr(processor, "patch_size", None) is None:
             if (
                 getattr(config, "vision_config", None) is not None
                 and getattr(config.vision_config, "patch_size", None) is not None
@@ -4000,14 +3993,10 @@ class _OVIdefics3ForCausalLM(OVModelForVisualCausalLM):
         for batch_idx, p_attn_mask in enumerate(patch_attention_mask):
             nb_patches_h = p_attn_mask[:, 0].sum()
             nb_patches_w = p_attn_mask[0].sum()
-            if is_transformers_version("<", "4.55"):
-                fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
-                fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
-            else:
-                h_indices = torch.arange(nb_patches_h, device=pixel_values.device, dtype=pixel_values.dtype)
-                w_indices = torch.arange(nb_patches_w, device=pixel_values.device, dtype=pixel_values.dtype)
-                fractional_coords_h = h_indices / nb_patches_h * (1 - 1e-6)
-                fractional_coords_w = w_indices / nb_patches_w * (1 - 1e-6)
+            h_indices = torch.arange(nb_patches_h, device=pixel_values.device, dtype=pixel_values.dtype)
+            w_indices = torch.arange(nb_patches_w, device=pixel_values.device, dtype=pixel_values.dtype)
+            fractional_coords_h = h_indices / nb_patches_h * (1 - 1e-6)
+            fractional_coords_w = w_indices / nb_patches_w * (1 - 1e-6)
 
             bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
             bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)

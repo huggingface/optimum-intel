@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
-from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
+from transformers import AutoConfig, AutoTokenizer, Mxfp4Config, PreTrainedTokenizerBase, ProcessorMixin
 from transformers.utils import is_torch_available
 
 from openvino import Core, Type, save_model
@@ -52,9 +52,6 @@ from .utils import (
     patch_qwenvl_configs,
 )
 
-
-if is_transformers_version(">=", "4.55"):
-    from transformers import Mxfp4Config
 
 FORCE_ATTN_MODEL_CLASSES = {"phi3_v": "eager", "gemma2": "sdpa", "llama4": "sdpa"}
 
@@ -360,7 +357,7 @@ def main_export(
             loading_kwargs["config"] = update_config_for_eagle3(config)
 
         # mxfp4 quantized model will be dequantized to bf16
-        if quant_method == "mxfp4" and is_transformers_version(">=", "4.55"):
+        if quant_method == "mxfp4":
             dtype = torch.bfloat16
             loading_kwargs["quantization_config"] = Mxfp4Config(dequantize=True)
 

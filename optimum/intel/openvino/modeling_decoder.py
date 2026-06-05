@@ -1465,7 +1465,9 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                         "you are calling `prepare_inputs_for_generation` directly with `use_cache=True`"
                     )
                 # infer from cache_params: None means prefill (0), otherwise means decoding stage
-                cache_position = torch.tensor([0 if cache_params is None else 1], device=input_ids.device, dtype=torch.long)
+                cache_position = torch.tensor(
+                    [0 if cache_params is None else 1], device=input_ids.device, dtype=torch.long
+                )
             if cache_position[0] > 0:
                 # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)

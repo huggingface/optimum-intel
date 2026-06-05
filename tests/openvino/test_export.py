@@ -94,45 +94,32 @@ class ExportModelTest(unittest.TestCase):
         "flux": OVFluxPipeline,
         "ltx-video": OVLTXPipeline,
         "kokoro": OVModelForTextToSpeechSeq2Seq,
+        "cohere2": OVModelForCausalLM,
+        "granitemoehybrid": OVModelForCausalLM,
+        "hunyuan_v1_dense": OVModelForCausalLM,
+        "qwen3": OVModelForFeatureExtraction,
     }
 
-    if is_transformers_version(">=", "4.48.0"):
-        SUPPORTED_ARCHITECTURES.update({"cohere2": OVModelForCausalLM})
+    if is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM, "exaone4": OVModelForCausalLM, "lfm2": OVModelForCausalLM, "qwen3_next": OVModelForCausalLM})
 
-    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
-
-    if is_transformers_version(">=", "4.53.0"):
-        SUPPORTED_ARCHITECTURES.update({"granitemoehybrid": OVModelForCausalLM})
-
-    if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES.update({"exaone4": OVModelForCausalLM, "lfm2": OVModelForCausalLM})
-
-    if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "4.58.0"):
+    if is_transformers_version("<", "4.58.0"):
         SUPPORTED_ARCHITECTURES.update({"afmoe": OVModelForCausalLM})
 
     if is_transformers_version("==", "4.57.6"):
         SUPPORTED_ARCHITECTURES.update({"qwen3_asr": OVModelForSpeechSeq2Seq})
 
-    if is_transformers_version(">=", "5.5.0"):
-        SUPPORTED_ARCHITECTURES.update({"gemma4": OVModelForVisualCausalLM})
-        SUPPORTED_ARCHITECTURES.update({"gemma4_moe": OVModelForVisualCausalLM})
-
-    if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
-        SUPPORTED_ARCHITECTURES.update({"qwen3_5": OVModelForVisualCausalLM})
-        SUPPORTED_ARCHITECTURES.update({"qwen3_5_moe": OVModelForVisualCausalLM})
-
-    if is_transformers_version(">=", "4.57.0"):
-        SUPPORTED_ARCHITECTURES.update({"hunyuan_v1_dense": OVModelForCausalLM})
-
-    if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES.update({"qwen3_next": OVModelForCausalLM})
-
-    if is_transformers_version(">=", "4.49") and is_transformers_version("<=", "4.57.6"):
+    if is_transformers_version("<=", "4.57.6"):
         SUPPORTED_ARCHITECTURES.update({"videochat_flash_qwen": OVModelForVisualCausalLM})
 
     if is_transformers_version(">=", "5.0"):
         SUPPORTED_ARCHITECTURES.update({"lfm2_moe": OVModelForCausalLM})
+
+    if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
+        SUPPORTED_ARCHITECTURES.update({"qwen3_5": OVModelForVisualCausalLM, "qwen3_5_moe": OVModelForVisualCausalLM})
+
+    if is_transformers_version(">=", "5.5.0"):
+        SUPPORTED_ARCHITECTURES.update({"gemma4": OVModelForVisualCausalLM, "gemma4_moe": OVModelForVisualCausalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
@@ -141,9 +128,6 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl-refiner": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "ltx-video": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
     }
-
-    if is_transformers_version(">=", "4.51"):
-        SUPPORTED_ARCHITECTURES.update({"qwen3": OVModelForFeatureExtraction})
 
     GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
 
