@@ -27,7 +27,6 @@ from transformers import (
     AutoTokenizer,
 )
 from utils_tests import (
-    _ARCHITECTURES_INT8_TASK_OVERRIDES,
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
     OPENVINO_DEVICE,
