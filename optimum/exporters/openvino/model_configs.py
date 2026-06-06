@@ -5898,3 +5898,138 @@ class TrOCROpenVINOConfig(TextSeq2SeqOpenVINOConfig):
         decoder_num_attention_heads="decoder_attention_heads",
         hidden_size="hidden_size",
     )
+
+
+from optimum.utils import DummyVisionInputGenerator
+import torch
+import enum
+from optimum.exporters.openvino.model_configs import BaseVLMOpenVINOConfig, VLMConfigBehavior
+
+class DummyYoutuVLInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "pixel_attention_mask",
+        "spatial_shapes",
+        "input_ids",
+        "attention_mask",
+    )
+
+    def generate(self, input_name: str, framework: str = "pt", **kwargs):
+        if input_name == "pixel_values":
+            return torch.zeros((1, 196, 768))
+        elif input_name == "pixel_attention_mask":
+            return torch.zeros((1, 196), dtype=torch.bool)
+        elif input_name == "spatial_shapes":
+            return torch.tensor([[14, 14]], dtype=torch.int64)
+        return super().generate(input_name, framework=framework)
+
+class YoutuVLOpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.45.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyYoutuVLInputGenerator,)
+
+    def __init__(self, config, task="feature-extraction", int_dtype="int64", float_dtype="fp32", behavior=VLMConfigBehavior.VISION_EMBEDDINGS, **kwargs):
+        super().__init__(config, task=task, int_dtype=int_dtype, float_dtype=float_dtype, behavior=behavior, **kwargs)
+
+    def get_model_for_behavior(self, model, behavior: VLMConfigBehavior):
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            class VisionWrapper(torch.nn.Module):
+                def __init__(self, model):
+                    super().__init__()
+                    self.model = model
+                    self.config = model.config
+                def forward(self, pixel_values, pixel_attention_mask, spatial_shapes):
+                    vision_outputs = self.model.siglip2(
+                        pixel_values=pixel_values,
+                        pixel_attention_mask=pixel_attention_mask,
+                        spatial_shapes=spatial_shapes,
+                    )
+                    image_embeds = self.model.merger(vision_outputs.last_hidden_state, spatial_shapes)
+                    return image_embeds
+            return VisionWrapper(model)
+        
+        elif behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            class TextEmbeddingsWrapper(torch.nn.Module):
+                def __init__(self, model):
+                    super().__init__()
+                    self.model = model
+                    self.config = model.config
+                def forward(self, input_ids):
+                    return self.model.get_input_embeddings()(input_ids)
+            return TextEmbeddingsWrapper(model)
+        
+        elif behavior == VLMConfigBehavior.LANGUAGE:
+            return model
+            
+        return super().get_model_for_behavior(model, behavior)
+
+    def with_behavior(self, behavior):
+        from optimum.exporters.openvino.model_configs import get_vlm_text_generation_config, get_vlm_text_embeddings_config
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+            
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            from optimum.exporters.openvino.model_patcher import YoutuPatcher
+            config = get_vlm_text_generation_config("minicpm3", self._config, self.int_dtype, self.float_dtype, model_patcher=YoutuPatcher)
+            return config
+        
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            # TEXT_EMBEDDINGS doesn't need past_key_values, just input_ids
+            from optimum.exporters.openvino.model_configs import get_vlm_text_embeddings_config
+            return get_vlm_text_embeddings_config("llama", self._config, self.int_dtype, self.float_dtype)
+            
+        return self.__class__(
+            self._config,
+            task=self.task,
+            int_dtype=self.int_dtype,
+            float_dtype=self.float_dtype,
+            behavior=behavior,
+            preprocessors=self._preprocessors,
+        )
+
+    def patch_model_for_export(self, model: "PreTrainedModel", model_kwargs: Optional[Dict[str, Any]] = None):
+        print("YOUTUVL PATCH MODEL FOR EXPORT CALLED!")
+        from optimum.exporters.openvino.model_patcher import ModelPatcher
+        class YoutuVLModelPatcher(ModelPatcher):
+            def patch_ops(self):
+                super().patch_ops()
+                print("PATCHING YOUTUVL UNIQUE CONSECUTIVE")
+                self.orig_unique_consecutive = torch.unique_consecutive
+                def custom_unique_consecutive(x, *args, **kwargs):
+                    print("CUSTOM UNIQUE CONSECUTIVE CALLED!")
+                    if x.numel() == 0:
+                        return x
+                    mask = torch.cat([torch.tensor([True], device=x.device, dtype=torch.bool), x[1:] != x[:-1]])
+                    return x[mask]
+                torch.unique_consecutive = custom_unique_consecutive
+
+            def restore_ops(self):
+                super().restore_ops()
+                torch.unique_consecutive = self.orig_unique_consecutive
+
+        return YoutuVLModelPatcher(self, model, model_kwargs or {})
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {0: "batch_size", 1: "num_patches"},
+                "pixel_attention_mask": {0: "batch_size", 1: "num_patches"},
+                "spatial_shapes": {0: "batch_size"}
+            }
+        elif self._behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            return {"input_ids": {0: "batch_size", 1: "sequence_length"}}
+        return super().inputs
+
+@register_in_tasks_manager("youtu_vl", *["image-text-to-text", "text-generation", "text-generation-with-past"], library_name="transformers")
+class YoutuVLOpenVINOConfigRegistration(YoutuVLOpenVINOConfig):
+    pass
+
+
+from optimum.exporters.openvino.model_configs import TextDecoderWithPositionIdsOpenVINOConfig
+from optimum.exporters.openvino.input_generators import OVMiniCPM3DummyPastKeyValuesGenerator
+
+class YoutuVLLanguageOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (TextDecoderWithPositionIdsOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES[0], OVMiniCPM3DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = OVMiniCPM3DummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+

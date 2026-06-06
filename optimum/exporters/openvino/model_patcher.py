@@ -1821,7 +1821,7 @@ def _phi3_self_attn_sdpa_forward(
 
     attn_output = self.o_proj(attn_output)
 
-    return attn_output, None, past_key_value
+    return attn_output, None
 
 
 class Phi3ModelPatcher(OVDecoderModelPatcher):
@@ -4069,7 +4069,7 @@ def minicpm3_attn_forward(
 
     attn_output = self.o_proj(attn_output)
 
-    return attn_output, None, past_key_value
+    return attn_output, None
 
 
 class MiniCPM3Patcher(OVDecoderModelPatcher):
@@ -4221,7 +4221,7 @@ def deepseek_v3_attn_forward(
 
     attn_output = self.o_proj(attn_output)
 
-    return attn_output, None, past_key_value
+    return attn_output, None
 
 
 def deepseek_v2_attn_forward(
@@ -4343,7 +4343,7 @@ def deepseek_v2_attn_forward(
 
     attn_output = self.o_proj(attn_output)
 
-    return attn_output, None, past_key_value
+    return attn_output, None
 
 
 def deepseek_moe_infer(self, x, topk_ids, topk_weight):
@@ -5742,7 +5742,7 @@ def _blenderbot_attn_forward_legacy(
 
     attn_output = self.out_proj(attn_output)
 
-    return attn_output, None, past_key_value
+    return attn_output, None
 
 
 # Adopted from https://github.com/huggingface/transformers/blob/v4.52.3/src/transformers/models/blenderbot/modeling_blenderbot.py#L156
@@ -9992,3 +9992,112 @@ class KokoroModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model._orig_forward
+
+class YoutuPatcher(OVDecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        for block in self._model.model.layers:
+            block.self_attn._orig_forward = block.self_attn.forward
+            block.self_attn.forward = types.MethodType(youtu_attn_forward, block.self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for block in self._model.model.layers:
+            block.self_attn.forward = block.self_attn._orig_forward
+
+def youtu_attn_forward(
+    self,
+    hidden_states: torch.Tensor,
+    position_embeddings: Tuple[torch.Tensor, torch.Tensor] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    instance_length: Optional[torch.LongTensor] = None,
+    past_key_value = None,
+    cache_position: Optional[torch.LongTensor] = None,
+    **kwargs,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    def rotate_half(x):
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+
+    def apply_rotary_pos_emb(q, k, cos, sin):
+        orig_dtype = k.dtype
+        q_fp32 = q.to(dtype=torch.float32, device=q.device)
+        k_fp32 = k.to(dtype=torch.float32, device=k.device)
+        q_embed = (q_fp32 * cos) + (rotate_half(q_fp32) * sin)
+        k_embed = (k_fp32 * cos) + (rotate_half(k_fp32) * sin)
+        return q_embed.to(dtype=orig_dtype), k_embed.to(dtype=orig_dtype)
+
+    def apply_rotary_pos_emb_interleave(q, k, cos, sin):
+        orig_dtype = k.dtype
+        q_fp32 = q.to(dtype=torch.float32, device=q.device)
+        k_fp32 = k.to(dtype=torch.float32, device=k.device)
+
+        def rotate_every_two(x):
+            x1 = x[:, :, :, ::2]
+            x2 = x[:, :, :, 1::2]
+            x_new = torch.stack((-x2, x1), dim=-1)
+            return x_new.flatten(3)
+
+        q_embed = (q_fp32 * cos) + (rotate_every_two(q_fp32) * sin)
+        k_embed = (k_fp32 * cos) + (rotate_every_two(k_fp32) * sin)
+        return q_embed.to(dtype=orig_dtype), k_embed.to(dtype=orig_dtype)
+
+    batch_size, seq_length = hidden_states.shape[:-1]
+    query_shape = (batch_size, seq_length, -1, self.qk_head_dim)
+    key_shape = (batch_size, seq_length, -1, self.qk_nope_head_dim + self.v_head_dim)
+
+    if self.q_lora_rank is None:
+        q_states = self.q_proj(hidden_states).view(query_shape).transpose(1, 2)
+    else:
+        q_states = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states))).view(query_shape).transpose(1, 2)
+    q_pass, q_rot = torch.split(q_states, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
+
+    compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
+    k_pass, k_rot = torch.split(compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
+
+    k_pass = self.kv_b_proj(self.kv_a_layernorm(k_pass)).view(key_shape).transpose(1, 2)
+    k_pass, value_states = torch.split(k_pass, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
+
+    k_rot = k_rot.view(batch_size, 1, seq_length, self.qk_rope_head_dim)
+
+    cos, sin = position_embeddings
+    cos = cos.unsqueeze(1)
+    sin = sin.unsqueeze(1)
+
+    if self.config.rope_interleave:
+        q_rot, k_rot = apply_rotary_pos_emb_interleave(q_rot, k_rot, cos, sin)
+    else:
+        q_rot, k_rot = apply_rotary_pos_emb(q_rot, k_rot, cos, sin)
+    k_rot = k_rot.expand(*k_pass.shape[:-1], -1)
+
+    query_states = torch.cat((q_pass, q_rot), dim=-1)
+    key_states = torch.cat((k_pass, k_rot), dim=-1)
+
+    if past_key_value is not None:
+        cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+        key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+    if self.config._attn_implementation == "flash_attention_2" and self.qk_head_dim != self.v_head_dim:
+        import torch.nn.functional as F
+        value_states = F.pad(value_states, [0, self.qk_head_dim - self.v_head_dim])
+
+    import torch.nn.functional as F
+    import math
+    attn_output = F.scaled_dot_product_attention(
+        query_states,
+        key_states,
+        value_states,
+        attn_mask=attention_mask,
+        dropout_p=0.0,
+        is_causal=False,
+    )
+    
+    if self.config._attn_implementation == "flash_attention_2" and self.qk_head_dim != self.v_head_dim:
+        attn_output = attn_output[:, :, :, : self.v_head_dim]
+
+    attn_output = attn_output.transpose(1, 2).reshape(batch_size, seq_length, -1).contiguous()
+    attn_output = self.o_proj(attn_output)
+
+    return attn_output, None
+
