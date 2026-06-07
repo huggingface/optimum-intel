@@ -461,6 +461,50 @@ class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         return past_kv_values
 
 
+class DummyGemma4UnifiedVisionInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "image_position_ids")
+
+    def __init__(self, task, normalized_config, batch_size=DEFAULT_DUMMY_SHAPES["batch_size"], **kwargs):
+        super().__init__(task, normalized_config, batch_size, **kwargs)
+        self.patch_size = getattr(normalized_config, "patch_size", 16)
+        self.pooling_kernel_size = getattr(normalized_config, "pooling_kernel_size", 3)
+        self.mm_posemb_size = getattr(normalized_config, "mm_posemb_size", 1120)
+        # The gemma4_unified vision embedder is encoder-free and consumes pre-merged patches:
+        # each merged patch has model_patch_size = patch_size * pooling_kernel_size pixels per side.
+        # The processor pads to max_soft_tokens merged patches, so num_patches == max_soft_tokens.
+        max_soft_tokens = getattr(normalized_config, "image_seq_length", None)
+        if max_soft_tokens is None:
+            max_soft_tokens = getattr(normalized_config, "max_soft_tokens", 280)
+        self.num_patches = max_soft_tokens
+        self.model_patch_size = self.patch_size * self.pooling_kernel_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            # Pre-merged pixel patches: [batch, num_patches, 3 * model_patch_size^2]
+            return self.random_float_tensor(
+                shape=[self.batch_size, self.num_patches, 3 * self.model_patch_size**2],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "image_position_ids":
+            import math
+
+            # 2D (x, y) patch coordinates. Build a roughly square grid of valid positions
+            # bounded by the factorized position embedding table size.
+            side = int(math.sqrt(self.num_patches))
+            side = max(1, min(side, self.mm_posemb_size - 1))
+            grid = torch.stack(
+                torch.meshgrid(torch.arange(side), torch.arange(side), indexing="ij"), dim=-1
+            ).reshape(1, -1, 2)
+            if grid.shape[1] < self.num_patches:
+                pad = torch.full((1, self.num_patches - grid.shape[1], 2), -1, dtype=grid.dtype)
+                grid = torch.cat([grid, pad], dim=1)
+            else:
+                grid = grid[:, : self.num_patches, :]
+            return grid.expand(self.batch_size, -1, -1).clone()
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
 class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
         self,
