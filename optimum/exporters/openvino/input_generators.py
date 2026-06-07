@@ -283,7 +283,7 @@ class Eagle3VLMDummyGenerator(DummyInputGenerator):
         sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
         **kwargs,
     ):
-        self.batch_size = batch_size
+        self.batch_size = 1
         self.sequence_length = sequence_length
         self.hidden_size = normalized_config.hidden_size
 
@@ -1161,6 +1161,50 @@ class DummyQwen3VLVisionEmbedInputGenerator(DummyQwen2VLVisionEmbedInputGenerato
                 framework=framework,
                 value=0,
                 dtype=DTYPE_MAPPER.pt(int_dtype),
+            )
+
+
+class DummyYoutuVLVisionEmbedInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "pixel_attention_mask",
+        "spatial_shapes",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 1,
+        width: int = 64,
+        height: int = 64,
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        **kwargs,
+    ):
+        self.batch_size = 1
+        self.height = height
+        self.width = width
+        self.num_channels = num_channels
+        self.patch_size = normalized_config.config.patch_size
+        self.num_patches = (height // self.patch_size) * (width // self.patch_size)
+        self.patch_dim = self.num_channels * self.patch_size * self.patch_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        grid_h, grid_w = self.height // self.patch_size, self.width // self.patch_size
+
+        if input_name == "pixel_values":
+            return self.random_float_tensor(
+                [self.batch_size, self.num_patches, self.patch_dim], framework=framework, dtype=float_dtype
+            )
+
+        if input_name == "pixel_attention_mask":
+            return self.constant_tensor(
+                [self.batch_size, self.num_patches], framework=framework, value=1, dtype=DTYPE_MAPPER.pt(int_dtype)
+            )
+
+        if input_name == "spatial_shapes":
+            return self.constant_tensor(
+                [self.batch_size, 2], framework=framework, value=grid_h, dtype=DTYPE_MAPPER.pt(int_dtype)
             )
 
 

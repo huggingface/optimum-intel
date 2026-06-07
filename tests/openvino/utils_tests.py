@@ -245,6 +245,7 @@ MODEL_NAMES = {
     "llava_next": "optimum-intel-internal-testing/tiny-random-llava-next",
     "llava_next_mistral": "optimum-intel-internal-testing/tiny-random-llava-next-mistral",
     "llava_next_video": "optimum-intel-internal-testing/tiny-random-llava-next-video",
+    "youtu_vl": "tencent/Youtu-VL-4B-Instruct",
     "m2m_100": "optimum-intel-internal-testing/tiny-random-m2m_100",
     "olmo2": "optimum-intel-internal-testing/tiny-random-olmo2",
     "opt": "optimum-intel-internal-testing/tiny-random-OPTModel",
@@ -440,6 +441,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 9,
     },
+    "youtu_vl": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+    },
     "minicpmv": {
         "lm_model": 30,
         "text_embeddings_model": 1,
@@ -577,6 +583,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_vl_eagle3",
     "qwen3_asr",
     "videochat_flash_qwen",
+    "youtu_vl",
 )
 
 if is_transformers_version("<", "5"):

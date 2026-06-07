@@ -3603,6 +3603,27 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
+def youtu_vl_vision_embed_forward(self, pixel_values, pixel_attention_mask, spatial_shapes):
+    image_embeds = self.siglip2(pixel_values, pixel_attention_mask, spatial_shapes).last_hidden_state
+    return self.merger(image_embeds, spatial_shapes)
+
+
+class YoutuVLImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(youtu_vl_vision_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
 class MairaImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
