@@ -72,7 +72,7 @@ TESTS_REQUIRE = [
     "protobuf",
 ]
 
-QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
+QUALITY_REQUIRE = ["ruff"]
 
 EXTRAS_REQUIRE = {
     "nncf": ["nncf>=2.19.0"],
@@ -97,9 +97,12 @@ setup(
         "Intended Audience :: Education",
         "Intended Audience :: Science/Research",
         "Operating System :: OS Independent",
-        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        "Programming Language :: Python :: 3.14",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
     keywords="transformers, quantization, pruning, knowledge distillation, optimization, training",

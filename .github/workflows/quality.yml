@@ -23,18 +23,15 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
-          python-version: 3.9
+          python-version: 3.10
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          # .[quality] installs too many dependencies
-          # TODO: we should remove the version pinning at some point
-          pip install "black~=23.1" "ruff==0.4.4"
+          python -m pip install ruff
 
-      - name: Check style with black
+      - name: Check format with ruff
         run: |
-          black --check .
+          ruff format --check .
 
       - name: Check style with ruff
         run: |
