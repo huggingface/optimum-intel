@@ -1331,6 +1331,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         expected_num_weight_nodes_per_model,
         expected_fake_nodes_per_model,
     ):
+        if model_name in ["gpt_oss"]:
+            self.skipTest("CVS-186980 int4 compression fails for tiny gpt_oss, full model works fine.")
         with TemporaryDirectory() as tmpdir:
             pt_model = auto_model_cls.from_pretrained(MODEL_NAMES[model_name])
             # overload for matching with default configuration
