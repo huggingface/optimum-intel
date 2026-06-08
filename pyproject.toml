@@ -18,7 +18,7 @@ extend-exclude = ["notebooks", "venv", ".venv"]
 
 [tool.ruff.lint]
 # Never enforce `E501` (line length violations).
-ignore = ["C901", "E501", "E741", "W605"]
+ignore = ["C901", "E203", "E501", "E741", "W503", "W605"]
 select = ["C", "E", "F", "I", "W"]
 
 # Ignore import violations in all `__init__.py` files.
