@@ -1345,9 +1345,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     @parameterized.expand(
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION,
-        name_func=lambda testcase_func,
-        param_num,
-        params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[1])}",
+        name_func=lambda testcase_func, param_num, params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[1])}",
     )
     def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type, trust_remote_code):
         model = model_cls.from_pretrained(
@@ -1572,9 +1570,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     @parameterized.expand(
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION,
-        name_func=lambda testcase_func,
-        param_num,
-        params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[1])}",
+        name_func=lambda testcase_func, param_num, params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[1])}",
     )
     def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type, trust_remote_code):
         model = model_cls.from_pretrained(
@@ -1707,9 +1703,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         if is_transformers_version(">=", "5.5.0")
         else [],
         skip_on_empty=True,
-        name_func=lambda testcase_func,
-        param_num,
-        params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[0])}",
+        name_func=lambda testcase_func, param_num, params: f"{testcase_func.__name__}_{parameterized.to_safe_name(params.args[0])}",
     )
     def test_build_dataset(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
