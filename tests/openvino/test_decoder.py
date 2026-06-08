@@ -1042,7 +1042,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if is_transformers_version("<", "4.49"):
             self.skipTest("Incompatible transformers version: Phi3 longrope requires transformers>=4.49")
         if is_transformers_version(">=", "5"):
-            self.skipTest("Transformers v4 and v5 output different results for Phi3 longrope. Currently, OpenVINO matches v4 output.")
+            self.skipTest("Transformers v4 and v5 output different (reference) results for Phi3 longrope. Currently, OpenVINO matches v4 output in both cases.")
 
         set_seed(SEED)
         model_id = MODEL_NAMES["phi3-longrope"]
