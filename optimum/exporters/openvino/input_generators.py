@@ -493,9 +493,9 @@ class DummyGemma4UnifiedVisionInputGenerator(DummyVisionInputGenerator):
             # bounded by the factorized position embedding table size.
             side = int(math.sqrt(self.num_patches))
             side = max(1, min(side, self.mm_posemb_size - 1))
-            grid = torch.stack(
-                torch.meshgrid(torch.arange(side), torch.arange(side), indexing="ij"), dim=-1
-            ).reshape(1, -1, 2)
+            grid = torch.stack(torch.meshgrid(torch.arange(side), torch.arange(side), indexing="ij"), dim=-1).reshape(
+                1, -1, 2
+            )
             if grid.shape[1] < self.num_patches:
                 pad = torch.full((1, self.num_patches - grid.shape[1], 2), -1, dtype=grid.dtype)
                 grid = torch.cat([grid, pad], dim=1)

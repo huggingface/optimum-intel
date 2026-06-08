@@ -9234,7 +9234,9 @@ class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
 # regardless of layer type. Mirrors transformers create_masks_for_generate with
 # block_sequence_ids when use_bidirectional_attention == "vision".
 # Original code: https://github.com/huggingface/transformers/blob/main/src/transformers/models/gemma4_unified/modeling_gemma4_unified.py#L992
-def _create_gemma4_unified_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids, inputs_embeds, sliding_window):
+def _create_gemma4_unified_bidirectional_mask_dict(
+    attention_mask_2d, mm_token_type_ids, inputs_embeds, sliding_window
+):
     dtype = inputs_embeds.dtype
     device = inputs_embeds.device
     min_dtype = torch.finfo(dtype).min
