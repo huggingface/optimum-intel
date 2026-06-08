@@ -756,6 +756,16 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),
         (
             "image-text-to-text",
+            "youtu_vl",
+            "--trust-remote-code int4 --group-size 16 --ratio 0.8",
+            {
+                "lm_model": {"int8": 14, "int4": 20},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 16},
+            },
+        ),
+        (
+            "image-text-to-text",
             "qwen3_vl",
             'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
             "--dataset contextual --num-samples 1",

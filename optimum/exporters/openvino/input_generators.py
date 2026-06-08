@@ -1735,3 +1735,118 @@ class DummyKokoroInputGenerator(DummyInputGenerator):
             return self.random_int_tensor(shape=[1], min_value=1, max_value=10, framework=framework, dtype=float_dtype)
         else:
             raise ValueError(f"Unsupported input {input_name} for DummyKokoroInputGenerator")
+
+
+class DummyYoutuVLVisionInputGenerator(DummyVisionInputGenerator):
+    """
+    Generates dummy vision inputs for YoutuVL model.
+
+    YoutuVL uses a packed image format where:
+      - pixel_values has shape (num_images, num_patches, in_features)
+      - pixel_attention_mask has shape (num_images, num_patches)
+      - spatial_shapes has shape (num_images, 2) as [h_patches, w_patches]
+    """
+
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "pixel_attention_mask",
+        "spatial_shapes",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = 1,
+        **kwargs,
+    ):
+        self.task = task
+        # YoutuVL vision model always processes one image at a time (packed image format)
+        self.batch_size = 1
+
+        # Derive in_features from vision config
+        vision_cfg = getattr(normalized_config, "config", normalized_config)
+        vision_sub = getattr(vision_cfg, "vision_config", vision_cfg)
+        self.patch_size = getattr(vision_sub, "patch_size", 16)
+        self.num_channels = getattr(vision_sub, "num_channels", 3)
+        self.in_features = getattr(vision_sub, "in_features", -1)
+        if self.in_features <= 0:
+            self.in_features = self.num_channels * self.patch_size * self.patch_size
+
+        # Dummy grid: 2x2 patches per image
+        self.grid_h = 2
+        self.grid_w = 2
+        self.num_patches = self.grid_h * self.grid_w
+
+    def generate(
+        self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"
+    ):
+        if input_name == "pixel_values":
+            return self.random_float_tensor(
+                shape=[self.batch_size, self.num_patches, self.in_features],
+                min_value=0,
+                max_value=1,
+                framework=framework,
+                dtype=float_dtype,
+            )
+        elif input_name == "pixel_attention_mask":
+            import torch
+            # All tokens visible: mask of ones with dtype int32
+            return torch.ones([self.batch_size, self.num_patches], dtype=torch.int32)
+        elif input_name == "spatial_shapes":
+            import torch
+            # Shape: (num_images, 2) as [h_patches, w_patches]
+            spatial = torch.tensor(
+                [[self.grid_h, self.grid_w]] * self.batch_size, dtype=torch.int64
+            )
+            return spatial
+        else:
+            raise ValueError(f"Unsupported input {input_name} for DummyYoutuVLVisionInputGenerator")
+
+
+class YoutuVLDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    """
+    Dummy past key values generator for YoutuVL.
+
+    YoutuVL uses Multi-Latent Attention (MLA) where:
+    - Key head dim: qk_nope_head_dim + qk_rope_head_dim  (= 64 in tiny model)
+    - Value head dim: v_head_dim  (= 32 in tiny model)
+    """
+
+    SUPPORTED_INPUT_NAMES = ("past_key_values",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = 1,
+        sequence_length: int = 1,
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+
+        # NormalizedConfig stores the raw PretrainedConfig in .config
+        cfg = getattr(normalized_config, "config", normalized_config)
+        self.num_layers = getattr(cfg, "num_hidden_layers", 2)
+        self.num_key_value_heads = getattr(cfg, "num_key_value_heads", 2)
+        self.qk_head_dim = getattr(cfg, "qk_head_dim", None)
+        if self.qk_head_dim is None:
+            qk_nope = getattr(cfg, "qk_nope_head_dim", 32)
+            qk_rope = getattr(cfg, "qk_rope_head_dim", 32)
+            self.qk_head_dim = qk_nope + qk_rope
+        self.v_head_dim = getattr(cfg, "v_head_dim", 32)
+
+    def generate(
+        self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"
+    ):
+        key_shape = (self.batch_size, self.num_key_value_heads, self.sequence_length, self.qk_head_dim)
+        val_shape = (self.batch_size, self.num_key_value_heads, self.sequence_length, self.v_head_dim)
+        return [
+            (
+                self.random_float_tensor(key_shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(val_shape, framework=framework, dtype=float_dtype),
+            )
+            for _ in range(self.num_layers)
+        ]

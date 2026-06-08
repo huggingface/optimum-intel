@@ -65,6 +65,8 @@ from optimum.exporters.openvino.input_generators import (
     DummyVideoChatFlashQwenProjectorInputGenerator,
     DummyVisionPositionIdsInputGenerator,
     DummyVisionPositionIdsPhi4InputGenerator,
+    DummyYoutuVLVisionInputGenerator,
+    YoutuVLDummyPastKeyValuesGenerator,
     Eagle3DummyGenerator,
     Eagle3VLMDummyGenerator,
     Gemma4DummyPastKeyValuesGenerator,
@@ -167,6 +169,7 @@ from optimum.exporters.openvino.model_patcher import (
     SpeechT5ModelPatcher,
     VideoChatFlashQwenVisionEmbeddingModelPatcher,
     XverseModelPatcher,
+    YoutuVLVisionEmbeddingPatcher,
     Zamba2ModelPatcher,
     _get_model_attribute,
 )
@@ -274,6 +277,12 @@ def init_model_configs():
         "AutoModelForCausalLM",
     )
     TasksManager._CUSTOM_CLASSES[("pt", "phi4_multimodal", "automatic-speech-recognition")] = (
+        "transformers",
+        "AutoModelForCausalLM",
+    )
+
+    # YoutuVL uses trust_remote_code; use AutoModelForCausalLM for loading
+    TasksManager._CUSTOM_CLASSES[("pt", "youtu_vl", "image-text-to-text")] = (
         "transformers",
         "AutoModelForCausalLM",
     )
@@ -3744,6 +3753,143 @@ class GotOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+
+@register_in_tasks_manager(
+    "youtu_vl_text",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class YoutuVLTextOpenVINOConfig(LlamaOpenVINOConfig):
+    """Config for the text-decoder part of YoutuVL (YoutuModel + lm_head)."""
+
+    MIN_TRANSFORMERS_VERSION = "5.0.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, YoutuVLDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = YoutuVLDummyPastKeyValuesGenerator
+
+    # Override the normalized config class to use the correct head dimensions
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
+        num_key_value_heads="num_key_value_heads",
+        allow_new=True,
+    )
+
+
+@register_in_tasks_manager("youtu_vl", *["image-text-to-text"], library_name="transformers")
+class YoutuVLOpenVINOConfig(BaseVLMOpenVINOConfig):
+    """
+    OpenVINO export config for YoutuVL (YoutuVLForConditionalGeneration).
+
+    Decomposition:
+      - vision_embeddings : siglip2 encoder + VLPatchMerger
+      - text_embeddings   : embed_tokens
+      - language          : YoutuModel + lm_head (text-generation-with-past)
+    """
+
+    MIN_TRANSFORMERS_VERSION = "5.0.0"
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyYoutuVLVisionInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        self._behavior = behavior
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {0: "num_images", 1: "num_patches"},
+                "pixel_attention_mask": {0: "num_images", 1: "num_patches"},
+                "spatial_shapes": {0: "num_images"},
+            }
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "num_image_tokens"}}
+        return {}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VLMConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "youtu_vl_text",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+            )
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "youtu_vl_text",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+            )
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            # Return the full model: language model + lm_head
+            return model
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            # Return the full model; the patcher extracts siglip2 + merger
+            return model
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.model.embed_tokens
+            text_embedding.config = model.config
+            return text_embedding
+
+    def patch_model_for_export(self, model: "PreTrainedModel", model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return YoutuVLVisionEmbeddingPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
 
 
 @register_in_tasks_manager("gemma3", *["image-text-to-text"], library_name="transformers")

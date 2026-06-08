@@ -9992,3 +9992,297 @@ class KokoroModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model._orig_forward
+
+
+def _youtu_vl_make_block_diagonal_attn_mask(cu_seqlens, seq_length, dtype, device):
+    """
+    Vectorized helper to create a block-diagonal attention mask from cumulative sequence lengths.
+
+    Replaces the Python for-loop:
+        for i in range(1, len(cu_seqlens)):
+            mask[..., cu_seqlens[i-1]:cu_seqlens[i], cu_seqlens[i-1]:cu_seqlens[i]] = 0
+
+    Returns a (1, seq_length, seq_length) float mask where 0 = attend, -inf = do not attend.
+    """
+    positions = torch.arange(seq_length, device=device, dtype=torch.float32)
+    boundaries = cu_seqlens[1:].float()
+    seg_ids = torch.bucketize(positions, boundaries)  # (seq_len,)
+    same_seg = seg_ids.unsqueeze(0) == seg_ids.unsqueeze(1)  # (seq_len, seq_len)
+    min_val = torch.finfo(dtype).min
+    mask = torch.where(
+        same_seg.unsqueeze(0),
+        torch.zeros(1, dtype=dtype, device=device),
+        torch.tensor(min_val, dtype=dtype, device=device),
+    )
+    return mask
+
+
+def _youtu_vl_patch_vision_eager_attn(module):
+    """Patch Vision_EagerAttention to use vectorized block-diagonal mask."""
+    orig_forward = module.forward
+
+    @functools.wraps(orig_forward)
+    def patched_forward(
+        hidden_states,
+        cu_seqlens,
+        rotary_pos_emb=None,
+        position_embeddings=None,
+    ):
+        seq_length = hidden_states.shape[0]
+        q = module.q_proj(hidden_states).reshape(seq_length, module.num_heads, -1)
+        k = module.k_proj(hidden_states).reshape(seq_length, module.num_heads, -1)
+        v = module.v_proj(hidden_states).reshape(seq_length, module.num_heads, -1)
+
+        if position_embeddings is None:
+            emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+            cos = emb.cos()
+            sin = emb.sin()
+        else:
+            cos, sin = position_embeddings
+
+        # apply_rotary_pos_emb_vision is module-level in modeling_siglip2; access via globals
+        from optimum.exporters.openvino.model_patcher import _youtu_vl_apply_rotary_pos_emb_vision
+        q, k = _youtu_vl_apply_rotary_pos_emb_vision(q, k, cos, sin)
+
+        attention_mask = _youtu_vl_make_block_diagonal_attn_mask(
+            cu_seqlens, seq_length, q.dtype, q.device
+        )
+
+        q = q.transpose(0, 1)
+        k = k.transpose(0, 1)
+        v = v.transpose(0, 1)
+        attn_weights = torch.matmul(q, k.transpose(1, 2)) / (module.head_dim ** 0.5)
+        attn_weights = attn_weights + attention_mask
+        attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(q.dtype)
+        attn_output = torch.matmul(attn_weights, v)
+        attn_output = attn_output.transpose(0, 1)
+        attn_output = attn_output.reshape(seq_length, -1)
+        attn_output = module.out_proj(attn_output)
+        return attn_output, None
+
+    module._orig_forward = orig_forward
+    module.forward = patched_forward
+
+
+def _youtu_vl_patch_vision_sdpa_attn(module):
+    """Patch Vision_SDPAAttention to use vectorized block-diagonal mask."""
+    import math
+    orig_forward = module.forward
+
+    @functools.wraps(orig_forward)
+    def patched_forward(
+        hidden_states,
+        cu_seqlens,
+        rotary_pos_emb=None,
+        position_embeddings=None,
+    ):
+        seq_length = hidden_states.shape[0]
+        q = module.q_proj(hidden_states).view(seq_length, module.num_heads, module.head_dim)
+        k = module.k_proj(hidden_states).view(seq_length, module.num_heads, module.head_dim)
+        v = module.v_proj(hidden_states).view(seq_length, module.num_heads, module.head_dim)
+
+        if position_embeddings is None:
+            emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+            cos = emb.cos()
+            sin = emb.sin()
+        else:
+            cos, sin = position_embeddings
+
+        from optimum.exporters.openvino.model_patcher import _youtu_vl_apply_rotary_pos_emb_vision
+        q, k = _youtu_vl_apply_rotary_pos_emb_vision(q, k, cos, sin)
+
+        attention_mask = _youtu_vl_make_block_diagonal_attn_mask(
+            cu_seqlens, seq_length, q.dtype, q.device
+        ).unsqueeze(0)  # (1, 1, seq_len, seq_len)
+
+        q = q.transpose(0, 1).unsqueeze(0)
+        k = k.transpose(0, 1).unsqueeze(0)
+        v = v.transpose(0, 1).unsqueeze(0)
+        attn_output = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attention_mask)
+        return module.out_proj(
+            attn_output.squeeze(0).transpose(0, 1).reshape(seq_length, -1).to(hidden_states.dtype)
+        ), None
+
+    module._orig_forward = orig_forward
+    module.forward = patched_forward
+
+
+def _youtu_vl_apply_rotary_pos_emb_vision(q, k, cos, sin):
+    """Rotary embedding for vision tokens (same as in modeling_siglip2.py)."""
+    orig_q_shape = q.shape
+    orig_k_shape = k.shape
+    cos = cos.unsqueeze(1)
+    sin = sin.unsqueeze(1)
+
+    def rotate_half(x):
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+
+    q = (q * cos) + (rotate_half(q) * sin)
+    k = (k * cos) + (rotate_half(k) * sin)
+    return q.view(orig_q_shape), k.view(orig_k_shape)
+
+
+def _youtu_vl_patch_siglip2_encoder(encoder_module):
+    """
+    Patch Siglip2Encoder.forward to remove torch.unique_consecutive which is
+    not supported by OpenVINO, and patch away Python data-dependent list ops.
+    For a fixed dummy input the shapes are static, so we can pre-compute
+    window indices and bake them as constants.
+    """
+    orig_forward = encoder_module.forward
+
+    @functools.wraps(orig_forward)
+    def patched_encoder_forward(
+        inputs_embeds,
+        spatial_shapes,
+        attention_mask=None,
+        output_attentions=None,
+        output_hidden_states=None,
+    ):
+        from transformers.modeling_outputs import BaseModelOutput
+
+        output_attentions = output_attentions if output_attentions is not None else encoder_module.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else encoder_module.config.output_hidden_states
+        )
+
+        encoder_states = () if output_hidden_states else None
+        all_attentions = () if output_attentions else None
+
+        hidden_states = inputs_embeds
+        rotary_pos_emb = encoder_module.rot_pos_emb(spatial_shapes)
+        window_index, cu_window_seqlens = encoder_module.get_window_index(spatial_shapes)
+        # Build cu_window_seqlens tensor without unique_consecutive (not supported by OV)
+        cu_window_seqlens_t = torch.tensor(
+            cu_window_seqlens,
+            device=hidden_states.device,
+            dtype=torch.int32,
+        )
+        # Remove duplicates by taking only unique consecutive values (baked as constant for fixed input)
+        # We skip torch.unique_consecutive and assume no duplicate seqlens for valid input
+        cu_seqlens_window = cu_window_seqlens_t
+
+        seq_len, _ = hidden_states.size()
+        hidden_states = hidden_states.reshape(seq_len // encoder_module.spatial_merge_unit, encoder_module.spatial_merge_unit, -1)
+        hidden_states = hidden_states[window_index, :, :]
+        hidden_states = hidden_states.reshape(seq_len, -1)
+        rotary_pos_emb = rotary_pos_emb.reshape(seq_len // encoder_module.spatial_merge_unit, encoder_module.spatial_merge_unit, -1)
+        rotary_pos_emb = rotary_pos_emb[window_index, :, :]
+        rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
+        emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+        position_embeddings = (emb.cos(), emb.sin())
+
+        cu_seqlens = torch.repeat_interleave(spatial_shapes[:, 0] * spatial_shapes[:, 1], 1).cumsum(
+            dim=0, dtype=torch.int32,
+        )
+        cu_seqlens = torch.nn.functional.pad(cu_seqlens, (1, 0), value=0)
+
+        for layer_num, encoder_layer in enumerate(encoder_module.layers):
+            if output_hidden_states:
+                encoder_states = encoder_states + (hidden_states,)
+
+            if (1 + layer_num) % 8 == 0 or layer_num == len(encoder_module.layers) - 1:
+                cu_seqlens_now = cu_seqlens
+            else:
+                cu_seqlens_now = cu_seqlens_window
+
+            layer_outputs = encoder_layer(
+                hidden_states,
+                attention_mask,
+                cu_seqlens=cu_seqlens_now,
+                position_embeddings=position_embeddings,
+            )
+            hidden_states = layer_outputs[0]
+            if output_attentions:
+                all_attentions = all_attentions + (layer_outputs[1],)
+
+        hidden_states = hidden_states.reshape(
+            seq_len // encoder_module.spatial_merge_unit, encoder_module.spatial_merge_unit, -1
+        )
+        reverse_indices = torch.argsort(window_index)
+        hidden_states = hidden_states[reverse_indices, :, :]
+        hidden_states = hidden_states.reshape(seq_len, -1)
+
+        if output_hidden_states:
+            encoder_states = encoder_states + (hidden_states,)
+
+        return BaseModelOutput(
+            last_hidden_state=hidden_states,
+            hidden_states=encoder_states,
+            attentions=all_attentions,
+        )
+
+    encoder_module._orig_forward = orig_forward
+    encoder_module.forward = patched_encoder_forward
+
+
+class YoutuVLVisionEmbeddingPatcher(ModelPatcher):
+    """
+    Patches YoutuVLForConditionalGeneration for OpenVINO vision embedding export.
+
+    The exported model takes (pixel_values, pixel_attention_mask, spatial_shapes)
+    and returns the merged visual features that will be scattered into the text
+    embeddings during inference.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def youtu_vl_vision_embed_forward(
+            self, pixel_values, pixel_attention_mask=None, spatial_shapes=None
+        ):
+            """
+            Run siglip2 vision encoder + merger to produce merged image features.
+            Returns {'last_hidden_state': merged_features}.
+            """
+            image_embeds = self.siglip2(
+                pixel_values, pixel_attention_mask, spatial_shapes
+            ).last_hidden_state
+            merged = self.merger(image_embeds, spatial_shapes)
+            return {"last_hidden_state": merged}
+
+        model.forward = types.MethodType(youtu_vl_vision_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        # Patch all vision attention layers
+        self._patched_attn_modules = []
+        for module in self._model.siglip2.modules():
+            class_name = type(module).__name__
+            if class_name == "Vision_EagerAttention":
+                _youtu_vl_patch_vision_eager_attn(module)
+                self._patched_attn_modules.append(module)
+            elif class_name == "Vision_SDPAAttention":
+                _youtu_vl_patch_vision_sdpa_attn(module)
+                self._patched_attn_modules.append(module)
+
+        # Patch Siglip2Encoder to remove torch.unique_consecutive
+        self._patched_siglip2_encoders = []
+        for module in self._model.siglip2.modules():
+            if type(module).__name__ == "Siglip2Encoder":
+                _youtu_vl_patch_siglip2_encoder(module)
+                self._patched_siglip2_encoders.append(module)
+
+        super().__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        # Restore attention modules
+        for module in self._patched_attn_modules:
+            if hasattr(module, "_orig_forward"):
+                module.forward = module._orig_forward
+                del module._orig_forward
+        # Restore Siglip2Encoder
+        for module in self._patched_siglip2_encoders:
+            if hasattr(module, "_orig_forward"):
+                module.forward = module._orig_forward
+                del module._orig_forward
