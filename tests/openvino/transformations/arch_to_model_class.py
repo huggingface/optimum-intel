@@ -10,6 +10,7 @@ ARCH_TO_MODEL_CLASS = {
     "qwen3": "OVModelForCausalLM",
     "lfm2": "OVModelForCausalLM",
     "lfm2_moe": "OVModelForCausalLM",
+    "qwen3_moe": "OVModelForCausalLM",
     # image-text-to-text
     "llava": "OVModelForVisualCausalLM",
     # text-to-image / text-to-video
