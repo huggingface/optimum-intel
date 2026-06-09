@@ -64,7 +64,7 @@ from optimum.utils import (
 )
 
 from ...exporters.openvino import main_export
-from ...exporters.openvino.model_configs import _get_flux_ids_dim
+from ...exporters.openvino.input_generators import _get_flux_ids_dim
 from ..utils.import_utils import is_diffusers_version
 from .configuration import OVConfig, OVQuantizationConfigBase, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
@@ -1700,20 +1700,6 @@ class OVFlux2KleinPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, F
     main_input_name = "prompt"
     export_feature = "text-to-image"
     auto_model_class = Flux2KleinPipeline
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        # Neutralize export-time runtime scaling for tighter parity with diffusers.
-        for component_name in ("transformer", "vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2"):
-            component = getattr(self, component_name, None)
-            if component is None:
-                continue
-            try:
-                component.model.set_rt_info("1.0", ["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
-                component.clear_requests()
-            except Exception:
-                pass
 
     def __call__(self, *args, **kwargs):
         if args and isinstance(args[0], str) and "prompt" not in kwargs:
