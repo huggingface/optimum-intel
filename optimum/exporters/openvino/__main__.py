@@ -373,6 +373,10 @@ def main_export(
             patch_qwenvl_configs()
 
         model_type = config.model_type
+
+        if original_task == "auto" and model_type in {"phi4mm", "phi4_multimodal", "qwen3_omni_moe"}:
+            task = "image-text-to-text"
+
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             if custom_export_configs is None:
                 raise ValueError(

@@ -5033,6 +5033,7 @@ class Qwen3OmniMoeCodePredictorPatcher(OVDecoderModelPatcher):
             temperature,
             top_k,
             seeds,
+            **kwargs,
         ):
             # inputs_embeds: [B, 2, hidden] = concat(prefix_hidden[:, -1:], first_code_embed)
             # temperature: scalar float32; top_k: scalar int64; seeds: [num_inner_steps] int64
