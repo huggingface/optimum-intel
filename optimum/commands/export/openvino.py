@@ -294,6 +294,18 @@ def parse_args_openvino(parser: "ArgumentParser"):
         type=json.loads,
         help=("Any kwargs passed to the model forward, or used to customize the export for a given model."),
     )
+    optional_group.add_argument(
+        "--torch-compile",
+        action="store_true",
+        help="Apply torch.compile() to the model before export. This can improve performance and export quality.",
+    )
+    optional_group.add_argument(
+        "--torch-compile-backend",
+        type=str,
+        default="inductor",
+        choices=["inductor", "cudagraph", "aot_eager", "aot_autograd"],
+        help="Backend to use for torch.compile(). Defaults to 'inductor'.",
+    )
 
 
 def no_compression_parameter_provided(args):
@@ -479,6 +491,8 @@ class OVExportCommand(BaseOptimumCLICommand):
                 library_name=library_name,
                 variant=self.args.variant,
                 model_kwargs=self.args.model_kwargs,
+                torch_compile=self.args.torch_compile,
+                torch_compile_backend=self.args.torch_compile_backend,
                 # **input_shapes,
             )
             if apply_main_quantize:

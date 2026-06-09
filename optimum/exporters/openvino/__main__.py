@@ -235,6 +235,8 @@ def main_export(
     library_name: Optional[str] = None,
     model_loading_kwargs: Optional[Dict[str, Any]] = None,
     variant: Optional[str] = None,
+    torch_compile: bool = False,
+    torch_compile_backend: str = "inductor",
     **kwargs_shapes,
 ):
     """
@@ -545,6 +547,13 @@ def main_export(
 
         if getattr(model, "dtype", None) in [torch.float16, torch.bfloat16]:
             patch_16bit = True
+
+        if torch_compile:
+            try:
+                logger.info(f"Applying torch.compile with backend '{torch_compile_backend}'")
+                model = torch.compile(model, backend=torch_compile_backend)
+            except Exception as e:
+                logger.warning(f"Failed to apply torch.compile: {e}. Continuing without compilation.")
 
         needs_pad_token_id = task == "text-classification" and getattr(model.config, "pad_token_id", None) is None
 
