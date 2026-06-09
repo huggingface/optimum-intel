@@ -1245,6 +1245,46 @@ class DummyGemma4VisionInputGenerator(DummyVisionInputGenerator):
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
+class DummyGemma4UnifiedVisionInputGenerator(DummyVisionInputGenerator):
+    """Dummy input generator for gemma4_unified encoder-free vision embedder.
+    embed_vision expects [batch, num_soft_tokens, pooling_kernel_size^2 * 3 * patch_size^2]
+    """
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "image_position_ids")
+
+    def __init__(self, task, normalized_config, batch_size=DEFAULT_DUMMY_SHAPES["batch_size"], **kwargs):
+        super().__init__(task, normalized_config, batch_size, **kwargs)
+        vision_cfg = getattr(normalized_config.config, "vision_config", None)
+        self.patch_size = getattr(vision_cfg, "patch_size", 16) if vision_cfg else 16
+        self.pooling_kernel_size = getattr(vision_cfg, "pooling_kernel_size", 3) if vision_cfg else 3
+        self.num_soft_tokens = getattr(vision_cfg, "num_soft_tokens", 280) if vision_cfg else 280
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            # embed_vision expects [batch, num_soft_tokens, pooling_kernel_size^2 * 3 * patch_size^2]
+            flat_dim = self.pooling_kernel_size ** 2 * 3 * self.patch_size ** 2
+            return self.random_float_tensor(
+                shape=[self.batch_size, self.num_soft_tokens * self.pooling_kernel_size ** 2, flat_dim],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "image_position_ids":
+            import torch
+            import math
+            k = self.pooling_kernel_size
+            total = self.num_soft_tokens
+            side = int(math.sqrt(total))
+            h, w = side, total // side
+            pos_ids = torch.stack(
+                torch.meshgrid(torch.arange(h * k), torch.arange(w * k), indexing="ij"), dim=-1
+            ).reshape(1, -1, 2)
+            num_patches = self.num_soft_tokens * k * k
+            if pos_ids.shape[1] < num_patches:
+                pad = torch.full((1, num_patches - pos_ids.shape[1], 2), -1, dtype=pos_ids.dtype)
+                pos_ids = torch.cat([pos_ids, pad], dim=1)
+            return pos_ids[:, :num_patches].expand(self.batch_size, -1, -1).clone()
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
 class DummyVisionPositionIdsInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("patch_attention_mask", "patch_position_ids")
 

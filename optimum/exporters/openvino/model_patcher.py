@@ -9179,6 +9179,13 @@ class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
         from transformers.models.gemma4.modeling_gemma4 import Gemma4ClippableLinear
 
         # Get the vision encoder - it's at model.model.vision_tower.encoder
+        # gemma4_unified uses embed_vision instead of vision_tower (encoder-free architecture)
+        if hasattr(model.model, "embed_vision"):
+            self._is_unified = True
+            self._vision_encoder = model.model.embed_vision
+            self._orig_encoder_forward = self._vision_encoder.forward
+            return
+        self._is_unified = False
         vision_model = model.model.vision_tower if is_transformers_version(">=", "5") else model.vision_tower
         self._vision_encoder = vision_model.encoder
 
@@ -9235,6 +9242,8 @@ class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
 
         self._vision_encoder.forward = self._orig_encoder_forward
         super().__exit__(exc_type, exc_value, traceback)
+        if getattr(self, "_is_unified", False):
+            return
 
         for layer in self._vision_encoder.layers:
             for module in layer.modules():

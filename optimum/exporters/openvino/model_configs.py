@@ -43,6 +43,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyFluxTextInputGenerator,
     DummyFluxTransformerInputGenerator,
     DummyGemma4VisionInputGenerator,
+    DummyGemma4UnifiedVisionInputGenerator,
     DummyKokoroInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMVImageInputGenerator,
@@ -1290,6 +1291,21 @@ class Gemma4TextOpenVINOConfig(Gemma3TextOpenVINOConfig):
             inputs_or_outputs[f"{name}.{i}.key"] = {0: "batch_size", 2: decoder_sequence_name}
             inputs_or_outputs[f"{name}.{i}.value"] = {0: "batch_size", 2: decoder_sequence_name}
 
+
+
+@register_in_tasks_manager(
+    "gemma4_unified_text",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class Gemma4UnifiedTextOpenVINOConfig(Gemma4TextOpenVINOConfig):
+    pass
 
 @register_in_tasks_manager("deci", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class DeciOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
@@ -3807,6 +3823,7 @@ class Gemma4ConfigBehavior(str, enum.Enum):
 
 
 @register_in_tasks_manager("gemma4", *["image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("gemma4_unified", *["image-text-to-text", "text-generation-with-past", "text-generation"], library_name="transformers")
 class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Gemma4ConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyTextInputGenerator)
@@ -3819,6 +3836,8 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
         float_dtype: str = "fp32",
         behavior: Gemma4ConfigBehavior = Gemma4ConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
+        use_past: bool = False,
+        **kwargs,
     ):
         super().__init__(
             config=config,
@@ -3828,9 +3847,13 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
             preprocessors=preprocessors,
             behavior=behavior,
         )
+        self.use_past = use_past
         self._behavior = behavior
         if self._behavior == Gemma4ConfigBehavior.VISION_EMBEDDINGS:
-            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4VisionInputGenerator,)
+            if getattr(config, 'model_type', '') == 'gemma4_unified':
+                self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4UnifiedVisionInputGenerator,)
+            else:
+                self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4VisionInputGenerator,)
             # Attach image_seq_length from preprocessor to normalized config so
             # the dummy input generator can compute the correct number of patches.
             # The vision model's pooling uses shape-dependent Python operations baked in
@@ -3867,7 +3890,7 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
             behavior = Gemma4ConfigBehavior(behavior)
 
         if behavior == Gemma4ConfigBehavior.LANGUAGE:
-            model_type = "gemma4_text"
+            model_type = "gemma4_unified_text" if getattr(self._orig_config, "model_type", "") == "gemma4_unified" else "gemma4_text"
             inputs_update = {
                 "per_layer_inputs": {0: "batch_size", 1: "sequence_length", 2: "num_hidden_layers"},
             }

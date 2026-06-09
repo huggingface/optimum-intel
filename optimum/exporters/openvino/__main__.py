@@ -30,6 +30,7 @@ from transformers.utils import is_torch_available
 from openvino import Core, Type, save_model
 from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.tasks import TasksManager
+import optimum.exporters.openvino.model_configs  # ensure model registrations are loaded
 from optimum.intel.utils.import_utils import (
     DIFFUSERS_IMPORT_ERROR,
     is_diffusers_available,
@@ -701,7 +702,7 @@ def _main_quantize(
             trust_remote_code=trust_remote_code,
         )
         model_type = config.model_type
-        if model_type in ["phi4mm", "phi4_multimodal"]:
+        if model_type in ["phi4mm", "phi4_multimodal", "gemma4", "gemma4_unified"]:
             task = "image-text-to-text"
 
     # Step 1. Obtain the correct OpenVINO model class
