@@ -47,6 +47,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMVImageInputGenerator,
     DummyMiniCPMVResampleInputGenerator,
+    DummyMistral3MultiModalProjectorInputGenerator,
     DummyPhi3VisionProjectionInputGenerator,
     DummyQwen2VLLMInputGenerator,
     DummyQwen2VLVisionEmbedInputGenerator,
@@ -1935,34 +1936,7 @@ class Mistral3ConfigBehavior(str, enum.Enum):
     MULTI_MODAL_PROJECTOR = "multi_modal_projector"
 
 
-class DummyMistral3MultiModalProjectorInputGenerator(DummyLLavaMultiModalProjectorInputGenerator):
-    def __init__(
-        self,
-        task: str,
-        normalized_config: NormalizedVisionConfig,
-        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
-        random_batch_size_range: Optional[Tuple[int, int]] = None,
-        **kwargs,
-    ):
-        super().__init__(task, normalized_config, batch_size, random_batch_size_range, **kwargs)
-        self.spatial_merge_size = getattr(
-            normalized_config.config, "spatial_merge_size", getattr(normalized_config, "spatial_merge_size", 2)
-        )
-        self.num_merged_patches = self.num_patches // (self.spatial_merge_size**2)
-
-    def generate(
-        self,
-        input_name: str,
-        framework: str = "pt",
-        int_dtype: str = "int64",
-        float_dtype: str = "fp32",
-    ):
-        input_dim = self.hidden_size * self.spatial_merge_size**2
-        shape = [self.num_merged_patches, input_dim]
-        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
-
-
-class Mistral3MultiModalProjectorOpenVINOConfig(OnnxConfig):
+class Mistral3MultiModalProjectorOpenVINOConfig(OpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyMistral3MultiModalProjectorInputGenerator,)
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     _MODEL_PATCHER = Mistral3MultiModalProjectorPatcher
@@ -1987,7 +1961,7 @@ class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
         task: str = "feature-extraction",
         int_dtype: str = "int64",
         float_dtype: str = "fp32",
-        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        behavior: Mistral3ConfigBehavior = Mistral3ConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
         **kwargs,
     ):
@@ -1996,12 +1970,25 @@ class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
             task=task,
             int_dtype=int_dtype,
             float_dtype=float_dtype,
+            behavior=behavior,
             preprocessors=preprocessors,
         )
         self._orig_config = config
-        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+        if self._behavior == Mistral3ConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != Mistral3ConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"pixel_values": {0: "batch_size", 2: "height", 3: "width"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != Mistral3ConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"last_hidden_state": {0: "batch_size"}}
 
     def with_behavior(
         self,
@@ -2039,13 +2026,13 @@ class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
 
-        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+        if self._behavior != Mistral3ConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
 
         return Mistral3ImageEmbeddingModelPatcher(self, model, model_kwargs)
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs) -> Dict:
-        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and self._config.model_type == "pixtral":
+        if self._behavior == Mistral3ConfigBehavior.VISION_EMBEDDINGS and self._config.model_type == "pixtral":
             kwargs["batch_size"] = 1
         return super().generate_dummy_inputs(framework, **kwargs)
 

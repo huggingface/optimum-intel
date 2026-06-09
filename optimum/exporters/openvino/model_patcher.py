@@ -3710,7 +3710,7 @@ def mistral3_multi_modal_projector_forward(self, image_features):
 class Mistral3ImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
@@ -3727,7 +3727,7 @@ class Mistral3ImageEmbeddingModelPatcher(ModelPatcher):
 class Mistral3MultiModalProjectorPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
