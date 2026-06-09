@@ -10066,7 +10066,6 @@ def _youtu_vl_patch_vision_eager_attn(module):
 
 def _youtu_vl_patch_vision_sdpa_attn(module):
     """Patch Vision_SDPAAttention to use vectorized block-diagonal mask."""
-    import math
     orig_forward = module.forward
 
     @functools.wraps(orig_forward)
@@ -10093,15 +10092,17 @@ def _youtu_vl_patch_vision_sdpa_attn(module):
 
         attention_mask = _youtu_vl_make_block_diagonal_attn_mask(
             cu_seqlens, seq_length, q.dtype, q.device
-        ).unsqueeze(0)  # (1, 1, seq_len, seq_len)
+        )
 
-        q = q.transpose(0, 1).unsqueeze(0)
-        k = k.transpose(0, 1).unsqueeze(0)
-        v = v.transpose(0, 1).unsqueeze(0)
-        attn_output = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attention_mask)
-        return module.out_proj(
-            attn_output.squeeze(0).transpose(0, 1).reshape(seq_length, -1).to(hidden_states.dtype)
-        ), None
+        q = q.transpose(0, 1)
+        k = k.transpose(0, 1)
+        v = v.transpose(0, 1)
+        attn_weights = torch.matmul(q, k.transpose(1, 2)) / (module.head_dim ** 0.5)
+        attn_weights = attn_weights + attention_mask
+        attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(q.dtype)
+        attn_output = torch.matmul(attn_weights, v)
+        attn_output = attn_output.transpose(0, 1).reshape(seq_length, -1)
+        return module.out_proj(attn_output.to(hidden_states.dtype)), None
 
     module._orig_forward = orig_forward
     module.forward = patched_forward
