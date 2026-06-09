@@ -775,6 +775,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         )
 
         transformers_model.eval()
+        # the tiny mistral3 checkpoint is stored in 16-bit, which clashes with the fp32 pixel_values
+        # produced by the processor; cast the reference model to fp32 so its vision tower runs on CPU
+        if model_arch == "mistral3":
+            transformers_model = transformers_model.float()
         if "internvl_chat" in model_arch:
             tokenizer = AutoTokenizer.from_pretrained(model_id, trast_remote_code=trust_remote_code)
             img_context_token_id = tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")
