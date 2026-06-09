@@ -27,7 +27,8 @@ from .version import __version__
 
 # Patch Transformers 5.0 Qwen3OmniMoeTalkerCodePredictorConfig bug
 # Bug: __init__ references self.use_sliding_window and self.max_window_layers before they're set
-if is_transformers_version(">=", "5.0"):
+# TODO: Narrow to specific broken versions once upstream fix is released (expected in 5.1+)
+if is_transformers_version(">=", "5.0") and is_transformers_version("<", "5.1"):
     try:
         from transformers.models.qwen3_omni_moe.configuration_qwen3_omni_moe import (
             Qwen3OmniMoeTalkerCodePredictorConfig,
@@ -39,7 +40,9 @@ if is_transformers_version(">=", "5.0"):
             # Set these attributes before calling original __init__ which references them
             self.use_sliding_window = use_sliding_window
             self.max_window_layers = max_window_layers
-            _original_code_predictor_init(self, *args, use_sliding_window=use_sliding_window, max_window_layers=max_window_layers, **kwargs)
+            _original_code_predictor_init(
+                self, *args, use_sliding_window=use_sliding_window, max_window_layers=max_window_layers, **kwargs
+            )
 
         Qwen3OmniMoeTalkerCodePredictorConfig.__init__ = _patched_code_predictor_init
     except (ImportError, AttributeError):
