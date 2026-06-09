@@ -27,6 +27,7 @@ from optimum.exporters.openvino.model_configs import (
     DeepseekOpenVINOConfig,
     LFM2MoeOpenVINOConfig,
     LFM2OpenVINOConfig,
+    Phi3OpenVINOConfig,
     Qwen3VLOpenVINOConfig,
 )
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
@@ -78,7 +79,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "cohere",
         "qwen2",
         "qwen2_moe",
-        "phi3",
         "gemma2",
         "granite",
         "granitemoe",
@@ -86,8 +86,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon_mamba")
 
+    if is_transformers_version(">=", "4.49"):
+        SUPPORTED_ARCHITECTURES += ("phi3",)
+
     if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
+        SUPPORTED_ARCHITECTURES += ("phi3-longrope",)
 
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_SSM_ARCHITECTURES += ("granitemoehybrid",)
@@ -210,6 +214,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "pegasus": 2,
         "qwen": 2,
         "phi": 2,
+        "phi3-longrope": 4,
         "internlm2": 4,
         "falcon": 2,
         "falcon-40b": 2,
@@ -315,6 +320,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             supported_architectures -= {"lfm2"}
         if is_transformers_version("<", str(LFM2MoeOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"lfm2_moe"}
+        if is_transformers_version("<", str(Phi3OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"phi3"}
         # qwen3_vl_text a part of qwen3_vl architecture and is tested in seq2seq group
         if is_transformers_version(">=", str(Qwen3VLOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"qwen3_vl_text"}
@@ -1024,6 +1031,62 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             ),
             f"Chunked prefill OV vs transformers mismatch:\n"
             f"  max diff: {(ov_out.logits - tf_out.logits).abs().max().item()}",
+        )
+
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+    def test_phi3_longrope_support(self):
+        """Test LongRoPE support for Phi3 with inputs > 4096 tokens."""
+        if is_transformers_version("<", "4.49"):
+            self.skipTest("Incompatible transformers version: Phi3 longrope requires transformers>=4.49")
+        if is_transformers_version(">=", "5"):
+            self.skipTest(
+                "Transformers v4 and v5 output different (reference) results for Phi3 longrope. Currently, OpenVINO matches v4 output in both cases."
+            )
+
+        set_seed(SEED)
+        model_id = MODEL_NAMES["phi3-longrope"]
+
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32)
+
+        # Doublecheck that model has LongRoPE support
+        original_max_pos = getattr(transformers_model.config, "original_max_position_embeddings", None)
+        self.assertIsNotNone(
+            original_max_pos,
+            f"Model {model_id} does not have original_max_position_embeddings attribute required for LongRoPE",
+        )
+
+        set_seed(SEED)
+        ov_model = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+
+        # Test 1: input tokens exceed original_max_pos
+        # Creating model inputs with more than original max position embeddings and enough variation for varied output tokens
+        tokens = torch.randint(high=transformers_model.config.vocab_size, size=(1, original_max_pos + 50))
+        with torch.no_grad():
+            transformers_outputs = transformers_model.generate(tokens, max_new_tokens=20)
+            ov_outputs = ov_model.generate(tokens, max_new_tokens=20)
+
+        self.assertTrue(
+            torch.equal(transformers_outputs, ov_outputs),
+            f"OpenVINO and PyTorch outputs do not match for LongRoPE test with inputs > original_max_pos.\n"
+            f"ov_outputs: {ov_outputs}\ntransformers_outputs: {transformers_outputs}",
+        )
+
+        # Test 2: generation tokens exceed original_max_pos
+        # Creating model inputs with slightly less than original max position embeddings
+        tokens = torch.randint(high=transformers_model.config.vocab_size, size=(1, original_max_pos - 50))
+        with torch.no_grad():
+            transformers_outputs = transformers_model.generate(tokens, max_new_tokens=100)
+            ov_outputs = ov_model.generate(tokens, max_new_tokens=100)
+
+        self.assertTrue(
+            torch.equal(transformers_outputs, ov_outputs),
+            f"OpenVINO and PyTorch outputs do not match for LongRoPE test with cumulative context > max_pos.\n"
+            f"ov_outputs: {ov_outputs}\ntransformers_outputs: {transformers_outputs}",
         )
 
         del transformers_model
