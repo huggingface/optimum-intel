@@ -28,6 +28,7 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=2.1",
+    "safetensors<0.8.0",
     "optimum~=2.2.0",
     "transformers>=4.45,<5.1",
     "setuptools",
