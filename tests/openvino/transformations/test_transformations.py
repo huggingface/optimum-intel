@@ -23,23 +23,119 @@ from utils_tests import MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS
 from arch_to_model_class import ARCH_TO_MODEL_CLASS
 
 
-# Maps architecture name -> list of  transformation needed to be applied , as per expected_transformations.txt
-def _load_expected_transformations(path):
-    result = {}
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            arch, _, transforms_str = line.partition(":")
-            result[arch.strip()] = [
-                t.strip() for t in transforms_str.split(",") if t.strip()
-            ]
-    return result
+# Expected transformations per architecture, separated by stage:
+#   "convert" — MoC (Model Optimizer Common) transformations applied during model conversion
+#   "compile" — device-specific transformations applied during compilation (e.g. CPU)
+ARCH_TO_EXPECTED_TRANSFORMATIONS = {
+    "afmoe": {
+        "convert": [],
+        "compile": ["MoEMatMulsFusion", "FullyConnectedBiasFusion"],
+    },
+    "gpt2": {
+        "convert": [],
+        "compile": ["ConvertToCPUSpecificOpset", "MatMulToFCFusion"],
+    },
+    "lfm2_moe": {
+        "convert": [
+            "SDPAFusion", "StatefulSDPAFusion", "SDPASubgraphFusion",
+            "MakeStateful", "RoPEFusionGPTNEOX", "RoPEFusionPreprocess", "RoPEFusion",
+            "CausalMaskPreprocessFusion", "DecompressionHandling",
+            "TransposeMatMul", "LinOpSequenceFusion", "TSShapeOfForward",
+        ],
+        "compile": [
+            "MoEMatMulsFusion", "ConvertMatMulToFC", "FullyConnectedBiasFusion",
+            "ConvertToCPUSpecificOpset", "ConvertToPowerStatic", "ConvertToSwishCPU",
+            "MulAddToFMA", "Snippets", "SnippetsDataFlowManager", "Tokenization",
+            "MoveReadValueInputsToSubgraph",
+        ],
+    },
+    "lfm2": {
+        "convert": [
+            "SDPAFusion", "StatefulSDPAFusion", "SDPASubgraphFusion",
+            "MakeStateful", "RoPEFusionGPTNEOX", "RoPEFusionPreprocess", "RoPEFusion",
+            "CausalMaskPreprocessFusion", "DecompressionHandling",
+            "TransposeMatMul", "LinOpSequenceFusion", "TSShapeOfForward",
+            "CompressedGatherTransformation",
+            "DisableDecompressionConvertConstantFolding",
+            "EnableDecompressionConvertConstantFolding",
+        ],
+        "compile": [
+            "ConvertMatMulToFC", "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic", "ConvertToSwishCPU", "MulAddToFMA",
+            "Snippets", "SnippetsDataFlowManager", "Tokenization",
+        ],
+    },
+    "qwen3_moe": {
+        "convert": [
+            "SDPAFusion", "StatefulSDPAFusion", "SDPASubgraphFusion",
+            "MakeStateful", "RoPEFusionGPTNEOX", "RoPEFusionPreprocess", "RoPEFusion",
+            "CausalMaskPreprocessFusion", "DecompressionHandling",
+            "TransposeMatMul", "CommonFusions", "ReshapeAMatMul",
+        ],
+        "compile": [
+            "MoEMatMulsFusion", "ConvertMatMulToFC", "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic", "ConvertToSwishCPU", "Snippets", "Tokenization",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
+        ],
+    },
+    "qwen3_5_moe": {
+        "convert": [
+            "SDPAFusion", "StatefulSDPAFusion", "SDPASubgraphFusion",
+            "MakeStateful", "RoPEFusionGPTNEOX", "RoPEFusionPreprocess", "RoPEFusion",
+            "RoPEFusionIOSlicing", "CausalMaskPreprocessFusion", "DecompressionHandling",
+            "TransposeMatMul", "CommonFusions", "ReshapeAMatMul",
+            "SoftmaxDecomposition", "EliminateScatterUpdate",
+            "TransposeConvert", "TransposeSinking",
+        ],
+        "compile": [
+            "MoEMatMulsFusion", "ConvertMatMulToFC", "FullyConnectedBiasFusion",
+            "Snippets", "SnippetsDataFlowManager", "Tokenization",
+            "TokenizeMHASnippets", "MatMulToBrgemm",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
+        ],
+    },
+    "llama4": {
+        "convert": [
+            "SDPAFusion", "StatefulSDPAFusion", "SDPASubgraphFusion",
+            "MakeStateful", "CompressedGatherTransformation", "DecompressionHandling",
+            "LinOpSequenceFusion", "CommonDecompositions", "CommonOptimizations",
+            "DisableDecompressionConvertConstantFolding",
+            "EnableDecompressionConvertConstantFolding",
+        ],
+        "compile": [
+            "RoPEFusionGPTNEOX", "RoPEFusion", "CausalMaskPreprocessFusion",
+            "ConvertMatMulToFC", "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic", "ConvertToSwishCPU",
+            "Snippets", "Tokenization", "ConvertBroadcast3",
+        ],
+    },
+    "gemma4_moe": {
+        "convert": [
+            "SDPAFusion", "SDPAFusionMatcher", "StatefulSDPAFusion", "SDPASubgraphFusion",
+            "MakeStateful", "DecompressionHandling",
+            "TransposeMatMul", "CommonFusions", "LinOpSequenceFusion",
+            "CommonDecompositions", "CommonOptimizations",
+            "BroadcastTransition", "MultiplyFusions",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
+        ],
+        "compile": [
+            "RoPEFusionGPTNEOX", "RoPEFusion", "CausalMaskPreprocessFusion",
+            "ConvertMatMulToFC", "ConvertToCPUSpecificOpset", "ConvertToPowerStatic",
+            "Snippets", "SnippetsDataFlowManager", "Tokenization", "TokenizeMHASnippets",
+            "MatMulToBrgemm", "FuseTransposeBrgemm",
+            "SoftmaxDecomposition", "MulAddToFMA", "ConvertBroadcast3",
+        ],
+    },
+}
 
 
-_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "expected_transformations.txt")
-ARCH_TO_EXPECTED_TRANSFORMATIONS = _load_expected_transformations(_CONFIG_PATH)
+def _get_flat_transforms(arch):
+    """Return a flat list of all expected transformations (convert + compile) for an architecture."""
+    entry = ARCH_TO_EXPECTED_TRANSFORMATIONS[arch]
+    return entry["convert"] + entry["compile"]
 
 
 def _capture_stderr_during(
@@ -116,8 +212,9 @@ def check_failed_transformations(log: str, words: list[str]) -> dict:
 
 class OVTransformationTest(unittest.TestCase):
 
-    @parameterized.expand(list(ARCH_TO_EXPECTED_TRANSFORMATIONS.items()))
-    def test_transformations_applied(self, model_arch, expected_transforms):
+    @parameterized.expand(list(ARCH_TO_EXPECTED_TRANSFORMATIONS.keys()))
+    def test_transformations_applied(self, model_arch):
+        expected_transforms = _get_flat_transforms(model_arch)
         model_id = MODEL_NAMES[model_arch]
         trust_remote_code = model_arch in REMOTE_CODE_MODELS
         model_class = ARCH_TO_MODEL_CLASS.get(model_arch)
