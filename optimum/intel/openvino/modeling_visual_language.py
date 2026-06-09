@@ -5851,11 +5851,34 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM, Qwen3_5Model, Qwen3_5Visio
 
 
 class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
-    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+    def get_vision_embeddings(self, pixel_values, input_ids=None, image_sizes=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
+
+        pixel_values = torch.from_numpy(pixel_values) if isinstance(pixel_values, np.ndarray) else pixel_values
         if pixel_values.dtype != torch.float32:
             pixel_values = pixel_values.to(torch.float32)
+
+        # Multi-image concat
+        # The exported vision submodel processes a single un-padded image
+        # Pixtral's vision encoder uses a block-diagonal attention mask
+        # with attention_mask=None, images are encoded independently
+        # for multi image per-image patch features concatenated at the end
+        if image_sizes is not None and pixel_values.shape[0] > 1:
+            image_sizes = torch.from_numpy(image_sizes) if isinstance(image_sizes, np.ndarray) else image_sizes
+            features = []
+            for idx in range(pixel_values.shape[0]):
+                height, width = int(image_sizes[idx][0]), int(image_sizes[idx][1])
+                single = pixel_values[idx : idx + 1, :, :height, :width]
+                single_features = self.vision_embeddings(single).last_hidden_state
+                single_features = (
+                    torch.from_numpy(single_features)
+                    if isinstance(single_features, np.ndarray)
+                    else single_features
+                )
+                features.append(single_features.reshape(-1, single_features.shape[-1]))
+            return torch.cat(features, dim=0)
+
         return self.vision_embeddings(pixel_values).last_hidden_state
 
     def merge_vision_text_embeddings(
