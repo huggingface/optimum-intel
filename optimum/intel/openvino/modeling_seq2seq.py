@@ -630,6 +630,16 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             model_kwargs=model_kwargs,
         )
 
+        # Reload the config from the export output directory, as the export process
+        # may have modified it (e.g., setting is_encoder_decoder, decoder_start_token_id)
+        exported_config_path = save_dir_path / "config.json"
+        if exported_config_path.exists():
+            original_name_or_path = getattr(config, "_name_or_path", None) or model_id
+            config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
+            # Preserve the original model identifier so that default quantization
+            # config lookup based on the model id keeps working.
+            config._name_or_path = original_name_or_path
+
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
@@ -921,7 +931,9 @@ class OVDecoder(OVModelPart):
             self.num_pkv = 2
         else:
             self.use_past = False
-            self.num_pkv = 4
+            # Determine num_pkv from output structure: if encoder KV is present, 4 per layer; otherwise 2
+            has_encoder_kv = any("encoder" in name for name in self.key_value_output_names)
+            self.num_pkv = 4 if has_encoder_kv else 2
 
         self.request = None if not self._compile_only else self.model.create_infer_request()
 
@@ -1001,11 +1013,20 @@ class OVDecoder(OVModelPart):
                     out_past_key_values[i : i + self.num_pkv] for i in range(0, len(out_past_key_values), self.num_pkv)
                 )
             else:
-                # grab the cross attention key/values from the inputs
-                out_past_key_values = tuple(
-                    out_past_key_values[i : i + self.num_pkv] + past_key_values[2 * i + 2 : 2 * i + 2 + self.num_pkv]
-                    for i in range(0, len(out_past_key_values), self.num_pkv)
-                )
+                has_encoder_kv_inputs = any("encoder" in name for name in self.key_value_input_names)
+                if has_encoder_kv_inputs:
+                    # grab the cross attention key/values from the inputs
+                    out_past_key_values = tuple(
+                        out_past_key_values[i : i + self.num_pkv]
+                        + past_key_values[2 * i + 2 : 2 * i + 2 + self.num_pkv]
+                        for i in range(0, len(out_past_key_values), self.num_pkv)
+                    )
+                else:
+                    # No cross-attention (e.g., Qwen3-ASR): just group self-attention KV
+                    out_past_key_values = tuple(
+                        out_past_key_values[i : i + self.num_pkv]
+                        for i in range(0, len(out_past_key_values), self.num_pkv)
+                    )
 
         return Seq2SeqLMOutput(logits=logits, past_key_values=out_past_key_values)
 
@@ -1248,6 +1269,34 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
     main_input_name = "input_features"
     export_feature = "automatic-speech-recognition"
 
+    def _prepare_decoder_input_ids_for_generation(
+        self, batch_size, model_input_name, model_kwargs, decoder_start_token_id, device=None
+    ):
+        """
+        For qwen3_asr: skip prepending decoder_start_token_id since the full prompt
+        (including chat template tokens) is already provided as decoder_input_ids.
+        This matches the PyTorch model behavior where input_ids is used as-is.
+        """
+        if getattr(self.config, "model_type", None) == "qwen3_asr":
+            if model_kwargs is not None and "decoder_input_ids" in model_kwargs:
+                decoder_input_ids = model_kwargs.pop("decoder_input_ids")
+            elif "input_ids" in model_kwargs and model_input_name != "input_ids":
+                decoder_input_ids = model_kwargs.pop("input_ids")
+            else:
+                decoder_input_ids = None
+
+            if decoder_input_ids is None:
+                # Fallback to default behavior if no decoder_input_ids provided
+                return super()._prepare_decoder_input_ids_for_generation(
+                    batch_size, model_input_name, model_kwargs, decoder_start_token_id, device
+                )
+            # Return decoder_input_ids as-is without prepending decoder_start_token_id
+            return decoder_input_ids, model_kwargs
+
+        return super()._prepare_decoder_input_ids_for_generation(
+            batch_size, model_input_name, model_kwargs, decoder_start_token_id, device
+        )
+
     def prepare_inputs_for_generation(
         self,
         decoder_input_ids,
@@ -1298,6 +1347,35 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
         cache_position: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> Seq2SeqLMOutput:
+        # For qwen3_asr: adjust decoder_input_ids to match encoder output audio feature count
+        if (
+            getattr(self.config, "model_type", None) == "qwen3_asr"
+            and decoder_input_ids is not None
+            and past_key_values is None
+        ):
+            # Get encoder outputs (may already be computed by generate())
+            if encoder_outputs is None and input_features is not None:
+                encoder_outputs = self.encoder(input_ids=input_features, attention_mask=attention_mask)
+
+            if encoder_outputs is not None:
+                audio_token_id = getattr(self.config, "audio_token_id", None)
+                if audio_token_id is None:
+                    audio_token_id = getattr(getattr(self.config, "thinker_config", None), "audio_token_id", None)
+                if audio_token_id is not None:
+                    enc_hidden = (
+                        encoder_outputs.last_hidden_state
+                        if hasattr(encoder_outputs, "last_hidden_state")
+                        else encoder_outputs[0]
+                    )
+                    num_encoder_features = enc_hidden.shape[1]
+                    current_audio_count = (decoder_input_ids == audio_token_id).sum(dim=-1).max().item()
+                    if current_audio_count > 0 and current_audio_count != num_encoder_features:
+                        decoder_input_ids = self._adjust_audio_tokens(
+                            decoder_input_ids, audio_token_id, num_encoder_features
+                        )
+                        if decoder_attention_mask is not None:
+                            decoder_attention_mask = torch.ones_like(decoder_input_ids)
+
         return super().forward(
             input_ids=input_features,
             attention_mask=attention_mask,
@@ -1309,6 +1387,44 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
             **kwargs,
         )
 
+    @staticmethod
+    def _adjust_audio_tokens(decoder_input_ids, audio_token_id, target_count):
+        """Adjust the number of audio_pad tokens in decoder_input_ids to match encoder output count."""
+        result_ids = []
+        for batch_idx in range(decoder_input_ids.shape[0]):
+            ids = decoder_input_ids[batch_idx]
+            # Find audio token positions
+            audio_mask = ids == audio_token_id
+            current_count = audio_mask.sum().item()
+            if current_count == target_count:
+                result_ids.append(ids)
+            else:
+                # Split into: before audio tokens, audio tokens, after audio tokens
+                non_audio_before = []
+                non_audio_after = []
+                in_audio = False
+                past_audio = False
+                for tok in ids.tolist():
+                    if tok == audio_token_id:
+                        in_audio = True
+                    else:
+                        if in_audio:
+                            past_audio = True
+                            in_audio = False
+                        if past_audio:
+                            non_audio_after.append(tok)
+                        else:
+                            non_audio_before.append(tok)
+                # Reconstruct with target_count audio tokens
+                new_ids = non_audio_before + [audio_token_id] * target_count + non_audio_after
+                result_ids.append(torch.tensor(new_ids, dtype=ids.dtype, device=ids.device))
+        # Pad to same length
+        max_len = max(t.shape[0] for t in result_ids)
+        padded = torch.zeros(len(result_ids), max_len, dtype=decoder_input_ids.dtype, device=decoder_input_ids.device)
+        for i, t in enumerate(result_ids):
+            padded[i, : t.shape[0]] = t
+        return padded
+
     @classmethod
     def _from_pretrained(
         cls,
@@ -1316,8 +1432,12 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
         config: "PretrainedConfig",
         **kwargs,
     ):
-        if "WhisperForConditionalGeneration" in config.architectures:
+        if "WhisperForConditionalGeneration" in getattr(config, "architectures", []):
             return _OVModelForWhisper._from_pretrained(model_id, config, **kwargs)
+        elif getattr(config, "model_type", None) == "qwen3_asr":
+            # Ensure is_encoder_decoder is set for proper model loading
+            config.is_encoder_decoder = True
+            return super()._from_pretrained(model_id, config, **kwargs)
         else:
             return super()._from_pretrained(model_id, config, **kwargs)
 

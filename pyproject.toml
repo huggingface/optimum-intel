@@ -36,4 +36,5 @@ known-first-party = ["optimum"]
 [tool.pytest.ini_options]
 markers = [
     "run_slow",
+    "gemma4: tests for gemma4 and gemma4_moe architectures (require transformers>=5.5)",
 ]
