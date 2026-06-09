@@ -912,7 +912,7 @@ class Phi3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         MistralDummyPastKeyValuesGenerator,
     ) + TextDecoderOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
-    MIN_TRANSFORMERS_VERSION = "4.36.0"
+    MIN_TRANSFORMERS_VERSION = "4.49.0"
     _MODEL_PATCHER = Phi3ModelPatcher
 
 
