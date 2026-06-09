@@ -11,8 +11,11 @@ ARCH_TO_MODEL_CLASS = {
     "lfm2": "OVModelForCausalLM",
     "lfm2_moe": "OVModelForCausalLM",
     "qwen3_moe": "OVModelForCausalLM",
+    "llama4": "OVModelForCausalLM",
     # image-text-to-text
     "llava": "OVModelForVisualCausalLM",
+    "qwen3_5_moe": "OVModelForVisualCausalLM",
+    "gemma4_moe": "OVModelForVisualCausalLM",
     # text-to-image / text-to-video
     "stable-diffusion": "OVDiffusionPipeline",
     # automatic-speech-recognition
