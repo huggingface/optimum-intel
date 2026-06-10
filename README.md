@@ -14,13 +14,13 @@
 To install the latest release of 🤗 Optimum Intel with the corresponding required dependencies, you can use `pip` as follows:
 
 ```bash
-python -m pip install -U "optimum-intel[openvino]"
+python -m pip install -U optimum-intel
 ```
 
 Optimum Intel is a fast-moving project with regular additions of new model support, so you may want to install from source with the following command:
 
 ```bash
-python -m pip install "optimum-intel"@git+https://github.com/huggingface/optimum-intel.git
+python -m pip install optimum-intel@git+https://github.com/huggingface/optimum-intel.git
 ```
 
 **Deprecation Notice:** The `extras` for `openvino` (e.g., `pip install optimum-intel[openvino,nncf]`), `nncf`, `neural-compressor`, `ipex` are **deprecated** and will be **removed in a future release**.  
