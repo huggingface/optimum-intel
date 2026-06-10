@@ -4244,7 +4244,7 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        if is_transformers_version("<", "4.57.0"):
+        if is_transformers_version("<", "4.56.0"):
             raise Exception("Qwen3-Omni-MoE is not supported in transformers versions earlier than 4.57.0.")
 
         # Extract per-component device / ov_config overrides before passing ov_config to the

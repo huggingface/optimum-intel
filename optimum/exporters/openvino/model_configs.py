@@ -452,7 +452,7 @@ class Qwen3VLTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     *["text-generation", "text-generation-with-past"],
     library_name="transformers",
 )
-class Qwen3OmniMoeTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class Qwen3OmniMoeTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.57.0"
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLLMInputGenerator, GemmaDummyPastKeyValuesGenerator)
@@ -473,7 +473,7 @@ class Qwen3OmniMoeTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     *["text-generation", "text-generation-with-past"],
     library_name="transformers",
 )
-class Qwen3OmniMoeTalkerTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class Qwen3OmniMoeTalkerTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.57.0"
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
