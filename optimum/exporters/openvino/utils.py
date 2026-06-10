@@ -335,6 +335,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "phi4_multimodal",
     "llama4",
     "minicpmo",
+    "youtu_vl",
     "videochat_flash_qwen",
 ]
 
