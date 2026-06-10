@@ -13,10 +13,9 @@
 #  limitations under the License.
 import logging
 import os
+from copy import deepcopy
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
-from copy import deepcopy
-
 
 import numpy as np
 import openvino
@@ -68,14 +67,9 @@ else:
 
     transformers_auto_class = AutoModelForVision2Seq
 
-from ..utils import (
-    is_accelerate_available)
-if is_accelerate_available():
-    from accelerate.hooks import AlignDevicesHook, add_hook_to_module
-
-import inspect
-from torch.nn import functional as F
 from torch import nn
+from torch.nn import functional as F
+
 
 core = Core()
 
@@ -890,8 +884,6 @@ class OVEncoder(OVModelPart):
             [n_window * 2] * chunk_num.sum(),
             dtype=torch.long,
         )
-        from torch.nn import functional as F
-        from torch import nn
 
         tail_chunk_index = F.pad(chunk_num, (1, 0), value=-1).cumsum(0)[1:]
         chunk_lengths[tail_chunk_index] = feature_lens % (n_window * 2)
@@ -906,15 +898,12 @@ class OVEncoder(OVModelPart):
         for idx, input_feature in enumerate(padded_feature):
             inputs["input_features"] = input_feature
 
-            last_hidden_state = torch.from_numpy(
-                self.request(inputs)["last_hidden_state"]
-            ).to(self.device)
+            last_hidden_state = torch.from_numpy(self.request(inputs)["last_hidden_state"]).to(self.device)
 
             audio_feature = last_hidden_state
             audio_features.append(deepcopy(audio_feature))
         audio_features = torch.cat(audio_features, dim=1)
         return audio_features
-
 
     @add_start_docstrings_to_model_forward(ENCODER_INPUTS_DOCSTRING)
     def forward(
@@ -931,7 +920,6 @@ class OVEncoder(OVModelPart):
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names:
             inputs["attention_mask"] = attention_mask
-
 
         # Qwen3-ASR requires input_features chunking before passing to encoder for processing of long audios.
         if getattr(self.config, "model_type", None) == "qwen3_asr":
