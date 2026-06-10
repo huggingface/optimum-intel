@@ -33,6 +33,7 @@ jobs:
             "*export*",
             "*seq2seq*",
             "*quantization*",
+            "*transformation*",
           ]
 
     runs-on: ubuntu-22.04
@@ -75,7 +76,3 @@ jobs:
         run: |
           uv pip install "transformers>=5.2,<5.3"
           pytest tests/openvino/${{ matrix.test-pattern }} -k "qwen3_5 or qwen3_5_moe" --durations=0
-
-      - name: Qwen3.5-Moe Transformation Validation
-        run: |
-          pytest tests/openvino/transformations/ -k qwen3_5_moe --durations=0
