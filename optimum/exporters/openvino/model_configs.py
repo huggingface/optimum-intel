@@ -457,6 +457,25 @@ class MiniCPM3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     _MODEL_PATCHER = MiniCPM3Patcher
 
 
+@register_in_tasks_manager(
+    "smollm3",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class SmolLM3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    MIN_TRANSFORMERS_VERSION = "4.53.0"
+    _MODEL_PATCHER = OVDecoderModelPatcher
+
+
 @register_in_tasks_manager("stablelm", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class StableLMOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
