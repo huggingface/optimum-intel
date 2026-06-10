@@ -1102,6 +1102,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     if is_transformers_version(">=", "5.5.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "gemma4", False))
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "gemma4_moe", False))
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "gemma4_unified", False))
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
@@ -1694,6 +1695,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         [
             ("gemma4",),
             ("gemma4_moe",),
+            ("gemma4_unified",),
         ]
         if is_transformers_version(">=", "5.5.0")
         else [],

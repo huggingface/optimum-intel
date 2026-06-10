@@ -714,7 +714,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         SUPPORTED_ARCHITECTURES += ["internvl_chat", "minicpmv"]
 
     if is_transformers_version(">=", "5.5"):
-        SUPPORTED_ARCHITECTURES += ["gemma4", "gemma4_moe"]
+        SUPPORTED_ARCHITECTURES += ["gemma4", "gemma4_moe", "gemma4_unified"]
 
     if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
         SUPPORTED_ARCHITECTURES += ["qwen3_5", "qwen3_5_moe"]

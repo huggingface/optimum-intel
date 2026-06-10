@@ -206,6 +206,7 @@ MODEL_NAMES = {
     "gemma3": "optimum-intel-internal-testing/tiny-random-gemma3",
     "gemma4": "optimum-intel-internal-testing/tiny-random-gemma4",
     "gemma4_moe": "optimum-intel-internal-testing/tiny-random-gemma4-moe",
+    "gemma4_unified": "optimum-intel-internal-testing/tiny-random-gemma4-unified",
     "falcon": "optimum-intel-internal-testing/really-tiny-falcon-testing",
     "falcon-40b": "optimum-intel-internal-testing/tiny-random-falcon-40b",
     "falcon_mamba": "optimum-intel-internal-testing/tiny-falcon-mamba",
