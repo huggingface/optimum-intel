@@ -938,7 +938,7 @@ class OVEncoder(OVModelPart):
             input_features = inputs["input_features"]
             audio_features = []
             for idx, input_feature in enumerate(input_features):
-                audio_feature = self.chanked_forward(input_feature, 50)
+                audio_feature = self.chanked_forward(input_feature, self.config.n_window)
                 audio_features.append(audio_feature)
             audio_features = torch.cat(audio_features, dim=0)
             return BaseModelOutput(last_hidden_state=audio_features)
