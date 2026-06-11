@@ -13,29 +13,17 @@
 #  limitations under the License.
 
 import os
-import sys
-import unittest
-
-# This code is for eliminating unnecessary code text from the output
-import pytest
-
-
-@pytest.fixture(autouse=True, scope="session")
-def set_tb_style(pytestconfig):
-    pytestconfig.option.tbstyle = "line"
-
-
-# we are adding this , so the parent directory (tests/openvino/) is in the python search path for utils_test.py to be imported
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 import subprocess
+import sys
 import textwrap
 import re
+import unittest
 
+import pytest
 from parameterized import parameterized
-from utils_tests import MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS
-from arch_to_model_class import ARCH_TO_MODEL_CLASS
+
 from optimum.intel.utils.import_utils import is_transformers_version
+from utils_tests import ARCH_TO_MODEL_CLASS, MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS
 
 
 # Expected transformations per architecture, separated by stage:
@@ -44,12 +32,7 @@ from optimum.intel.utils.import_utils import is_transformers_version
 #
 # Architectures are conditionally included based on transformers version
 # to match model compatibility constraints.
-ARCH_TO_EXPECTED_TRANSFORMATIONS = {
-    "gpt2": {
-        "convert": [],
-        "compile": ["ConvertToCPUSpecificOpset", "MatMulToFCFusion"],
-    },
-}
+ARCH_TO_EXPECTED_TRANSFORMATIONS = {}
 
 if is_transformers_version(">=", "4.51.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"] = {
