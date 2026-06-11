@@ -16,6 +16,9 @@ from typing import Optional, Tuple
 
 import torch
 
+import math
+
+
 from optimum.intel.utils.import_utils import is_diffusers_version
 from optimum.utils import (
     DEFAULT_DUMMY_SHAPES,
@@ -487,15 +490,19 @@ class DummyGemma4UnifiedVisionInputGenerator(DummyVisionInputGenerator):
                 dtype=float_dtype,
             )
         if input_name == "image_position_ids":
-            import math
-
             # 2D (x, y) patch coordinates. Build a roughly square grid of valid positions
             # bounded by the factorized position embedding table size.
             side = int(math.sqrt(self.num_patches))
             side = max(1, min(side, self.mm_posemb_size - 1))
-            grid = torch.stack(torch.meshgrid(torch.arange(side), torch.arange(side), indexing="ij"), dim=-1).reshape(
-                1, -1, 2
-            )
+            dtype = DTYPE_MAPPER.pt(int_dtype)
+            grid = torch.stack(
+                torch.meshgrid(
+                    torch.arange(side, dtype=dtype),
+                    torch.arange(side, dtype=dtype),
+                    indexing="ij",
+                ),
+                dim=-1,
+            ).reshape(1, -1, 2)
             if grid.shape[1] < self.num_patches:
                 pad = torch.full((1, self.num_patches - grid.shape[1], 2), -1, dtype=grid.dtype)
                 grid = torch.cat([grid, pad], dim=1)

@@ -16,6 +16,8 @@ import enum
 import logging
 from typing import Any, Dict, List, Optional, Union
 
+import torch
+
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
 from optimum.exporters.openvino.base import (
@@ -1329,6 +1331,7 @@ class Gemma4UnifiedTextOpenVINOConfig(Gemma4TextOpenVINOConfig):
     # attention, optional global KV heads / head dim), so add_past_key_values is inherited.
     # It has no per-layer embeddings (PLE), so no extra inputs are required.
     MIN_TRANSFORMERS_VERSION = "5.10"
+    MAX_TRANSFORMERS_VERSION = "5.10.99"
 
 
 @register_in_tasks_manager("deci", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -4109,7 +4112,6 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
             return model
 
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
-            import torch
 
             class TextEmbeddingsModule(torch.nn.Module):
                 def __init__(self, model):
