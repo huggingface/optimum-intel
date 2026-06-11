@@ -373,6 +373,11 @@ def main_export(
             patch_qwenvl_configs()
 
         model_type = config.model_type
+        # Remap HuggingFace pipeline tags that are not valid optimum tasks.
+        # Qwen3-VL-based reranker models (pipeline_tag=text-ranking) use the VLM architecture.
+        _VLM_RERANKER_TYPES = {"qwen3_vl", "qwen2_vl", "qwen2_5_vl"}
+        if task == "text-ranking" and model_type in _VLM_RERANKER_TYPES:
+            task = "image-text-to-text"
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             if custom_export_configs is None:
                 raise ValueError(

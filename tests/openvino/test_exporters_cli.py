@@ -1534,6 +1534,23 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertTrue("text_features" in model.text_model.output_names)
             self.assertTrue("image_features" in model.visual_model.output_names)
 
+    def test_export_text_ranking_remaps_to_image_text_to_text_for_qwen3_vl(self):
+        if is_transformers_version("<", "4.52"):
+            self.skipTest("qwen3_vl export requires transformers >= 4.52")
+
+        with TemporaryDirectory() as tmpdir:
+            main_export(model_name_or_path=MODEL_NAMES["qwen3_vl"], output=tmpdir, task="text-ranking")
+
+            for artifact_name in (
+                "openvino_language_model.xml",
+                "openvino_text_embeddings_model.xml",
+                "openvino_vision_embeddings_model.xml",
+            ):
+                self.assertTrue((Path(tmpdir) / artifact_name).exists())
+
+            model = OVModelForVisualCausalLM.from_pretrained(tmpdir, compile=False)
+            self.assertIsInstance(model, OVModelForVisualCausalLM)
+
     def test_export_openvino_with_missed_weight_format(self):
         # Test that exception is raised when some compression parameter is given, but weight format is not.
         with TemporaryDirectory() as tmpdir:
