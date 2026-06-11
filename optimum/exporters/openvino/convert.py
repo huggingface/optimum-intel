@@ -832,6 +832,7 @@ def export_tokenizer(
     suffix: Optional[str] = "",
     task: Optional[str] = None,
     processor_chat_template: Optional[str] = None,
+    model_type: Optional[str] = None,
 ):
     # avoid circular imports
     from optimum.intel.openvino import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME
@@ -849,15 +850,17 @@ def export_tokenizer(
         tokenizer = maybe_convert_tokenizer_to_fast(tokenizer, output)
 
     # Left-padding is required for decoder-only models (text-generation and VLM language models)
-    # Note: ASR/text-to-audio tasks in this repo currently only apply to decoder-only Qwen3-Omni VLMs
-    if (
-        task is not None
-        and (task.startswith("text-generation") or task in ("image-text-to-text", "text-to-audio"))
-        and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0")
-    ):
-        logger.info(f"Set tokenizer padding side to left for `{task}` task.")
-        tokenizer.padding_side = "left"
-        tokenizer.truncation_side = "left"
+    if task is not None and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0"):
+        if task.startswith("text-generation"):
+            logger.info(f"Set tokenizer padding side to left for `{task}` task.")
+            tokenizer.padding_side = "left"
+            tokenizer.truncation_side = "left"
+        # For multimodal tasks, only apply to Qwen3-Omni decoder-only VLMs
+        elif task in ("image-text-to-text", "text-to-audio", "automatic-speech-recognition"):
+            if model_type in ("qwen3_omni_moe", "qwen3_omni", "qwen2_vl"):
+                logger.info(f"Set tokenizer padding side to left for Qwen3-Omni VLM task `{task}`.")
+                tokenizer.padding_side = "left"
+                tokenizer.truncation_side = "left"
 
     try:
         converted = convert_tokenizer(tokenizer, with_detokenizer=True)

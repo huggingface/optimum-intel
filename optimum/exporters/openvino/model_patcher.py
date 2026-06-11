@@ -4846,7 +4846,8 @@ class Qwen3OmniMoeAudioEncoderPatcher(ModelPatcher):
             padded_embed = padded_embed + positional_embedding
 
             # Flatten rather than boolean-index: the latter bakes a data-dependent shape that OV can't trace.
-            # Encoder layers run with eager attention during export, so cu_seqlens don't affect the output.
+            # cu_seqlens ensure encoder layers only attend within valid segments, preventing padding
+            # contamination while allowing static shape tracing. Padding is zeroed post-encoder.
             b, t, d = padded_embed.shape
             hidden_states = padded_embed.reshape(b * t, d)
 

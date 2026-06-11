@@ -1201,11 +1201,18 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
         preprocessors = self.get_preprocessors("qwen3_omni_moe")
 
+        outputs = []
         for _ in range(3):
             inputs = model.preprocess_inputs(**preprocessors, text="Hello", image=self.IMAGE.resize((224, 224)))
-            output = model.generate(**inputs, max_new_tokens=5)
+            output = model.generate(**inputs, max_new_tokens=5, do_sample=False)
             self.assertIsInstance(output, torch.Tensor)
             self.assertGreater(output.shape[1], inputs["input_ids"].shape[1])
+            outputs.append(output)
+
+        for i in range(1, len(outputs)):
+            torch.testing.assert_close(
+                outputs[i], outputs[0], msg=f"Iteration {i} output differs from first iteration"
+            )
 
         del model
         gc.collect()
@@ -1222,6 +1229,32 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         output = model.generate(**inputs, max_new_tokens=5)
         self.assertIsInstance(output, torch.Tensor)
         self.assertGreater(output.shape[1], inputs["input_ids"].shape[1])
+        del model
+        gc.collect()
+
+    @unittest.skipUnless(is_transformers_version(">=", "4.57.0"), "qwen3_omni_moe requires transformers >= 4.57.0")
+    def test_qwen3_omni_moe_multi_turn_conversation(self):
+        """Test multi-turn conversation with mixed modalities across turns."""
+        model_id = MODEL_NAMES["qwen3_omni_moe"]
+        model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        preprocessors = self.get_preprocessors("qwen3_omni_moe")
+
+        inputs_turn1 = model.preprocess_inputs(
+            **preprocessors, text="What do you see in this image?", image=self.IMAGE.resize((224, 224))
+        )
+        output_turn1 = model.generate(**inputs_turn1, max_new_tokens=20, do_sample=False)
+
+        input_audio = self._generate_random_audio_data()
+        inputs_turn2 = model.preprocess_inputs(
+            **preprocessors, text="Now listen to this audio and describe it", audio=[input_audio]
+        )
+        output_turn2 = model.generate(**inputs_turn2, max_new_tokens=20, do_sample=False)
+
+        self.assertIsInstance(output_turn1, torch.Tensor)
+        self.assertIsInstance(output_turn2, torch.Tensor)
+        self.assertGreater(output_turn1.shape[1], inputs_turn1["input_ids"].shape[1])
+        self.assertGreater(output_turn2.shape[1], inputs_turn2["input_ids"].shape[1])
+
         del model
         gc.collect()
 
