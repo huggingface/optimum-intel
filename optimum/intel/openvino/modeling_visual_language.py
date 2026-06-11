@@ -4096,6 +4096,117 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
         return model_kwargs
 
 
+class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
+    # gemma4_unified (e.g. google/gemma-4-12B) has an encoder-free vision embedder and no
+    # per-layer text embeddings. The vision embedder consumes pre-merged pixel patches plus
+    # 2D patch position ids and returns one soft token per (pooled) patch.
+    def get_vision_embeddings(self, pixel_values, input_ids=None, image_position_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        return self.vision_embeddings(pixel_values, image_position_ids=image_position_ids).last_hidden_state
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        # The vision embedder keeps padding patches; drop them so the number of soft tokens
+        # matches the number of image placeholder positions in the text sequence.
+        image_position_ids = kwargs.get("image_position_ids")
+        if image_position_ids is not None:
+            image_position_ids = (
+                torch.from_numpy(image_position_ids)
+                if isinstance(image_position_ids, np.ndarray)
+                else image_position_ids
+            )
+            valid_mask = (image_position_ids != -1).all(dim=-1).reshape(-1)
+            image_features = image_features.reshape(-1, image_features.shape[-1])[valid_mask]
+
+        special_image_mask = (input_ids == self.config.image_token_id).unsqueeze(-1)
+        special_image_mask = special_image_mask.expand_as(inputs_embeds)
+        image_features = image_features.to(inputs_embeds.dtype)
+        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+        return inputs_embeds, attention_mask, position_ids
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        image_sizes=None,
+        attention_mask=None,
+        mm_token_type_ids=None,
+        image_position_ids=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            image_sizes=image_sizes,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        # Map mm_token_type_ids (from the Gemma4Unified processor) to token_type_ids and
+        # propagate the patch positions needed by the vision embedder.
+        model_inputs["token_type_ids"] = mm_token_type_ids
+        model_inputs["image_position_ids"] = image_position_ids
+        return model_inputs
+
+    def forward(self, input_ids, pixel_values=None, token_type_ids=None, **kwargs):
+        mm_token_type_ids = kwargs.pop("mm_token_type_ids", None)
+        if token_type_ids is None and mm_token_type_ids is not None:
+            token_type_ids = mm_token_type_ids
+        return super().forward(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            token_type_ids=token_type_ids,
+            **kwargs,
+        )
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        # The gemma4_unified processor has no chat template, so build the prompt directly.
+        # An image is referenced by the processor's image token placeholder.
+        if image is not None:
+            image_token = getattr(processor, "image_token", "<|image|>")
+            text = f"{image_token}{text}"
+        return processor(images=image, text=text, return_tensors="pt")
+
+    def _update_model_kwargs_for_generation(
+        self,
+        outputs,
+        model_kwargs,
+        is_encoder_decoder=False,
+        num_new_tokens=1,
+    ):
+        model_kwargs = super()._update_model_kwargs_for_generation(
+            outputs=outputs,
+            model_kwargs=model_kwargs,
+            is_encoder_decoder=is_encoder_decoder,
+            num_new_tokens=num_new_tokens,
+        )
+        model_kwargs.pop("mm_token_type_ids", None)
+        model_kwargs.pop("image_position_ids", None)
+        return model_kwargs
+
+
 class _OVGotOCR2ForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1 and kwargs.get("past_key_values") is not None:
@@ -5834,6 +5945,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "got_ocr2": _OVGotOCR2ForCausalLM,
     "gemma3": _OVGemma3ForCausalLM,
     "gemma4": _OVGemma4ForCausalLM,
+    "gemma4_unified": _OVGemma4UnifiedForCausalLM,
     "idefics3": _OVIdefics3ForCausalLM,
     "smolvlm": _OVSmolVLForCasualLM,
     "phi4mm": _OVPhi4MMForCausalLM,
