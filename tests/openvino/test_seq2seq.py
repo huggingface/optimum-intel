@@ -713,6 +713,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         # remote code models incompatible after transformers v5
         SUPPORTED_ARCHITECTURES += ["internvl_chat", "minicpmv"]
 
+    if is_transformers_version(">=", "5.0.0"):
+        SUPPORTED_ARCHITECTURES += ["mistral3"]
+
     if is_transformers_version(">=", "5.5"):
         SUPPORTED_ARCHITECTURES += ["gemma4", "gemma4_moe"]
 
@@ -756,6 +759,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "qwen3_vl",
             "qwen3_5",
             "qwen3_5_moe",
+            "mistral3",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -849,6 +853,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             model_id, trust_remote_code=trust_remote_code, **loading_kwargs
         )
         transformers_model.eval()
+        # the tiny mistral3 checkpoint is stored in 16-bit, which clashes with the fp32 pixel_values
+        # produced by the processor; cast the reference model to fp32 so its vision tower runs on CPU
+        if model_arch == "mistral3":
+            transformers_model = transformers_model.float()
         if "internvl_chat" in model_arch:
             tokenizer = AutoTokenizer.from_pretrained(model_id, trast_remote_code=trust_remote_code)
             img_context_token_id = tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")
