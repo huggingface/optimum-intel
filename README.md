@@ -20,7 +20,7 @@ pip install -U optimum-intel
 Optimum Intel is a fast-moving project with regular additions of new model support, so you may want to install from source with the following command:
 
 ```bash
-python -m pip install optimum-intel@git+https://github.com/huggingface/optimum-intel.git
+pip install optimum-intel@git+https://github.com/huggingface/optimum-intel.git
 ```
 
 
