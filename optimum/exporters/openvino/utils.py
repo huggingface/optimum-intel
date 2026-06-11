@@ -312,6 +312,34 @@ def _get_kokoro_submodels_fn_and_export_configs(
     return custom_export_configs, fn_get_submodels
 
 
+def _get_qwen3_tts_submodels_fn_and_export_configs(
+    model,
+    library_name: str = "qwen3_tts",
+    task: Optional[str] = None,
+    preprocessors: List = None,
+    custom_export_configs: Dict[str, "OpenVINOConfig"] = None,
+    fn_get_submodels: Callable = None,
+):
+    # Only the heavy talker decoder stack is offloaded to OpenVINO. It is exported as a
+    # stateless graph described by ``Qwen3TTSTalkerOpenVINOConfig`` (dummy inputs + dynamic
+    # axes) and traced through a thin wrapper whose forward signature matches the graph
+    # inputs; the real stateless computation is installed by ``Qwen3TTSTalkerModelPatcher``.
+    from optimum.exporters.openvino.model_configs import Qwen3TTSTalkerOpenVINOConfig
+    from optimum.exporters.openvino.model_patcher import Qwen3TTSTalkerModelWrapper
+
+    talker_model = model.talker.model
+    talker_export_config = Qwen3TTSTalkerOpenVINOConfig(talker_model.config, task="feature-extraction")
+    custom_export_configs = {"talker_model": talker_export_config}
+
+    def _get_qwen3_tts_submodels(model):
+        return {"talker_model": Qwen3TTSTalkerModelWrapper(model.talker.model).eval()}
+
+    fn_get_submodels = _get_qwen3_tts_submodels
+
+    return custom_export_configs, fn_get_submodels
+
+
+
 MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llava",
     "llava_next",
