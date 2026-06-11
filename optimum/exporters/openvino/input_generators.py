@@ -12,12 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from typing import Optional, Tuple
 
 import torch
-
-import math
-
 
 from optimum.intel.utils.import_utils import is_diffusers_version
 from optimum.utils import (
