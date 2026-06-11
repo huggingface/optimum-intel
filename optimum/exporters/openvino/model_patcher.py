@@ -10335,21 +10335,18 @@ def _ltx2_connector_forward_patched(self, hidden_states, attention_mask=None, at
         if binary_attn_mask.ndim == 4:
             binary_attn_mask = binary_attn_mask.squeeze(1).squeeze(1)  # [B, L]
 
-        # Sort mask descending to left-align valid tokens
+        # Sort mask descending to left-align valid tokens (preserving relative order via stable sort)
         _, sort_indices = binary_attn_mask.sort(dim=1, descending=True, stable=True)
         gather_indices = sort_indices.unsqueeze(-1).expand(-1, -1, hidden_dim)
         padded_hidden_states = torch.gather(hidden_states, dim=1, index=gather_indices)  # [B, L, D] valid left-aligned
 
-        # Valid tokens are now left-aligned. Original code pads right then flips mask.
-        # flipped_mask has 1s at the end (where valid tokens should go) and 0s at beginning (registers)
+        # Create mask: 1s for valid token positions (left), 0s for register positions (right)
         valid_counts = binary_attn_mask.sum(dim=1)  # [B]
         pos_indices = torch.arange(seq_len, device=hidden_states.device).unsqueeze(0)
-        # After flip, valid positions are at the end
-        flipped_valid_mask = (pos_indices >= (seq_len - valid_counts.unsqueeze(1))).unsqueeze(-1).to(padded_hidden_states.dtype)  # [B, L, 1]
+        valid_mask = (pos_indices < valid_counts.unsqueeze(1)).unsqueeze(-1).to(padded_hidden_states.dtype)  # [B, L, 1]
 
-        # Flip padded_hidden_states so valid tokens move to the end
-        padded_hidden_states = padded_hidden_states.flip(dims=[1])
-        hidden_states = flipped_valid_mask * padded_hidden_states + (1 - flipped_valid_mask) * registers
+        # Valid tokens at left positions, registers at right positions (matches original behavior)
+        hidden_states = valid_mask * padded_hidden_states + (1 - valid_mask) * registers
 
         attention_mask = torch.zeros_like(attention_mask)
 
@@ -10440,6 +10437,75 @@ def _ltx2_connectors_top_level_forward_patched(self, text_encoder_hidden_states,
     return video_text_embedding, audio_text_embedding, binary_attn_mask.squeeze(-1)
 
 
+class _LTX2AttnProcessorWithEps:
+    """
+    Attention processor that replaces SDPA with manual attention + epsilon
+    to work around OpenVINO CPU plugin numerical issues with zero attention weights.
+    """
+
+    def __call__(
+        self,
+        attn,
+        hidden_states,
+        encoder_hidden_states=None,
+        attention_mask=None,
+        query_rotary_emb=None,
+        key_rotary_emb=None,
+    ):
+        from diffusers.models.transformers.transformer_ltx2 import apply_split_rotary_emb
+
+        batch_size, sequence_length, _ = (
+            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+        )
+
+        if attention_mask is not None:
+            attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+            attention_mask = attention_mask.view(batch_size, attn.heads, -1, attention_mask.shape[-1])
+
+        if encoder_hidden_states is None:
+            encoder_hidden_states = hidden_states
+
+        query = attn.to_q(hidden_states)
+        key = attn.to_k(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
+
+        query = attn.norm_q(query)
+        key = attn.norm_k(key)
+
+        if query_rotary_emb is not None:
+            query = apply_split_rotary_emb(query, query_rotary_emb)
+            key = apply_split_rotary_emb(key, key_rotary_emb if key_rotary_emb is not None else query_rotary_emb)
+
+        query = query.unflatten(2, (attn.heads, -1))
+        key = key.unflatten(2, (attn.heads, -1))
+        value = value.unflatten(2, (attn.heads, -1))
+
+        # Manual attention with epsilon to avoid CPU plugin issue
+        query = query.transpose(1, 2)
+        key = key.transpose(1, 2)
+        value = value.transpose(1, 2)
+
+        scale = 1.0 / (query.shape[-1] ** 0.5)
+        attn_weights = torch.matmul(query, key.transpose(-2, -1)) * scale
+
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask
+
+        attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1)
+
+        # epsilon to avoid CPU plugin issue with zero attention weights
+        eps = 1e-30
+        hidden_states = torch.matmul(attn_weights + eps, value)
+
+        hidden_states = hidden_states.transpose(1, 2).flatten(2, 3)
+        hidden_states = hidden_states.to(query.dtype)
+
+        hidden_states = attn.to_out[0](hidden_states)
+        hidden_states = attn.to_out[1](hidden_states)
+
+        return hidden_states
+
+
 class LTX2ConnectorsPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
@@ -10455,6 +10521,16 @@ class LTX2ConnectorsPatcher(ModelPatcher):
                 connector._orig_forward = connector.forward
                 connector.forward = types.MethodType(_ltx2_connector_forward_patched, connector)
 
+        # Replace attention processors with epsilon-patched version
+        self._orig_processors = {}
+        for connector_name in ["video_connector", "audio_connector"]:
+            connector = getattr(self._model, connector_name, None)
+            if connector is not None:
+                for block in connector.transformer_blocks:
+                    attn = block.attn1
+                    self._orig_processors[id(attn)] = attn.processor
+                    attn.set_processor(_LTX2AttnProcessorWithEps())
+
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
@@ -10466,6 +10542,16 @@ class LTX2ConnectorsPatcher(ModelPatcher):
             connector = getattr(self._model, connector_name, None)
             if connector is not None and hasattr(connector, "_orig_forward"):
                 connector.forward = connector._orig_forward
+
+        # Restore original attention processors
+        for connector_name in ["video_connector", "audio_connector"]:
+            connector = getattr(self._model, connector_name, None)
+            if connector is not None:
+                for block in connector.transformer_blocks:
+                    attn = block.attn1
+                    orig = self._orig_processors.get(id(attn))
+                    if orig is not None:
+                        attn.set_processor(orig)
 
 
 def _ltx2_apply_split_rotary_emb(x, freqs):
@@ -10502,65 +10588,88 @@ def _ltx2_apply_split_rotary_emb(x, freqs):
     return out
 
 
-def _ltx2_attn_processor_forward_patched(
-    self, attn, hidden_states, encoder_hidden_states=None, attention_mask=None, query_rotary_emb=None,
-    key_rotary_emb=None, **kwargs
-):
-    """Patched attention processor forward that uses only split rotary emb and avoids data-dependent branching."""
-    batch_size, sequence_length, _ = (
-        hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
-    )
+class _LTX2TraceSafeAttnProcessor:
+    """
+    Attention processor with trace-safe mask handling.
+    Replaces prepare_attention_mask (which has data-dependent branches) with
+    branchless mask reshaping, ensuring traced graph generalizes to all input sizes.
+    """
 
-    if encoder_hidden_states is None:
-        encoder_hidden_states = hidden_states
+    def __call__(
+        self,
+        attn,
+        hidden_states,
+        encoder_hidden_states=None,
+        attention_mask=None,
+        query_rotary_emb=None,
+        key_rotary_emb=None,
+    ):
+        from diffusers.models.transformers.transformer_ltx2 import apply_split_rotary_emb
 
-    query = attn.to_q(hidden_states)
-    key = attn.to_k(encoder_hidden_states)
-    value = attn.to_v(encoder_hidden_states)
+        batch_size, sequence_length, _ = (
+            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+        )
 
-    query = attn.norm_q(query)
-    key = attn.norm_k(key)
+        if attention_mask is not None:
+            # Trace-safe: reshape mask to [batch, heads, 1, seq_len] without data-dependent branches.
+            # Incoming mask is [batch, 1, seq_len] (additive bias from transformer forward).
+            # Simply expand to heads dimension — no padding or repeat_interleave needed.
+            attention_mask = attention_mask.unsqueeze(1)  # [batch, 1, 1, seq_len]
 
-    if query_rotary_emb is not None:
-        query = _ltx2_apply_split_rotary_emb(query, query_rotary_emb)
-        key = _ltx2_apply_split_rotary_emb(key, key_rotary_emb if key_rotary_emb is not None else query_rotary_emb)
+        if encoder_hidden_states is None:
+            encoder_hidden_states = hidden_states
 
-    query = query.unflatten(2, (attn.heads, -1))
-    key = key.unflatten(2, (attn.heads, -1))
-    value = value.unflatten(2, (attn.heads, -1))
+        if attn.to_gate_logits is not None:
+            gate_logits = attn.to_gate_logits(hidden_states)
 
-    query = query.transpose(1, 2)
-    key = key.transpose(1, 2)
-    value = value.transpose(1, 2)
+        query = attn.to_q(hidden_states)
+        key = attn.to_k(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
 
-    hidden_states = torch.nn.functional.scaled_dot_product_attention(
-        query, key, value, attn_mask=attention_mask, scale=attn.scale
-    )
-    hidden_states = hidden_states.transpose(1, 2).flatten(2, 3)
-    hidden_states = hidden_states.to(query.dtype)
+        query = attn.norm_q(query)
+        key = attn.norm_k(key)
 
-    hidden_states = attn.to_out[0](hidden_states)
-    hidden_states = attn.to_out[1](hidden_states)
+        if query_rotary_emb is not None:
+            query = apply_split_rotary_emb(query, query_rotary_emb)
+            key = apply_split_rotary_emb(key, key_rotary_emb if key_rotary_emb is not None else query_rotary_emb)
 
-    return hidden_states
+        query = query.unflatten(2, (attn.heads, -1))
+        key = key.unflatten(2, (attn.heads, -1))
+        value = value.unflatten(2, (attn.heads, -1))
+
+        # Transpose to [B, heads, seq, dim] for SDPA
+        query = query.transpose(1, 2)
+        key = key.transpose(1, 2)
+        value = value.transpose(1, 2)
+
+        hidden_states = torch.nn.functional.scaled_dot_product_attention(
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False,
+        )
+        hidden_states = hidden_states.transpose(1, 2).flatten(2, 3)
+        hidden_states = hidden_states.to(query.dtype)
+
+        if attn.to_gate_logits is not None:
+            hidden_states = hidden_states.unflatten(2, (attn.heads, -1))
+            gates = 2.0 * torch.sigmoid(gate_logits)
+            hidden_states = hidden_states * gates.unsqueeze(-1)
+            hidden_states = hidden_states.flatten(2, 3)
+
+        hidden_states = attn.to_out[0](hidden_states)
+        hidden_states = attn.to_out[1](hidden_states)
+        return hidden_states
 
 
 class LTX2TransformerPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
-        self._orig_forwards = {}
 
-        # Patch all attention processors to use split-only rotary emb
+        # Replace attention processors with trace-safe version
+        # (original prepare_attention_mask has data-dependent branches that break tracing)
+        self._orig_processors = {}
         for name, module in self._model.named_modules():
-            if hasattr(module, 'processor') and hasattr(module.processor, '__call__'):
-                proc = module.processor
-                self._orig_forwards[name] = proc.__call__
-                proc.__call__ = types.MethodType(
-                    lambda self_proc, attn, hidden_states, **kw: _ltx2_attn_processor_forward_patched(
-                        self_proc, attn, hidden_states, **kw
-                    ),
-                    proc,
-                )
+            if hasattr(module, 'processor') and hasattr(module, 'set_processor'):
+                self._orig_processors[name] = module.processor
+                module.set_processor(_LTX2TraceSafeAttnProcessor())
 
         # Wrap forward to return dict (needed for output naming) and force return_dict=False internally
         self._orig_model_forward = self._model.forward
@@ -10613,6 +10722,7 @@ class LTX2TransformerPatcher(ModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._orig_model_forward
 
+        # Restore original attention processors
         for name, module in self._model.named_modules():
-            if name in self._orig_forwards and hasattr(module, 'processor'):
-                module.processor.__call__ = self._orig_forwards[name]
+            if name in self._orig_processors and hasattr(module, 'set_processor'):
+                module.set_processor(self._orig_processors[name])
