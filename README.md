@@ -14,7 +14,7 @@
 To install the latest release of 🤗 Optimum Intel with the corresponding required dependencies, you can use `pip` as follows:
 
 ```bash
-python -m pip install -U optimum-intel
+pip install -U optimum-intel
 ```
 
 Optimum Intel is a fast-moving project with regular additions of new model support, so you may want to install from source with the following command:
