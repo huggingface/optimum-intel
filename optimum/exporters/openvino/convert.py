@@ -389,6 +389,13 @@ def export_pytorch(
             inp_tensor.get_tensor().set_names({input_name})
 
         if stateful:
+            # Allow the export config to mutate the ov_model right before the
+            # stateful transformation runs (e.g. to protect auxiliary outputs
+            # that share a producing tensor with kv-cache outputs from being
+            # removed by `apply_make_stateful_transformation`).
+            pre_stateful_hook = getattr(config, "patch_ov_model_before_stateful", None)
+            if callable(pre_stateful_hook):
+                pre_stateful_hook(ov_model)
             patch_stateful(model.config, ov_model)
 
         library_name = _infer_library_from_model_or_model_class(model=model, library_name=library_name)
@@ -1012,6 +1019,12 @@ def _get_submodels_and_export_configs(
         not custom_architecture
         and library_name == "transformers"
         and model.config.model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
+        # Pure text-generation tasks on multimodal checkpoints (e.g. running
+        # `--task text-generation` on a Gemma 4 VLM checkpoint to export only
+        # the language model) should bypass the multimodal multi-behavior
+        # exporter and go through the default path, which uses the
+        # text-only OpenVINOConfig registered for that model_type.
+        and task not in ("text-generation", "text-generation-with-past")
     ):
         return _get_multi_modal_submodels_and_export_configs(
             model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful
@@ -1020,6 +1033,22 @@ def _get_submodels_and_export_configs(
         return _get_speecht5_tss_model_for_export(
             model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs
         )
+
+    # When exporting a multimodal checkpoint for a pure text-generation task,
+    # the user wants only the language model.  AutoModelForCausalLM returns the
+    # full multimodal wrapper (e.g. `Gemma4ForConditionalGeneration` for
+    # `google/gemma-4-*`), whose forward signature includes vision-specific
+    # args that don't match the text-only dummy inputs and triggers attention
+    # shape mismatches during tracing.  Unwrap to the inner language model.
+    if (
+        not custom_architecture
+        and library_name == "transformers"
+        and task in ("text-generation", "text-generation-with-past")
+        and model.config.model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
+        and hasattr(model, "language_model")
+        and hasattr(model.language_model, "forward")
+    ):
+        model = model.language_model
 
     export_config, models_for_export = _default_get_submodels_and_export_configs(
         model,

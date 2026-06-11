@@ -679,7 +679,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             outputs=outputs, model_kwargs=model_kwargs, is_encoder_decoder=is_encoder_decoder, **kwargs
         )
 
-        if "position_ids" in model_kwargs:
+        # Starting from transformers 5.5, the base ``_update_model_kwargs_for_generation`` already
+        # appends the next position id to ``position_ids`` (see GenerationMixin in transformers
+        # ``generation/utils.py``). Avoid appending a second time on newer transformers to prevent
+        # ``position_ids`` from growing by 2 per decoding step.
+        if "position_ids" in model_kwargs and is_transformers_version("<", "5.5"):
             position_ids = model_kwargs["position_ids"]
             new_position_id = position_ids[..., -1:].clone()
             new_position_id += 1
@@ -902,6 +906,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = OVPhi3ForCausalLM
         elif model_type in SSM_MODELS:
             init_cls = OVModelWithMambaForCausalLM
+        elif model_type is not None and model_type.startswith("gemma4"):
+            # Lazy import to avoid circular dependency with modeling_gemma4_mtp,
+            # which itself imports OVModelForCausalLM.
+            from .modeling_gemma4_mtp import Gemma4OVForCausalLM  # noqa: F401
+
+            init_cls = Gemma4OVForCausalLM
         else:
             init_cls = cls
 
