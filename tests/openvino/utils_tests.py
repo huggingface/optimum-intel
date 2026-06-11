@@ -274,6 +274,7 @@ MODEL_NAMES = {
     "nystromformer": "optimum-intel-internal-testing/tiny-random-NystromformerModel",
     "olmo": "optimum-intel-internal-testing/tiny-random-olmo-hf",
     "orion": "optimum-intel-internal-testing/tiny-random-orion",
+    "ouro": "optimum-intel-internal-testing/tiny-random-ouro",
     "pegasus": "optimum-intel-internal-testing/tiny-random-pegasus",
     "perceiver_text": "optimum-intel-internal-testing/tiny-random-language_perceiver",
     "perceiver_vision": "optimum-intel-internal-testing/tiny-random-vision_perceiver_conv",
@@ -546,6 +547,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_per_layer_model": 0,
     },
     "smollm3": {"model": 30},
+    "ouro": {"model": 34},
     "qwen3_asr": {
         "encoder": 36,
         "decoder": 30,
@@ -583,7 +585,7 @@ REMOTE_CODE_MODELS = (
 )
 
 if is_transformers_version("<", "5"):
-    REMOTE_CODE_MODELS += ("afmoe",)
+    REMOTE_CODE_MODELS += ("afmoe", "ouro")
 
 
 SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED = [
