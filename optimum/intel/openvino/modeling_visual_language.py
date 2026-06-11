@@ -419,6 +419,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self._supports_cache_class = False
         self.main_input_name = "input_ids"
         self._compile_only = kwargs.get("compile_only", False)
+        self.export_feature = kwargs.get("export_feature", "image-text-to-text")
 
         for part in self.additional_parts:
             setattr(self, f"{part}_model", kwargs.get(part))
@@ -3867,6 +3868,9 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM, Qwen3VLModel, Qwen3VLVisio
             rope_deltas,
             **kwargs,
         )
+        if self.export_feature == "feature-extraction":
+            return ModelOutput(last_hidden_state=result.logits)
+
         final_result = QWen2VLModelOutputWithPast(
             logits=result.logits, past_key_values=result.past_key_values, rope_deltas=rope_deltas
         )
