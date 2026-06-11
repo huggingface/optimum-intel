@@ -117,6 +117,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "jais",
         "baichuan2",
         "baichuan2-13b",
+        "ouro",
         # remote modeling code failing with v5
         "aquila",
         "xverse",
@@ -223,6 +224,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "falcon_mamba": 0,
         "arcee": 2,
         "smollm3": 2,
+        "ouro": 8,
         "gpt_oss": 2,
         "gpt_oss_mxfp4": 2,
         "zamba2": 1,
@@ -459,6 +461,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "internlm2",
             "jais",
             "orion",
+            "ouro",
             "xverse",
         }:
             additional_inputs = {"use_cache": False}
@@ -817,6 +820,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "internlm2",
                 "jais",
                 "orion",
+                "ouro",
                 "xverse",
             }:
                 additional_inputs["use_cache"] = False

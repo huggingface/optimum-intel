@@ -128,6 +128,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "qwen3_dflash"),
         ("text-generation-with-past", "zamba2"),
         ("text-generation-with-past", "exaone4"),
+        ("text-generation-with-past", "ouro"),
         ("text-generation-with-past", "bitnet"),
         ("text-generation-with-past", "qwen3_next"),
         ("image-text-to-text", "qwen3_vl_eagle3"),
@@ -182,6 +183,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "bitnet": 2,
         "granitemoehybrid": 2,
         "smollm3": 2,
+        "ouro": 2,
         "qwen3_vl_eagle3": 0,
         "qwen3_vl_embedding": 2,
     }
