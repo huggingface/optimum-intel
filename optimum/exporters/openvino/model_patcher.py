@@ -4471,7 +4471,7 @@ class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
             if hasattr(self, "lm_head"):
                 logits = self.lm_head(outputs[0])
             else:
-                logits = outputs["last_hidden_state"]
+                return (outputs["last_hidden_state"], postprocess_past_key_values(outputs.past_key_values))
             return (logits, postprocess_past_key_values(outputs.past_key_values))
 
         model.__orig_forward = model.forward

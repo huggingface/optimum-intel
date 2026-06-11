@@ -29,7 +29,7 @@ from transformers import (
     PretrainedConfig,
     PreTrainedTokenizer,
 )
-from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPooling
+from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
 from transformers.utils import ModelOutput
 
@@ -419,6 +419,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self._supports_cache_class = False
         self.main_input_name = "input_ids"
         self._compile_only = kwargs.get("compile_only", False)
+        self.export_feature = kwargs.get("export_feature", "image-text-to-text")
 
         for part in self.additional_parts:
             setattr(self, f"{part}_model", kwargs.get(part))
@@ -475,10 +476,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         save_config(self.config, save_directory)
 
     @classmethod
-    def _get_model_class(cls, model_type):
-        return MODEL_TYPE_TO_CLS_MAPPING[model_type]
-
-    @classmethod
     def _from_pretrained(
         cls,
         model_id: Union[str, Path],
@@ -527,7 +524,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             trust_remote_code (`bool`, *optional*, defaults to `False`):
                 Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
-        model_cls = cls._get_model_class(config.model_type)
+        model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
         model_file_names = model_cls._all_ov_model_paths.copy()
         for k in tuple(model_file_names):
             model_file_names[f"{k}_bin"] = model_file_names[k].replace(".xml", ".bin")
@@ -966,12 +963,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             if quantization_config.tokenizer is None:
                 quantization_config.tokenizer = model_name_or_path
         return quantization_config
-
-
-class _OVModelForVisualFeatureExtraction(OVModelForVisualCausalLM):
-    @classmethod
-    def _get_model_class(cls, model_type):
-        return MODEL_TYPE_TO_FEATURE_EXTRACTION_CLS_MAPPING[model_type]
 
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
@@ -3877,6 +3868,9 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM, Qwen3VLModel, Qwen3VLVisio
             rope_deltas,
             **kwargs,
         )
+        if self.export_feature == "feature-extraction":
+            return ModelOutput(last_hidden_state=result.logits)
+
         final_result = QWen2VLModelOutputWithPast(
             logits=result.logits, past_key_values=result.past_key_values, rope_deltas=rope_deltas
         )
@@ -5828,45 +5822,6 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM, Qwen3_5Model, Qwen3_5Visio
         return super().generate(*args, **kwargs)
 
 
-class _OVQwen3VLForFeatureExtraction(_OVQwen3VLForCausalLM):
-    export_feature = "feature-extraction"
-
-    def forward(
-        self,
-        input_ids,
-        pixel_values=None,
-        past_key_values=None,
-        inputs_embeds=None,
-        image_sizes=None,
-        attention_mask=None,
-        position_ids=None,
-        image_bound=None,
-        tgt_sizes=None,
-        pixel_values_videos=None,
-        image_grid_thw=None,
-        video_grid_thw=None,
-        rope_deltas=None,
-        **kwargs,
-    ):
-        result = super().forward(
-            input_ids,
-            pixel_values,
-            past_key_values,
-            inputs_embeds,
-            image_sizes,
-            attention_mask,
-            position_ids,
-            image_bound,
-            tgt_sizes,
-            pixel_values_videos,
-            image_grid_thw,
-            video_grid_thw,
-            rope_deltas,
-            **kwargs,
-        )
-        return BaseModelOutput(last_hidden_state=result.logits)
-
-
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
@@ -5895,8 +5850,4 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_5_moe_text": _OVQwen3_5ForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
-}
-
-MODEL_TYPE_TO_FEATURE_EXTRACTION_CLS_MAPPING = {
-    "qwen3_vl": _OVQwen3VLForFeatureExtraction,
 }
