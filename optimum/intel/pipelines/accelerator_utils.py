@@ -27,6 +27,7 @@ from optimum.intel.openvino import (
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
+    OVModelForOmni,
     OVModelForQuestionAnswering,
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
@@ -49,18 +50,18 @@ OV_TASKS_MAPPING = {
     "audio-classification": (OVModelForAudioClassification,),
     "audio-frame-classification": (OVModelForAudioFrameClassification,),
     "audio-xvector": (OVModelForAudioXVector,),
-    "automatic-speech-recognition": (OVModelForCTC, OVModelForSpeechSeq2Seq),
+    "automatic-speech-recognition": (OVModelForCTC, OVModelForSpeechSeq2Seq, OVModelForOmni),
     "feature-extraction": (OVModelForFeatureExtraction,),
     "fill-mask": (OVModelForMaskedLM,),
     "image-classification": (OVModelForImageClassification,),
-    "image-text-to-text": (OVModelForVisualCausalLM,),
+    "image-text-to-text": (OVModelForVisualCausalLM, OVModelForOmni),
     "image-to-text": (OVModelForVision2Seq,),
     "question-answering": (OVModelForQuestionAnswering,),
     "summarization": (OVModelForSeq2SeqLM,),
     "text2text-generation": (OVModelForSeq2SeqLM,),
     "text-classification": (OVModelForSequenceClassification,),
     "text-generation": (OVModelForCausalLM,),
-    "text-to-audio": (OVModelForTextToSpeechSeq2Seq,),
+    "text-to-audio": (OVModelForTextToSpeechSeq2Seq, OVModelForOmni),
     "token-classification": (OVModelForTokenClassification,),
     "translation": (OVModelForSeq2SeqLM,),
     "zero-shot-image-classification": (OVModelForZeroShotImageClassification,),
@@ -88,10 +89,26 @@ def get_openvino_model_class(
             config = AutoConfig.from_pretrained(model_id, **hub_kwargs)
         if any(arch.endswith("ForCTC") for arch in config.architectures):
             ov_model_class = OV_TASKS_MAPPING[task][0]
+        elif getattr(config, "model_type", None) == "qwen3_omni_moe":
+            ov_model_class = OV_TASKS_MAPPING[task][2]
         else:
             ov_model_class = OV_TASKS_MAPPING[task][1]
     else:
-        ov_model_class = OV_TASKS_MAPPING[task][0]
+        task_classes = OV_TASKS_MAPPING[task]
+        if len(task_classes) > 1 and OVModelForOmni in task_classes:
+            if config is None:
+                hub_kwargs = {
+                    "trust_remote_code": model_kwargs.pop("trust_remote_code", False),
+                    "revision": model_kwargs.pop("revision", None),
+                    "token": model_kwargs.pop("token", None),
+                }
+                config = AutoConfig.from_pretrained(model_id, **hub_kwargs)
+            if getattr(config, "model_type", None) == "qwen3_omni_moe":
+                ov_model_class = OVModelForOmni
+            else:
+                ov_model_class = task_classes[0]
+        else:
+            ov_model_class = task_classes[0]
 
     return ov_model_class
 

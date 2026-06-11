@@ -373,6 +373,10 @@ def main_export(
             patch_qwenvl_configs()
 
         model_type = config.model_type
+
+        if original_task == "auto" and model_type in {"phi4mm", "phi4_multimodal", "qwen3_omni_moe"}:
+            task = "image-text-to-text"
+
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             if custom_export_configs is None:
                 raise ValueError(
@@ -691,6 +695,8 @@ def _main_quantize(
     # which is returned as the inferred task. As a result, we try to load the exported model using the
     # OVModelForSpeechSeq2Seq class instead of the OVModelForVisualCausalLM class when the task is not specified
     # explicitly. Because of this, we get an error.
+    # Qwen3-Omni-MoE registers multiple tasks (text-to-audio, ASR, image-text-to-text) but always loads
+    # through OVModelForVisualCausalLM, so redirect unconditionally regardless of inferred or explicit task.
     if original_task == "auto" and library_name == "transformers":
         config = AutoConfig.from_pretrained(
             model_name_or_path,
@@ -701,7 +707,7 @@ def _main_quantize(
             trust_remote_code=trust_remote_code,
         )
         model_type = config.model_type
-        if model_type in ["phi4mm", "phi4_multimodal"]:
+        if model_type in ["phi4mm", "phi4_multimodal", "qwen3_omni_moe"]:
             task = "image-text-to-text"
 
     # Step 1. Obtain the correct OpenVINO model class
@@ -768,6 +774,12 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
     from optimum.exporters.openvino.convert import export_tokenizer
 
     if is_openvino_tokenizers_available():
+        model_type = None
+        if model and hasattr(model, "config"):
+            model_type = getattr(model.config, "export_model_type", None) or getattr(
+                model.config, "model_type", None
+            )
+
         if library_name != "diffusers" and preprocessors:
             processor_chat_template = None
             tokenizer = next(filter(lambda it: isinstance(it, PreTrainedTokenizerBase), preprocessors), None)
@@ -777,7 +789,13 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
                         processor_chat_template = processor.chat_template
             if tokenizer:
                 try:
-                    export_tokenizer(tokenizer, output, task=task, processor_chat_template=processor_chat_template)
+                    export_tokenizer(
+                        tokenizer,
+                        output,
+                        task=task,
+                        processor_chat_template=processor_chat_template,
+                        model_type=model_type,
+                    )
                 except Exception as exception:
                     logger.warning(
                         "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer "
@@ -787,7 +805,7 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
             for tokenizer_name in ("tokenizer", "tokenizer_2", "tokenizer_3"):
                 tokenizer = getattr(model, tokenizer_name, None)
                 if tokenizer:
-                    export_tokenizer(tokenizer, output / tokenizer_name, task=task)
+                    export_tokenizer(tokenizer, output / tokenizer_name, task=task, model_type=model_type)
     else:
         logger.warning("Tokenizer won't be converted.")
 
