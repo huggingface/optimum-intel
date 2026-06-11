@@ -4022,6 +4022,7 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in VLMConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyTextInputGenerator)
     MIN_TRANSFORMERS_VERSION = "5.10"
+    MAX_TRANSFORMERS_VERSION = "5.10.99"
 
     def __init__(
         self,
