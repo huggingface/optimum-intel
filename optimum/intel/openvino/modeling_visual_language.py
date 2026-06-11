@@ -24,6 +24,7 @@ from transformers import (
     AutoConfig,
     AutoImageProcessor,
     AutoModel,
+    AutoModelForCausalLM,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
@@ -3906,6 +3907,124 @@ class _OVMaira2ForCausalLM(_OVLlavaForCausalLM):
         return processed_inputs
 
 
+class _OVYoutuVLForCausalLM(OVModelForVisualCausalLM):
+    """
+    OVModelForVisualCausalLM subclass for YoutuVL (YoutuVLForConditionalGeneration).
+
+    Vision pipeline: siglip2 encoder + VLPatchMerger are exported together as the
+    vision_embeddings model.  During inference the merged image features are
+    scattered into the text embeddings at positions marked by image_token_id.
+    """
+
+    # YoutuVL registers with AutoModelForCausalLM (not AutoModelForImageTextToText)
+    auto_model_class = AutoModelForCausalLM
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        # Skip vision encoding for decode steps (single new token)
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        pixel_attention_mask = kwargs.get("pixel_attention_mask")
+        spatial_shapes = kwargs.get("spatial_shapes")
+        return self.vision_embeddings(
+            pixel_values,
+            pixel_attention_mask=pixel_attention_mask,
+            spatial_shapes=spatial_shapes,
+        ).last_hidden_state
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        """
+        Scatter vision features into the text embedding tensor at image-token positions.
+
+        Mirrors the logic in YoutuVLForConditionalGeneration.forward:
+            mask = (input_ids == self.config.image_token_id)
+            inputs_embeds = inputs_embeds.masked_scatter(mask_expanded, image_embeds)
+        """
+        image_features = (
+            torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        )
+        inputs_embeds = (
+            torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        )
+        if input_ids is None:
+            # Fallback: if input_ids not available, return embeddings as-is
+            return inputs_embeds, attention_mask, position_ids
+
+        image_token_id = getattr(self.config, "image_token_id", None)
+        if image_token_id is None:
+            return inputs_embeds, attention_mask, position_ids
+
+        mask = (input_ids == image_token_id).unsqueeze(-1).expand_as(inputs_embeds)
+        image_features = image_features.to(inputs_embeds.device).to(inputs_embeds.dtype)
+        # Add batch dimension if needed and flatten for masked_scatter
+        if image_features.dim() == 2:
+            image_features = image_features.unsqueeze(0)
+        inputs_embeds = inputs_embeds.masked_scatter(mask, image_features)
+        return inputs_embeds, attention_mask, position_ids
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        pixel_attention_mask=None,
+        spatial_shapes=None,
+        attention_mask=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        if past_key_values is not None:
+            # Decode step: skip vision inputs
+            model_inputs.pop("pixel_values", None)
+        else:
+            model_inputs["pixel_attention_mask"] = pixel_attention_mask
+            model_inputs["spatial_shapes"] = spatial_shapes
+        return model_inputs
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image=None,
+        processor=None,
+        tokenizer=None,
+        config=None,
+        video=None,
+        audio=None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required for YoutuVL.")
+        if video is not None:
+            raise ValueError("Video input is not supported for YoutuVL.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported for YoutuVL.")
+
+        image_token = getattr(processor, "image_token", "<image>")
+        if image is not None:
+            prompt = f"{image_token}\n{text}"
+        else:
+            prompt = text
+
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            text_prompt = processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+        except Exception:
+            text_prompt = prompt
+
+        inputs = processor(text=text_prompt, images=[image] if image is not None else None, return_tensors="pt")
+        return inputs
+
+
 class _OVGemma3ForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
@@ -5846,4 +5965,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_5_moe_text": _OVQwen3_5ForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
+    "youtu_vl": _OVYoutuVLForCausalLM,
 }

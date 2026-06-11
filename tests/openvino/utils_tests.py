@@ -330,6 +330,7 @@ MODEL_NAMES = {
     "trocr": "optimum-intel-internal-testing/trocr-small-handwritten",
     "unispeech": "optimum-intel-internal-testing/tiny-random-unispeech",
     "unispeech-sat": "optimum-intel-internal-testing/tiny-random-UnispeechSatModel",
+    "youtu_vl": "/home/mohamed-ashraf/Desktop/projects/GSoC26/auto-openvino-bot/workspace/tiny-tencent-Youtu-VL-4B-Instruct",
     "vit": "optimum-intel-internal-testing/tiny-random-vit",
     "vit-with-attentions": "optimum-intel-internal-testing/vit-with-attentions",
     "vit-with-hidden-states": "optimum-intel-internal-testing/vit-with-hidden_states",
@@ -466,6 +467,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 1,
         "vision_embeddings_merger_model": 10,
     },
+    "youtu_vl": {
+        "lm_model": 34,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 16,
+    },
     "qwen3_vl": {
         "lm_model": 30,
         "text_embeddings_model": 1,
@@ -580,6 +586,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_vl_eagle3",
     "qwen3_asr",
     "videochat_flash_qwen",
+    "youtu_vl",
 )
 
 if is_transformers_version("<", "5"):
