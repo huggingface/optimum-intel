@@ -444,6 +444,97 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         gc.collect()
 
 
+class CohereAsrTest(unittest.TestCase):
+    """
+    Test CohereAsr model type (cohere_asr).
+    Compares OpenVINO export output to original PyTorch model output.
+    """
+
+    SUPPORTED_ARCHITECTURES = ("cohere_asr",)
+
+    def _generate_audio_data(self):
+        np.random.seed(SEED)
+        sample_rate = 16000
+        t = np.linspace(0, 1.0, sample_rate, endpoint=False)
+        audio_data = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+        return audio_data, sample_rate
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.skipif(
+        is_transformers_version("<", "4.57.0"),
+        reason="requires transformers>=4.57.0.",
+    )
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        audio_data, sample_rate = self._generate_audio_data()
+        inputs = processor(audio=audio_data, sampling_rate=sample_rate, return_tensors="pt", language="en")
+
+        transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id, trust_remote_code=True)
+        transformers_model.eval()
+
+        decoder_start_token_id = transformers_model.config.decoder_start_token_id or 0
+        decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs, **decoder_inputs)
+
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        ov_model_stateless = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id,
+            export=True,
+            trust_remote_code=True,
+            ov_config=F32_CONFIG,
+            stateful=False,
+            device=OPENVINO_DEVICE,
+        )
+
+        ov_outputs = ov_model(**inputs, **decoder_inputs)
+        ov_stateless_outputs = ov_model_stateless(**inputs, **decoder_inputs)
+        self.assertIn("logits", ov_outputs)
+        self.assertTrue(
+            torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3),
+            f"Logits mismatch: max_diff={float(abs(torch.Tensor(ov_outputs.logits) - transformers_outputs.logits).max()):.4f}",
+        )
+        self.assertTrue(
+            torch.allclose(torch.Tensor(ov_stateless_outputs.logits), transformers_outputs.logits, atol=1e-3),
+            f"Stateless logits mismatch: max_diff={float(abs(torch.Tensor(ov_stateless_outputs.logits) - transformers_outputs.logits).max()):.4f}",
+        )
+
+        generate_kwrgs = {}
+        if is_transformers_version(">=", "4.50") and is_transformers_version("<", "5"):
+            generate_kwrgs = {"use_model_defaults": False}
+
+        gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=2,
+            do_sample=False,
+            eos_token_id=None,
+        )
+
+        set_seed(SEED)
+        generated_tokens = transformers_model.generate(**inputs, generation_config=gen_config, **generate_kwrgs)
+        set_seed(SEED)
+        ov_generated_tokens = ov_model.generate(**inputs, generation_config=gen_config, **generate_kwrgs)
+        set_seed(SEED)
+        ov_stateless_generated_tokens = ov_model_stateless.generate(
+            **inputs, generation_config=gen_config, **generate_kwrgs
+        )
+
+        self.assertTrue(torch.equal(generated_tokens, ov_generated_tokens))
+        self.assertTrue(torch.equal(generated_tokens, ov_stateless_generated_tokens))
+
+        del transformers_model
+        del ov_model
+        del ov_model_stateless
+        gc.collect()
+
+
 class Qwen3ASRTest(unittest.TestCase):
     """
     Test Qwen3ASR model type.
