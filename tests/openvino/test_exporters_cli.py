@@ -119,6 +119,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation", "lfm2"),
         ("text-generation-with-past", "lfm2"),
         ("text-generation-with-past", "granitemoehybrid"),
+        ("text-generation-with-past", "smollm3"),
         ("text-generation-with-past", "hunyuan_v1_dense"),
     ]
 
@@ -174,6 +175,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "exaone4": 2,
         "bitnet": 2,
         "granitemoehybrid": 2,
+        "smollm3": 2,
         "qwen3_vl_eagle3": 0,
     }
 

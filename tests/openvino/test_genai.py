@@ -145,7 +145,6 @@ class LLMPipelineTestCase(unittest.TestCase):
         "cohere",
         "qwen2",
         "qwen2_moe",
-        "phi3",
         "gemma2",
         "granite",
         "granitemoe",
@@ -159,6 +158,8 @@ class LLMPipelineTestCase(unittest.TestCase):
         "glm4",
         "arcee",
         "gpt_oss",
+        "smollm3",
+        "phi3",
     )
 
     # to be expanded, other architectures work on NPU too

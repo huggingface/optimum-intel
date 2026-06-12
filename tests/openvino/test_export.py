@@ -96,6 +96,7 @@ class ExportModelTest(unittest.TestCase):
         "kokoro": OVModelForTextToSpeechSeq2Seq,
         "cohere2": OVModelForCausalLM,
         "granitemoehybrid": OVModelForCausalLM,
+        "smollm3": OVModelForCausalLM,
         "hunyuan_v1_dense": OVModelForCausalLM,
         "qwen3": OVModelForFeatureExtraction,
     }

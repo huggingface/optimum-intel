@@ -1044,6 +1044,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForCausalLM, "cohere2", False),
         (OVModelForVisualCausalLM, "qwen3_vl", False),
         (OVModelForCausalLM, "hunyuan_v1_dense", False),
+        (OVModelForCausalLM, "smollm3", False),
     ]
 
     if is_transformers_version("<", "5"):

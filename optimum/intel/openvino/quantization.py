@@ -1203,6 +1203,8 @@ class OVCalibrationDatasetBuilder:
                     )
                     if inputs["input_ids"].shape[1] > seq_len:
                         inputs["input_ids"] = inputs["input_ids"][:, :seq_len]
+                        if "attention_mask" in inputs:
+                            inputs["attention_mask"] = inputs["attention_mask"][:, :seq_len]
 
                 self.model(**inputs)
 
