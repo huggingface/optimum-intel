@@ -456,6 +456,194 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         gc.collect()
 
 
+class CohereAsrTest(unittest.TestCase):
+    """
+    Test CohereAsr model type (cohere_asr).
+    Compares OpenVINO export output to original PyTorch model output.
+    """
+
+    SUPPORTED_ARCHITECTURES = ("cohere_asr",)
+
+    def _generate_audio_data(self):
+        np.random.seed(SEED)
+        sample_rate = 16000
+        t = np.linspace(0, 1.0, sample_rate, endpoint=False)
+        audio_data = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+        return audio_data, sample_rate
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.skipif(
+        is_transformers_version("<", "4.57.0"),
+        reason="requires transformers>=4.57.0.",
+    )
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        audio_data, sample_rate = self._generate_audio_data()
+        inputs = processor(audio=audio_data, sampling_rate=sample_rate, return_tensors="pt", language="en")
+
+        transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id, trust_remote_code=True)
+        transformers_model.eval()
+
+        decoder_start_token_id = transformers_model.config.decoder_start_token_id or 0
+        decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs, **decoder_inputs)
+
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        ov_model_stateless = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id,
+            export=True,
+            trust_remote_code=True,
+            ov_config=F32_CONFIG,
+            stateful=False,
+            device=OPENVINO_DEVICE,
+        )
+
+        ov_outputs = ov_model(**inputs, **decoder_inputs)
+        ov_stateless_outputs = ov_model_stateless(**inputs, **decoder_inputs)
+        self.assertIn("logits", ov_outputs)
+        self.assertTrue(
+            torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3),
+            f"Logits mismatch: max_diff={float(abs(torch.Tensor(ov_outputs.logits) - transformers_outputs.logits).max()):.4f}",
+        )
+        self.assertTrue(
+            torch.allclose(torch.Tensor(ov_stateless_outputs.logits), transformers_outputs.logits, atol=1e-3),
+            f"Stateless logits mismatch: max_diff={float(abs(torch.Tensor(ov_stateless_outputs.logits) - transformers_outputs.logits).max()):.4f}",
+        )
+
+        generate_kwrgs = {}
+        if is_transformers_version(">=", "4.50") and is_transformers_version("<", "5"):
+            generate_kwrgs = {"use_model_defaults": False}
+
+        gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=2,
+            do_sample=False,
+            eos_token_id=None,
+        )
+
+        set_seed(SEED)
+        generated_tokens = transformers_model.generate(**inputs, generation_config=gen_config, **generate_kwrgs)
+        set_seed(SEED)
+        ov_generated_tokens = ov_model.generate(**inputs, generation_config=gen_config, **generate_kwrgs)
+        set_seed(SEED)
+        ov_stateless_generated_tokens = ov_model_stateless.generate(
+            **inputs, generation_config=gen_config, **generate_kwrgs
+        )
+
+        self.assertTrue(torch.equal(generated_tokens, ov_generated_tokens))
+        self.assertTrue(torch.equal(generated_tokens, ov_stateless_generated_tokens))
+
+        del transformers_model
+        del ov_model
+        del ov_model_stateless
+        gc.collect()
+
+
+class Qwen3ASRTest(unittest.TestCase):
+    """
+    Test Qwen3ASR model type.
+    Compares OpenVINO model output to original PyTorch transformers model output.
+    """
+
+    SUPPORTED_ARCHITECTURES = ("qwen3_asr",)
+
+    def _generate_audio_data(self):
+        np.random.seed(SEED)
+        sample_rate = 16000
+        duration = 120
+        t = np.linspace(0, 1.0, sample_rate * duration, endpoint=False)
+        audio_data = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+        return audio_data, sample_rate
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.skipif(
+        is_transformers_version("!=", "4.57.6"),
+        reason="requires transformers==4.57.6.",
+    )
+    def test_compare_to_transformers(self, model_arch):
+        from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
+
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+
+        # Load processor
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+
+        # Prepare audio input
+        audio_data, sample_rate = self._generate_audio_data()
+        text_prompt = processor.apply_chat_template(
+            [
+                {"role": "system", "content": ""},
+                {"role": "user", "content": [{"type": "audio", "audio": ""}]},
+            ],
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+        inputs = processor(
+            text=text_prompt,
+            audio=audio_data,
+            sampling_rate=sample_rate,
+            return_tensors="pt",
+        )
+
+        # Load and infer with PyTorch model
+        transformers_model = Qwen3ASRForConditionalGeneration.from_pretrained(model_id, trust_remote_code=True)
+        transformers_model.eval()
+
+        gen_kwargs = {
+            "max_new_tokens": 10,
+        }
+
+        with torch.no_grad():
+            pt_generated_ids = transformers_model.generate(
+                input_ids=inputs["input_ids"],
+                input_features=inputs["input_features"],
+                feature_attention_mask=inputs["feature_attention_mask"],
+                attention_mask=inputs["attention_mask"],
+                **gen_kwargs,
+            )
+        if hasattr(pt_generated_ids, "sequences"):
+            pt_generated_ids = pt_generated_ids.sequences
+
+        # Load and infer with OpenVINO model
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+
+        ov_generated_ids = ov_model.generate(
+            input_features=inputs["input_features"],
+            attention_mask=inputs.get("feature_attention_mask"),
+            decoder_input_ids=inputs["input_ids"],
+            **gen_kwargs,
+        )
+        if hasattr(ov_generated_ids, "sequences"):
+            ov_generated_ids = ov_generated_ids.sequences
+
+        # Compare generated token sequences
+        self.assertTrue(
+            torch.equal(pt_generated_ids, ov_generated_ids),
+            f"Token mismatch:\n  PyTorch:  {pt_generated_ids[0].tolist()}\n  OpenVINO: {ov_generated_ids[0].tolist()}",
+        )
+
+        # Compare decoded text
+        prompt_len = inputs["input_ids"].shape[1]
+        pt_text = processor.batch_decode(pt_generated_ids[:, prompt_len:], skip_special_tokens=True)[0]
+        ov_text = processor.batch_decode(ov_generated_ids[:, prompt_len:], skip_special_tokens=True)[0]
+        self.assertEqual(pt_text, ov_text)
+
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+
 class OVModelForImageTextToTextIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ["vision-encoder-decoder", "trocr"]
     # GOT-OCR2 models shouldn't be exported using the task image-to-text (currently equivalent to exporting the model using image-text-to-text) and will be deprecated v1.29

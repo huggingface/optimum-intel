@@ -134,6 +134,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
+        ("automatic-speech-recognition", "cohere_asr"),
     ]
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = [
@@ -170,6 +171,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "speecht5": 2,
         "kokoro": 0,  # uses g2p, no tokenizer
         "clip": 2,
+        "cohere_asr": 2,
         "mamba": 2,
         "falcon_mamba": 2,
         "qwen3": 2,
