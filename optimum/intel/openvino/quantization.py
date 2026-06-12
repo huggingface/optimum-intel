@@ -58,7 +58,7 @@ from .configuration import (
     OVWeightQuantizationConfig,
     _merge_ignored_scopes,
 )
-from .modeling import OVModelForFeatureExtraction, OVModelForMaskedLM, OVModelForZeroShotImageClassification
+from .modeling import OVModelForCTC, OVModelForFeatureExtraction, OVModelForMaskedLM, OVModelForZeroShotImageClassification
 from .modeling_base import OVBaseModel
 from .modeling_decoder import OVBaseDecoderModel, OVModelForCausalLM
 from .modeling_sam import OVSamModel
@@ -281,6 +281,22 @@ class OVCalibrationDatasetBuilder:
 
         if isinstance(self.model, OVModelForCausalLM):
             return self._prepare_causal_lm_calibration_data(config)
+        elif isinstance(self.model, OVModelForCTC):
+            if config.processor is None:
+                raise ValueError(
+                    "`processor` must be specified in order to run data-aware quantization. Please provide it as a"
+                    "model id, or a path to a directory containing all the required configuration files."
+                )
+            dataset_metadata = PREDEFINED_SPEECH_TO_TEXT_DATASETS[config.dataset]
+            return self.build_from_dataset_name(
+                config,
+                dataset_metadata["id"],
+                num_samples=config.num_samples,
+                dataset_split=dataset_metadata["split"],
+                streaming=dataset_metadata["streaming"],
+                data_dir=dataset_metadata.get("data_dir", None),
+                revision=dataset_metadata.get("revision", None),
+            )
         elif isinstance(
             self.model,
             (OVModelForVisualCausalLM, _OVModelForWhisper, OVModelForZeroShotImageClassification, OVSamModel),
@@ -486,6 +502,7 @@ class OVCalibrationDatasetBuilder:
             isinstance(
                 self.model,
                 (
+                    OVModelForCTC,
                     OVModelForVisualCausalLM,
                     _OVModelForWhisper,
                     OVModelForFeatureExtraction,
@@ -506,7 +523,9 @@ class OVCalibrationDatasetBuilder:
                     "`batch_size`, `data_collator` and `remove_unused_columns` are not supported for this type of model."
                 )
 
-            if isinstance(self.model, OVModelForVisualCausalLM):
+            if isinstance(self.model, OVModelForCTC):
+                return self._prepare_ctc_calibration_data(quantization_config, dataset)
+            elif isinstance(self.model, OVModelForVisualCausalLM):
                 return self._prepare_visual_causal_lm_calibration_data(quantization_config, dataset)
             elif isinstance(self.model, _OVModelForWhisper):
                 return self._prepare_speech_to_text_calibration_data(quantization_config, dataset)
@@ -954,6 +973,32 @@ class OVCalibrationDatasetBuilder:
             collected_inputs[ov_model_name] = nncf.Dataset(collected_inputs[ov_model_name])
 
         return OVCalibrationDataset(collected_inputs)
+
+    def _prepare_ctc_calibration_data(
+        self, config: OVQuantizationConfigBase, dataset: "Dataset"
+    ) -> OVCalibrationDataset:
+        """
+        Prepares calibration data for CTC (Connectionist Temporal Classification) models by processing audio samples.
+        """
+        collected_inputs = []
+        self.model.compile()
+        self.model.request = InferRequestWrapper(self.model.request, collected_inputs, apply_caching=True)
+
+        try:
+            processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=self.trust_remote_code)
+
+            num_samples = config.num_samples or 32
+            dataset = list(tqdm(dataset.take(num_samples), desc="Downloading audio inputs", total=num_samples))
+
+            for item in tqdm(dataset, desc="Collecting calibration data"):
+                audio = item["audio"]["array"]
+                sampling_rate = item["audio"]["sampling_rate"]
+                inputs = processor(audio, sampling_rate=sampling_rate, return_tensors="pt")
+                self.model(**inputs)
+        finally:
+            self.model.request = self.model.request.request
+
+        return OVCalibrationDataset({"model": nncf.Dataset(collected_inputs)})
 
     def _prepare_text_to_text_calibration_data(
         self,
