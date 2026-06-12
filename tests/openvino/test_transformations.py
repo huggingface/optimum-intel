@@ -118,15 +118,22 @@ if is_transformers_version(">=", "5.0"):
             "SDPAFusion", "StatefulSDPAFusion", "SDPASubgraphFusion",
             "MakeStateful", "RoPEFusionGPTNEOX", "RoPEFusionPreprocess", "RoPEFusion",
             "CausalMaskPreprocessFusion", "DecompressionHandling",
-            "TransposeMatMul", "LinOpSequenceFusion", "TSShapeOfForward",
+            "TransposeMatMul", "TSShapeOfForward",
         ],
         "compile": [
-            "MoEMatMulsFusion", "ConvertMatMulToFC", "FullyConnectedBiasFusion",
+            "ConvertMatMulToFC",
             "ConvertToCPUSpecificOpset", "ConvertToPowerStatic", "ConvertToSwishCPU",
-            "MulAddToFMA", "Snippets", "SnippetsDataFlowManager", "Tokenization",
+            "Snippets", "Tokenization",
             "MoveReadValueInputsToSubgraph",
         ],
     }
+    # Transforms applied only in OV >= 2026.1.0
+    if is_openvino_version(">=", "2026.1.0"):
+        ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2_moe"]["convert"].append("LinOpSequenceFusion")
+        ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2_moe"]["compile"].extend([
+            "MoEMatMulsFusion", "FullyConnectedBiasFusion",
+            "MulAddToFMA", "SnippetsDataFlowManager",
+        ])
 
 if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_5_moe"] = {
