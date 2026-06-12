@@ -22,7 +22,7 @@ import unittest
 import pytest
 from parameterized import parameterized
 
-from optimum.intel.utils.import_utils import is_transformers_version
+from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from utils_tests import ARCH_TO_MODEL_CLASS, MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS
 
 
@@ -32,6 +32,7 @@ from utils_tests import ARCH_TO_MODEL_CLASS, MODEL_NAMES, OPENVINO_DEVICE, REMOT
 #
 # Architectures are conditionally included based on transformers version
 # to match model compatibility constraints.
+# Some transformations are only applied in newer OpenVINO versions.
 ARCH_TO_EXPECTED_TRANSFORMATIONS = {}
 
 if is_transformers_version(">=", "4.51.0"):
@@ -40,15 +41,23 @@ if is_transformers_version(">=", "4.51.0"):
             "SDPAFusion", "StatefulSDPAFusion", "SDPASubgraphFusion",
             "MakeStateful", "RoPEFusionGPTNEOX", "RoPEFusionPreprocess", "RoPEFusion",
             "CausalMaskPreprocessFusion", "DecompressionHandling",
-            "TransposeMatMul", "CommonFusions", "ReshapeAMatMul",
+            "CommonFusions",
         ],
         "compile": [
-            "MoEMatMulsFusion", "ConvertMatMulToFC", "ConvertToCPUSpecificOpset",
+            "ConvertMatMulToFC", "ConvertToCPUSpecificOpset",
             "ConvertToPowerStatic", "ConvertToSwishCPU", "Snippets", "Tokenization",
             "ConvertSoftMax8ToSoftMax1",
-            "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
         ],
     }
+    # Transforms applied only in OV >= 2026.1.0
+    if is_openvino_version(">=", "2026.1.0"):
+        ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["convert"].extend([
+            "TransposeMatMul", "ReshapeAMatMul",
+        ])
+        ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["compile"].extend([
+            "MoEMatMulsFusion",
+            "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
+        ])
 
 if is_transformers_version(">=", "4.51.0") and is_transformers_version("<", "5"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["llama4"] = {
@@ -73,23 +82,35 @@ if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
             "SDPAFusion", "StatefulSDPAFusion", "SDPASubgraphFusion",
             "MakeStateful", "RoPEFusionGPTNEOX", "RoPEFusionPreprocess", "RoPEFusion",
             "CausalMaskPreprocessFusion", "DecompressionHandling",
-            "TransposeMatMul", "LinOpSequenceFusion", "TSShapeOfForward",
-            "CompressedGatherTransformation",
+            "TransposeMatMul", "TSShapeOfForward",
             "DisableDecompressionConvertConstantFolding",
             "EnableDecompressionConvertConstantFolding",
         ],
         "compile": [
             "ConvertMatMulToFC", "ConvertToCPUSpecificOpset",
-            "ConvertToPowerStatic", "ConvertToSwishCPU", "MulAddToFMA",
-            "Snippets", "SnippetsDataFlowManager", "Tokenization",
+            "ConvertToPowerStatic", "ConvertToSwishCPU",
+            "Snippets", "Tokenization",
         ],
     }
+    # Transforms applied only in OV >= 2026.1.0
+    if is_openvino_version(">=", "2026.1.0"):
+        ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2"]["convert"].extend([
+            "LinOpSequenceFusion", "CompressedGatherTransformation",
+        ])
+        ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2"]["compile"].extend([
+            "MulAddToFMA", "SnippetsDataFlowManager",
+        ])
 
 if is_transformers_version(">=", "4.55.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["afmoe"] = {
         "convert": [],
-        "compile": ["MoEMatMulsFusion", "FullyConnectedBiasFusion"],
+        "compile": [],
     }
+    # Transforms applied only in OV >= 2026.1.0
+    if is_openvino_version(">=", "2026.1.0"):
+        ARCH_TO_EXPECTED_TRANSFORMATIONS["afmoe"]["compile"].extend([
+            "MoEMatMulsFusion", "FullyConnectedBiasFusion",
+        ])
 
 if is_transformers_version(">=", "5.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2_moe"] = {
