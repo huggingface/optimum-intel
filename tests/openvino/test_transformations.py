@@ -38,68 +38,111 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {}
 if is_transformers_version(">=", "4.51.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"] = {
         "convert": [
-            "SDPAFusion", "StatefulSDPAFusion", "SDPASubgraphFusion",
-            "MakeStateful", "RoPEFusionGPTNEOX", "RoPEFusionPreprocess", "RoPEFusion",
-            "CausalMaskPreprocessFusion", "DecompressionHandling",
+            "SDPAFusion",
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "MakeStateful",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "DecompressionHandling",
             "CommonFusions",
         ],
         "compile": [
-            "ConvertMatMulToFC", "ConvertToCPUSpecificOpset",
-            "ConvertToPowerStatic", "ConvertToSwishCPU", "Snippets", "Tokenization",
+            "ConvertMatMulToFC",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "Snippets",
+            "Tokenization",
             "ConvertSoftMax8ToSoftMax1",
         ],
     }
     # Transforms applied only in OV >= 2026.1.0
     if is_openvino_version(">=", "2026.1.0"):
-        ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["convert"].extend([
-            "TransposeMatMul", "ReshapeAMatMul",
-        ])
-        ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["compile"].extend([
-            "MoEMatMulsFusion",
-            "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
-        ])
+        ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["convert"].extend(
+            [
+                "TransposeMatMul",
+                "ReshapeAMatMul",
+            ]
+        )
+        ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["compile"].extend(
+            [
+                "MoEMatMulsFusion",
+                "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
+            ]
+        )
 
 if is_transformers_version(">=", "4.51.0") and is_transformers_version("<", "5"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["llama4"] = {
         "convert": [
-            "SDPAFusion", "StatefulSDPAFusion", "SDPASubgraphFusion",
-            "MakeStateful", "CompressedGatherTransformation", "DecompressionHandling",
-            "LinOpSequenceFusion", "CommonDecompositions", "CommonOptimizations",
+            "SDPAFusion",
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "MakeStateful",
+            "CompressedGatherTransformation",
+            "DecompressionHandling",
+            "LinOpSequenceFusion",
+            "CommonDecompositions",
+            "CommonOptimizations",
             "DisableDecompressionConvertConstantFolding",
             "EnableDecompressionConvertConstantFolding",
         ],
         "compile": [
-            "RoPEFusionGPTNEOX", "RoPEFusion", "CausalMaskPreprocessFusion",
-            "ConvertMatMulToFC", "ConvertToCPUSpecificOpset",
-            "ConvertToPowerStatic", "ConvertToSwishCPU",
-            "Snippets", "Tokenization", "ConvertBroadcast3",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "ConvertMatMulToFC",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "Snippets",
+            "Tokenization",
+            "ConvertBroadcast3",
         ],
     }
 
 if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2"] = {
         "convert": [
-            "SDPAFusion", "StatefulSDPAFusion", "SDPASubgraphFusion",
-            "MakeStateful", "RoPEFusionGPTNEOX", "RoPEFusionPreprocess", "RoPEFusion",
-            "CausalMaskPreprocessFusion", "DecompressionHandling",
-            "TransposeMatMul", "TSShapeOfForward",
+            "SDPAFusion",
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "MakeStateful",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "DecompressionHandling",
+            "TransposeMatMul",
+            "TSShapeOfForward",
             "DisableDecompressionConvertConstantFolding",
             "EnableDecompressionConvertConstantFolding",
         ],
         "compile": [
-            "ConvertMatMulToFC", "ConvertToCPUSpecificOpset",
-            "ConvertToPowerStatic", "ConvertToSwishCPU",
-            "Snippets", "Tokenization",
+            "ConvertMatMulToFC",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "Snippets",
+            "Tokenization",
         ],
     }
     # Transforms applied only in OV >= 2026.1.0
     if is_openvino_version(">=", "2026.1.0"):
-        ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2"]["convert"].extend([
-            "LinOpSequenceFusion", "CompressedGatherTransformation",
-        ])
-        ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2"]["compile"].extend([
-            "MulAddToFMA", "SnippetsDataFlowManager",
-        ])
+        ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2"]["convert"].extend(
+            [
+                "LinOpSequenceFusion",
+                "CompressedGatherTransformation",
+            ]
+        )
+        ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2"]["compile"].extend(
+            [
+                "MulAddToFMA",
+                "SnippetsDataFlowManager",
+            ]
+        )
 
 if is_transformers_version(">=", "4.55.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["afmoe"] = {
@@ -108,47 +151,80 @@ if is_transformers_version(">=", "4.55.0"):
     }
     # Transforms applied only in OV >= 2026.1.0
     if is_openvino_version(">=", "2026.1.0"):
-        ARCH_TO_EXPECTED_TRANSFORMATIONS["afmoe"]["compile"].extend([
-            "MoEMatMulsFusion", "FullyConnectedBiasFusion",
-        ])
+        ARCH_TO_EXPECTED_TRANSFORMATIONS["afmoe"]["compile"].extend(
+            [
+                "MoEMatMulsFusion",
+                "FullyConnectedBiasFusion",
+            ]
+        )
 
 if is_transformers_version(">=", "5.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2_moe"] = {
         "convert": [
-            "SDPAFusion", "StatefulSDPAFusion", "SDPASubgraphFusion",
-            "MakeStateful", "RoPEFusionGPTNEOX", "RoPEFusionPreprocess", "RoPEFusion",
-            "CausalMaskPreprocessFusion", "DecompressionHandling",
-            "TransposeMatMul", "TSShapeOfForward",
+            "SDPAFusion",
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "MakeStateful",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "DecompressionHandling",
+            "TransposeMatMul",
+            "TSShapeOfForward",
         ],
         "compile": [
             "ConvertMatMulToFC",
-            "ConvertToCPUSpecificOpset", "ConvertToPowerStatic", "ConvertToSwishCPU",
-            "Snippets", "Tokenization",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "Snippets",
+            "Tokenization",
             "MoveReadValueInputsToSubgraph",
         ],
     }
     # Transforms applied only in OV >= 2026.1.0
     if is_openvino_version(">=", "2026.1.0"):
         ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2_moe"]["convert"].append("LinOpSequenceFusion")
-        ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2_moe"]["compile"].extend([
-            "MoEMatMulsFusion", "FullyConnectedBiasFusion",
-            "MulAddToFMA", "SnippetsDataFlowManager",
-        ])
+        ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2_moe"]["compile"].extend(
+            [
+                "MoEMatMulsFusion",
+                "FullyConnectedBiasFusion",
+                "MulAddToFMA",
+                "SnippetsDataFlowManager",
+            ]
+        )
 
 if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_5_moe"] = {
         "convert": [
-            "SDPAFusion", "StatefulSDPAFusion", "SDPASubgraphFusion",
-            "MakeStateful", "RoPEFusionGPTNEOX", "RoPEFusionPreprocess", "RoPEFusion",
-            "RoPEFusionIOSlicing", "CausalMaskPreprocessFusion", "DecompressionHandling",
-            "TransposeMatMul", "CommonFusions", "ReshapeAMatMul",
-            "SoftmaxDecomposition", "EliminateScatterUpdate",
-            "TransposeConvert", "TransposeSinking",
+            "SDPAFusion",
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "MakeStateful",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "RoPEFusionIOSlicing",
+            "CausalMaskPreprocessFusion",
+            "DecompressionHandling",
+            "TransposeMatMul",
+            "CommonFusions",
+            "ReshapeAMatMul",
+            "SoftmaxDecomposition",
+            "EliminateScatterUpdate",
+            "TransposeConvert",
+            "TransposeSinking",
         ],
         "compile": [
-            "MoEMatMulsFusion", "ConvertMatMulToFC", "FullyConnectedBiasFusion",
-            "Snippets", "SnippetsDataFlowManager", "Tokenization",
-            "TokenizeMHASnippets", "MatMulToBrgemm",
+            "MoEMatMulsFusion",
+            "ConvertMatMulToFC",
+            "FullyConnectedBiasFusion",
+            "Snippets",
+            "SnippetsDataFlowManager",
+            "Tokenization",
+            "TokenizeMHASnippets",
+            "MatMulToBrgemm",
             "ConvertSoftMax8ToSoftMax1",
             "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
         ],
@@ -157,20 +233,38 @@ if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.
 if is_transformers_version(">=", "5.5.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["gemma4_moe"] = {
         "convert": [
-            "SDPAFusion", "SDPAFusionMatcher", "StatefulSDPAFusion", "SDPASubgraphFusion",
-            "MakeStateful", "DecompressionHandling",
-            "TransposeMatMul", "CommonFusions", "LinOpSequenceFusion",
-            "CommonDecompositions", "CommonOptimizations",
-            "BroadcastTransition", "MultiplyFusions",
+            "SDPAFusion",
+            "SDPAFusionMatcher",
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "MakeStateful",
+            "DecompressionHandling",
+            "TransposeMatMul",
+            "CommonFusions",
+            "LinOpSequenceFusion",
+            "CommonDecompositions",
+            "CommonOptimizations",
+            "BroadcastTransition",
+            "MultiplyFusions",
             "ConvertSoftMax8ToSoftMax1",
             "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
         ],
         "compile": [
-            "RoPEFusionGPTNEOX", "RoPEFusion", "CausalMaskPreprocessFusion",
-            "ConvertMatMulToFC", "ConvertToCPUSpecificOpset", "ConvertToPowerStatic",
-            "Snippets", "SnippetsDataFlowManager", "Tokenization", "TokenizeMHASnippets",
-            "MatMulToBrgemm", "FuseTransposeBrgemm",
-            "SoftmaxDecomposition", "MulAddToFMA", "ConvertBroadcast3",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "ConvertMatMulToFC",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "Snippets",
+            "SnippetsDataFlowManager",
+            "Tokenization",
+            "TokenizeMHASnippets",
+            "MatMulToBrgemm",
+            "FuseTransposeBrgemm",
+            "SoftmaxDecomposition",
+            "MulAddToFMA",
+            "ConvertBroadcast3",
         ],
     }
 
@@ -181,12 +275,11 @@ def _get_flat_transforms(arch):
     return entry["convert"] + entry["compile"]
 
 
-def _capture_stderr_during(
-    model_id, OPENVINO_DEVICE, trust_remote_code, model_class="OVModelForCausalLM"
-):
+def _capture_stderr_during(model_id, OPENVINO_DEVICE, trust_remote_code, model_class="OVModelForCausalLM"):
     #  Runs model loading in a subprocess to reliably capture OpenVINO C++ logs.
 
-    code = textwrap.dedent(f"""
+    code = textwrap.dedent(
+        f"""
         import os
         os.environ["OV_ENABLE_PROFILE_PASS"] = "1"
 
@@ -199,7 +292,8 @@ def _capture_stderr_during(
             device="{OPENVINO_DEVICE}",
             trust_remote_code={trust_remote_code},
         )
-    """)
+    """
+    )
 
     result = subprocess.run(
         [sys.executable, "-c", code],
@@ -275,17 +369,11 @@ class OVTransformationTest(unittest.TestCase):
         not_found = ", ".join(result["not_found"])
         not_applied = ", ".join(result["not_applied"])
         if not_applied:
-            err = (
-                f"These transformations were not 'applied' for '{model_arch}' architecture: "
-                + not_applied
-            )
+            err = f"These transformations were not 'applied' for '{model_arch}' architecture: " + not_applied
             errors.append(err)
 
         if not_found:
-            err = (
-                f"These transformations were not 'found' in the '{model_arch}'  transformation set: "
-                + not_found
-            )
+            err = f"These transformations were not 'found' in the '{model_arch}'  transformation set: " + not_found
             errors.append(err)
 
         RED = "\033[91m"
