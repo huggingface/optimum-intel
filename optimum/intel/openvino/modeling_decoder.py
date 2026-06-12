@@ -1162,6 +1162,20 @@ class OVCacheWithMambaStates(MambaCache):
             self.mamba_headdim = getattr(config, "mamba_d_head", None)
             self.num_mamba_layers = layer_types.count("mamba")
             self.num_attn_layers = layer_types.count("attention")
+        elif config.model_type == "nemotron_h":
+            # NemotronH is a hybrid Mamba2 + Attention + MoE model. `config.intermediate_size`
+            # refers to the (MoE) MLP size, while the mamba intermediate size is derived from
+            # the mamba head configuration.
+            layers_block_type = getattr(config, "layers_block_type", None)
+            self.num_key_value_heads = getattr(config, "num_key_value_heads", None)
+            self.head_dim = getattr(config, "head_dim", self.hidden_size // self.num_attention_heads)
+            self.mamba_ngroups = getattr(config, "n_groups", None)
+            self.n_mamba_heads = getattr(config, "mamba_num_heads", None)
+            self.ssm_state_size = getattr(config, "ssm_state_size", None)
+            self.mamba_headdim = getattr(config, "mamba_head_dim", None)
+            self.mamba_intermediate_size = self.n_mamba_heads * self.mamba_headdim
+            self.num_mamba_layers = layers_block_type.count("mamba")
+            self.num_attn_layers = layers_block_type.count("attention")
         else:
             # Mamba 2 specific parameters
             hybrid_layer_ids = getattr(config, "hybrid_layer_ids", None)
@@ -1182,7 +1196,14 @@ class OVCacheWithMambaStates(MambaCache):
             self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
 
         self.conv_states = conv_states
-        if self.conv_states is None:
+        if self.conv_states is None and config.model_type == "nemotron_h":
+            self.conv_states = []
+            conv_dim = self.mamba_intermediate_size + 2 * self.mamba_ngroups * self.ssm_state_size
+            for _ in range(self.num_mamba_layers):
+                conv_state_shape = (self.max_batch_size, conv_dim, self.conv_kernel_size)
+                conv_state: torch.Tensor = torch.zeros(conv_state_shape, device=self.device, dtype=dtype)
+                self.conv_states.append(conv_state)
+        elif self.conv_states is None:
             self.conv_states = []
             for _ in range(self.num_mamba_layers):
                 if (
@@ -1206,7 +1227,18 @@ class OVCacheWithMambaStates(MambaCache):
                 self.conv_states.append(conv_state)
 
         self.ssm_states = ssm_states
-        if self.ssm_states is None:
+        if self.ssm_states is None and config.model_type == "nemotron_h":
+            self.ssm_states = []
+            for _ in range(self.num_mamba_layers):
+                ssm_state_shape = (
+                    self.max_batch_size,
+                    self.n_mamba_heads,
+                    self.mamba_headdim,
+                    self.ssm_state_size,
+                )
+                ssm_state: torch.Tensor = torch.zeros(ssm_state_shape, device=self.device, dtype=dtype)
+                self.ssm_states.append(ssm_state)
+        elif self.ssm_states is None:
             self.ssm_states: List[torch.Tensor] = []
             if config.model_type in ["lfm2_moe", "lfm2"]:
                 for _ in range(self.num_mamba_layers):
@@ -1501,13 +1533,15 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         # Overwitten -- uses `cache_params` as opposed to `past_key_values`
 
         if self.use_cache:
-            # `cache_position` should have been initialized in `generate`
+            # `cache_position` was historically initialized in `generate`, but is no longer created
+            # there starting from transformers v5. We therefore distinguish the prefill stage
+            # (no `cache_params` yet) from the decoding stage (`cache_params` already populated)
+            # whenever `cache_position` is not explicitly provided.
             if cache_position is None:
-                raise ValueError(
-                    "`cache_position` should not be None as it should have been initialized in "
-                    "`model.generate`, you are responsible for passing in a valid `cache_position` if "
-                    "you are calling `prepare_inputs_for_generation` directly with `use_cache=True`"
-                )
+                if cache_params is None:
+                    cache_position = torch.arange(0, input_ids.shape[1], device=input_ids.device)
+                else:
+                    cache_position = torch.tensor([self._past_length], device=input_ids.device)
             if cache_position[0] > 0:
                 # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)
@@ -1519,8 +1553,9 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                     "qwen3_next",
                     "qwen3_5_text",
                     "qwen3_5_moe_text",
+                    "nemotron_h",
                 ]:
-                    # LFM2, GraniteMoeHybrid (Granite-4.0), and Qwen3-Next require the attention mask
+                    # LFM2, GraniteMoeHybrid (Granite-4.0), Qwen3-Next and NemotronH require the attention mask
                     # to be the length of the full context, so default mask from OVModelForCausalLM needs to be used.
                     # Other models like Mamba typically do not require an attention_mask
                     # for the decoding step after the first token so use attention mask of ones.

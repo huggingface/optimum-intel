@@ -193,6 +193,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             [
                 ("text-generation", "lfm2_moe"),
                 ("text-generation-with-past", "lfm2_moe"),
+                ("text-generation-with-past", "nemotron_h"),
             ]
         )
 
@@ -215,6 +216,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         if is_openvino_version(">=", "2026.0")
         else 0,  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
         "lfm2_moe": 2,
+        "nemotron_h": 2,
         "llava": 2,
         "sana": 2,
         "ltx-video": 2,
