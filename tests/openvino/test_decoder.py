@@ -99,8 +99,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.54.0"):
         SUPPORTED_SSM_ARCHITECTURES += ("lfm2",)
 
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
+    if is_transformers_version(">=", "4.57.0.dev0") and is_transformers_version("<", "5"):
         SUPPORTED_SSM_ARCHITECTURES += ("qwen3_next",)
 
     if is_transformers_version(">=", "5.0"):
@@ -153,7 +152,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.55.0"):
         SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4", "afmoe")
 
-    if is_transformers_version(">=", "4.57.0"):
+    if is_transformers_version(">=", "4.57.0.dev0"):
         SUPPORTED_ARCHITECTURES += ("hunyuan_v1_dense",)
 
     if is_transformers_version("<", "4.56.0"):
@@ -338,6 +337,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "exaone4",
                 "qwen3_next",
             }
+        # qwen3_omni_text and qwen3_omni_talker_text are parts of qwen3_omni architecture, tested in seq2seq group
+        supported_architectures -= {"qwen3_omni_text", "qwen3_omni_talker_text"}
 
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
         untested_architectures = supported_architectures - tested_architectures
@@ -786,7 +787,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             # group_beam_search_gen_config,
             # constrained_beam_search_gen_config,
         ]
-        if is_transformers_version("<", "4.57.0"):
+        if is_transformers_version("<", "4.57.0.dev0"):
             # currently broken in transformers == 4.57.*
             gen_configs.extend([group_beam_search_gen_config, constrained_beam_search_gen_config])
 
