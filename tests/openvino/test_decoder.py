@@ -34,9 +34,9 @@ from optimum.exporters.openvino.model_configs import (
     DeepseekOpenVINOConfig,
     LFM2MoeOpenVINOConfig,
     LFM2OpenVINOConfig,
+    Phi3OpenVINOConfig,
     Qwen3_5MoeTextOpenVINOConfig,
     Qwen3_5TextOpenVINOConfig,
-    Phi3OpenVINOConfig,
     Qwen3VLOpenVINOConfig,
 )
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
