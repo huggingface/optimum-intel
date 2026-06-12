@@ -115,80 +115,26 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
         ("text-to-audio", "kokoro"),
+        ("text-generation-with-past", "cohere2"),
+        ("text-generation", "lfm2"),
+        ("text-generation-with-past", "lfm2"),
+        ("text-generation-with-past", "granitemoehybrid"),
+        ("text-generation-with-past", "smollm3"),
+        ("text-generation-with-past", "hunyuan_v1_dense"),
     ]
 
-    if is_transformers_version(">=", "4.48.0"):
-        SUPPORTED_ARCHITECTURES.extend(
-            [
-                ("text-generation-with-past", "cohere2"),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.54.0"):
-        SUPPORTED_ARCHITECTURES.extend(
-            [
-                ("text-generation", "lfm2"),
-                ("text-generation-with-past", "lfm2"),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
+    if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "qwen3_eagle3"),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES.extend(
-            [
                 ("text-generation-with-past", "zamba2"),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES.extend(
-            [
                 ("text-generation-with-past", "exaone4"),
-            ]
-        )
-    if is_transformers_version(">=", "4.52.1") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES.extend(
-            [
                 ("text-generation-with-past", "bitnet"),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.53.0"):
-        SUPPORTED_ARCHITECTURES.extend(
-            [
-                ("text-generation-with-past", "granitemoehybrid"),
-                ("text-generation-with-past", "smollm3"),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.57.0"):
-        SUPPORTED_ARCHITECTURES.extend(
-            [
-                ("text-generation-with-past", "hunyuan_v1_dense"),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.57") and is_transformers_version("<", "5.0.0"):
-        SUPPORTED_ARCHITECTURES.extend(
-            [
+                ("text-generation-with-past", "qwen3_next"),
                 ("image-text-to-text", "qwen3_vl_eagle3"),
             ]
         )
-
-    if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES.extend(
-            [
-                ("text-generation-with-past", "qwen3_next"),
-            ]
-        )
-
-    if is_transformers_version(">=", "5.0"):
+    else:
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation", "lfm2_moe"),
@@ -266,43 +212,15 @@ class OVCLIExportTestCase(unittest.TestCase):
             "expected_chat_template": True,
             "remote_code": False,
         },
+        "glm": {  # transformers, no processor, no simplified chat template
+            "num_tokenizers": 2,
+            "task": "text-generation-with-past",
+            "expected_chat_template": True,
+            "simplified_chat_template": False,
+            "processor_chat_template": False,
+            "remote_code": True,
+        },
     }
-
-    if is_transformers_version(">=", "4.46"):
-        TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
-            {
-                "glm": {  # transformers, no processor, no simplified chat template
-                    "num_tokenizers": 2,
-                    "task": "text-generation-with-past",
-                    "expected_chat_template": True,
-                    "simplified_chat_template": False,
-                    "processor_chat_template": False,
-                    "remote_code": True,
-                },
-            }
-        )
-
-    if is_transformers_version("<", "4.54"):
-        TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
-            {
-                "minicpm3": {  # transformers, no processor, simplified chat template
-                    "num_tokenizers": 2,
-                    "task": "text-generation-with-past",
-                    "expected_chat_template": True,
-                    "simplified_chat_template": True,
-                    "processor_chat_template": False,
-                    "remote_code": True,
-                },
-                "phi3_v": {  # transformers, no processor chat template, no simplified chat template
-                    "num_tokenizers": 2,
-                    "task": "image-text-to-text",
-                    "expected_chat_template": True,
-                    "simplified_chat_template": False,
-                    "processor_chat_template": False,
-                    "remote_code": True,
-                },
-            }
-        )
 
     SUPPORTED_SD_HYBRID_ARCHITECTURES = [
         ("flux", 7, 56),
@@ -319,28 +237,16 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 14, "decoder": 22, "decoder_with_past": 22}
-            if is_transformers_version("<=", "4.45")
-            else {"encoder": 14, "decoder": 22, "decoder_with_past": 25},
-            (
-                {"encoder": {"int8": 14}, "decoder": {"int8": 22}, "decoder_with_past": {"int8": 17}}
-                if is_transformers_version("<=", "4.45")
-                else {"encoder": {"int8": 14}, "decoder": {"int8": 22}, "decoder_with_past": {"int8": 18}}
-            ),
+            {"encoder": 14, "decoder": 22, "decoder_with_past": 25},
+            {"encoder": {"int8": 14}, "decoder": {"int8": 22}, "decoder_with_past": {"int8": 18}},
         ),
         (
             "automatic-speech-recognition-with-past",
             "whisper",
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 16, "decoder": 26, "decoder_with_past": 23}
-            if is_transformers_version("<=", "4.45")
-            else {"encoder": 16, "decoder": 26, "decoder_with_past": 25},
-            (
-                {"encoder": {"f8e4m3": 14}, "decoder": {"f8e4m3": 22}, "decoder_with_past": {"f8e4m3": 17}}
-                if is_transformers_version("<=", "4.45")
-                else {"encoder": {"f8e4m3": 14}, "decoder": {"f8e4m3": 22}, "decoder_with_past": {"f8e4m3": 18}}
-            ),
+            {"encoder": 16, "decoder": 26, "decoder_with_past": 25},
+            {"encoder": {"f8e4m3": 14}, "decoder": {"f8e4m3": 22}, "decoder_with_past": {"f8e4m3": 18}},
         ),
         (
             "text-generation-with-past",
@@ -511,17 +417,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "t5",
             "int8",
             "--dataset c4:seq_len=64 --num-samples 1",
-            {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
-            if is_transformers_version("<=", "4.45")
-            else {
+            {
                 "encoder": 30,
                 "decoder": 52,
             },
-            (
-                {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
-                if is_transformers_version("<=", "4.45")
-                else {"encoder": {"int8": 32}, "decoder": {"int8": 52 if is_transformers_version("<", "5") else 53}}
-            ),
+            {"encoder": {"int8": 32}, "decoder": {"int8": 52 if is_transformers_version("<", "5") else 53}},
         ),
         (
             "feature-extraction",
@@ -798,9 +698,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
             "--dataset contextual --num-samples 1 --trust-remote-code",
             {
-                "lm_model": {"int8": 10, "int4": 20}
-                if is_transformers_version(">=", "4.54")
-                else {"int8": 6, "int4": 24},
+                "lm_model": {"int8": 10, "int4": 20},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 1},
                 "vision_embeddings_merger_model": {"int8": 12},
@@ -879,18 +777,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
 
     def test_filtered_architectures(cls):
-        if is_transformers_version("<", "4.49"):
-            expected = {"qwen3_vl", "llama4", "qwen2_5_vl", "phi4mm"}
-        elif is_transformers_version("<", "4.51"):
-            expected = {"qwen3_vl", "llama4", "phi4mm"}
-        elif is_transformers_version("<", "4.52"):
-            expected = {"qwen3_vl"}
-        else:
-            expected = {"llava-qwen2", "phi3_v", "phi4mm", "minicpmo"}
-        if is_transformers_version("<", "4.49") or is_transformers_version(">", "4.57.6"):
-            expected.add("videochat_flash_qwen")
+        expected = {"llava-qwen2", "phi3_v", "phi4mm", "minicpmo"}
         if is_transformers_version(">=", "5"):
-            expected.update({"llama4", "llava_next_video", "minicpmv", "internvl_chat"})
+            expected.update({"videochat_flash_qwen", "llama4", "llava_next_video", "minicpmv", "internvl_chat"})
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.SUPPORTED_4BIT_CONFIGURATIONS}

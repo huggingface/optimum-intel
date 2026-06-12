@@ -1,13 +1,20 @@
 import copy
 import gc
 import os
-import platform
 import unittest
 
 import pytest
 import torch
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, PretrainedConfig, pipeline, set_seed
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    GenerationConfig,
+    Mxfp4Config,
+    PretrainedConfig,
+    pipeline,
+    set_seed,
+)
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
 from utils_tests import (
@@ -28,6 +35,8 @@ from optimum.exporters.openvino.model_configs import (
     LFM2MoeOpenVINOConfig,
     LFM2OpenVINOConfig,
     Phi3OpenVINOConfig,
+    Qwen3_5MoeTextOpenVINOConfig,
+    Qwen3_5TextOpenVINOConfig,
     Qwen3VLOpenVINOConfig,
 )
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
@@ -38,9 +47,6 @@ from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 
-
-if is_transformers_version(">=", "4.55"):
-    from transformers import Mxfp4Config
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -62,7 +68,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mistral",
         "mixtral",
         "mpt",
-        "mbart",
         "opt",
         "pegasus",
         "phi",
@@ -73,94 +78,40 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neox_japanese",
         "xglm",
         "gemma",
-        "olmo",
         "stablelm",
         "starcoder2",
         "cohere",
         "qwen2",
         "qwen2_moe",
+        "phi3",
         "gemma2",
         "granite",
         "granitemoe",
+        "glm",
+        "mistral-nemo",
+        "gemma3_text",
+        "qwen3",
+        "qwen3_moe",
+        "glm4",
+        "arcee",
+        "gpt_oss",
+        "gpt_oss_mxfp4",
+        "afmoe",
+        "hunyuan_v1_dense",
     )
 
-    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon_mamba")
-
-    if is_transformers_version(">=", "4.49"):
-        SUPPORTED_ARCHITECTURES += ("phi3",)
-
-    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
-        SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
-        SUPPORTED_ARCHITECTURES += ("phi3-longrope",)
-
-    if is_transformers_version(">=", "4.53.0"):
-        SUPPORTED_SSM_ARCHITECTURES += ("granitemoehybrid",)
-
-    if is_transformers_version(">=", "4.54.0"):
-        SUPPORTED_SSM_ARCHITECTURES += ("lfm2",)
-
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
-        SUPPORTED_SSM_ARCHITECTURES += ("qwen3_next",)
-
-    if is_transformers_version(">=", "5.0"):
-        SUPPORTED_SSM_ARCHITECTURES += ("lfm2_moe",)
-
-    SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
-
-    if is_transformers_version(">=", "4.48.0"):
-        SUPPORTED_ARCHITECTURES += ("cohere2",)
-
-    if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phimoe")
-
-        if is_transformers_version("<", "4.54.0"):
-            SUPPORTED_ARCHITECTURES += ("deepseek",)
-
-        # gptq and awq install disabled for windows test environment
-        if platform.system() != "Windows" and is_transformers_version("<", "4.56.0"):
-            SUPPORTED_ARCHITECTURES += ("opt_gptq", "mixtral_awq")
-
-    if is_transformers_version(">", "4.47"):
-        SUPPORTED_ARCHITECTURES += ("olmo2",)
-
-    if is_transformers_version(">=", "4.50"):
-        SUPPORTED_ARCHITECTURES += ("gemma3_text",)
-
-    if is_transformers_version(">=", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe")
-
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version(">=", "4.51.0") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES += ("llama4",)
-
-    if is_transformers_version(">=", "4.51.3"):
-        SUPPORTED_ARCHITECTURES += ("glm4",)
-
-    if is_transformers_version(">=", "4.53.0"):
-        SUPPORTED_ARCHITECTURES += ("arcee", "smollm3")
-
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version(">=", "4.52.1") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES += ("bitnet",)
-
-    if is_transformers_version(">=", "4.54.0") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES += ("exaone4",)
-
-    if is_transformers_version("<", "4.54.0"):
-        SUPPORTED_ARCHITECTURES += ("minicpm", "minicpm3", "arctic")
-
-    if is_transformers_version(">=", "4.55.0"):
-        SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4", "afmoe")
-
-    if is_transformers_version(">=", "4.57.0"):
-        SUPPORTED_ARCHITECTURES += ("hunyuan_v1_dense",)
-
-    if is_transformers_version("<", "4.56.0"):
-        SUPPORTED_ARCHITECTURES += ("qwen", "chatglm", "chatglm4")
+    # config loading failing coming from type mismatch coming from transformers v5.4
+    if is_transformers_version("!=", "5.4"):
+        SUPPORTED_ARCHITECTURES += ("mbart", "olmo", "cohere2", "phimoe", "olmo2")
 
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += (
+            "llama4",
+            "bitnet",
+            "exaone4",
+            "dbrx",
+            "marian",
+            "phi3-longrope",
             # remote modeling incompatible with v5
             "codegen2",
             "exaone",
@@ -175,10 +126,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "aquila",
             "xverse",
             "internlm",
-            # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-            "dbrx",
-            "marian",
         )
+
+    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon_mamba", "granitemoehybrid", "lfm2")
+    if is_transformers_version("<", "5"):
+        SUPPORTED_SSM_ARCHITECTURES += ("zamba2", "qwen3_next")
+    else:
+        SUPPORTED_SSM_ARCHITECTURES += ("lfm2_moe",)
+
+    SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
+
     GENERATION_LENGTH = 100
 
     EXPECTED_NUM_SDPA = {
@@ -186,7 +143,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "bart": 2,
         "baichuan2": 2,
         "baichuan2-13b": 2,
-        "bigbird_pegasus": 2 if is_transformers_version(">=", "4.52") else 0,
+        "bigbird_pegasus": 2,
         "gpt_bigcode": 5,
         "blenderbot": 2,
         "blenderbot-small": 2,
@@ -210,7 +167,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mpt": 5,
         "nemotron": 2,
         "olmo2": 2,
-        "opt": 5 if is_transformers_version(">=", "4.46") else 0,
+        "opt": 5,
         "pegasus": 2,
         "qwen": 2,
         "phi": 2,
@@ -326,6 +283,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # qwen3_vl_text a part of qwen3_vl architecture and is tested in seq2seq group
         if is_transformers_version(">=", str(Qwen3VLOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"qwen3_vl_text"}
+        # qwen3_5_text a part of qwen3_5 architecture and is tested in seq2seq group
+        if is_transformers_version(">=", str(Qwen3_5TextOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"qwen3_5_text"}
+        # qwen3_5_moe_text a part of qwen3_5_moe architecture and is tested in seq2seq group
+        if is_transformers_version(">=", str(Qwen3_5MoeTextOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"qwen3_5_moe_text"}
 
         # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
         if is_transformers_version(">=", "5"):
@@ -478,7 +441,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49
-        if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
+        if model_arch in {"deepseek"}:
             self.skipTest("Incompatible modeling code")
 
         additional_inputs = {}
@@ -536,7 +499,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             tokenizer._convert_tokens_to_ids = lambda x: 0
 
         additional_args = {}
-        if is_transformers_version(">=", "4.51") and is_transformers_version("<", "5"):
+        if is_transformers_version("<", "5"):
             additional_args["use_model_defaults"] = False
 
         set_seed(SEED)
@@ -559,20 +522,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             model_id,
             accelerator="openvino",
             trust_remote_code=model_arch in REMOTE_CODE_MODELS,
-            tokenizer=(
-                # in older transformers versions, qwen tokenizer didn't have a _convert_tokens_to_ids
-                # method, which made it fail during inference using pipelines
-                tokenizer
-                if is_transformers_version("<=", "4.46") and model_arch == "qwen"
-                # in older transformers versions, remote code tokenizers (and granite/granitemoe)
-                # were not loaded in pipelines because they were not registered in TOKENIZER_MAPPING
-                else (
-                    model_id
-                    if is_transformers_version("<=", "4.46")
-                    and model_arch in REMOTE_CODE_MODELS + ("granite", "granitemoe")
-                    else None
-                )
-            ),
+            tokenizer=None,
         )
         set_seed(SEED)
         ov_outputs = ov_pipe(inputs, min_new_tokens=5, max_new_tokens=5, **additional_args, do_sample=False)
@@ -733,7 +683,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             return
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49
-        if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
+        if model_arch in {"deepseek"}:
             self.skipTest("Incompatible modeling code")
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
@@ -786,6 +736,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             # group_beam_search_gen_config,
             # constrained_beam_search_gen_config,
         ]
+
         if is_transformers_version("<", "4.57.0"):
             # currently broken in transformers == 4.57.*
             gen_configs.extend([group_beam_search_gen_config, constrained_beam_search_gen_config])
@@ -820,11 +771,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             transformers_model.model.rotary_emb.long_mscale = transformers_model.config.rope_parameters["long_mscale"]
 
         additional_inputs = {}
-        # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache, align cache representation in torch model
-        if model_arch in ["gemma2", "gemma3_text"] and is_transformers_version("<", "4.53.0"):
-            patch_update_causal_mask(transformers_model, "4.43.0")
-            transformers_model._supports_cache_class = True
-            transformers_model.generation_config.cache_implementation = None
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
         tokenization_args = {}
@@ -852,13 +798,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model_stateless.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
 
-        if is_transformers_version(">=", "4.51") and is_transformers_version("<", "5"):
+        if is_transformers_version("<", "5"):
             additional_inputs["use_model_defaults"] = False
 
         for gen_config in gen_configs:
             if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo", "zamba2"]:
                 continue
-            if gen_config.num_beams > 1 and is_transformers_version(">=", "4.51.0") and model_arch in ["mixtral_awq"]:
+            if gen_config.num_beams > 1 and model_arch in ["mixtral_awq"]:
                 continue
             set_seed(SEED)
 
@@ -924,7 +870,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             )
 
     @parameterized.expand(EAGLE3_MODELS.items())
-    @pytest.mark.skipif(is_transformers_version("<", "4.54"), reason="Eagle3 requires transformers >= 4.54")
     def test_load_and_infer_with_eagle3_model(self, model_arch, model_pair):
         draft_model_id, target_model_id = model_pair
 
@@ -947,13 +892,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del ov_model
         gc.collect()
 
-    HYBRID_ARCHITECTURES = []
-    if is_transformers_version(">=", "4.53"):
-        HYBRID_ARCHITECTURES.append("granitemoehybrid")
-    if is_transformers_version(">=", "4.54"):
-        HYBRID_ARCHITECTURES.append("lfm2")
-    if is_transformers_version(">=", "4.57"):
-        HYBRID_ARCHITECTURES.append("qwen3_next")
+    HYBRID_ARCHITECTURES = ["granitemoehybrid", "lfm2", "qwen3_next"]
     # not including zamba2 - the Mamba mixer's torch_forward crashes on the second chunk
 
     @parameterized.expand(HYBRID_ARCHITECTURES, skip_on_empty=True)

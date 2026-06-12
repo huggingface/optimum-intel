@@ -25,6 +25,7 @@ from openvino import CompiledModel, Core
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from transformers import (
     AutoConfig,
+    AutoModelForImageTextToText,
     AutoModelForSeq2SeqLM,
     AutoModelForSpeechSeq2Seq,
     GenerationConfig,
@@ -53,18 +54,6 @@ from .utils import (
     TemporaryDirectory,
     classproperty,
 )
-
-
-# AutoModelForVision2Seq is deprecated since v4.54
-# https://github.com/huggingface/transformers/blob/v4.54.0/src/transformers/models/auto/modeling_auto.py#L2151
-if is_transformers_version(">=", "4.54.0"):
-    from transformers import AutoModelForImageTextToText
-
-    transformers_auto_class = AutoModelForImageTextToText
-else:
-    from transformers import AutoModelForVision2Seq
-
-    transformers_auto_class = AutoModelForVision2Seq
 
 
 core = Core()
@@ -885,6 +874,8 @@ class OVEncoder(OVModelPart):
 
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names:
+            if attention_mask is None:
+                attention_mask = torch.ones_like(inputs[self.main_input_name])
             inputs["attention_mask"] = attention_mask
 
         # Run inference
@@ -1070,7 +1061,7 @@ class OVDecoder(OVModelPart):
     INPUTS_DOCSTRING,
 )
 class OVModelForVision2Seq(OVModelForSeq2SeqLM):
-    auto_model_class = transformers_auto_class
+    auto_model_class = AutoModelForImageTextToText
     main_input_name = "pixel_values"
     export_feature = "image-to-text"
 
@@ -1536,18 +1527,3 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
             "decoder_position_ids": decoder_position_ids,
             "cache_position": cache_position,
         }
-
-    def _get_logits_processor(self, generation_config: GenerationConfig, *args, **kwargs):
-        # Whisper uses forced_decoder_ids for default task and language specification, while original _get_logits_processor does not allow it
-        # see for details https://github.com/huggingface/transformers/issues/37172
-        if not hasattr(generation_config, "forced_decoder_ids") or is_transformers_version(">=", "4.53.0"):
-            # since transformers 4.53.0, forced_decoder_ids is deprecated: https://github.com/huggingface/transformers/pull/38232
-            logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
-        else:
-            forced_decoder_ids = generation_config.forced_decoder_ids
-
-            if is_transformers_version(">=", "4.50.0"):
-                generation_config.forced_decoder_ids = None
-            logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
-            generation_config.forced_decoder_ids = forced_decoder_ids
-        return logits_processor

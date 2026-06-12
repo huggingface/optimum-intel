@@ -88,11 +88,8 @@ from optimum.exporters.openvino.model_patcher import (
     ArcticModelPatcher,
     BaichuanModelPatcher,
     BigBirdPegasusModelPatcher,
-    BlenderbotModelPatcher,
-    BlenderbotSmallModelPatcher,
     BloomModelPatcher,
     ChatGLMModelPatcher,
-    CLIPModelPatcher,
     CodeGenModelPatcher,
     CommonImageEmbeddingsModelPatcher,
     DBRXModelPatcher,
@@ -106,7 +103,6 @@ from optimum.exporters.openvino.model_patcher import (
     Gemma4LMModelPatcher,
     GptJModelPatcher,
     GptNeoModelPatcher,
-    GptNeoxModelPatcher,
     GptOssModelPatcher,
     GraniteMoeHybridModelPatcher,
     GraniteMoEModelPatcher,
@@ -128,7 +124,6 @@ from optimum.exporters.openvino.model_patcher import (
     LlavaQwen2ImageEmbeddingsModelPatcher,
     MairaImageEmbeddingModelPatcher,
     MambaPatcher,
-    MarianModelPatcher,
     MiniCPM3Patcher,
     MiniCPMModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
@@ -139,8 +134,6 @@ from optimum.exporters.openvino.model_patcher import (
     MPTModelPatcher,
     OVDecoderModelPatcher,
     OVSeq2SeqModelPatcher,
-    PegasusModelPatcher,
-    PersimmonModelPatcher,
     Phi3ModelPatcher,
     Phi3VisionImageEmbeddingsPatcher,
     Phi4MMAudioEncoderPatcher,
@@ -277,38 +270,6 @@ def init_model_configs():
         "transformers",
         "AutoModelForCausalLM",
     )
-
-    # since transformers v4.46, model can be loaded using default AutoModelForImageTextToText
-    # https://github.com/huggingface/transformers/blob/v4.46.0/src/transformers/models/auto/modeling_auto.py#L776
-    if is_transformers_version("<", "4.46"):
-        TasksManager._CUSTOM_CLASSES[("pt", "llava", "image-text-to-text")] = (
-            "transformers",
-            "LlavaForConditionalGeneration",
-        )
-        TasksManager._CUSTOM_CLASSES[("pt", "llava_next", "image-text-to-text")] = (
-            "transformers",
-            "LlavaNextForConditionalGeneration",
-        )
-        TasksManager._CUSTOM_CLASSES[("pt", "qwen2_vl", "image-text-to-text")] = (
-            "transformers",
-            "Qwen2VLForConditionalGeneration",
-        )
-
-    # since transformers v4.50, model can be loaded using default AutoModelForImageTextToText
-    # https://github.com/huggingface/transformers/blob/v4.50.0/src/transformers/models/auto/modeling_auto.py#L835
-    if is_transformers_version("<", "4.50"):
-        TasksManager._CUSTOM_CLASSES[("pt", "gemma3", "image-text-to-text")] = (
-            "transformers",
-            "Gemma3ForConditionalGeneration",
-        )
-
-    # since transformers v4.52, model can be loaded using default AutoModelForImageTextToText
-    # https://github.com/huggingface/transformers/blob/v4.52.0/src/transformers/models/auto/modeling_auto.py#L899
-    if is_transformers_version("<", "4.52"):
-        TasksManager._CUSTOM_CLASSES[("pt", "llava_next_video", "image-text-to-text")] = (
-            "transformers",
-            "AutoModelForVision2Seq",
-        )
 
     # Qwen3-ASR is loaded via trust_remote_code; register custom classes for task lookup.
     if is_transformers_version("==", "4.57.6"):
@@ -1011,13 +972,11 @@ class FalconOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 )
 class PersimmonOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    _MODEL_PATCHER = PersimmonModelPatcher
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager("biogpt", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class BioGPTOpenVINOConfig(
-    TextDecoderWithPositionIdsOpenVINOConfig if is_transformers_version(">=", "4.52.0") else TextDecoderOpenVINOConfig
-):
+class BioGPTOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = OVDecoderModelPatcher
 
@@ -1073,24 +1032,6 @@ class BloomOpenVINOConfig(TextDecoderOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, BloomDummyPastKeyValuesGenerator)
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(num_layers="n_layer", num_attention_heads="n_head")
     _MODEL_PATCHER = BloomModelPatcher
-
-    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
-        if is_transformers_version(">=", "4.44"):
-            super().add_past_key_values(inputs_or_outputs, direction)
-        else:
-            if direction not in ["inputs", "outputs"]:
-                raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
-
-            if direction == "inputs":
-                decoder_sequence_name = "past_sequence_length"
-                name = "past_key_values"
-            else:
-                decoder_sequence_name = "past_sequence_length + sequence_length"
-                name = "present"
-
-            for i in range(self._normalized_config.num_layers):
-                inputs_or_outputs[f"{name}.{i}.key"] = {0: "batch_size * num_heads", 2: decoder_sequence_name}
-                inputs_or_outputs[f"{name}.{i}.value"] = {0: "batch_size * num_heads", 1: decoder_sequence_name}
 
 
 @register_in_tasks_manager(
@@ -1228,7 +1169,7 @@ class MistralOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 )
 class GPTNeoxOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    _MODEL_PATCHER = GptNeoxModelPatcher
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager(
@@ -1237,7 +1178,7 @@ class GPTNeoxOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOpenVINOConfig):
     # GPTNeoxJapanese does not require position_ids input.
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    _MODEL_PATCHER = GptNeoxModelPatcher
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager(
@@ -1331,7 +1272,6 @@ class SiglipNormalizedConfig(CLIPNormalizedConfig):
 @register_in_tasks_manager("clip", *["zero-shot-image-classification"], library_name="open_clip")
 class OpenCLIPOpenVINOConfig(TextAndVisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = CLIPNormalizedConfig
-    _MODEL_PATCHER = CLIPModelPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -1379,7 +1319,6 @@ class OpenCLIPTextOpenVINOConfig(TextEncoderOpenVINOConfig):
         num_layers="num_hidden_layers",
         allow_new=True,
     )
-    _MODEL_PATCHER = CLIPModelPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -1434,7 +1373,6 @@ class OpenCLIPVisualOpenVINOConfig(VisionOpenVINOConfig):
 )
 class CLIPOpenVINOConfig(TextAndVisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = CLIPNormalizedConfig
-    _MODEL_PATCHER = CLIPModelPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -1472,7 +1410,6 @@ class CLIPTextOpenVINOConfig(TextEncoderOpenVINOConfig):
         num_layers="num_hidden_layers",
         allow_new=True,
     )
-    _MODEL_PATCHER = CLIPModelPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -1502,7 +1439,6 @@ class CLIPTextWithProjectionOpenVINOConfig(TextEncoderOpenVINOConfig):
         num_layers="num_hidden_layers",
         allow_new=True,
     )
-    _MODEL_PATCHER = CLIPModelPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -1526,7 +1462,6 @@ class CLIPTextWithProjectionOpenVINOConfig(TextEncoderOpenVINOConfig):
 @register_in_tasks_manager("clip_vision_model", *["feature-extraction"], library_name="transformers")
 class CLIPVisionModelOpenVINOConfig(VisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
-    _MODEL_PATCHER = CLIPModelPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -1615,10 +1550,7 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOpenVINOConfig):
         )
         dummy_inputs["inputs_embeds"] = inputs_embeds
         if "token_type_ids" in self.inputs:
-            if is_transformers_version(">=", "4.53"):
-                token_type_ids_shape = (input_ids.shape[0], input_ids.shape[1] + pask_key_values[0][0].shape[-2])
-            else:
-                token_type_ids_shape = (input_ids.shape[0], input_ids.shape[1])
+            token_type_ids_shape = (input_ids.shape[0], input_ids.shape[1] + pask_key_values[0][0].shape[-2])
             dummy_inputs["token_type_ids"] = self.orig_export_config.DUMMY_INPUT_GENERATOR_CLASSES[
                 0
             ].random_int_tensor(token_type_ids_shape, min_value=0, max_value=2)
@@ -3391,12 +3323,6 @@ class WhisperOpenVINOConfig(AudioToTextOpenVINOConfig):
             # TODO: this can be fixed by generating the correct inputs in the input generator
             common_inputs["encoder_outputs"] = {0: "batch_size", 1: "encoder_sequence_length"}
 
-        if self._behavior in {ConfigBehavior.DECODER, ConfigBehavior.MONOLITH}:
-            if is_transformers_version(">=", "4.43.0") and is_transformers_version("<", "4.46.0"):
-                # since https://github.com/huggingface/transformers/pull/31166
-                if self._behavior is not ConfigBehavior.ENCODER and self.use_past_in_inputs:
-                    common_inputs["cache_position"] = {0: "decoder_sequence_length"}
-
         return common_inputs
 
     @property
@@ -4093,7 +4019,7 @@ class SmolVLMOpenVINOConfig(Idefics3OpenVINOConfig):
     library_name="transformers",
 )
 class BlenderbotOpenVINOConfig(BartOpenVINOConfig):
-    _MODEL_PATCHER = BlenderbotModelPatcher
+    _MODEL_PATCHER = OVSeq2SeqModelPatcher
 
 
 @register_in_tasks_manager(
@@ -4109,7 +4035,7 @@ class BlenderbotOpenVINOConfig(BartOpenVINOConfig):
     library_name="transformers",
 )
 class BlenderbotSmallOpenVINOConfig(BartOpenVINOConfig):
-    _MODEL_PATCHER = BlenderbotSmallModelPatcher
+    _MODEL_PATCHER = OVSeq2SeqModelPatcher
 
 
 @register_in_tasks_manager(
@@ -4125,7 +4051,7 @@ class BlenderbotSmallOpenVINOConfig(BartOpenVINOConfig):
     library_name="transformers",
 )
 class PegasusOpenVINOConfig(BartOpenVINOConfig):
-    _MODEL_PATCHER = PegasusModelPatcher
+    _MODEL_PATCHER = OVSeq2SeqModelPatcher
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -4145,7 +4071,7 @@ class PegasusOpenVINOConfig(BartOpenVINOConfig):
     library_name="transformers",
 )
 class MarianOpenVINOConfig(BartOpenVINOConfig):
-    _MODEL_PATCHER = MarianModelPatcher
+    _MODEL_PATCHER = OVSeq2SeqModelPatcher
     # TODO (@echarlaix): add v5 support
     MAX_TRANSFORMERS_VERSION = "4.57.6"
 
@@ -4666,9 +4592,7 @@ class Olmo2OOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 
 
 @register_in_tasks_manager("opt", *[*COMMON_TEXT_GENERATION_TASKS, "text-classification", "question-answering"])
-class OPTOpenVINOConfig(
-    TextDecoderWithPositionIdsOpenVINOConfig if is_transformers_version(">=", "4.46.0") else TextDecoderOpenVINOConfig
-):
+class OPTOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
     def __init__(self, *args, **kwargs):
@@ -4683,37 +4607,6 @@ class GPTBigCodeOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GPTBigCodeDummyPastKeyValuesGenerator)
     NORMALIZED_CONFIG_CLASS = NormalizedConfigManager.get_normalized_config_class("gpt_bigcode")
     DUMMY_PKV_GENERATOR_CLASS = GPTBigCodeDummyPastKeyValuesGenerator
-
-    def add_past_key_values(self, inputs_or_outputs: dict, direction: str):
-        if is_transformers_version(">=", "4.54"):
-            super().add_past_key_values(inputs_or_outputs, direction)
-        else:
-            if direction not in ["inputs", "outputs"]:
-                raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
-
-            if direction == "inputs":
-                decoder_sequence_name = "past_sequence_length"
-                name = "past_key_values"
-            else:
-                decoder_sequence_name = "past_sequence_length + sequence_length"
-                name = "present"
-
-            if self._normalized_config.multi_query:
-                decoder_sequence_dim = 1
-            else:
-                decoder_sequence_dim = 2
-
-            for i in range(self._normalized_config.num_layers):
-                inputs_or_outputs[f"{name}.{i}.key_value"] = {
-                    0: "batch_size",
-                    decoder_sequence_dim: decoder_sequence_name,
-                }
-
-    def flatten_past_key_values(self, flattened_output, name, idx, t):
-        if is_transformers_version(">=", "4.54"):
-            super().flatten_past_key_values(flattened_output, name, idx, t)
-        else:
-            flattened_output[f"{name}.{idx}.key_value"] = t
 
 
 class _Pix2StructNormalizedConfig(NormalizedSeq2SeqConfig):
@@ -4745,12 +4638,6 @@ class Pix2StructOpenVINOConfig(OpenVINOSeq2SeqConfigWithPast):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if is_transformers_version("==", "4.46.0"):
-            logger.warning(
-                "Found transformers v4.46.0 while trying to export a Pix2Struct model, "
-                "this specific version of transformers is broken for this model. Please "
-                "upgrade to v4.46.1 or higher, or downgrade to v4.45.x.",
-            )
 
     @property
     def inputs(self):
@@ -4849,7 +4736,7 @@ class AlbertOpenVINOConfig(BertOpenVINOConfig):
 
 @register_in_tasks_manager("nystromformer", *COMMON_TEXT_TASKS)
 class NystromformerOpenVINOConfig(BertOpenVINOConfig):
-    pass
+    MAX_TRANSFORMERS_VERSION = "4.50.3"
 
 
 @register_in_tasks_manager("convbert", *COMMON_TEXT_TASKS)
@@ -5290,7 +5177,6 @@ class SamOpenVINOConfig(OpenVINOConfig):
 @register_in_tasks_manager("siglip", *["feature-extraction", "zero-shot-image-classification"])
 class SiglipOpenVINOConfig(TextAndVisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = SiglipNormalizedConfig
-    _MODEL_PATCHER = CLIPModelPatcher
 
     @property
     def inputs(self) -> dict:
@@ -5348,7 +5234,6 @@ class SiglipTextWithProjectionOpenVINOConfig(TextEncoderOpenVINOConfig):
         num_layers="num_hidden_layers",
         allow_new=True,
     )
-    _MODEL_PATCHER = CLIPModelPatcher
 
     @property
     def inputs(self) -> dict:
@@ -5371,8 +5256,6 @@ class SiglipTextWithProjectionOpenVINOConfig(TextEncoderOpenVINOConfig):
 
 @register_in_tasks_manager("siglip-text", *["feature-extraction"])
 class SiglipTextOpenVINOConfig(SiglipTextWithProjectionOpenVINOConfig):
-    _MODEL_PATCHER = CLIPModelPatcher
-
     @property
     def outputs(self) -> dict:
         common_outputs = {
