@@ -322,9 +322,18 @@ def init_model_configs():
             "AutoModel",
         )
 
-    # Qwen3Omni is registered in transformers only under MODEL_FOR_TEXT_TO_WAVEFORM, so ASR routing
-    # cannot be resolved by the stock AutoModel mapping and needs an explicit custom class.
+    # Qwen3Omni is registered in transformers only under MODEL_FOR_TEXT_TO_WAVEFORM, so ASR,
+    # image-text-to-text and text-to-audio routings cannot be resolved by the stock AutoModel mapping
+    # and need explicit custom classes.
     TasksManager._CUSTOM_CLASSES[("pt", "qwen3_omni", "automatic-speech-recognition")] = (
+        "transformers",
+        "Qwen3OmniForConditionalGeneration",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "qwen3_omni", "image-text-to-text")] = (
+        "transformers",
+        "Qwen3OmniForConditionalGeneration",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "qwen3_omni", "text-to-audio")] = (
         "transformers",
         "Qwen3OmniForConditionalGeneration",
     )
