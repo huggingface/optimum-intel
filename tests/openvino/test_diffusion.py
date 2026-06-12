@@ -93,6 +93,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
     if is_diffusers_version(">=", "0.33.0"):
         SUPPORTED_ARCHITECTURES.extend(["sana-sprint"])
+    if is_diffusers_version(">=", "0.35.0"):
+        SUPPORTED_ARCHITECTURES.extend(["qwenimage"])
     CALLBACK_SUPPORT_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
 
     OVMODEL_CLASS = OVPipelineForText2Image

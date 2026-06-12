@@ -198,6 +198,9 @@ from .model_patcher import (
     Qwen3NextModelPatcher,
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
+    QwenImageTextEncoderModelPatcher,
+    QwenImageTransformerModelPatcher,
+    QwenImageVaeModelPatcher,
     QwenModelPatcher,
     SanaTextEncoderModelPatcher,
     XverseModelPatcher,
@@ -2769,6 +2772,200 @@ class LTXVideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {
             "out_sample": {0: "batch_size", 1: "video_sequence_length"},
+        }
+
+
+class DummyQwenImageTransformerVisionInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("hidden_states",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"] // 8,
+        height: int = DEFAULT_DUMMY_SHAPES["height"] // 8,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width=width, height=height, **kwargs)
+        self.in_channels = normalized_config.config.in_channels
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "hidden_states":
+            shape = [self.batch_size, (self.height // 2) * (self.width // 2), self.in_channels]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyQwenImageTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("encoder_hidden_states", "encoder_hidden_states_mask")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.hidden_size = self.normalized_config.config.joint_attention_dim
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "encoder_hidden_states":
+            shape = [self.batch_size, self.sequence_length, self.hidden_size]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "encoder_hidden_states_mask":
+            shape = [self.batch_size, self.sequence_length]
+            return self.random_int_tensor(shape, min_value=1, max_value=2, framework=framework, dtype=int_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyQwenImageRotaryEmbInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("img_cos", "img_sin", "txt_cos", "txt_sin")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"] // 8,
+        height: int = DEFAULT_DUMMY_SHAPES["height"] // 8,
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        self.height = height
+        self.width = width
+        self.sequence_length = sequence_length
+        # rotary frequencies span half of the per-head dimension
+        self.rotary_dim = normalized_config.config.attention_head_dim // 2
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name in ("img_cos", "img_sin"):
+            shape = [(self.height // 2) * (self.width // 2), self.rotary_dim]
+        else:
+            shape = [self.sequence_length, self.rotary_dim]
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
+@register_in_tasks_manager("qwenimage-transformer", *["semantic-segmentation"], library_name="diffusers")
+class QwenImageTransformerOpenVINOConfig(UNetOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        image_size="sample_size",
+        num_channels="in_channels",
+        hidden_size="joint_attention_dim",
+        vocab_size="attention_head_dim",
+        allow_new=True,
+    )
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummyTransformerTimestpsInputGenerator,
+        DummyQwenImageTransformerVisionInputGenerator,
+        DummyQwenImageTextInputGenerator,
+        DummyQwenImageRotaryEmbInputGenerator,
+    )
+    _MODEL_PATCHER = QwenImageTransformerModelPatcher
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        # bypass UNetOnnxConfig.generate_dummy_inputs which unwraps `encoder_hidden_states[0]`
+        # (QwenImage's text dummy generator already returns a plain 3D tensor)
+        return OnnxConfig.generate_dummy_inputs(self, framework=framework, **kwargs)
+
+    @property
+    def inputs(self):
+        common_inputs = {
+            "hidden_states": {0: "batch_size", 1: "packed_height_width", 2: "in_channels"},
+            "encoder_hidden_states": {0: "batch_size", 1: "sequence_length", 2: "joint_attention_dim"},
+            "encoder_hidden_states_mask": {0: "batch_size", 1: "sequence_length"},
+            "timestep": {0: "batch_size"},
+            "img_cos": {0: "packed_height_width"},
+            "img_sin": {0: "packed_height_width"},
+            "txt_cos": {0: "sequence_length"},
+            "txt_sin": {0: "sequence_length"},
+        }
+        if getattr(self._normalized_config.config, "guidance_embeds", False):
+            common_inputs["guidance"] = {0: "batch_size"}
+        return common_inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "out_hidden_states": {0: "batch_size", 1: "packed_height_width"},
+        }
+
+
+@register_in_tasks_manager("qwenimage-text-encoder", *["feature-extraction"], library_name="diffusers")
+class QwenImageTextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+    _MODEL_PATCHER = QwenImageTextEncoderModelPatcher
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+        }
+
+
+class QwenImageVaeEncoderDummyInputGenerator(LTXVaeDummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("sample",)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "sample":
+            # RGB image input with a single temporal frame
+            return self.random_float_tensor([self.batch_size, 3, 1, self.height, self.width])
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class QwenImageVaeDecoderDummyInputGenerator(LTXVaeDummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("latent_sample",)
+
+    def __init__(self, task, normalized_config, *args, **kwargs):
+        super().__init__(task, normalized_config, *args, **kwargs)
+        self.z_dim = normalized_config.config.z_dim
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "latent_sample":
+            return self.random_float_tensor([self.batch_size, self.z_dim, 1, self.height, self.width])
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+@register_in_tasks_manager("qwenimage-vae-encoder", *["semantic-segmentation"], library_name="diffusers")
+class QwenImageVaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (QwenImageVaeEncoderDummyInputGenerator,)
+    _MODEL_PATCHER = QwenImageVaeModelPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_parameters": {0: "batch_size", 2: "num_frames", 3: "height_latent", 4: "width_latent"},
+        }
+
+
+@register_in_tasks_manager("qwenimage-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
+class QwenImageVaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (QwenImageVaeDecoderDummyInputGenerator,)
+    _MODEL_PATCHER = QwenImageVaeModelPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
         }
 
 

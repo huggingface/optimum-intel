@@ -3346,6 +3346,200 @@ class FluxTransfromerModelPatcher(ModelPatcher):
             self._model.pos_embed.forward = self._model.pos_embed._orig_forward
 
 
+def _qwenimage_apply_rotary_emb(x, freqs):
+    # Real-valued equivalent of the complex rotary embedding used by QwenImage.
+    # `x` has layout [batch, sequence, heads, head_dim]; `freqs` is a (cos, sin) tuple of [sequence, head_dim // 2].
+    # The complex path reshapes the last dim into (real, imag) interleaved pairs, this reproduces it with real math.
+    cos, sin = freqs
+    x_reshaped = x.reshape(*x.shape[:-1], -1, 2)
+    x_even = x_reshaped[..., 0]
+    x_odd = x_reshaped[..., 1]
+    cos = cos[None, :, None, :]
+    sin = sin[None, :, None, :]
+    out_even = x_even * cos - x_odd * sin
+    out_odd = x_even * sin + x_odd * cos
+    return torch.stack([out_even, out_odd], dim=-1).flatten(-2).type_as(x)
+
+
+def _qwenimage_attn_processor_call(
+    self,
+    attn,
+    hidden_states,
+    encoder_hidden_states=None,
+    encoder_hidden_states_mask=None,
+    attention_mask=None,
+    image_rotary_emb=None,
+):
+    # Patched QwenDoubleStreamAttnProcessor2_0 that consumes precomputed real rotary embeddings
+    # (image and text cos/sin tensors) instead of complex tensors so the model can be traced for OpenVINO.
+    seq_txt = encoder_hidden_states.shape[1]
+
+    img_query = attn.to_q(hidden_states).unflatten(-1, (attn.heads, -1))
+    img_key = attn.to_k(hidden_states).unflatten(-1, (attn.heads, -1))
+    img_value = attn.to_v(hidden_states).unflatten(-1, (attn.heads, -1))
+
+    txt_query = attn.add_q_proj(encoder_hidden_states).unflatten(-1, (attn.heads, -1))
+    txt_key = attn.add_k_proj(encoder_hidden_states).unflatten(-1, (attn.heads, -1))
+    txt_value = attn.add_v_proj(encoder_hidden_states).unflatten(-1, (attn.heads, -1))
+
+    if attn.norm_q is not None:
+        img_query = attn.norm_q(img_query)
+    if attn.norm_k is not None:
+        img_key = attn.norm_k(img_key)
+    if attn.norm_added_q is not None:
+        txt_query = attn.norm_added_q(txt_query)
+    if attn.norm_added_k is not None:
+        txt_key = attn.norm_added_k(txt_key)
+
+    img_freqs, txt_freqs = image_rotary_emb
+    img_query = _qwenimage_apply_rotary_emb(img_query, img_freqs)
+    img_key = _qwenimage_apply_rotary_emb(img_key, img_freqs)
+    txt_query = _qwenimage_apply_rotary_emb(txt_query, txt_freqs)
+    txt_key = _qwenimage_apply_rotary_emb(txt_key, txt_freqs)
+
+    joint_query = torch.cat([txt_query, img_query], dim=1).transpose(1, 2)
+    joint_key = torch.cat([txt_key, img_key], dim=1).transpose(1, 2)
+    joint_value = torch.cat([txt_value, img_value], dim=1).transpose(1, 2)
+
+    joint_hidden_states = F.scaled_dot_product_attention(joint_query, joint_key, joint_value, attn_mask=attention_mask)
+    joint_hidden_states = joint_hidden_states.transpose(1, 2).flatten(2, 3).to(joint_query.dtype)
+
+    txt_attn_output = joint_hidden_states[:, :seq_txt, :]
+    img_attn_output = joint_hidden_states[:, seq_txt:, :]
+
+    img_attn_output = attn.to_out[0](img_attn_output)
+    if len(attn.to_out) > 1:
+        img_attn_output = attn.to_out[1](img_attn_output)
+    txt_attn_output = attn.to_add_out(txt_attn_output)
+
+    return img_attn_output, txt_attn_output
+
+
+def _qwenimage_transformer_forward(
+    self,
+    hidden_states,
+    encoder_hidden_states,
+    encoder_hidden_states_mask,
+    timestep,
+    img_cos,
+    img_sin,
+    txt_cos,
+    txt_sin,
+    guidance=None,
+):
+    # Patched QwenImageTransformer2DModel forward that takes precomputed rotary embeddings as plain
+    # tensors. The original forward builds them from python-list `img_shapes` using complex arithmetic
+    # inside `self.pos_embed`, which cannot be traced. Here cos/sin are computed in the OV wrapper instead.
+    hidden_states = self.img_in(hidden_states)
+    timestep = timestep.to(hidden_states.dtype)
+
+    encoder_hidden_states = self.txt_norm(encoder_hidden_states)
+    encoder_hidden_states = self.txt_in(encoder_hidden_states)
+
+    if guidance is not None:
+        guidance = guidance.to(hidden_states.dtype) * 1000
+
+    temb = (
+        self.time_text_embed(timestep, hidden_states)
+        if guidance is None
+        else self.time_text_embed(timestep, guidance, hidden_states)
+    )
+
+    image_rotary_emb = ((img_cos, img_sin), (txt_cos, txt_sin))
+
+    batch_size, image_seq_len = hidden_states.shape[:2]
+    image_mask = torch.ones((batch_size, image_seq_len), dtype=torch.bool, device=hidden_states.device)
+    joint_attention_mask = torch.cat([encoder_hidden_states_mask.to(torch.bool), image_mask], dim=1)
+    attention_mask = joint_attention_mask[:, None, None, :]
+
+    for block in self.transformer_blocks:
+        encoder_hidden_states, hidden_states = block(
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_hidden_states_mask=None,
+            temb=temb,
+            image_rotary_emb=image_rotary_emb,
+            joint_attention_kwargs={"attention_mask": attention_mask},
+        )
+
+    hidden_states = self.norm_out(hidden_states, temb)
+    output = self.proj_out(hidden_states)
+    return output
+
+
+class QwenImageTransformerModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        self._model._orig_forward = self._model.forward
+        self._model.forward = types.MethodType(_qwenimage_transformer_forward, self._model)
+        # Python resolves __call__ on the type, so the attention processor class (shared by all blocks)
+        # is patched at the class level rather than per-instance.
+        processor_cls = type(self._model.transformer_blocks[0].attn.processor)
+        self._processor_cls = processor_cls
+        self._orig_processor_call = processor_cls.__call__
+        processor_cls.__call__ = _qwenimage_attn_processor_call
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model._orig_forward
+        del self._model._orig_forward
+        self._processor_cls.__call__ = self._orig_processor_call
+
+
+def _qwenimage_vae_encoder_forward(self, sample):
+    # Single-frame (image) encode without the streaming feature cache, which uses None placeholders
+    # that cannot be traced. For a single temporal frame this is numerically identical to the cached path.
+    self.clear_cache()
+    enc = self.encoder(sample)
+    enc = self.quant_conv(enc)
+    return enc
+
+
+def _qwenimage_vae_decoder_forward(self, latent_sample):
+    self.clear_cache()
+    x = self.post_quant_conv(latent_sample)
+    out = self.decoder(x)
+    out = torch.clamp(out, min=-1.0, max=1.0)
+    return out
+
+
+class QwenImageVaeModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        from diffusers.models.autoencoders.autoencoder_kl_qwenimage import QwenImageUpsample
+
+        # OpenVINO has no "nearest-exact" upsampling op; "nearest" is identical for the integer
+        # scale factor of 2 used here.
+        self._patched_upsamplers = []
+        for module in self._model.modules():
+            if isinstance(module, QwenImageUpsample) and module.mode == "nearest-exact":
+                module.mode = "nearest"
+                self._patched_upsamplers.append(module)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for module in self._patched_upsamplers:
+            module.mode = "nearest-exact"
+
+
+class QwenImageTextEncoderModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+        self._model.config._attn_implementation = "sdpa"
+        if is_transformers_version(">=", "4.53"):
+            # starting from 4.53, we get unmatching outputs if we use the boolean mask
+            # (an OpenVINO inconsistency between boolean and float masks)
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+        del self._model.config._orig_attn_implementation
+        if is_transformers_version(">=", "4.53"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
+
+
 def _minicpmv_resampler_forward(self, image_feature, pos_embed, key_padding_mask):
     bs = image_feature.shape[0]
     image_feature = self.kv_proj(image_feature)  # B * L * D

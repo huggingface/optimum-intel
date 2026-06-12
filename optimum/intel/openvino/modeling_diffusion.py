@@ -122,9 +122,11 @@ else:
 
 
 if is_diffusers_version(">=", "0.35.0"):
+    from diffusers import QwenImagePipeline
     from diffusers.models.cache_utils import CacheMixin
 else:
     CacheMixin = object
+    QwenImagePipeline = object
 
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
 DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER = "text_encoder_3"
@@ -213,8 +215,11 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 )
 
         self.unet = OVModelUnet(unet, self, DIFFUSION_MODEL_UNET_SUBFOLDER) if unet is not None else None
+        transformer_cls = (
+            OVModelQwenImageTransformer if self.__class__.__name__.startswith("OVQwenImage") else OVModelTransformer
+        )
         self.transformer = (
-            OVModelTransformer(transformer, self, DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER)
+            transformer_cls(transformer, self, DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER)
             if transformer is not None
             else None
         )
@@ -755,12 +760,14 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         tokenizer_max_length: int = -1,
         num_frames: int = -1,
     ):
+        is_qwen_image = self.__class__.__name__.startswith("OVQwenImage")
         if batch_size == -1 or num_images_per_prompt == -1:
             batch_size = -1
         else:
             # The factor of 2 comes from the guidance scale > 1
             batch_size *= num_images_per_prompt
-            if "img_ids" not in {inputs.get_any_name() for inputs in model.inputs}:
+            # QwenImage runs the conditional and unconditional passes as separate calls (no batch doubling)
+            if not is_qwen_image and "img_ids" not in {inputs.get_any_name() for inputs in model.inputs}:
                 batch_size *= 2
 
         is_ltx = self.__class__.__name__.startswith("OVLTX")
@@ -808,6 +815,9 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 shapes[inputs] = [batch_size, -1, 3] if is_diffusers_version("<", "0.31.0") else [-1, 3]
             elif inputs.get_any_name() in ["height", "width", "num_frames", "rope_interpolation_scale"]:
                 shapes[inputs] = inputs.get_partial_shape()
+            elif inputs.get_any_name() in ["img_cos", "img_sin", "txt_cos", "txt_sin"]:
+                # rotary embeddings are precomputed per resolution / prompt length, keep them dynamic
+                shapes[inputs] = inputs.get_partial_shape()
             else:
                 shapes[inputs][0] = batch_size
                 shapes[inputs][1] = -1  # text_encoder_3 may have vary input length
@@ -853,9 +863,13 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         num_frames: int = -1,
     ):
         is_ltx = self.__class__.__name__.startswith("OVLTX")
+        is_qwen_image = self.__class__.__name__.startswith("OVQwenImage")
         if is_ltx:
             height = height // self.vae_spatial_compression_ratio if height > 0 else -1
             width = width // self.vae_spatial_compression_ratio if width > 0 else -1
+        elif is_qwen_image:
+            height = height // self.vae_scale_factor if height > 0 else -1
+            width = width // self.vae_scale_factor if width > 0 else -1
         else:
             height = height // self.vae_scale_factor if height > -1 else height
             width = width // self.vae_scale_factor if width > -1 else width
@@ -867,11 +881,12 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     "Could not identify `latent_channels` from the VAE decoder configuration, to statically reshape the VAE decoder please provide a configuration."
                 )
                 self.is_dynamic = True
-        shapes = {
-            model.inputs[0]: [num_images_per_prompt, latent_channels, height, width]
-            if not is_ltx
-            else [num_images_per_prompt, latent_channels, num_frames, height, width]
-        }
+        if model.inputs[0].get_partial_shape().rank.get_length() == 5:
+            # 3D (video-style) VAE decoder, run on a single temporal frame for images
+            num_frames = num_frames if num_frames > 0 else 1
+            shapes = {model.inputs[0]: [num_images_per_prompt, latent_channels, num_frames, height, width]}
+        else:
+            shapes = {model.inputs[0]: [num_images_per_prompt, latent_channels, height, width]}
         model.reshape(shapes)
         return model
 
@@ -1308,6 +1323,111 @@ class OVModelTransformer(OVPipelinePart):
         return ModelOutput(**model_outputs)
 
 
+class OVModelQwenImageTransformer(OVPipelinePart):
+    """
+    Transformer wrapper for QwenImage. The diffusers `QwenImageTransformer2DModel` computes its rotary
+    position embeddings internally from python-list `img_shapes` using complex arithmetic, which cannot be
+    traced for OpenVINO. The exported model therefore expects the rotary embeddings as precomputed real
+    `cos`/`sin` tensors; this wrapper computes them on the fly and feeds them to the compiled model.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._rope_cache = {}
+        axes_dim = list(getattr(self.config, "axes_dims_rope", (16, 56, 56)))
+        theta = 10000
+        pos_index = torch.arange(4096)
+        neg_index = torch.arange(4096).flip(0) * -1 - 1
+
+        def rope_params(index, dim):
+            freqs = torch.outer(index, 1.0 / torch.pow(theta, torch.arange(0, dim, 2).float().div(dim)))
+            return torch.polar(torch.ones_like(freqs), freqs)
+
+        self._axes_dim = axes_dim
+        self._pos_freqs = torch.cat([rope_params(pos_index, d) for d in axes_dim], dim=1)
+        self._neg_freqs = torch.cat([rope_params(neg_index, d) for d in axes_dim], dim=1)
+
+    def _compute_video_freqs(self, frame, height, width):
+        # Replicates diffusers QwenEmbedRope._compute_video_freqs with scale_rope=True.
+        freqs_pos = self._pos_freqs.split([d // 2 for d in self._axes_dim], dim=1)
+        freqs_neg = self._neg_freqs.split([d // 2 for d in self._axes_dim], dim=1)
+
+        freqs_frame = freqs_pos[0][:frame].view(frame, 1, 1, -1).expand(frame, height, width, -1)
+        freqs_height = torch.cat([freqs_neg[1][-(height - height // 2) :], freqs_pos[1][: height // 2]], dim=0)
+        freqs_height = freqs_height.view(1, height, 1, -1).expand(frame, height, width, -1)
+        freqs_width = torch.cat([freqs_neg[2][-(width - width // 2) :], freqs_pos[2][: width // 2]], dim=0)
+        freqs_width = freqs_width.view(1, 1, width, -1).expand(frame, height, width, -1)
+
+        freqs = torch.cat([freqs_frame, freqs_height, freqs_width], dim=-1).reshape(frame * height * width, -1)
+        return freqs
+
+    def _rotary_embeddings(self, img_shapes, txt_seq_len):
+        key = (tuple(tuple(shape) for shape in img_shapes[0]), int(txt_seq_len))
+        if key not in self._rope_cache:
+            video_fhw = img_shapes[0]
+            if not isinstance(video_fhw, list):
+                video_fhw = [video_fhw]
+            vid_freqs = []
+            max_vid_index = 0
+            for frame, height, width in video_fhw:
+                vid_freqs.append(self._compute_video_freqs(frame, height, width))
+                max_vid_index = max(height // 2, width // 2, max_vid_index)
+            txt_freqs = self._pos_freqs[max_vid_index : max_vid_index + txt_seq_len, ...]
+            vid_freqs = torch.cat(vid_freqs, dim=0)
+            self._rope_cache[key] = (
+                vid_freqs.real.contiguous(),
+                vid_freqs.imag.contiguous(),
+                txt_freqs.real.contiguous(),
+                txt_freqs.imag.contiguous(),
+            )
+        return self._rope_cache[key]
+
+    def forward(
+        self,
+        hidden_states: torch.FloatTensor,
+        encoder_hidden_states: torch.FloatTensor = None,
+        encoder_hidden_states_mask: torch.Tensor = None,
+        timestep: torch.LongTensor = None,
+        img_shapes: Optional[List] = None,
+        txt_seq_lens: Optional[List[int]] = None,
+        guidance: torch.Tensor = None,
+        attention_kwargs: Optional[Dict[str, Any]] = None,
+        return_dict: bool = True,
+        **kwargs,
+    ):
+        self.compile()
+
+        if encoder_hidden_states_mask is None:
+            encoder_hidden_states_mask = torch.ones(encoder_hidden_states.shape[:2], dtype=torch.int64)
+
+        txt_seq_len = encoder_hidden_states.shape[1]
+        img_cos, img_sin, txt_cos, txt_sin = self._rotary_embeddings(img_shapes, txt_seq_len)
+
+        model_inputs = {
+            "hidden_states": hidden_states,
+            "encoder_hidden_states": encoder_hidden_states,
+            "encoder_hidden_states_mask": encoder_hidden_states_mask,
+            "timestep": timestep,
+            "img_cos": img_cos,
+            "img_sin": img_sin,
+            "txt_cos": txt_cos,
+            "txt_sin": txt_sin,
+        }
+        if guidance is not None:
+            model_inputs["guidance"] = guidance
+
+        ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
+
+        model_outputs = {}
+        for key, value in ov_outputs.items():
+            model_outputs[next(iter(key.names))] = torch.from_numpy(value)
+
+        sample = next(iter(model_outputs.values()))
+        if return_dict:
+            return {"sample": sample}
+        return (sample,)
+
+
 class OVModelVaeEncoder(OVPipelinePart):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1317,7 +1437,8 @@ class OVModelVaeEncoder(OVPipelinePart):
                 "The `scaling_factor` attribute is missing from the VAE encoder configuration. "
                 "Please re-export the model with newer version of optimum and diffusers."
             )
-            self.register_to_config(scaling_factor=2 ** (len(self.config.block_out_channels) - 1))
+            if hasattr(self.config, "block_out_channels"):
+                self.register_to_config(scaling_factor=2 ** (len(self.config.block_out_channels) - 1))
 
     def forward(
         self,
@@ -1359,7 +1480,8 @@ class OVModelVaeDecoder(OVPipelinePart):
                 "The `scaling_factor` attribute is missing from the VAE decoder configuration. "
                 "Please re-export the model with newer version of optimum and diffusers."
             )
-            self.register_to_config(scaling_factor=2 ** (len(self.config.block_out_channels) - 1))
+            if hasattr(self.config, "block_out_channels"):
+                self.register_to_config(scaling_factor=2 ** (len(self.config.block_out_channels) - 1))
 
     def forward(
         self,
@@ -1403,6 +1525,8 @@ class OVModelVae(OVModelHostMixin):
             self.latents_mean = torch.tensor(self.decoder.config.latents_mean_data)
         if hasattr(self.decoder.config, "latents_std_data"):
             self.latents_std = torch.tensor(self.decoder.config.latents_std_data)
+        # QwenImage's 3D VAE exposes `temperal_downsample` as an attribute (used to derive the scale factor)
+        self.temperal_downsample = getattr(self.decoder.config, "temperal_downsample", None)
 
     @property
     def _component_names(self) -> List[str]:
@@ -1663,6 +1787,52 @@ class OVLTXPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTXPipel
     auto_model_class = LTXPipeline
 
 
+class OVQwenImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, QwenImagePipeline):
+    main_input_name = "prompt"
+    export_feature = "text-to-image"
+    auto_model_class = QwenImagePipeline
+
+    def _get_qwen_prompt_embeds(
+        self,
+        prompt: Union[str, List[str]] = None,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
+    ):
+        # Mirror diffusers.QwenImagePipeline._get_qwen_prompt_embeds, but the OpenVINO text encoder directly
+        # outputs the last hidden state (equivalent to `hidden_states[-1]` of the original Qwen2.5-VL model).
+        device = device or self._execution_device
+        dtype = dtype or torch.float32
+
+        prompt = [prompt] if isinstance(prompt, str) else prompt
+
+        template = self.prompt_template_encode
+        drop_idx = self.prompt_template_encode_start_idx
+        txt = [template.format(e) for e in prompt]
+        txt_tokens = self.tokenizer(
+            txt, max_length=self.tokenizer_max_length + drop_idx, padding=True, truncation=True, return_tensors="pt"
+        )
+        encoder_outputs = self.text_encoder(
+            input_ids=txt_tokens.input_ids,
+            attention_mask=txt_tokens.attention_mask,
+            output_hidden_states=True,
+        )
+        hidden_states = encoder_outputs.last_hidden_state
+        split_hidden_states = self._extract_masked_hidden(hidden_states, txt_tokens.attention_mask)
+        split_hidden_states = [e[drop_idx:] for e in split_hidden_states]
+        attn_mask_list = [torch.ones(e.size(0), dtype=torch.long, device=e.device) for e in split_hidden_states]
+        max_seq_len = max([e.size(0) for e in split_hidden_states])
+        prompt_embeds = torch.stack(
+            [torch.cat([u, u.new_zeros(max_seq_len - u.size(0), u.size(1))]) for u in split_hidden_states]
+        )
+        encoder_attention_mask = torch.stack(
+            [torch.cat([u, u.new_zeros(max_seq_len - u.size(0))]) for u in attn_mask_list]
+        )
+
+        prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
+
+        return prompt_embeds, encoder_attention_mask
+
+
 SUPPORTED_OV_PIPELINES = [
     OVStableDiffusionPipeline,
     OVStableDiffusionImg2ImgPipeline,
@@ -1747,6 +1917,10 @@ if is_diffusers_version(">=", "0.32.0"):
 if is_diffusers_version(">=", "0.33.0"):
     SUPPORTED_OV_PIPELINES.append(OVSanaSprintPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana-sprint"] = OVSanaSprintPipeline
+
+if is_diffusers_version(">=", "0.35.0"):
+    SUPPORTED_OV_PIPELINES.append(OVQwenImagePipeline)
+    OV_TEXT2IMAGE_PIPELINES_MAPPING["qwenimage"] = OVQwenImagePipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,
