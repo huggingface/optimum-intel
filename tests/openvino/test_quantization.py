@@ -1076,7 +1076,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.50.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "mistral3", False))
- 
+
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "smollm3", False))
 
