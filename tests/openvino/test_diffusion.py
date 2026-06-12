@@ -501,6 +501,36 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         image = pipeline(**inputs).images[0]
         self.assertTupleEqual(image.size, (32, 32))
 
+    @require_diffusers
+    def test_flux2_klein_compare_to_diffusers_pipeline(self):
+        model_arch = "flux.2-klein"
+        height, width, batch_size = 64, 64, 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type="flux")
+
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES[model_arch], export=True, load_in_8bit=False, device=OPENVINO_DEVICE
+        )
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+
+        for output_type in ["latent", "np", "pt"]:
+            inputs["output_type"] = output_type
+
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+
+        # test on inputs nondivisible on 64
+        height, width, batch_size = 96, 96, 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type="flux")
+
+        for output_type in ["latent", "np", "pt"]:
+            inputs["output_type"] = output_type
+
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [
@@ -630,6 +660,44 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
                         packed_width = width // pipeline.vae_scale_factor // 2
                         channels = pipeline.transformer.config.in_channels
                         self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
+
+    @require_diffusers
+    def test_flux2_klein_compare_to_diffusers_pipeline(self):
+        model_arch = "flux.2-klein"
+        height, width, batch_size = 64, 64, 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type="flux")
+        # Flux2Klein img2img does not accept `strength`.
+        inputs.pop("strength", None)
+        # Flux2Klein expects a single image, not a list for batch_size=1.
+        if isinstance(inputs.get("image"), list):
+            inputs["image"] = inputs["image"][0]
+
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES[model_arch], export=True, load_in_8bit=False, device=OPENVINO_DEVICE
+        )
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+
+        for output_type in ["latent", "np", "pt"]:
+            inputs["output_type"] = output_type
+
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+
+        height, width, batch_size = 96, 96, 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type="flux")
+        inputs.pop("strength", None)
+        if isinstance(inputs.get("image"), list):
+            inputs["image"] = inputs["image"][0]
+
+        for output_type in ["latent", "np", "pt"]:
+            inputs["output_type"] = output_type
+
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
