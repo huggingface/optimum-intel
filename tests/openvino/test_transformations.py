@@ -25,7 +25,6 @@ from parameterized import parameterized
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from utils_tests import ARCH_TO_MODEL_CLASS, MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS
 
-
 # Expected transformations per architecture, separated by stage:
 #   "convert" — MoC (Model Optimizer Common) transformations applied during model conversion
 #   "compile" — device-specific transformations applied during compilation (e.g. CPU)
@@ -348,8 +347,7 @@ def check_failed_transformations(log: str, words: list[str]) -> dict:
 
 
 class OVTransformationTest(unittest.TestCase):
-
-    @parameterized.expand(list(ARCH_TO_EXPECTED_TRANSFORMATIONS.keys()))
+    @parameterized.expand(list(ARCH_TO_EXPECTED_TRANSFORMATIONS.keys()), skip_on_empty=True)
     def test_transformations_applied(self, model_arch):
         expected_transforms = _get_flat_transforms(model_arch)
         model_id = MODEL_NAMES[model_arch]
