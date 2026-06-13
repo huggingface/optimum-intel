@@ -126,6 +126,7 @@ from optimum.exporters.openvino.model_patcher import (
     LlavaImageEmbeddingModelPatcher,
     LlavaNextVideoImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
+    LTXVaeDecoderModelPatcher,
     MairaImageEmbeddingModelPatcher,
     MambaPatcher,
     MarianModelPatcher,
@@ -2431,6 +2432,45 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
         return common_inputs
 
 
+class LTXVaeDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "pixel_mask", "sample", "latent_sample", "timestep")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        num_frames: int = 2,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        self.num_frames = num_frames
+        self.sample_num_channels = getattr(normalized_config.config, "in_channels", self.num_channels)
+        self.latent_num_channels = getattr(normalized_config.config, "latent_channels", self.num_channels)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "sample":
+            return self.random_float_tensor(
+                [self.batch_size, self.sample_num_channels, self.num_frames, self.height, self.width],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "latent_sample":
+            return self.random_float_tensor(
+                [self.batch_size, self.latent_num_channels, self.num_frames, self.height, self.width],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "timestep":
+            # Export timestep as float and keep batch-dynamic mapping in decoder config.
+            return self.random_float_tensor([self.batch_size], framework=framework, dtype=float_dtype)
+
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
 @register_in_tasks_manager("ltx-vae-encoder", *["semantic-segmentation"], library_name="diffusers")
 class LTXVaeEncoderOpenVINOConfig(VisionOpenVINOConfig):
     ATOL_FOR_VALIDATION = 3e-4  # TODO: this only happens in test_export.py
@@ -2457,6 +2497,7 @@ class LTXVaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
     ATOL_FOR_VALIDATION = 3e-4  # TODO: this only happens in test_export.py
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(num_channels="latent_channels", allow_new=True)
     DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeDummyInputGenerator,)
+    _MODEL_PATCHER = LTXVaeDecoderModelPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -2464,7 +2505,7 @@ class LTXVaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
             "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"},
         }
         if self._normalized_config.config.timestep_conditioning:
-            base_input["timestep"] = {}
+            base_input["timestep"] = {0: "batch_size"}
         return base_input
 
     @property
