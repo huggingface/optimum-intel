@@ -586,6 +586,30 @@ if is_transformers_version("<", "5"):
     REMOTE_CODE_MODELS += ("afmoe",)
 
 
+ARCH_TO_MODEL_CLASS = {
+    "afmoe": "OVModelForCausalLM",
+    "gpt2": "OVModelForCausalLM",
+    "llama": "OVModelForCausalLM",
+    "mistral": "OVModelForCausalLM",
+    "qwen2": "OVModelForCausalLM",
+    "qwen3": "OVModelForCausalLM",
+    "lfm2": "OVModelForCausalLM",
+    "lfm2_moe": "OVModelForCausalLM",
+    "qwen3_moe": "OVModelForCausalLM",
+    "llama4": "OVModelForCausalLM",
+    "llava": "OVModelForVisualCausalLM",
+    "qwen3_5_moe": "OVModelForVisualCausalLM",
+    "gemma4_moe": "OVModelForVisualCausalLM",
+    "stable-diffusion": "OVDiffusionPipeline",
+    "whisper": "OVModelForSpeechSeq2Seq",
+    "bart": "OVModelForSeq2SeqLM",
+    "bert": "OVModelForFeatureExtraction",
+    "electra": "OVModelForFeatureExtraction",
+    "clip": "OVModelForZeroShotImageClassification",
+    "siglip": "OVModelForZeroShotImageClassification",
+}
+
+
 SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED = [
     "bart",
     "musicgen",

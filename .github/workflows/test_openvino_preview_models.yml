@@ -33,6 +33,7 @@ jobs:
             "*export*",
             "*seq2seq*",
             "*quantization*",
+            "*transformation*",
           ]
 
     runs-on: ubuntu-22.04
