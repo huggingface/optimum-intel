@@ -45,9 +45,9 @@ from optimum.intel.utils.modeling_utils import (
 
 from .utils import (
     _MAX_UNCOMPRESSED_SIZE,
-    MULTI_MODAL_TEXT_GENERATION_MODELS,
     clear_class_registry,
     deduce_diffusers_dtype,
+    is_multi_modal_text_generation_model,
     load_preprocessors,
     patch_qwenvl_configs,
 )
@@ -161,6 +161,10 @@ def infer_task(
             model_type = config.export_model_type
         else:
             model_type = config.model_type
+        # GLM-Edge-V reports model_type="glm" (same as the text-only GLM decoder); the
+        # presence of a `vision_config` marks it as an image-text-to-text model.
+        if model_type == "glm" and hasattr(config, "vision_config") and original_task == "auto":
+            return "image-text-to-text"
         custom_architecture = model_type not in TasksManager._SUPPORTED_MODEL_TYPE
         if not custom_architecture and task + "-with-past" in TasksManager.get_supported_tasks_for_model_type(
             model_type, exporter="openvino", library_name=library_name
@@ -425,10 +429,7 @@ def main_export(
         if (
             dtype is None
             and framework == "pt"
-            and (
-                task.startswith("text-generation")
-                or getattr(config, "model_type", "") in MULTI_MODAL_TEXT_GENERATION_MODELS
-            )
+            and (task.startswith("text-generation") or is_multi_modal_text_generation_model(config))
             and getattr(config, "torch_dtype", torch.float32) in [torch.float16, torch.bfloat16]
         ):
             if ov_config is not None and ov_config.dtype in {"fp16", "fp32"}:
@@ -702,6 +703,8 @@ def _main_quantize(
         )
         model_type = config.model_type
         if model_type in ["phi4mm", "phi4_multimodal"]:
+            task = "image-text-to-text"
+        elif model_type == "glm" and hasattr(config, "vision_config"):
             task = "image-text-to-text"
 
     # Step 1. Obtain the correct OpenVINO model class

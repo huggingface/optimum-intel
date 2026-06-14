@@ -338,6 +338,22 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "videochat_flash_qwen",
 ]
 
+
+def is_multi_modal_text_generation_model(config) -> bool:
+    """
+    Returns whether a model config corresponds to a multimodal text-generation
+    (image-text-to-text) model exported as separate vision/text submodels.
+
+    Besides the explicit `MULTI_MODAL_TEXT_GENERATION_MODELS` list, GLM-Edge-V
+    shares its `model_type` ("glm") with the text-only GLM decoder and is only
+    distinguishable by the presence of a nested `vision_config`.
+    """
+    model_type = getattr(config, "model_type", "") or ""
+    if model_type in MULTI_MODAL_TEXT_GENERATION_MODELS:
+        return True
+    return model_type == "glm" and hasattr(config, "vision_config")
+
+
 SSM_MODELS = [
     "mamba",
     "falcon_mamba",

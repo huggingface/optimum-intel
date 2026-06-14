@@ -4096,6 +4096,69 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
         return model_kwargs
 
 
+class _OVGlmEdgeVForCausalLM(OVModelForVisualCausalLM):
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        pixel_values = torch.from_numpy(pixel_values) if isinstance(pixel_values, np.ndarray) else pixel_values
+        # GLM-Edge-V image processor produces a 6D tensor
+        # (batch, num_concurrent_media, num_tiles, channels, height, width);
+        # flatten it to (num_images, channels, height, width) like the original
+        # GlmForCausalLM.forward does before calling the vision tower.
+        if pixel_values.ndim == 6:
+            batch, media, tiles, channels, height, width = pixel_values.shape
+            pixel_values = pixel_values.reshape(batch * media * tiles, channels, height, width)
+        return self.vision_embeddings(pixel_values).last_hidden_state
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        # Adopted from https://huggingface.co/zai-org/glm-edge-v-2b/blob/main/modeling_glm.py
+        # The processor inserts `boi_token_id` placeholders (one per image embedding,
+        # including the learned boi/eoi tokens). Replace them with the vision features.
+        image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        image_features = image_features.to(inputs_embeds.dtype)
+
+        special_image_mask = (input_ids == self.config.boi_token_id).unsqueeze(-1)
+        special_image_mask = special_image_mask.expand_as(inputs_embeds)
+        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if tokenizer is None:
+            raise ValueError("Tokenizer is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+
+        content = [{"type": "text", "text": text}]
+        if image is not None:
+            if processor is None:
+                raise ValueError("Processor is required for image input.")
+            content.insert(0, {"type": "image"})
+        messages = [{"role": "user", "content": content}]
+
+        inputs = tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, return_dict=True, tokenize=True, return_tensors="pt"
+        )
+        if image is not None:
+            pixel_values = torch.tensor(processor(image).pixel_values)
+            inputs["pixel_values"] = pixel_values
+        return inputs
+
+
 class _OVGotOCR2ForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1 and kwargs.get("past_key_values") is not None:
@@ -5832,6 +5895,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen2_5_vl": _OVQwen2_5_VLForCausalLM,
     "qwen2_5_vl_text": _OVQwen2_5_VLForCausalLM,
     "got_ocr2": _OVGotOCR2ForCausalLM,
+    "glm": _OVGlmEdgeVForCausalLM,
     "gemma3": _OVGemma3ForCausalLM,
     "gemma4": _OVGemma4ForCausalLM,
     "idefics3": _OVIdefics3ForCausalLM,

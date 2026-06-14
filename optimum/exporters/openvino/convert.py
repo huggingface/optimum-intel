@@ -30,7 +30,6 @@ from openvino import Model, save_model
 from openvino.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
 from optimum.exporters.openvino.utils import (
-    MULTI_MODAL_TEXT_GENERATION_MODELS,
     ONNX_SUPPORTED_ARCHITECTURES,
     OV_XML_FILE_NAME,
     _get_dynamic_shapes_info,
@@ -41,6 +40,7 @@ from optimum.exporters.openvino.utils import (
     _normalize_dummy_inputs,
     allow_skip_tracing_check,
     clear_class_registry,
+    is_multi_modal_text_generation_model,
     remove_none_from_dummy_inputs,
     save_config,
     save_preprocessors,
@@ -638,7 +638,9 @@ def export_from_model(
         if model.config.decoder_start_token_id is None:
             model.config.decoder_start_token_id = 0
     stateful = stateful and (
-        ensure_export_task_support_stateful(task) or ensure_model_type_support_stateful(model_type)
+        ensure_export_task_support_stateful(task)
+        or ensure_model_type_support_stateful(model_type)
+        or is_multi_modal_text_generation_model(getattr(model, "config", None))
     )
 
     if (
@@ -1011,7 +1013,7 @@ def _get_submodels_and_export_configs(
     if (
         not custom_architecture
         and library_name == "transformers"
-        and model.config.model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
+        and is_multi_modal_text_generation_model(model.config)
     ):
         return _get_multi_modal_submodels_and_export_configs(
             model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful

@@ -104,6 +104,8 @@ from optimum.exporters.openvino.model_patcher import (
     Gemma3LMModelPatcher,
     Gemma4ImageEmbeddingsModelPatcher,
     Gemma4LMModelPatcher,
+    GlmEdgeVImageEmbeddingsModelPatcher,
+    GlmEdgeVLMModelPatcher,
     GptJModelPatcher,
     GptNeoModelPatcher,
     GptNeoxModelPatcher,
@@ -3332,6 +3334,132 @@ class GLMOpenVINOConfig(LlamaOpenVINOConfig):
 )
 class GLM4OpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.3"
+
+
+# GLM-Edge-V (e.g. zai-org/glm-edge-v-2b) is a vision-language model whose config
+# reports model_type="glm" (same as the text-only GLM decoder) but carries an extra
+# `vision_config`. It is registered here only for the image-text-to-text task so the
+# text-only GLM export path (registered above) is untouched. The multimodal export
+# routing is additionally gated on `hasattr(config, "vision_config")`.
+@register_in_tasks_manager("glm", *["image-text-to-text"], library_name="transformers")
+class GLMEdgeVOpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.46.0"
+    SUPPORTS_PAST = True
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            # GLM-Edge-V stores `vision_config` as a plain dict; wrap it in a SigLIP
+            # vision config so the dummy input generator can read `image_size`/
+            # `patch_size` and build correctly shaped pixel values (SigLIP uses a
+            # fixed-size learned position embedding).
+            vision_config = config.vision_config
+            if isinstance(vision_config, dict):
+                from transformers import SiglipVisionConfig
+
+                vision_config = SiglipVisionConfig(**vision_config)
+            self._config = vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if not self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"pixel_values": {0: "batch_size"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if not self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"last_hidden_state": {0: "batch_size"}}
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs) -> Dict:
+        # The adapter concatenates the learned boi/eoi parameters with `.repeat(batch, ...)`,
+        # which would be traced as a constant. Export the vision graph with batch_size=1
+        # so the batch axis stays dynamic at inference time.
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            kwargs["batch_size"] = 1
+        return super().generate_dummy_inputs(framework, **kwargs)
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VLMConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+
+        Args:
+            behavior ([`ConfigBehavior`]):
+                The behavior to use for the new instance.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        # GLM-Edge-V embeds its text decoder directly under model_type="glm",
+        # so both the text-embeddings and language-model graphs reuse the plain
+        # GLM text-generation export config.
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config("glm", self._orig_config, self.int_dtype, self.float_dtype)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "glm",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=GlmEdgeVLMModelPatcher,
+            )
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            # The language-model graph is built from the full GlmForCausalLM (its
+            # forward is replaced by GlmEdgeVLMModelPatcher to skip the vision merge).
+            return model
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return model
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.model.config
+            return text_embedding
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return GlmEdgeVImageEmbeddingsModelPatcher(self, model, model_kwargs)
 
 
 @register_in_tasks_manager(
