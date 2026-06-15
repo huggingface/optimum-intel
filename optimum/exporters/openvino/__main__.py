@@ -535,6 +535,16 @@ def main_export(
                 has_remote_code = hasattr(config, "auto_map")
                 if has_remote_code and trust_remote_code and task == "image-text-to-text":
                     task_model_loading = "text-generation"
+                elif has_remote_code and not trust_remote_code and task == "image-text-to-text":
+                    # Remote-code VLMs (e.g. GLM-Edge-V, nanoLLaVA, phi3_v) define their
+                    # multimodal class via `auto_map` and cannot be loaded by the built-in
+                    # AutoModelForImageTextToText. Fail early with an actionable message
+                    # instead of the cryptic "Unrecognized configuration class" error.
+                    raise ValueError(
+                        f"The model {model_name_or_path} relies on custom code to load its "
+                        f"`{task}` architecture. Please re-run the export with `--trust-remote-code` "
+                        "(or `trust_remote_code=True`)."
+                    )
 
             model = TasksManager.get_model_from_task(
                 task_model_loading,
