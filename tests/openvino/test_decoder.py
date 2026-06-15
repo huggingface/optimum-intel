@@ -25,20 +25,11 @@ from utils_tests import (
     REMOTE_CODE_MODELS,
     SEED,
     get_num_sdpa,
+    get_supported_model_for_library,
     mock_torch_cuda_is_available,
     patch_awq_for_inference,
 )
 
-from optimum.exporters.openvino.model_configs import (
-    BitnetOpenVINOConfig,
-    DeepseekOpenVINOConfig,
-    LFM2MoeOpenVINOConfig,
-    LFM2OpenVINOConfig,
-    Phi3OpenVINOConfig,
-    Qwen3_5MoeTextOpenVINOConfig,
-    Qwen3_5TextOpenVINOConfig,
-    Qwen3VLOpenVINOConfig,
-)
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
 from optimum.exporters.tasks import TasksManager
@@ -99,46 +90,47 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "afmoe",
         "hunyuan_v1_dense",
         "smollm3",
+        ## not supporter after v5
+        "llama4",
+        "bitnet",
+        "exaone4",
+        "dbrx",
+        "marian",
+        "phi3-longrope",
+        # remote modeling incompatible with v5
+        "codegen2",
+        "exaone",
+        "decilm",
+        "internlm2",
+        "orion",
+        "aquila2",
+        "jais",
+        "baichuan2",
+        "baichuan2-13b",
+        # remote modeling code failing with v5
+        "aquila",
+        "xverse",
+        "internlm",
     )
 
     # config loading failing coming from type mismatch coming from transformers v5.4
     if is_transformers_version("!=", "5.4"):
         SUPPORTED_ARCHITECTURES += ("mbart", "olmo", "cohere2", "phimoe", "olmo2")
 
-    if is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES += (
-            "llama4",
-            "bitnet",
-            "exaone4",
-            "dbrx",
-            "marian",
-            "phi3-longrope",
-            # remote modeling incompatible with v5
-            "codegen2",
-            "exaone",
-            "decilm",
-            "internlm2",
-            "orion",
-            "aquila2",
-            "jais",
-            "baichuan2",
-            "baichuan2-13b",
-            # remote modeling code failing with v5
-            "aquila",
-            "xverse",
-            "internlm",
-        )
-
-    SUPPORTED_SSM_ARCHITECTURES = ("granitemoehybrid", "lfm2")
-    if is_transformers_version("<", "5"):
-        SUPPORTED_SSM_ARCHITECTURES += ("zamba2", "qwen3_next")
-    else:
-        SUPPORTED_SSM_ARCHITECTURES += ("lfm2_moe",)
-
-    if is_transformers_version("<", "5.4"):
-        SUPPORTED_SSM_ARCHITECTURES += ("mamba", "falcon_mamba")
-
+    SUPPORTED_SSM_ARCHITECTURES = (
+        "granitemoehybrid",
+        "mamba",
+        "falcon_mamba",
+        "zamba2",
+        "lfm2",
+        "lfm2_moe",
+        "qwen3_next",
+    )
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
+    # filter architectures depending on min/max transformers supported versions
+    SUPPORTED_ARCHITECTURES = tuple(
+        arch for arch in SUPPORTED_ARCHITECTURES if arch in get_supported_model_for_library("transformers")
+    )
 
     GENERATION_LENGTH = 100
 
@@ -262,49 +254,28 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         tested_architectures = set(self.SUPPORTED_ARCHITECTURES)
         transformers_architectures = set(CONFIG_MAPPING_NAMES.keys())
+        ov_model_types = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES.get("transformers", {})
         ov_architectures = {
-            model_type
-            for model_type in TasksManager._SUPPORTED_MODEL_TYPE
-            if self.TASK in TasksManager._SUPPORTED_MODEL_TYPE[model_type].get("openvino", {})
+            model_type for model_type, tasks in ov_model_types.items() if self.TASK in tasks.get("openvino", {})
         }
         supported_architectures = ov_architectures & transformers_architectures
 
-        if "llama4_text" in supported_architectures:
-            supported_architectures.remove("llama4_text")
-        if is_transformers_version(">", str(DeepseekOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
-            if "deepseek_v2" in supported_architectures:
-                supported_architectures.remove("deepseek_v2")
-            if "deepseek_v3" in supported_architectures:
-                supported_architectures.remove("deepseek_v3")
-        if is_transformers_version("<", str(BitnetOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
-            supported_architectures -= {"bitnet"}
-        if is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
-            supported_architectures -= {"lfm2"}
-        if is_transformers_version("<", str(LFM2MoeOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
-            supported_architectures -= {"lfm2_moe"}
-        if is_transformers_version("<", str(Phi3OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
-            supported_architectures -= {"phi3"}
-        # qwen3_vl_text a part of qwen3_vl architecture and is tested in seq2seq group
-        if is_transformers_version(">=", str(Qwen3VLOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
-            supported_architectures -= {"qwen3_vl_text"}
-        # qwen3_5_text a part of qwen3_5 architecture and is tested in seq2seq group
-        if is_transformers_version(">=", str(Qwen3_5TextOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
-            supported_architectures -= {"qwen3_5_text"}
-        # qwen3_5_moe_text a part of qwen3_5_moe architecture and is tested in seq2seq group
-        if is_transformers_version(">=", str(Qwen3_5MoeTextOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
-            supported_architectures -= {"qwen3_5_moe_text"}
+        to_remove = set()
+        for arch in supported_architectures:
+            export_config = next(iter(ov_model_types[arch]["openvino"].values())).func
+            min_v = getattr(export_config, "MIN_TRANSFORMERS_VERSION", None)
+            max_v = getattr(export_config, "MAX_TRANSFORMERS_VERSION", None)
 
-        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-        if is_transformers_version(">=", "5"):
-            supported_architectures -= {
-                "bitnet",
-                "dbrx",
-                "zamba2",
-                "marian",
-                "llama4",
-                "exaone4",
-                "qwen3_next",
-            }
+            if (min_v and is_transformers_version("<", str(min_v))) or (
+                max_v and is_transformers_version(">", str(max_v))
+            ):
+                to_remove.add(arch)
+
+        supported_architectures -= to_remove
+        # llama4_text is the text sub-model of llama4 (VLM), tested in the VLM group
+        supported_architectures.discard("llama4_text")
+        # *_text variants below are sub-models of VLM architectures tested in the seq2seq group
+        supported_architectures -= {"qwen3_vl_text", "qwen3_5_text", "qwen3_5_moe_text"}
 
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
         untested_architectures = supported_architectures - tested_architectures

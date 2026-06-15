@@ -4468,7 +4468,7 @@ class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
 )
 class LFM2OpenVINOConfig(MambaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.54.0"
-    MAX_TRANSFORMERS_VERSION = None
+    MAX_TRANSFORMERS_VERSION = "5.4.0"
     _MODEL_PATCHER = Lfm2ModelPatcher
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Lfm2DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Lfm2DummyPastKeyValuesGenerator
@@ -5508,7 +5508,7 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
 )
 class LFM2MoeOpenVINOConfig(LFM2OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "5.0"
-    MAX_TRANSFORMERS_VERSION = None
+    MAX_TRANSFORMERS_VERSION = "5.4.0"
     _MODEL_PATCHER = Lfm2MoeModelPatcher
 
 
