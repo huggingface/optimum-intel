@@ -129,11 +129,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "internlm",
         )
 
-    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon_mamba", "granitemoehybrid", "lfm2")
+    SUPPORTED_SSM_ARCHITECTURES = ("granitemoehybrid", "lfm2")
     if is_transformers_version("<", "5"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2", "qwen3_next")
     else:
         SUPPORTED_SSM_ARCHITECTURES += ("lfm2_moe",)
+
+    if is_transformers_version("<", "5.4"):
+        SUPPORTED_SSM_ARCHITECTURES += ("mamba", "falcon_mamba")
 
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 

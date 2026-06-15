@@ -88,8 +88,6 @@ class ExportModelTest(unittest.TestCase):
         "sam": OVSamModel,
         "speecht5": OVModelForTextToSpeechSeq2Seq,
         "clip": OVModelForZeroShotImageClassification,
-        "mamba": OVModelForCausalLM,
-        "falcon_mamba": OVModelForCausalLM,
         "stable-diffusion-3": OVStableDiffusion3Pipeline,
         "flux": OVFluxPipeline,
         "ltx-video": OVLTXPipeline,
@@ -117,6 +115,10 @@ class ExportModelTest(unittest.TestCase):
 
     if is_transformers_version("==", "4.57.6"):
         SUPPORTED_ARCHITECTURES.update({"qwen3_asr": OVModelForSpeechSeq2Seq})
+
+    if is_transformers_version("<", "5.4"):
+        SUPPORTED_ARCHITECTURES.update({"mamba": OVModelForCausalLM})
+        SUPPORTED_ARCHITECTURES.update({"falcon_mamba": OVModelForCausalLM})
 
     if is_transformers_version(">=", "5.5.0"):
         SUPPORTED_ARCHITECTURES.update({"gemma4": OVModelForVisualCausalLM})

@@ -4287,6 +4287,7 @@ class MambaOpenVINOConfig(TextDecoderOpenVINOConfig):
     DUMMY_PKV_GENERATOR_CLASS = MambaCacheDummyInputGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     MIN_TRANSFORMERS_VERSION = "4.43.0"
+    MAX_TRANSFORMERS_VERSION = "5.3.0"
     _MODEL_PATCHER = MambaPatcher
 
     @property

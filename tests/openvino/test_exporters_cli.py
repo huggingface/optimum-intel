@@ -94,8 +94,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "gpt2"),
         ("text2text-generation", "t5"),
         ("text2text-generation-with-past", "t5"),
-        ("text-generation-with-past", "mamba"),
-        ("text-generation-with-past", "falcon_mamba"),
         ("text-classification", "albert"),
         ("question-answering", "distilbert"),
         ("token-classification", "roberta"),
@@ -139,6 +137,14 @@ class OVCLIExportTestCase(unittest.TestCase):
             [
                 ("text-generation", "lfm2_moe"),
                 ("text-generation-with-past", "lfm2_moe"),
+            ]
+        )
+
+    if is_transformers_version("<", "5.4"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "mamba"),
+                ("text-generation-with-past", "falcon_mamba"),
             ]
         )
 
