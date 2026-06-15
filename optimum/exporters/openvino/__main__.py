@@ -439,6 +439,14 @@ def main_export(
             elif config.torch_dtype == torch.bfloat16:
                 dtype = torch.bfloat16
 
+        # GLM-Edge-V: force fp32 export. Its SigLIP vision tower is numerically
+        # fragile and the 16-bit tracing path (ModuleExtension wrapping + bf16
+        # boi/eoi parameters) corrupts the image features, producing outputs that
+        # diverge from transformers (which runs bf16 but upcasts internally). HF
+        # itself matches fp32 in bf16/fp16, so fp32 export reproduces HF exactly.
+        if getattr(config, "model_type", "") == "glm" and hasattr(config, "vision_config"):
+            dtype = torch.float32
+
         if dtype is not None:
             if dtype in [torch.float16, torch.bfloat16]:
                 patch_16bit = True
