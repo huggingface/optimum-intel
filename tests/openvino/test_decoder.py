@@ -138,7 +138,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("glm4",)
 
     if is_transformers_version(">=", "4.53.0"):
-        SUPPORTED_ARCHITECTURES += ("arcee",)
+        SUPPORTED_ARCHITECTURES += ("arcee", "smollm3")
 
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version(">=", "4.52.1") and is_transformers_version("<", "5"):
@@ -258,6 +258,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mamba": 0,
         "falcon_mamba": 0,
         "arcee": 2,
+        "smollm3": 2,
         "gpt_oss": 2,
         "gpt_oss_mxfp4": 2,
         "zamba2": 1,

@@ -164,6 +164,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "granitemoehybrid"),
+                ("text-generation-with-past", "smollm3"),
             ]
         )
 
@@ -230,6 +231,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "exaone4": 2,
         "bitnet": 2,
         "granitemoehybrid": 2,
+        "smollm3": 2,
         "qwen3_vl_eagle3": 0,
     }
 
