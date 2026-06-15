@@ -98,6 +98,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_oss_mxfp4",
         "afmoe",
         "hunyuan_v1_dense",
+        "smollm3",
     )
 
     # config loading failing coming from type mismatch coming from transformers v5.4
