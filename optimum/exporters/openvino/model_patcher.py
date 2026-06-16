@@ -10452,8 +10452,6 @@ class _LTX2AttnProcessorWithEps:
         query_rotary_emb=None,
         key_rotary_emb=None,
     ):
-        from diffusers.models.transformers.transformer_ltx2 import apply_split_rotary_emb
-
         batch_size, sequence_length, _ = (
             hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
         )
@@ -10473,8 +10471,8 @@ class _LTX2AttnProcessorWithEps:
         key = attn.norm_k(key)
 
         if query_rotary_emb is not None:
-            query = apply_split_rotary_emb(query, query_rotary_emb)
-            key = apply_split_rotary_emb(key, key_rotary_emb if key_rotary_emb is not None else query_rotary_emb)
+            query = _ltx2_apply_split_rotary_emb(query, query_rotary_emb)
+            key = _ltx2_apply_split_rotary_emb(key, key_rotary_emb if key_rotary_emb is not None else query_rotary_emb)
 
         query = query.unflatten(2, (attn.heads, -1))
         key = key.unflatten(2, (attn.heads, -1))
@@ -10590,9 +10588,10 @@ def _ltx2_apply_split_rotary_emb(x, freqs):
 
 class _LTX2TraceSafeAttnProcessor:
     """
-    Attention processor with trace-safe mask handling.
-    Replaces prepare_attention_mask (which has data-dependent branches) with
-    branchless mask reshaping, ensuring traced graph generalizes to all input sizes.
+    Attention processor with trace-safe mask handling and RoPE.
+    Replaces prepare_attention_mask (which has data-dependent branches) and
+    apply_split_rotary_emb (which uses in-place addcmul_ on views) with
+    trace-safe equivalents.
     """
 
     def __call__(
@@ -10604,7 +10603,8 @@ class _LTX2TraceSafeAttnProcessor:
         query_rotary_emb=None,
         key_rotary_emb=None,
     ):
-        from diffusers.models.transformers.transformer_ltx2 import apply_split_rotary_emb
+        # Use trace-safe RoPE — original has in-place addcmul_ on views which can break tracing
+        apply_rotary = _ltx2_apply_split_rotary_emb
 
         batch_size, sequence_length, _ = (
             hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
@@ -10630,8 +10630,8 @@ class _LTX2TraceSafeAttnProcessor:
         key = attn.norm_k(key)
 
         if query_rotary_emb is not None:
-            query = apply_split_rotary_emb(query, query_rotary_emb)
-            key = apply_split_rotary_emb(key, key_rotary_emb if key_rotary_emb is not None else query_rotary_emb)
+            query = apply_rotary(query, query_rotary_emb)
+            key = apply_rotary(key, key_rotary_emb if key_rotary_emb is not None else query_rotary_emb)
 
         query = query.unflatten(2, (attn.heads, -1))
         key = key.unflatten(2, (attn.heads, -1))
