@@ -131,8 +131,8 @@ class OVQuantizerTest(unittest.TestCase):
         (OVModelForSequenceClassification, "bert", 32, 35),
         (OVModelForCausalLM, "gpt2", 31, 22),
         (OVSentenceTransformer, "sentence-transformers-bert", 12, 15),
-        (OVModelForFeatureExtraction, "blenderbot", 33, 35 if is_transformers_version("<", "5") else 36),
-        (OVModelForMaskedLM, "roberta", 32, 34 if is_transformers_version("<", "5") else 35),
+        (OVModelForFeatureExtraction, "blenderbot", 33, 35 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 36),
+        (OVModelForMaskedLM, "roberta", 32, 34 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 35),
         (OVModelForZeroShotImageClassification, "clip", 65, 65),
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET = [
@@ -265,7 +265,7 @@ class OVQuantizerTest(unittest.TestCase):
                 "model": 33,
             },
             {
-                "model": {"int8": 35 if is_transformers_version("<", "5") else 36},
+                "model": {"int8": 35 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 36},
             },
         ),
         (
@@ -295,7 +295,7 @@ class OVQuantizerTest(unittest.TestCase):
                 "model": 32,
             },
             {
-                "model": {"int8": 34 if is_transformers_version("<", "5") else 35},
+                "model": {"int8": 34 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 35},
             },
         ),
         (
@@ -337,7 +337,7 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {"encoder": 30, "decoder": 52},
-            {"encoder": {"int8": 32}, "decoder": {"int8": 52 if is_transformers_version("<", "5") else 53}},
+            {"encoder": {"int8": 32}, "decoder": {"int8": 52 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 53}},
         ),
         (
             OVSamModel,
@@ -578,7 +578,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     )
 
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = (
-        (OVModelForCausalLM, "opt125m", 62 if is_transformers_version("<", "5") else 64, 43),
+        (OVModelForCausalLM, "opt125m", 62 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 64, 43),
     )
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 74),)
     SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "gpt2", 44, 44),)
@@ -1143,7 +1143,10 @@ class OVWeightCompressionTest(unittest.TestCase):
             {"bits": 4, "group_size": 8, "ratio": 0.5},
             {
                 "decoder": {"int8": 40, "int4": 4},
-                "encoder": {"int8": 24, "int4": 4},
+                "encoder": {
+                    "int8": 24 if is_transformers_version("<", "5.5") else 44,
+                    "int4": 4 if is_transformers_version("<", "5.5") else 8,
+                },
             },
         ),
     ]
@@ -1826,7 +1829,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 processor=MODEL_NAMES["whisper"],
             ),
             {"encoder": 14, "decoder": 22},
-            {"encoder": {"int8": 14}, "decoder": {"int8": 22}},
+            {"encoder": {"int8": 14 if is_transformers_version("<", "5.5") else 26}, "decoder": {"int8": 22}},
         ),
     ]
 
