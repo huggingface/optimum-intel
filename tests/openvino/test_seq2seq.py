@@ -455,7 +455,8 @@ class Qwen3ASRTest(unittest.TestCase):
     def _generate_audio_data(self):
         np.random.seed(SEED)
         sample_rate = 16000
-        t = np.linspace(0, 1.0, sample_rate, endpoint=False)
+        duration = 120
+        t = np.linspace(0, 1.0, sample_rate * duration, endpoint=False)
         audio_data = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
         return audio_data, sample_rate
 
