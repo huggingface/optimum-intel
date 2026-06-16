@@ -400,6 +400,20 @@ def main_export(
         # some models force flash_attn attention by default that does not support load model on cpu
         if model_type in FORCE_ATTN_MODEL_CLASSES:
             loading_kwargs["_attn_implementation"] = FORCE_ATTN_MODEL_CLASSES[model_type]
+        if model_type == "deepseek_vl_v2" and trust_remote_code:
+            # DeepSeek-OCR-2 only exposes its remote class via auto_map["AutoModel"]; register it for
+            # AutoModelForCausalLM so the image-text-to-text -> text-generation loading path can find it.
+            from transformers import AutoModelForCausalLM
+            from transformers.dynamic_module_utils import get_class_from_dynamic_module
+
+            auto_map = getattr(config, "auto_map", {})
+            if "AutoModelForCausalLM" not in auto_map and "AutoModel" in auto_map:
+                remote_cls = get_class_from_dynamic_module(
+                    auto_map["AutoModel"], model_name_or_path, trust_remote_code=trust_remote_code
+                )
+                remote_cls.register_for_auto_class("AutoModelForCausalLM")
+                AutoModelForCausalLM.register(config.__class__, remote_cls, exist_ok=True)
+            loading_kwargs["_attn_implementation"] = "eager"
         if model_type == "phi4mm":
             if "activation_checkpointing" in config.audio_processor["config"]:
                 config.audio_processor["config"]["activation_checkpointing"] = ""

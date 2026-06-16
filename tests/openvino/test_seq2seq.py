@@ -709,6 +709,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         # remote code models differs after transformers v4.54
         SUPPORTED_ARCHITECTURES += ["llava-qwen2", "phi3_v"]
 
+    if is_transformers_version(">=", "4.46.0") and is_transformers_version("<", "4.54.0"):
+        # DeepSeek-OCR-2 (deepseek_vl_v2) ships as remote code pinned to transformers 4.46.x
+        SUPPORTED_ARCHITECTURES += ["deepseek_vl_v2"]
+
     if is_transformers_version("<", "5"):
         # remote code models incompatible after transformers v5
         SUPPORTED_ARCHITECTURES += ["internvl_chat", "minicpmv"]
@@ -733,6 +737,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "maira2",
         "phi4mm",
         "videochat_flash_qwen",
+        "deepseek_vl_v2",
     ]
     IMAGE = Image.open(
         requests.get(
@@ -776,7 +781,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             from transformers import Qwen2VLForConditionalGeneration
 
             return Qwen2VLForConditionalGeneration
-        if model_arch == "videochat_flash_qwen":
+        if model_arch in ("videochat_flash_qwen", "deepseek_vl_v2"):
             from transformers import AutoModel
 
             return AutoModel
@@ -810,6 +815,12 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
+        if model_arch == "deepseek_vl_v2":
+            # DeepSeek-OCR-2's reference modeling hardcodes CUDA and uses a custom (non-`generate`)
+            # `infer` interface, so the transformers-parity comparison is not applicable. The OV
+            # generation path is exercised by `test_generate_utils` instead.
+            self.skipTest("DeepSeek-OCR-2 reference uses a custom CUDA-only infer() API")
+
         if model_arch in ("llama4", "minicpmv", "minicpmo") and is_openvino_version(">=", "2026.1.0"):
             self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
 
@@ -1084,8 +1095,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         outputs = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
         self.assertIsInstance(outputs[0], str)
 
-        # GOT-OCR2 does not support text-only input
-        if model_arch != "got_ocr2":
+        # GOT-OCR2 and DeepSeek-OCR-2 are OCR models that do not support text-only input
+        if model_arch not in ("got_ocr2", "deepseek_vl_v2"):
             # No input image case
             question = "Hi, how are you?"
             inputs = model.preprocess_inputs(**preprocessors, text=question, image=None)
@@ -1149,7 +1160,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             preprocessors = {"processor": processor, "tokenizer": tokenizer, "config": config}
-        elif model_arch in ["internvl_chat", "videochat_flash_qwen"]:
+        elif model_arch in ["internvl_chat", "videochat_flash_qwen", "deepseek_vl_v2"]:
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
