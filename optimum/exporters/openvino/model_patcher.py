@@ -10637,14 +10637,22 @@ class _LTX2TraceSafeAttnProcessor:
         key = key.unflatten(2, (attn.heads, -1))
         value = value.unflatten(2, (attn.heads, -1))
 
-        # Transpose to [B, heads, seq, dim] for SDPA
+        # Manual attention with epsilon (avoids SDPA op in IR)
         query = query.transpose(1, 2)
         key = key.transpose(1, 2)
         value = value.transpose(1, 2)
 
-        hidden_states = torch.nn.functional.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False,
-        )
+        scale = 1.0 / (query.shape[-1] ** 0.5)
+        attn_weights = torch.matmul(query, key.transpose(-2, -1)) * scale
+
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask
+
+        attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1)
+
+        eps = 1e-30
+        hidden_states = torch.matmul(attn_weights + eps, value)
+
         hidden_states = hidden_states.transpose(1, 2).flatten(2, 3)
         hidden_states = hidden_states.to(query.dtype)
 
