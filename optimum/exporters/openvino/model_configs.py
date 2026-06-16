@@ -67,6 +67,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyVisionPositionIdsPhi4InputGenerator,
     Eagle3DummyGenerator,
     Eagle3VLMDummyGenerator,
+    Gemma4AssistantDummyInputGenerator,
     Gemma4DummyPastKeyValuesGenerator,
     GPTBigCodeDummyPastKeyValuesGenerator,
     Lfm2DummyPastKeyValuesGenerator,
@@ -1282,11 +1283,64 @@ class Gemma3TextOpenVINOConfig(Gemma2OpenVINOConfig):
     ],
     library_name="transformers",
 )
+# Also handle the multimodal `gemma4` model_type for pure text-generation tasks.
+# AutoModelForCausalLM loads `Gemma4ForConditionalGeneration` for the
+# `google/gemma-4-*` checkpoints (model_type=="gemma4"); routing text-generation
+# through this text-only config makes `--task text-generation[-with-past]` work
+# on those checkpoints and uses the MTP patcher to emit the extra outputs.
+@register_in_tasks_manager(
+    "gemma4",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
 class Gemma4TextOpenVINOConfig(Gemma3TextOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Gemma4DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Gemma4DummyPastKeyValuesGenerator
     MIN_TRANSFORMERS_VERSION = "5.5"
+
+    def __init__(self, config, *args, **kwargs):
+        # When this config is invoked for the multimodal `gemma4` model_type
+        # (e.g. `--task text-generation` on `google/gemma-4-E2B-it`), the
+        # caller passes the full multimodal `Gemma4Config` whose text-only
+        # fields (num_hidden_layers, etc.) live under `.text_config`.
+        # `NormalizedTextConfig` and the dummy generators read those fields
+        # directly off `self._normalized_config.config`, so unwrap here.
+        if getattr(config, "model_type", None) == "gemma4" and hasattr(config, "get_text_config"):
+            config = config.get_text_config()
+        super().__init__(config, *args, **kwargs)
+
+    # Use the MTP-enabled patcher so the exported IR includes the additional
+    # last_hidden_state and shared_kv_states tensors required by
+    # `Gemma4AssistantOVForCausalLM`.  Set lazily to avoid an import cycle at
+    # module import time (model_patcher imports from input_generators which
+    # imports from this module via the registry).
+    @property
+    def _MODEL_PATCHER(self):  # type: ignore[override]
+        from .model_patcher import Gemma4TextMTPModelPatcher
+
+        return Gemma4TextMTPModelPatcher
+
+    @property
+    def outputs(self) -> dict[str, dict[int, str]]:
+        common_outputs = super().outputs
+        # MTP-specific extra outputs.  Order matters: it MUST match the field
+        # order in `_Gemma4MTPOutput` in model_patcher.py, which in turn is
+        # the order torch.onnx tracer will see when iterating the returned
+        # container as a tuple.  Past key value outputs come from
+        # `super().outputs` in their normal positions; the MTP tensors are
+        # appended at the end.
+        common_outputs["mtp_last_hidden_state"] = {0: "batch_size", 1: "sequence_length"}
+        # K/V shape: (batch, num_kv_heads, sequence_length, head_dim)
+        kv_axes = {0: "batch_size", 2: "sequence_length"}
+        common_outputs["mtp_full_attention_key"] = dict(kv_axes)
+        common_outputs["mtp_full_attention_value"] = dict(kv_axes)
+        common_outputs["mtp_sliding_attention_key"] = dict(kv_axes)
+        common_outputs["mtp_sliding_attention_value"] = dict(kv_axes)
+        return common_outputs
 
     def add_past_key_values(self, inputs_or_outputs: dict[str, dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
@@ -1308,6 +1362,101 @@ class Gemma4TextOpenVINOConfig(Gemma3TextOpenVINOConfig):
         for i, layer_type in enumerate(layer_types):
             inputs_or_outputs[f"{name}.{i}.key"] = {0: "batch_size", 2: decoder_sequence_name}
             inputs_or_outputs[f"{name}.{i}.value"] = {0: "batch_size", 2: decoder_sequence_name}
+
+    def patch_ov_model_before_stateful(self, ov_model):
+        """Protect ``mtp_*`` outputs from being dropped by stateful patching.
+
+        The MTP outputs (shared K/V from the source layer + last_hidden_state)
+        share their producing tensor with ``present.<shared_layer>.*`` outputs:
+        in PyTorch the model returns the same underlying tensor twice. As a
+        result both ``Result`` nodes consume the same output port of the same
+        node. OpenVINO's ``apply_make_stateful_transformation`` then rewrites
+        that port to feed an ``Assign`` and removes *every* ``Result`` reading
+        from it, including our ``mtp_*`` ones.
+
+        To keep the MTP results alive we insert a no-op (a single-axis
+        ``Reshape`` keeping the same shape) between the shared source port and
+        the ``mtp_*`` ``Result`` node, so the MTP path consumes a *different*
+        node than the ``present.*`` ``Result`` that the stateful pass rewires.
+        """
+        from openvino import opset13
+
+        mtp_prefixes = ("mtp_full_attention_", "mtp_sliding_attention_")
+        for result in list(ov_model.get_results()):
+            names = result.output(0).get_names()
+            if not any(any(n.startswith(p) for p in mtp_prefixes) for n in names):
+                continue
+            source = result.input_value(0)
+            shape_of = opset13.shape_of(source, output_type="i64")
+            reshape = opset13.reshape(source, shape_of, special_zero=False)
+            reshape.set_friendly_name(sorted(names)[0] + "/protect")
+            result.input(0).replace_source_output(reshape.output(0))
+            # Preserve tensor names on the new Result tensor.
+            result.output(0).get_tensor().set_names(set(names))
+        ov_model.validate_nodes_and_infer_types()
+
+
+@register_in_tasks_manager(
+    "gemma4_assistant",
+    *["text-generation"],
+    library_name="transformers",
+)
+class Gemma4AssistantOpenVINOConfig(OpenVINOConfig):
+    """OpenVINO export config for ``Gemma4AssistantForCausalLM``.
+
+    The assistant model is the *small* half of the MTP-style speculative
+    decoding pair documented in transformers' ``gemma4_assistant``: it has
+    ``num_kv_shared_layers == num_hidden_layers`` so every layer consumes
+    ``shared_kv_states`` provided by the (large) target model. Consequently
+    the IR has *no* past-key-value inputs/outputs; instead its inputs are
+    flat ``full_attention_*`` / ``sliding_attention_*`` tensors plus
+    ``inputs_embeds`` (the concatenated backbone hidden states) and the
+    usual ``position_ids`` / ``attention_mask`` pair. Outputs are ``logits``
+    and the post-projected ``last_hidden_state``.
+    """
+
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (Gemma4AssistantDummyInputGenerator,)
+    MIN_TRANSFORMERS_VERSION = "5.5"
+    # The assistant has no past-KV cache (every layer is a shared-KV layer);
+    # declare ``use_past = False`` so the generic ``get_decoder_models_for_export``
+    # routing in optimum's text-generation path is a no-op.
+    use_past = False
+    use_past_in_inputs = False
+
+    def __init__(self, config, *args, **kwargs):
+        # ``get_decoder_models_for_export`` reconstructs the config with
+        # ``use_past`` / ``use_past_in_inputs`` keyword arguments which the
+        # base :class:`OpenVINOConfig.__init__` does not accept. Swallow them
+        # here since the assistant never uses a KV cache.
+        kwargs.pop("use_past", None)
+        kwargs.pop("use_past_in_inputs", None)
+        super().__init__(config, *args, **kwargs)
+
+    @property
+    def _MODEL_PATCHER(self):  # type: ignore[override]
+        from .model_patcher import Gemma4AssistantModelPatcher
+
+        return Gemma4AssistantModelPatcher
+
+    @property
+    def inputs(self) -> dict[str, dict[int, str]]:
+        return {
+            "inputs_embeds": {0: "batch_size", 1: "sequence_length"},
+            "position_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "kv_sequence_length"},
+            "full_attention_key": {0: "batch_size", 2: "kv_sequence_length"},
+            "full_attention_value": {0: "batch_size", 2: "kv_sequence_length"},
+            "sliding_attention_key": {0: "batch_size", 2: "kv_sequence_length"},
+            "sliding_attention_value": {0: "batch_size", 2: "kv_sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> dict[str, dict[int, str]]:
+        return {
+            "logits": {0: "batch_size", 1: "sequence_length"},
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+        }
 
 
 @register_in_tasks_manager("deci", *["text-generation", "text-generation-with-past"], library_name="transformers")

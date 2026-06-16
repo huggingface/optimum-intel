@@ -18,6 +18,7 @@ import logging
 import logging as log
 import math
 import types
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -3313,6 +3314,173 @@ class Gemma2ModelPatcher(OVDecoderModelPatcher):
             return outputs
 
         self.patched_forward = patched_forward
+
+
+# ---------------------------------------------------------------------------
+# Gemma 4 text + MTP (Multi-Token Prediction / shared-KV speculation) exporter
+# ---------------------------------------------------------------------------
+#
+# When the assistant model uses MTP-style speculative decoding, the target
+# (full) Gemma 4 model must additionally emit, for each forward pass:
+#   * the last hidden state (so the assistant can consume it via inputs_embeds)
+#   * the shared key/value tensors for both attention regimes
+#     (full_attention and sliding_attention) from the *last* shared KV layer
+#
+# transformers' Gemma 4 forward returns a `shared_kv_states` dict of shape
+# {"full_attention": (K, V), "sliding_attention": (K, V)} when called with
+# `return_shared_kv_states=True`.  We force that flag in the patched forward
+# and augment the returned `ModelOutput` with the MTP tensors at the tail end
+# (and strip the verbose `hidden_states` / `shared_kv_states` fields the
+# torchscript tracer cannot flatten).
+#
+# Note on stateful KV cache: optimum-intel's post-export stateful patching
+# operates on the standard `present.*` outputs only and is agnostic to extra
+# trailing outputs, so the extra MTP outputs leave the stateful conversion
+# unaffected.
+class Gemma4TextMTPModelPatcher(Gemma2ModelPatcher):
+    """Patcher for the text-only Gemma 4 model with MTP outputs.
+
+    Forces `output_hidden_states=True` and `return_shared_kv_states=True` on
+    every traced forward, then augments the returned `ModelOutput` with the
+    MTP tensors so they appear as trailing positional outputs of the IR.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        base_patched_forward = self.patched_forward
+
+        @functools.wraps(base_patched_forward)
+        def mtp_patched_forward(*args, **kwargs):
+            # Force MTP-related kwargs.  These are honored by Gemma 4's
+            # transformers implementation; older versions would have ignored
+            # them, which is why we gate by transformers version in the
+            # config (MIN_TRANSFORMERS_VERSION >= 5.5).
+            kwargs["output_hidden_states"] = True
+            kwargs["return_shared_kv_states"] = True
+
+            outputs = base_patched_forward(*args, **kwargs)
+
+            # `outputs` is a transformers ModelOutput (OrderedDict-like).  We
+            # need to extract the MTP tensors and append them at the end of
+            # the dict, while removing the bulky `hidden_states` tuple and
+            # `shared_kv_states` dict that the torchscript tracer cannot
+            # serialise.
+            hidden_states = outputs.get("hidden_states", None)
+            if hidden_states is None:
+                raise RuntimeError(
+                    "Gemma4TextMTPModelPatcher: expected `hidden_states` on the model "
+                    "output but got None. The MTP export requires "
+                    "`output_hidden_states=True` to be honored by the model."
+                )
+            last_hidden_state = hidden_states[-1]
+
+            shared_kv = outputs.get("shared_kv_states", None)
+            if shared_kv is None or "full_attention" not in shared_kv or "sliding_attention" not in shared_kv:
+                raise RuntimeError(
+                    "Gemma4TextMTPModelPatcher: expected `shared_kv_states` with both "
+                    "'full_attention' and 'sliding_attention' entries on the model output. "
+                    "The MTP export requires `return_shared_kv_states=True` to be honored."
+                )
+            full_k, full_v = shared_kv["full_attention"]
+            sliding_k, sliding_v = shared_kv["sliding_attention"]
+
+            # Clone the MTP tensors so torch's tracer does not deduplicate
+            # them with the `present.*` past-key-value outputs of the shared
+            # KV layers (the model returns the *same* underlying tensor in
+            # both `shared_kv_states[...]` and the cache outputs for the
+            # shared layers, which would otherwise cause the MTP outputs to
+            # collapse into the cache outputs in the traced graph).
+            full_k = full_k.clone()
+            full_v = full_v.clone()
+            sliding_k = sliding_k.clone()
+            sliding_v = sliding_v.clone()
+            last_hidden_state = last_hidden_state.clone()
+
+            # Build a fresh OrderedDict so the tracer (which iterates
+            # outputs.values()) sees the fields in OnnxConfig declaration
+            # order: logits, past_key_values (flattened by the tracer
+            # wrapper), then MTP tensors.  We rebuild rather than mutate
+            # because transformers ModelOutput forbids __delitem__.
+            new_outputs = OrderedDict()
+            new_outputs["logits"] = outputs["logits"]
+            new_outputs["past_key_values"] = outputs["past_key_values"]
+            new_outputs["mtp_last_hidden_state"] = last_hidden_state
+            new_outputs["mtp_full_attention_key"] = full_k
+            new_outputs["mtp_full_attention_value"] = full_v
+            new_outputs["mtp_sliding_attention_key"] = sliding_k
+            new_outputs["mtp_sliding_attention_value"] = sliding_v
+            return new_outputs
+
+        self.patched_forward = mtp_patched_forward
+
+
+# ---------------------------------------------------------------------------
+# Gemma 4 Assistant (MTP draft model) exporter
+# ---------------------------------------------------------------------------
+#
+# The assistant model has ``num_kv_shared_layers == num_hidden_layers`` so it
+# consumes ``shared_kv_states`` from the target on every layer and has no
+# past-key-value cache of its own. The OnnxConfig declares its inputs as a
+# flat list of tensors; this patcher reassembles the ``shared_kv_states``
+# dictionary expected by ``Gemma4AssistantForCausalLM.forward`` and returns
+# the two tensors the runtime needs (``logits`` + post-projected
+# ``last_hidden_state``).
+class Gemma4AssistantModelPatcher(ModelPatcher):
+    """Patcher for the Gemma 4 assistant (draft) model.
+
+    Rewrites the model's forward so its Python signature matches the flat
+    inputs declared by :class:`Gemma4AssistantOpenVINOConfig` and packs the
+    shared KV tensors back into the dict the model's original forward expects.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def forward(
+            self,
+            inputs_embeds,
+            position_ids,
+            attention_mask,
+            full_attention_key,
+            full_attention_value,
+            sliding_attention_key,
+            sliding_attention_value,
+        ):
+            shared_kv_states = {
+                "full_attention": (full_attention_key, full_attention_value),
+                "sliding_attention": (sliding_attention_key, sliding_attention_value),
+            }
+            out = self.__orig_forward(
+                input_ids=None,
+                inputs_embeds=inputs_embeds,
+                position_ids=position_ids,
+                attention_mask=attention_mask,
+                shared_kv_states=shared_kv_states,
+                use_cache=False,
+            )
+            # ``Gemma4AssistantOutput.last_hidden_state`` is the post-projected
+            # state, which is what the runtime feeds back as ``inputs_embeds``
+            # on the next draft step.
+            return OrderedDict([("logits", out.logits), ("last_hidden_state", out.last_hidden_state)])
+
+        model.forward = types.MethodType(forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
 
 
 def _decilm_attn_forward(
