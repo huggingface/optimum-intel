@@ -12,14 +12,12 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import os
+import re
 import subprocess
 import sys
 import textwrap
-import re
 import unittest
 
-import pytest
 from parameterized import parameterized
 
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
@@ -66,11 +64,8 @@ if is_transformers_version(">=", "4.51.0"):
                 "ReshapeAMatMul",
             ]
         )
-        ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["compile"].extend(
-            [
-                "MoEMatMulsFusion",
-                "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
-            ]
+        ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["compile"].append(
+            "ConvertScatterElementsUpdate12ToScatterElementsUpdate3"
         )
 
 if is_transformers_version(">=", "4.51.0") and is_transformers_version("<", "5"):
@@ -148,14 +143,6 @@ if is_transformers_version(">=", "4.55.0"):
         "convert": [],
         "compile": [],
     }
-    # Transforms applied only in OV >= 2026.1.0
-    if is_openvino_version(">=", "2026.1.0"):
-        ARCH_TO_EXPECTED_TRANSFORMATIONS["afmoe"]["compile"].extend(
-            [
-                "MoEMatMulsFusion",
-                "FullyConnectedBiasFusion",
-            ]
-        )
 
 if is_transformers_version(">=", "5.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2_moe"] = {
@@ -187,8 +174,6 @@ if is_transformers_version(">=", "5.0"):
         ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2_moe"]["convert"].append("LinOpSequenceFusion")
         ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2_moe"]["compile"].extend(
             [
-                "MoEMatMulsFusion",
-                "FullyConnectedBiasFusion",
                 "MulAddToFMA",
                 "SnippetsDataFlowManager",
             ]
@@ -216,9 +201,7 @@ if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.
             "TransposeSinking",
         ],
         "compile": [
-            "MoEMatMulsFusion",
             "ConvertMatMulToFC",
-            "FullyConnectedBiasFusion",
             "Snippets",
             "SnippetsDataFlowManager",
             "Tokenization",
