@@ -14,6 +14,7 @@
 
 import copy
 import gc
+import importlib.util
 import os
 import unittest
 from tempfile import TemporaryDirectory
@@ -1298,6 +1299,74 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
             self.assertEqual(ov_generated.shape, ref_waveform.shape)
 
         del ref_model
+        del ov_model
+        gc.collect()
+
+
+@unittest.skipUnless(
+    importlib.util.find_spec("chatterbox") is not None,
+    "chatterbox-tts package is not installed",
+)
+class OVModelForChatterboxTextToSpeechIntegrationTest(unittest.TestCase):
+    OVMODEL_CLASS = OVModelForTextToSpeechSeq2Seq
+
+    def _export_tiny_model(self, tmpdirname, multilingual=False):
+        # Build a tiny random-weight Chatterbox at test time instead of downloading the
+        # ~2 GB checkpoint, and export it to OpenVINO.
+        from chatterbox_test_utils import build_tiny_chatterbox
+
+        from optimum.exporters.openvino import export_from_model
+
+        model = build_tiny_chatterbox(tmpdirname, multilingual=multilingual)
+        output_path = os.path.join(tmpdirname, "ov")
+        export_from_model(model=model, output=output_path, task="text-to-audio")
+        return output_path
+
+    def test_export_and_inference(self):
+        set_seed(SEED)
+        with TemporaryDirectory() as tmpdirname:
+            output_path = self._export_tiny_model(tmpdirname)
+            ov_model = self.OVMODEL_CLASS.from_pretrained(output_path, device=OPENVINO_DEVICE)
+
+            from optimum.intel.openvino.modeling_text2speech import _OVModelForChatterboxTextToSpeech
+
+            self.assertIsInstance(ov_model, _OVModelForChatterboxTextToSpeech)
+            self.assertIsInstance(ov_model.config, PretrainedConfig)
+            self.assertEqual(ov_model.config.model_type, "chatterbox")
+            self.assertFalse(ov_model.multilingual)
+
+            inputs = ov_model.preprocess_input("Hello, this is a test.")
+            self.assertIn("input_ids", inputs)
+            waveform = ov_model.generate(**inputs, max_new_tokens=120)
+
+            self.assertIsInstance(waveform, torch.Tensor)
+            self.assertEqual(waveform.dim(), 2)
+            self.assertGreater(waveform.shape[-1], 0)
+            # The synthesized audio must be finite and non-silent.
+            self.assertTrue(torch.isfinite(waveform).all())
+            self.assertGreater(float(waveform.abs().max()), 1e-3)
+
+        del ov_model
+        gc.collect()
+
+    def test_multilingual_export_and_inference(self):
+        set_seed(SEED)
+        with TemporaryDirectory() as tmpdirname:
+            output_path = self._export_tiny_model(tmpdirname, multilingual=True)
+            ov_model = self.OVMODEL_CLASS.from_pretrained(output_path, device=OPENVINO_DEVICE)
+
+            self.assertTrue(ov_model.multilingual)
+            # Russian input via the `language_id` argument, mirroring the original model API.
+            waveform = ov_model.generate(
+                text="Всем привет. Вы используете оптимум-интел.",
+                language_id="ru",
+                max_new_tokens=120,
+            )
+            self.assertEqual(waveform.dim(), 2)
+            self.assertGreater(waveform.shape[-1], 0)
+            self.assertTrue(torch.isfinite(waveform).all())
+            self.assertGreater(float(waveform.abs().max()), 1e-3)
+
         del ov_model
         gc.collect()
 
