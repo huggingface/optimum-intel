@@ -244,7 +244,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
             {"encoder": 14, "decoder": 22, "decoder_with_past": 25},
-            {"encoder": {"int8": 14}, "decoder": {"int8": 22}, "decoder_with_past": {"int8": 18}},
+            {
+                "encoder": {"int8": 14 if is_transformers_version("<", "5.5") else 26},
+                "decoder": {"int8": 22},
+                "decoder_with_past": {"int8": 18},
+            },
         ),
         (
             "automatic-speech-recognition-with-past",
@@ -252,7 +256,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
             {"encoder": 16, "decoder": 26, "decoder_with_past": 25},
-            {"encoder": {"f8e4m3": 14}, "decoder": {"f8e4m3": 22}, "decoder_with_past": {"f8e4m3": 18}},
+            {
+                "encoder": {"f8e4m3": 14 if is_transformers_version("<", "5.5") else 26},
+                "decoder": {"f8e4m3": 22},
+                "decoder_with_past": {"f8e4m3": 18},
+            },
         ),
         (
             "text-generation-with-past",
@@ -367,7 +375,9 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "model": 33,
             },
             {
-                "model": {"int8": 35 if is_transformers_version("<", "5") else 36},
+                "model": {
+                    "int8": 35 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 36
+                },
             },
         ),
         (
@@ -391,7 +401,9 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "model": 32,
             },
             {
-                "model": {"int8": 34 if is_transformers_version("<", "5") else 35},
+                "model": {
+                    "int8": 34 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 35
+                },
             },
         ),
         (
@@ -427,7 +439,12 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "encoder": 30,
                 "decoder": 52,
             },
-            {"encoder": {"int8": 32}, "decoder": {"int8": 52 if is_transformers_version("<", "5") else 53}},
+            {
+                "encoder": {"int8": 32},
+                "decoder": {
+                    "int8": 52 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 53
+                },
+            },
         ),
         (
             "feature-extraction",
@@ -470,13 +487,23 @@ class OVCLIExportTestCase(unittest.TestCase):
             "text-generation-with-past",
             "opt125m",
             "int4 --sym --group-size 128",
-            {"model": {"int8": 4 if is_transformers_version("<", "5") else 6, "int4": 72}},
+            {
+                "model": {
+                    "int8": 4 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 6,
+                    "int4": 72,
+                }
+            },
         ),
         (
             "text-generation-with-past",
             "opt125m",
             "int4 --group-size 64",
-            {"model": {"int8": 4 if is_transformers_version("<", "5") else 6, "int4": 144}},
+            {
+                "model": {
+                    "int8": 4 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 6,
+                    "int4": 144,
+                }
+            },
         ),
         (
             "text-generation-with-past",
@@ -485,8 +512,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             {
                 "model": {
                     "f4e2m1": 72,
-                    "f8e4m3": 2 if is_transformers_version("<", "5") else 3,
-                    "f8e8m0": 74 if is_transformers_version("<", "5") else 75,
+                    "f8e4m3": 2 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 3,
+                    "f8e8m0": 74 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 75,
                 }
             },
         ),
@@ -494,7 +521,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             "text-generation-with-past",
             "opt125m",
             "nf4",
-            {"model": {"int8": 4 if is_transformers_version("<", "5") else 6, "nf4": 72}},
+            {
+                "model": {
+                    "int8": 4 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 6,
+                    "nf4": 72,
+                }
+            },
         ),
         (
             "text-generation-with-past",
