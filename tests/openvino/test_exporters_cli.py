@@ -124,6 +124,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "4.57"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("feature-extraction", "qwen3_vl_embedding"),
+            ]
+        )
+
     if is_transformers_version(">=", "4.54.0"):
         SUPPORTED_ARCHITECTURES.extend(
             [
@@ -231,6 +238,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "granitemoehybrid": 2,
         "smollm3": 2,
         "qwen3_vl_eagle3": 0,
+        "qwen3_vl_embedding": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {

@@ -1568,7 +1568,9 @@ class IBertOpenVINOConfig(TextEncoderOpenVINOConfig):
 
 # TODO: this is a very confusing class TBH, why not simply decompose the VLM into components, like diffusion models ?
 class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOpenVINOConfig):
-    def __init__(self, export_config, patcher_cls=None, dummy_input_generator=None, inputs_update=None):
+    def __init__(
+        self, export_config, patcher_cls=None, dummy_input_generator=None, inputs_update=None, task="text-generation"
+    ):
         self.orig_export_config = export_config
         if dummy_input_generator is not None:
             export_config.DUMMY_INPUT_GENERATOR_CLASSES = (
@@ -1581,6 +1583,7 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOpenVINOConfig):
         self.use_past = export_config.use_past
         self.patcher_cls = patcher_cls
         self.input_info_upd = inputs_update
+        self.task = task
 
     def patch_model_for_export(
         self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None
@@ -1594,7 +1597,10 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOpenVINOConfig):
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        return self.orig_export_config.outputs
+        outputs = self.orig_export_config.outputs
+        if self.task == "feature-extraction":
+            outputs["last_hidden_state"] = {0: "batch_size", 1: "patch_height", 2: "patch_width"}
+        return outputs
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -1696,6 +1702,7 @@ def get_vlm_text_generation_config(
     model_patcher=None,
     dummy_input_generator=None,
     inputs_update=None,
+    task=None,
 ):
     internal_export_config = get_vlm_internal_text_generation_config(model_type, model_config, int_dtype, float_dtype)
     export_config = LMInputEmbedsConfigHelper(
@@ -1703,6 +1710,7 @@ def get_vlm_text_generation_config(
         patcher_cls=model_patcher,
         dummy_input_generator=dummy_input_generator,
         inputs_update=inputs_update,
+        task=task,
     )
     export_config._normalized_config = internal_export_config._normalized_config
     return export_config
@@ -3075,7 +3083,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = (
                 model.model.embed_tokens
-                if hasattr(model.model, "embed_tokens")
+                if hasattr(model, "model") and hasattr(model.model, "embed_tokens")
                 else _get_model_attribute(model, "language_model").embed_tokens
             )
             text_embedding.config = model.config
@@ -3183,7 +3191,11 @@ class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
 
 @register_in_tasks_manager(
     "qwen3_vl",
-    *["image-text-to-text"],
+    *[
+        "image-text-to-text",
+        "feature-extraction",
+        "feature-extraction-with-past",
+    ],
     library_name="transformers",
 )
 class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
@@ -3249,6 +3261,7 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
                 model_patcher=Qwen3VLLanguageModelPatcher,
                 dummy_input_generator=DummyQwen2VLLMInputGenerator,
                 inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                task=self.task,
             )
             config._normalized_config.deepstack_visual_indexes = (
                 self._orig_config.vision_config.deepstack_visual_indexes
