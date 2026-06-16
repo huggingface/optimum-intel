@@ -1069,6 +1069,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "qwen3_vl", False),
         (OVModelForCausalLM, "hunyuan_v1_dense", False),
         (OVModelForCausalLM, "smollm3", False),
+        (OVModelForFeatureExtraction, "qwen3_vl_embedding", False),
     ]
 
     if is_transformers_version("<", "5"):

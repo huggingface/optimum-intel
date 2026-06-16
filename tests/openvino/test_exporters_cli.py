@@ -119,6 +119,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "granitemoehybrid"),
         ("text-generation-with-past", "smollm3"),
         ("text-generation-with-past", "hunyuan_v1_dense"),
+        ("feature-extraction", "qwen3_vl_embedding"),
     ]
 
     if is_transformers_version("<", "5"):
@@ -183,6 +184,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "granitemoehybrid": 2,
         "smollm3": 2,
         "qwen3_vl_eagle3": 0,
+        "qwen3_vl_embedding": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
