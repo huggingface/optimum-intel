@@ -13,7 +13,6 @@
 #  limitations under the License.
 import logging
 import os
-from copy import deepcopy
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -876,7 +875,7 @@ class OVEncoder(OVModelPart):
         self.main_input_name = self.parent_model.main_input_name or "input_ids"
 
     # Adapted from https://github.com/QwenLM/Qwen3-ASR/blob/c17a131fe028b2e428b6e80a33d30bb4fa57b8df/qwen_asr/core/transformers_backend/modeling_qwen3_asr.py#L669
-    def chanked_forward(self, input_features, n_window):
+    def chunked_forward(self, input_features, n_window):
         feature_lens = input_features.shape[-1]
         chunk_num = torch.ceil(torch.tensor([feature_lens]) / (n_window * 2)).long()
 
@@ -891,19 +890,11 @@ class OVEncoder(OVModelPart):
 
         chunk_list = input_features.T.split(chunk_lengths.tolist(), dim=0)
         padded_feature = nn.utils.rnn.pad_sequence(chunk_list, batch_first=True).transpose(1, 2)
-        padded_feature = padded_feature.unsqueeze(1)
-
-        audio_features = []
         inputs = {}
-        for idx, input_feature in enumerate(padded_feature):
-            inputs["input_features"] = input_feature
+        inputs["input_features"] = padded_feature
+        last_hidden_state = torch.from_numpy(self.request(inputs)["last_hidden_state"]).to(self.device)
 
-            last_hidden_state = torch.from_numpy(self.request(inputs)["last_hidden_state"]).to(self.device)
-
-            audio_feature = last_hidden_state
-            audio_features.append(deepcopy(audio_feature))
-        audio_features = torch.cat(audio_features, dim=1)
-        return audio_features
+        return last_hidden_state.view(1, -1, last_hidden_state.shape[-1])
 
     @add_start_docstrings_to_model_forward(ENCODER_INPUTS_DOCSTRING)
     def forward(
@@ -926,7 +917,7 @@ class OVEncoder(OVModelPart):
             input_features = inputs["input_features"]
             audio_features = []
             for idx, input_feature in enumerate(input_features):
-                audio_feature = self.chanked_forward(input_feature, self.config.n_window)
+                audio_feature = self.chunked_forward(input_feature, self.config.n_window)
                 audio_features.append(audio_feature)
             audio_features = torch.cat(audio_features, dim=0)
             return BaseModelOutput(last_hidden_state=audio_features)
