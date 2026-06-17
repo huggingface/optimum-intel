@@ -19,9 +19,10 @@ import textwrap
 import unittest
 
 from parameterized import parameterized
+from utils_tests import ARCH_TO_MODEL_CLASS, MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS
 
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
-from utils_tests import ARCH_TO_MODEL_CLASS, MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS
+
 
 # Expected transformations per architecture, separated by stage:
 #   "convert" — MoC (Model Optimizer Common) transformations applied during model conversion
