@@ -821,9 +821,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         )
 
 
-
-        return out
-
     def _reorder_cache(self, past_key_values, beam_idx):
         return self.language_model._reorder_cache(past_key_values, beam_idx)
 

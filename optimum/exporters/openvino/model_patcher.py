@@ -5273,6 +5273,7 @@ def gemma3n_language_model_forward(
         cache_position=cache_position,
         **lm_kwargs,
     )
+    return outputs
 
 
 # Creates a dict of causal masks with bidirectional attention for vision tokens
@@ -5447,7 +5448,7 @@ def gemma3n_lm_forward(
         num_atten_layers = len(past_key_values)
         past_key_values = preprocess_past_key_values(past_key_values)
 
-    outputs = self.model(
+    outputs = self.model.forward(
         input_ids=input_ids,
         pixel_values=pixel_values,
         input_features=input_features,
