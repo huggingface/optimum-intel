@@ -132,11 +132,11 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "falcon_mamba"),
     ]
     # filter architectures depending on min/max transformers supported versions
-    _valid_models = get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
     SUPPORTED_ARCHITECTURES = [
         (task, model_type)
         for task, model_type in SUPPORTED_ARCHITECTURES
-        if TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type) in _valid_models
+        if TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type)
+        in get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
     ]
 
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
@@ -473,7 +473,8 @@ class OVCLIExportTestCase(unittest.TestCase):
     SUPPORTED_QUANTIZATION_ARCHITECTURES = [
         config
         for config in SUPPORTED_QUANTIZATION_ARCHITECTURES
-        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in _valid_models
+        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1])
+        in get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
     ]
 
     TRANSFORMERS_4BIT_CONFIGURATIONS = [
