@@ -178,6 +178,7 @@ from optimum.intel.utils.import_utils import (
     is_transformers_version,
 )
 from optimum.utils.input_generators import (
+    DTYPE_MAPPER,
     ASTDummyAudioInputGenerator,
     BartDummyTextInputGenerator,
     BloomDummyPastKeyValuesGenerator,
@@ -442,7 +443,7 @@ class Qwen3VLTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     *["text-generation", "text-generation-with-past"],
     library_name="transformers",
 )
-class Qwen3OmniTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class Qwen3OmniTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLLMInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -461,7 +462,7 @@ class Qwen3OmniTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     *["text-generation", "text-generation-with-past"],
     library_name="transformers",
 )
-class Qwen3OmniTalkerTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class Qwen3OmniTalkerTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -3421,28 +3422,48 @@ class Qwen3OmniTalkerLMConfigHelper(LMInputEmbedsConfigHelper):
 
 
 class Qwen3OmniCodePredictorLMConfigHelper(LMInputEmbedsConfigHelper):
+    # Unrolled CodePredictor: single graph call runs all num_code_groups-1 inner steps
+    # with in-graph Gumbel-max sampling. The graph is stateless across calls (use_past=False),
+    # so patch_stateful is skipped; the only inputs are inputs_embeds + sampling controls.
+    # This matches the unrolled API the GenAI speech_pipeline.cpp expects.
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Disable stateful past wrapping: each call starts fresh.
+        self.use_past = False
+        self.use_past_in_inputs = False
+
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        orig_inputs = super().inputs
-        orig_inputs["generation_steps"] = {}
-        return orig_inputs
+        return {
+            "inputs_embeds": {0: "batch_size", 1: "sequence_length"},
+            "temperature": {},
+            "top_k": {},
+            "seeds": {0: "num_inner_steps"},
+        }
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        base_outputs = self.orig_export_config.outputs
-        result = {}
-        for key, value in base_outputs.items():
-            result[key] = value
-            if key == "logits":
-                result["hidden_states"] = {0: "batch_size", 1: "sequence_length"}
-        return result
+        return {
+            "codes": {0: "batch_size", 1: "num_inner_steps"},
+            "codec_hiddens_sum": {0: "batch_size", 1: "sequence_length"},
+        }
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
-        dummy_inputs = super().generate_dummy_inputs(framework, **kwargs)
         import torch
 
-        dummy_inputs["generation_steps"] = torch.tensor(0, dtype=torch.int64)
-        return dummy_inputs
+        talker_config = getattr(self._config, "talker_config", self._config)
+        cp_config = getattr(talker_config, "code_predictor_config", talker_config)
+        hidden_size = getattr(cp_config, "hidden_size", getattr(self._normalized_config, "hidden_size", 64))
+        num_code_groups = getattr(cp_config, "num_code_groups", 16)
+        num_inner_steps = max(1, num_code_groups - 1)
+
+        return {
+            "inputs_embeds": torch.randn(1, 2, hidden_size, dtype=torch.float32),
+            "temperature": torch.tensor(0.9, dtype=torch.float32),
+            "top_k": torch.tensor(50, dtype=torch.int64),
+            "seeds": torch.arange(num_inner_steps, dtype=torch.int64),
+        }
 
 
 class DummyQwen3OmniAudioInputGenerator(DummyInputGenerator):
