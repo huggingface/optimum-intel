@@ -25,6 +25,8 @@ from utils_tests import (
     OPENVINO_DEVICE,
     REMOTE_CODE_MODELS,
     SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED,
+    TEST_NAME_TO_MODEL_TYPE,
+    get_supported_model_for_library,
 )
 
 from optimum.exporters.openvino import export_from_model, main_export
@@ -97,36 +99,28 @@ class ExportModelTest(unittest.TestCase):
         "smollm3": OVModelForCausalLM,
         "hunyuan_v1_dense": OVModelForCausalLM,
         "qwen3": OVModelForFeatureExtraction,
+        "zamba2": OVModelForCausalLM,
+        "exaone4": OVModelForCausalLM,
+        "lfm2": OVModelForCausalLM,
+        "afmoe": OVModelForCausalLM,
+        "qwen3_next": OVModelForCausalLM,
+        "videochat_flash_qwen": OVModelForVisualCausalLM,
+        "lfm2_moe": OVModelForCausalLM,
+        "qwen3_asr": OVModelForSpeechSeq2Seq,
+        "mamba": OVModelForCausalLM,
+        "falcon_mamba": OVModelForCausalLM,
+        "gemma4": OVModelForVisualCausalLM,
+        "gemma4_moe": OVModelForVisualCausalLM,
+        "qwen3_5": OVModelForVisualCausalLM,
+        "qwen3_5_moe": OVModelForVisualCausalLM,
     }
-
-    if is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES.update(
-            {
-                "zamba2": OVModelForCausalLM,
-                "exaone4": OVModelForCausalLM,
-                "lfm2": OVModelForCausalLM,
-                "afmoe": OVModelForCausalLM,
-                "qwen3_next": OVModelForCausalLM,
-                "videochat_flash_qwen": OVModelForVisualCausalLM,
-            }
-        )
-    else:
-        SUPPORTED_ARCHITECTURES.update({"lfm2_moe": OVModelForCausalLM})
-
-    if is_transformers_version("==", "4.57.6"):
-        SUPPORTED_ARCHITECTURES.update({"qwen3_asr": OVModelForSpeechSeq2Seq})
-
-    if is_transformers_version("<", "5.4"):
-        SUPPORTED_ARCHITECTURES.update({"mamba": OVModelForCausalLM})
-        SUPPORTED_ARCHITECTURES.update({"falcon_mamba": OVModelForCausalLM})
-
-    if is_transformers_version(">=", "5.5.0"):
-        SUPPORTED_ARCHITECTURES.update({"gemma4": OVModelForVisualCausalLM})
-        SUPPORTED_ARCHITECTURES.update({"gemma4_moe": OVModelForVisualCausalLM})
-
-    if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
-        SUPPORTED_ARCHITECTURES.update({"qwen3_5": OVModelForVisualCausalLM})
-        SUPPORTED_ARCHITECTURES.update({"qwen3_5_moe": OVModelForVisualCausalLM})
+    # filter architectures depending on min/max transformers supported versions
+    SUPPORTED_ARCHITECTURES = {
+        model_type: model_cls
+        for model_type, model_cls in SUPPORTED_ARCHITECTURES.items()
+        if TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type)
+        in get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
+    }
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},

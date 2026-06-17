@@ -120,34 +120,24 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "smollm3"),
         ("text-generation-with-past", "hunyuan_v1_dense"),
         ("feature-extraction", "qwen3_vl_embedding"),
+        ("text-generation-with-past", "qwen3_eagle3"),
+        ("text-generation-with-past", "zamba2"),
+        ("text-generation-with-past", "exaone4"),
+        ("text-generation-with-past", "bitnet"),
+        ("text-generation-with-past", "qwen3_next"),
+        ("image-text-to-text", "qwen3_vl_eagle3"),
+        ("text-generation", "lfm2_moe"),
+        ("text-generation-with-past", "lfm2_moe"),
+        ("text-generation-with-past", "mamba"),
+        ("text-generation-with-past", "falcon_mamba"),
     ]
-
-    if is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES.extend(
-            [
-                ("text-generation-with-past", "qwen3_eagle3"),
-                ("text-generation-with-past", "zamba2"),
-                ("text-generation-with-past", "exaone4"),
-                ("text-generation-with-past", "bitnet"),
-                ("text-generation-with-past", "qwen3_next"),
-                ("image-text-to-text", "qwen3_vl_eagle3"),
-            ]
-        )
-    else:
-        SUPPORTED_ARCHITECTURES.extend(
-            [
-                ("text-generation", "lfm2_moe"),
-                ("text-generation-with-past", "lfm2_moe"),
-            ]
-        )
-
-    if is_transformers_version("<", "5.4"):
-        SUPPORTED_ARCHITECTURES.extend(
-            [
-                ("text-generation-with-past", "mamba"),
-                ("text-generation-with-past", "falcon_mamba"),
-            ]
-        )
+    # filter architectures depending on min/max transformers supported versions
+    _valid_models = get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
+    SUPPORTED_ARCHITECTURES = [
+        (task, model_type)
+        for task, model_type in SUPPORTED_ARCHITECTURES
+        if TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type) in _valid_models
+    ]
 
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
@@ -462,27 +452,29 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "prompt_encoder_mask_decoder": {"int8": 49},
             },
         ),
+        (
+            "image-text-to-text",
+            "internvl_chat",
+            "f8e4m3",
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": 15,
+                "text_embeddings_model": 0,
+                "vision_embeddings_model": 17,
+            },
+            {
+                "lm_model": {"f8e4m3": 15},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"f8e4m3": 11},
+            },
+        ),
     ]
-
-    if is_transformers_version("<", "5"):
-        SUPPORTED_QUANTIZATION_ARCHITECTURES.append(
-            (
-                "image-text-to-text",
-                "internvl_chat",
-                "f8e4m3",
-                "--dataset contextual --num-samples 1 --trust-remote-code",
-                {
-                    "lm_model": 15,
-                    "text_embeddings_model": 0,
-                    "vision_embeddings_model": 17,
-                },
-                {
-                    "lm_model": {"f8e4m3": 15},
-                    "text_embeddings_model": {"int8": 1},
-                    "vision_embeddings_model": {"f8e4m3": 11},
-                },
-            ),
-        )
+    # filter architectures depending on min/max transformers supported versions
+    SUPPORTED_QUANTIZATION_ARCHITECTURES = [
+        config
+        for config in SUPPORTED_QUANTIZATION_ARCHITECTURES
+        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in _valid_models
+    ]
 
     TRANSFORMERS_4BIT_CONFIGURATIONS = [
         (
