@@ -1043,6 +1043,9 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.51.0"):
         SUPPORTED_ARCHITECTURES += ("qwen3",)
 
+    if is_transformers_version(">=", "4.50.0"):
+        SUPPORTED_ARCHITECTURES += ("gemma3_text",)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
