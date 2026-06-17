@@ -346,6 +346,7 @@ MODEL_NAMES = {
     "xverse": "optimum-intel-internal-testing/tiny-random-xverse",
     "glm4": "optimum-intel-internal-testing/tiny-random-glm4",
     "glm": "optimum-intel-internal-testing/tiny-random-glm-edge",
+    "glm_edge_v": "optimum-intel-internal-testing/tiny-random-glm-edge-v",
     "open-clip": "optimum-intel-internal-testing/tiny-open-clip-model",
     "open-clip-ov": "optimum-intel-internal-testing/tiny-open-clip-model",
     "st-bert": "optimum-intel-internal-testing/all-MiniLM-L6-v2",

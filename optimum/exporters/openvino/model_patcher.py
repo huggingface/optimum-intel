@@ -3944,6 +3944,73 @@ class InputEmbeddingPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
+def glm_edge_v_vision_embeddings_forward(self, pixel_values: torch.FloatTensor):
+    # GLM-Edge-V keeps the whole image branch (SigLIP encoder + conv/GLU adapter
+    # with learned boi/eoi parameters) inside `GlmForCausalLM.model.vision`.
+    # Running it as a standalone graph turns the (b, 3, 672, 672) pixel values into
+    # (b, 578, hidden_size) image embeddings.
+    return self.model.vision(pixel_values)
+
+
+class GlmEdgeVImageEmbeddingsModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(glm_edge_v_vision_embeddings_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class GlmEdgeVLMModelPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        # GLM-Edge-V reuses the plain `glm` decoder, but `GlmForCausalLM.forward`
+        # expects `pixel_values` and `GlmModel.forward` performs the image/text
+        # embedding merge during prefill. For the language model graph we receive
+        # already merged `inputs_embeds`, so we bypass the vision branch and run
+        # the decoder stack with a stateful KV cache directly.
+        def forward(self, attention_mask, position_ids, past_key_values, inputs_embeds, use_cache=True):
+            pkv = DynamicCache.from_legacy_cache(past_key_values)
+            past_seen_tokens = past_key_values[0][0].shape[-2]
+            cache_position = torch.arange(
+                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
+            )
+
+            result = self.model(
+                input_ids=None,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                cache_position=cache_position,
+                past_key_values=pkv,
+                inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+            )
+            hidden_states = result[0]
+            logits = self.lm_head(hidden_states)
+            upd_pkv = result["past_key_values"]
+            return {"logits": logits, "past_key_values": postprocess_past_key_values(upd_pkv)}
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
 def phi3_vision_embeddings_forward(self, pixel_values: torch.FloatTensor):
     return self.get_img_features(pixel_values)
 

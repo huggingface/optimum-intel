@@ -45,9 +45,9 @@ from optimum.intel.utils.modeling_utils import (
 
 from .utils import (
     _MAX_UNCOMPRESSED_SIZE,
-    MULTI_MODAL_TEXT_GENERATION_MODELS,
     clear_class_registry,
     deduce_diffusers_dtype,
+    is_multi_modal_text_generation_model,
     load_preprocessors,
     patch_qwenvl_configs,
 )
@@ -161,6 +161,10 @@ def infer_task(
             model_type = config.export_model_type
         else:
             model_type = config.model_type
+        # GLM-Edge-V reports model_type="glm" (same as the text-only GLM decoder); the
+        # presence of a `vision_config` marks it as an image-text-to-text model.
+        if model_type == "glm" and hasattr(config, "vision_config") and original_task == "auto":
+            return "image-text-to-text"
         custom_architecture = model_type not in TasksManager._SUPPORTED_MODEL_TYPE
         if not custom_architecture and task + "-with-past" in TasksManager.get_supported_tasks_for_model_type(
             model_type, exporter="openvino", library_name=library_name
@@ -425,10 +429,7 @@ def main_export(
         if (
             dtype is None
             and framework == "pt"
-            and (
-                task.startswith("text-generation")
-                or getattr(config, "model_type", "") in MULTI_MODAL_TEXT_GENERATION_MODELS
-            )
+            and (task.startswith("text-generation") or is_multi_modal_text_generation_model(config))
             and getattr(config, "torch_dtype", torch.float32) in [torch.float16, torch.bfloat16]
         ):
             if ov_config is not None and ov_config.dtype in {"fp16", "fp32"}:
@@ -437,6 +438,14 @@ def main_export(
                 dtype = torch.float16
             elif config.torch_dtype == torch.bfloat16:
                 dtype = torch.bfloat16
+
+        # GLM-Edge-V: force fp32 export. Its SigLIP vision tower is numerically
+        # fragile and the 16-bit tracing path (ModuleExtension wrapping + bf16
+        # boi/eoi parameters) corrupts the image features, producing outputs that
+        # diverge from transformers (which runs bf16 but upcasts internally). HF
+        # itself matches fp32 in bf16/fp16, so fp32 export reproduces HF exactly.
+        if getattr(config, "model_type", "") == "glm" and hasattr(config, "vision_config"):
+            dtype = torch.float32
 
         if dtype is not None:
             if dtype in [torch.float16, torch.bfloat16]:
@@ -526,6 +535,16 @@ def main_export(
                 has_remote_code = hasattr(config, "auto_map")
                 if has_remote_code and trust_remote_code and task == "image-text-to-text":
                     task_model_loading = "text-generation"
+                elif has_remote_code and not trust_remote_code and task == "image-text-to-text":
+                    # Remote-code VLMs (e.g. GLM-Edge-V, nanoLLaVA, phi3_v) define their
+                    # multimodal class via `auto_map` and cannot be loaded by the built-in
+                    # AutoModelForImageTextToText. Fail early with an actionable message
+                    # instead of the cryptic "Unrecognized configuration class" error.
+                    raise ValueError(
+                        f"The model {model_name_or_path} relies on custom code to load its "
+                        f"`{task}` architecture. Please re-run the export with `--trust-remote-code` "
+                        "(or `trust_remote_code=True`)."
+                    )
 
             model = TasksManager.get_model_from_task(
                 task_model_loading,
@@ -702,6 +721,8 @@ def _main_quantize(
         )
         model_type = config.model_type
         if model_type in ["phi4mm", "phi4_multimodal"]:
+            task = "image-text-to-text"
+        elif model_type == "glm" and hasattr(config, "vision_config"):
             task = "image-text-to-text"
 
     # Step 1. Obtain the correct OpenVINO model class
