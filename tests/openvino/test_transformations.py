@@ -57,17 +57,7 @@ if is_transformers_version(">=", "4.51.0"):
             "ConvertSoftMax8ToSoftMax1",
         ],
     }
-    # Transforms applied only in OV >= 2026.1.0
-    if is_openvino_version(">=", "2026.1.0"):
-        ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["convert"].extend(
-            [
-                "TransposeMatMul",
-                "ReshapeAMatMul",
-            ]
-        )
-        ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["compile"].append(
-            "ConvertScatterElementsUpdate12ToScatterElementsUpdate3"
-        )
+
 
 if is_transformers_version(">=", "4.51.0") and is_transformers_version("<", "5"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["llama4"] = {
@@ -124,20 +114,7 @@ if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
             "Tokenization",
         ],
     }
-    # Transforms applied only in OV >= 2026.1.0
-    if is_openvino_version(">=", "2026.1.0"):
-        ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2"]["convert"].extend(
-            [
-                "LinOpSequenceFusion",
-                "CompressedGatherTransformation",
-            ]
-        )
-        ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2"]["compile"].extend(
-            [
-                "MulAddToFMA",
-                "SnippetsDataFlowManager",
-            ]
-        )
+
 
 if is_transformers_version(">=", "4.55.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["afmoe"] = {
