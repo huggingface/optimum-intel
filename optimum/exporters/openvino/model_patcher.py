@@ -9347,13 +9347,10 @@ def gemma4_unified_text_attention_forward(
     value_states = value_states.transpose(1, 2)
 
     if past_key_values is not None:
-        cache_kwargs = {
-            "sin": sin,
-            "cos": cos,
-            "cache_position": cache_position,
-            "sliding_window": self.sliding_window,
-        }
-        key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
+        # Match HF Gemma4UnifiedTextAttention: store the full-length KV (no sliding-window
+        # eviction in the cache). Sliding attention is enforced solely via the attention mask,
+        # so passing a sliding_window here would wrongly evict cached KV during decode.
+        key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx)
 
     # Reuse the gemma4 eager attention which already handles GQA repeat, softcapping and mask reshaping.
     attn_output, attn_weights = gemma4_eager_attention_forward_patched(

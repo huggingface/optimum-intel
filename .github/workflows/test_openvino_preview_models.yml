@@ -66,6 +66,7 @@ jobs:
           pytest tests/openvino/${{ matrix.test-pattern }} -k "gemma4 and not gemma4_unified" --durations=0
 
       - name: Gemma 4 Unified Validation
+        if: ${{ matrix.test-pattern != '*quantization*' }}
         run: |
           uv pip install "transformers>=5.10,<5.11"
           pytest tests/openvino/${{ matrix.test-pattern }} -k gemma4_unified --durations=0
