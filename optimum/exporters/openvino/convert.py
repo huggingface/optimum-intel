@@ -29,6 +29,23 @@ from transformers.utils import is_torch_available
 from openvino import Model, save_model
 from openvino.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
+from optimum.exporters.openvino.utils import (
+    MULTI_MODAL_TEXT_GENERATION_MODELS,
+    ONNX_SUPPORTED_ARCHITECTURES,
+    OV_XML_FILE_NAME,
+    _get_dynamic_shapes_info,
+    _get_input_info,
+    _get_kokoro_submodels_fn_and_export_configs,
+    _get_model_dtype,
+    _get_open_clip_submodels_fn_and_export_configs,
+    _normalize_dummy_inputs,
+    allow_skip_tracing_check,
+    clear_class_registry,
+    remove_none_from_dummy_inputs,
+    save_config,
+    save_preprocessors,
+    set_simplified_chat_template,
+)
 from optimum.exporters.tasks import TasksManager
 from optimum.exporters.utils import (
     DECODER_NAME,
@@ -41,6 +58,7 @@ from optimum.exporters.utils import (
 )
 from optimum.intel.utils.import_utils import (
     _diffusers_version,
+    _kokoro_version,
     _nncf_version,
     _open_clip_version,
     _optimum_intel_version,
@@ -49,33 +67,18 @@ from optimum.intel.utils.import_utils import (
     _torch_version,
     _transformers_version,
     compare_versions,
+    is_diffusers_available,
+    is_nncf_available,
     is_transformers_version,
 )
-from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
+from optimum.utils import DEFAULT_DUMMY_SHAPES
 
-from ...intel.utils.import_utils import is_nncf_available
 from ...intel.utils.modeling_utils import _infer_library_from_model_or_model_class
 from .stateful import (
     ensure_export_task_support_stateful,
     ensure_model_type_support_stateful,
     ensure_stateful_is_available,
     patch_stateful,
-)
-from .utils import (
-    MULTI_MODAL_TEXT_GENERATION_MODELS,
-    ONNX_SUPPORTED_ARCHITECTURES,
-    OV_XML_FILE_NAME,
-    _get_dynamic_shapes_info,
-    _get_input_info,
-    _get_model_dtype,
-    _get_open_clip_submodels_fn_and_export_configs,
-    _normalize_dummy_inputs,
-    allow_skip_tracing_check,
-    clear_class_registry,
-    remove_none_from_dummy_inputs,
-    save_config,
-    save_preprocessors,
-    set_simplified_chat_template,
 )
 
 
@@ -90,14 +93,14 @@ if is_diffusers_available():
 
 
 if TYPE_CHECKING:
-    from optimum.exporters.onnx.base import OnnxConfig
+    from optimum.exporters.openvino.base import OpenVINOConfig
     from optimum.intel.openvino.configuration import OVConfig
 
 
 def _set_runtime_options(
     models_and_export_configs: Dict[
         str,
-        Tuple[Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"],
+        Tuple[Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OpenVINOConfig"],
     ],
     task: str,
     library_name: str,
@@ -126,7 +129,7 @@ def _save_model(
     path: str,
     ov_config: Optional["OVConfig"] = None,
     library_name: Optional[str] = None,
-    config: "OnnxConfig" = None,
+    config: "OpenVINOConfig" = None,
 ):
     compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
     model = _add_version_info_to_model(model, library_name)
@@ -144,9 +147,8 @@ def _save_model(
 
 def export(
     model: Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"],
-    config: "OnnxConfig",
+    config: "OpenVINOConfig",
     output: Path,
-    opset: Optional[int] = None,
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
@@ -161,12 +163,10 @@ def export(
     Args:
         model ([`PreTrainedModel`]):
             The model to export.
-        config ([`~exporters.onnx.config.OnnxConfig`]):
-            The ONNX configuration associated with the exported model.
+        config ([`~exporters.openvino.config.OpenVINOConfig`]):
+            The OpenVINO configuration associated with the exported model.
         output (`Path`):
             Directory to store the exported model.
-        opset (`Optional[int]`, defaults to `None`):
-            The version of the ONNX operator set to use.
         device (`str`, *optional*, defaults to `cpu`):
             The device on which the model will be exported. Either `cpu` or `cuda`. Only PyTorch is supported for
             export on CUDA devices.
@@ -179,7 +179,7 @@ def export(
 
     Returns:
         `Tuple[List[str], List[str]]`: A tuple with an ordered list of the model's inputs, and the named inputs from
-        the ONNX configuration.
+        the OpenVINO configuration.
     """
     if not is_torch_available():
         raise ImportError(
@@ -219,7 +219,6 @@ def export(
         return export_pytorch(
             model,
             config,
-            opset,
             output,
             device=device,
             input_shapes=input_shapes,
@@ -233,77 +232,9 @@ def export(
         raise RuntimeError("You either provided a non-PyTorch model or the PyTorch library is not installed.")
 
 
-def export_pytorch_via_onnx(
-    model: Union["PreTrainedModel", "ModelMixin"],
-    config: "OnnxConfig",
-    opset: int,
-    output: Path,
-    device: str = "cpu",
-    input_shapes: Optional[Dict] = None,
-    model_kwargs: Optional[Dict[str, Any]] = None,
-    ov_config: Optional["OVConfig"] = None,
-    library_name: Optional[str] = None,
-):
-    """
-    Exports a PyTorch model to an OpenVINO Intermediate Representation via ONNX export.
-
-    Args:
-        model ([`PreTrainedModel`]):
-            The model to export.
-        config ([`~exporters.onnx.config.OnnxConfig`]):
-            The configuration associated with the exported model.
-        opset (`int`):
-            The version of the ONNX operator set to use.
-        output (`Path`):
-            Directory to store the exported model.
-        device (`str`, defaults to `"cpu"`):
-            The device on which the model will be exported. Either `cpu` or `cuda`. Only PyTorch is supported for
-            export on CUDA devices.
-        input_shapes (`optional[Dict]`, defaults to `None`):
-            If specified, allows to use specific shapes for the example input provided to the exporter.
-        model_kwargs (optional[Dict[str, Any]], defaults to `None`):
-            Additional kwargs for model export.
-        ov_config (`OVConfig`, *optional*):
-            The configuration containing the parameters related to quantization.
-
-    Returns:
-        `Tuple[List[str], List[str], bool]`: A tuple with an ordered list of the model's inputs, and the named inputs from
-        the ONNX configuration and boolean flag - was legacy ONNX path were applied to model or not.
-    """
-    import torch
-
-    from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
-
-    output = Path(output)
-    orig_torch_onnx_export = torch.onnx.export
-    torch.onnx.export = functools.partial(orig_torch_onnx_export, do_constant_folding=False)
-    model.config.torchscript = False
-    model.config.return_dict = True
-    onnx_output = output.with_suffix(".onnx")
-    input_names, output_names = export_pytorch_to_onnx(
-        model, config, opset, onnx_output, device, input_shapes, model_kwargs
-    )
-    torch.onnx.export = orig_torch_onnx_export
-    ov_model = convert_model(str(onnx_output))
-
-    library_name = _infer_library_from_model_or_model_class(model=model, library_name=library_name)
-
-    _save_model(
-        ov_model,
-        output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output,
-        ov_config=ov_config,
-        library_name=library_name,
-        config=config,
-    )
-    del ov_model
-    gc.collect()
-    return input_names, output_names, True
-
-
 def export_pytorch(
     model: Union["PreTrainedModel", "ModelMixin"],
-    config: "OnnxConfig",
-    opset: int,
+    config: "OpenVINOConfig",
     output: Path,
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
@@ -319,10 +250,8 @@ def export_pytorch(
     Args:
         model ([`PreTrainedModel`]):
             The model to export.
-        config ([`~exporters.onnx.config.OnnxConfig`]):
+        config ([`~exporters.openvino.config.OpenVINOConfig`]):
             The configuration associated with the exported model.
-        opset (`int`):
-            The version of the ONNX operator set to use.
         output (`Path`):
             Directory to store the exported model.
         device (`str`, defaults to `"cpu"`):
@@ -339,7 +268,7 @@ def export_pytorch(
 
     Returns:
         `Tuple[List[str], List[str], bool]`: A tuple with an ordered list of the model's inputs, and the named inputs from
-        the ONNX configuration and boolean flag - was legacy ONNX path were applied to model or not.
+        the OpenVINO configuration and boolean flag - was legacy OpenVINO path were applied to model or not.
     """
     import torch
     from torch.utils._pytree import tree_map
@@ -435,11 +364,16 @@ def export_pytorch(
 
                     __make_16bit_traceable(model)
 
+                conversion_extensions = getattr(patcher, "conversion_extensions", None)
+                module_extensions = getattr(patcher, "module_extensions", None)
+                if module_extensions is not None:
+                    ts_decoder_kwargs["module_extensions"] = module_extensions
                 ts_decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **ts_decoder_kwargs)
                 ov_model = convert_model(
                     ts_decoder,
                     example_input=dummy_inputs,
                     input=[(item.shape, item.type) for item in input_info],
+                    extension=conversion_extensions,
                 )
 
         ov_model.validate_nodes_and_infer_types()  # TODO: remove as unnecessary validation?
@@ -475,10 +409,9 @@ def export_pytorch(
 
 def export_models(
     models_and_export_configs: Dict[
-        str, Tuple[Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"]
+        str, Tuple[Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OpenVINOConfig"]
     ],
     output_dir: Path,
-    opset: Optional[int] = None,
     output_names: Optional[List[str]] = None,
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
@@ -492,9 +425,8 @@ def export_models(
     Export the models to OpenVINO IR format
 
     Args:
-        models_and_export_configs (Dict[ str, Tuple[Union["PreTrainedModel", "ModelMixin"], "OnnxConfig"]):
+        models_and_export_configs (Dict[ str, Tuple[Union["PreTrainedModel", "ModelMixin"], "OpenVINOConfig"]):
         output_dir (Path): output directory for saving models
-        opset (Optional[int], optional, Default to None): ONNX export opset
         output_names (Optional[List[str]], optional, Defaults to None): model output names
         device (str, optional, Defaults to "cpu"):
             The device on which the model will be exported. Either `cpu` or `cuda`. Only PyTorch is supported for
@@ -512,7 +444,7 @@ def export_models(
         ValueError: if custom names set not equal of number of models
 
     Returns:
-        list of input_names and output_names from ONNX configuration
+        list of input_names and output_names from OpenVINO configuration
     """
 
     outputs = []
@@ -532,7 +464,6 @@ def export_models(
                 model=submodel,
                 config=sub_export_config,
                 output=output_path,
-                opset=opset,
                 device=device,
                 input_shapes=input_shapes,
                 model_kwargs=model_kwargs,
@@ -547,15 +478,100 @@ def export_models(
     return outputs
 
 
+def _save_kokoro_config_and_assets(model, output: Path):
+    """Save Kokoro model config.json and export voice embeddings."""
+    import json
+    import tempfile
+    import urllib.request
+
+    import numpy as np
+    from huggingface_hub import hf_hub_download, list_repo_files
+
+    repo_id = getattr(model, "_kokoro_repo_id", None)
+
+    # Save config.json
+    config_dict = {}
+    for key in vars(model.config):
+        if not key.startswith("_"):
+            config_dict[key] = getattr(model.config, key)
+    config_path = output / "config.json"
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config_dict, f, indent=2)
+
+    # Save misaki data files from GitHub to data dir of output directory
+    try:
+        MISAKI_DATA_URL = "https://raw.githubusercontent.com/hexgrad/misaki/main/misaki/data"
+        MISAKI_DATA_FILES = [
+            "gb_gold.json",
+            "gb_silver.json",
+            "us_gold.json",
+            "us_silver.json",
+            "vi_acronyms.json",
+            "vi_symbols.json",
+            "vi_teencode.json",
+            "ja_words.txt",
+        ]
+        data_out = output / "data"
+        data_out.mkdir(parents=True, exist_ok=True)
+        for fname in MISAKI_DATA_FILES:
+            url = f"{MISAKI_DATA_URL}/{fname}"
+            dest = data_out / fname
+            try:
+                urllib.request.urlretrieve(url, dest)
+                logger.info(f"Downloaded misaki data file: {fname}")
+            except Exception as e:
+                logger.warning(f"Failed to download {fname} from {url}: {e}")
+    except Exception as e:
+        logger.warning(f"Could not download misaki data files: {e}")
+
+    if repo_id is None:
+        return
+
+    # Export voice embeddings to .bin format
+    voices_dir = output / "voices"
+    voices_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        repo_files = list_repo_files(repo_id=repo_id)
+    except Exception:
+        logger.warning(f"Could not list files for {repo_id}. Skipping voice export.")
+        return
+
+    voice_pt_files = sorted(path for path in repo_files if path.startswith("voices/") and path.endswith(".pt"))
+    if not voice_pt_files:
+        return
+
+    logger.info(f"Found {len(voice_pt_files)} voice files. Exporting to {voices_dir} ...")
+    with tempfile.TemporaryDirectory(prefix="kokoro_voice_pt_") as tmp_dir:
+        for remote_path in voice_pt_files:
+            local_pt = hf_hub_download(repo_id=repo_id, filename=remote_path, local_dir=tmp_dir)
+            voice_name = Path(remote_path).stem
+            out_bin = voices_dir / f"{voice_name}.bin"
+
+            import torch
+
+            voice_obj = torch.load(local_pt, map_location="cpu")
+            if torch.is_tensor(voice_obj):
+                voice_tensor = voice_obj
+            elif isinstance(voice_obj, dict):
+                voice_tensor = next(v for v in voice_obj.values() if torch.is_tensor(v))
+            else:
+                logger.warning(f"Unsupported voice format in {remote_path}, skipping.")
+                continue
+
+            voice_tensor = voice_tensor.detach().cpu().to(torch.float32).contiguous()
+            np.asarray(voice_tensor.numpy(), dtype=np.float32).tofile(out_bin)
+            logger.info(f"Exported {remote_path} -> {out_bin}")
+
+
 def export_from_model(
     model: Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"],
     output: Union[str, Path],
     task: Optional[str] = None,
     ov_config: Optional["OVConfig"] = None,
     stateful: bool = True,
-    opset: Optional[int] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    custom_export_configs: Optional[Dict[str, "OnnxConfig"]] = None,
+    custom_export_configs: Optional[Dict[str, "OpenVINOConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
     preprocessors: List = None,
     device: str = "cpu",
@@ -571,8 +587,8 @@ def export_from_model(
         )
 
     library_name = _infer_library_from_model_or_model_class(model)
-    if library_name != "open_clip":
-        TasksManager.standardize_model_attributes(model)
+    if library_name not in ("open_clip", "kokoro"):
+        TasksManager.standardize_model_attributes(model, library_name=library_name)
 
     if hasattr(model.config, "export_model_type") and model.config.export_model_type is not None:
         model_type = model.config.export_model_type
@@ -580,8 +596,8 @@ def export_from_model(
         model_type = getattr(model.config, "model_type", None) or ""
 
     if model_type in ONNX_SUPPORTED_ARCHITECTURES:
-        logger.warning(
-            f"The OpenVINO export of {model_type} models is not officially supported by optimum-intel, export at your own risks."
+        raise ValueError(
+            f"The OpenVINO export of {model_type} models is not officially supported by optimum-intel and has been removed."
         )
 
     custom_architecture = library_name == "transformers" and model_type not in TasksManager._SUPPORTED_MODEL_TYPE
@@ -589,12 +605,15 @@ def export_from_model(
     if task is not None and task != "auto":
         task = TasksManager.map_from_synonym(task)
     else:
-        try:
-            task = TasksManager._infer_task_from_model_or_model_class(model=model)
-        except (ValueError, KeyError) as e:
-            raise RuntimeError(
-                f"The model task could not be automatically inferred in `export_from_model`. Please provide the argument `task` with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
-            )
+        if library_name == "kokoro":
+            task = "text-to-audio"
+        else:
+            try:
+                task = TasksManager._infer_task_from_model_or_model_class(model=model)
+            except (ValueError, KeyError) as e:
+                raise RuntimeError(
+                    f"The model task could not be automatically inferred in `export_from_model`. Please provide the argument `task` with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+                )
 
         if (
             not custom_architecture
@@ -608,6 +627,16 @@ def export_from_model(
         logger.info(f"Automatic task detection to: {task}.")
 
     is_encoder_decoder = getattr(getattr(model, "config", {}), "is_encoder_decoder", False)
+
+    # Qwen3-ASR is structurally encoder-decoder (audio_tower + text LM) but config says is_encoder_decoder=False
+    if model_type == "qwen3_asr" and not is_encoder_decoder:
+        is_encoder_decoder = True
+        model.config.is_encoder_decoder = True
+        if not hasattr(model, "get_encoder"):
+            model.get_encoder = lambda: model.thinker.audio_tower
+        # Set decoder_start_token_id so the saved config enables encoder-decoder generation
+        if model.config.decoder_start_token_id is None:
+            model.config.decoder_start_token_id = 0
     stateful = stateful and (
         ensure_export_task_support_stateful(task) or ensure_model_type_support_stateful(model_type)
     )
@@ -618,7 +647,7 @@ def export_from_model(
         and not getattr(model, "_supports_cache_class", is_transformers_version(">=", "4.54"))
     ):
         stateful = False
-    # TODO: support onnx_config.py in the model repo
+    # TODO: support ov_config.py in the model repo
     if custom_architecture and custom_export_configs is None:
         raise ValueError(
             f"Trying to export a {model_type} model, that is a custom or unsupported architecture, but no custom export configuration was passed as `custom_export_configs`. Please refer to https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models for an example on how to export custom models. Please open an issue at https://github.com/huggingface/optimum-intel/issues if you would like the model type {model_type} to be supported natively in the OpenVINO export."
@@ -656,6 +685,12 @@ def export_from_model(
             model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
         )
 
+    if library_name == "kokoro":
+        custom_architecture = True
+        custom_export_configs, fn_get_submodels = _get_kokoro_submodels_fn_and_export_configs(
+            model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
+        )
+
     if library_name == "diffusers":
         export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
         stateful_submodels = False
@@ -682,10 +717,6 @@ def export_from_model(
         )
         logging.disable(logging.NOTSET)
 
-    # Remove empty model and export_configs pairs, they can be empty when a config class is shared between model versions.
-    # Example: Qwen2VL and Qwen3VL share config class, but "vision_embeddings_pos" is used in Qwen3VL only.
-    models_and_export_configs = {k: v for k, v in models_and_export_configs.items() if v != (None, None)}
-
     if library_name == "open_clip":
         if hasattr(model.config, "save_pretrained"):
             model.config.save_pretrained(output)
@@ -695,21 +726,25 @@ def export_from_model(
                 preprocess.save_pretrained(output)
 
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
+    elif library_name == "kokoro":
+        _save_kokoro_config_and_assets(model, output)
+        files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
     elif library_name != "diffusers":
-        # some model configs may have issues with loading without parameters initialization
-        try:
-            misplaced_generation_parameters = model.config._get_non_default_generation_parameters()
-        except (AttributeError, KeyError, TypeError):
-            misplaced_generation_parameters = {}
-        if isinstance(model, GenerationMixin) and len(misplaced_generation_parameters) > 0:
-            logger.warning(
-                "Moving the following attributes in the config to the generation config: "
-                f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
-                "generation parameters in the model config, as opposed to in the generation config.",
-            )
-            for param_name, param_value in misplaced_generation_parameters.items():
-                setattr(model.generation_config, param_name, param_value)
-                setattr(model.config, param_name, None)
+        if is_transformers_version("<", "5"):
+            # some model configs may have issues with loading without parameters initialization
+            try:
+                misplaced_generation_parameters = model.config._get_non_default_generation_parameters()
+            except (AttributeError, KeyError, TypeError):
+                misplaced_generation_parameters = {}
+            if isinstance(model, GenerationMixin) and len(misplaced_generation_parameters) > 0:
+                logger.warning(
+                    "Moving the following attributes in the config to the generation config: "
+                    f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                    "generation parameters in the model config, as opposed to in the generation config.",
+                )
+                for param_name, param_value in misplaced_generation_parameters.items():
+                    setattr(model.generation_config, param_name, param_value)
+                    setattr(model.config, param_name, None)
 
         # Saving the model config and preprocessor as this is needed sometimes.
         save_config(model.config, output)
@@ -776,7 +811,6 @@ def export_from_model(
         device=device,
         ov_config=ov_config,
         stateful=stateful_submodels,
-        opset=opset,
         model_kwargs=model_kwargs,
         patch_16bit_model=patch_16bit_model,
         library_name=library_name,
@@ -887,6 +921,8 @@ def _add_version_info_to_model(model: Model, library_name: Optional[str] = None)
             model.set_rt_info(_timm_version, ["optimum", "timm_version"])
         elif library_name == "open_clip":
             model.set_rt_info(_open_clip_version, ["optimum", "open_clip_version"])
+        elif library_name == "kokoro":
+            model.set_rt_info(_kokoro_version, ["optimum", "kokoro_version"])
         rt_info = model.get_rt_info()
         if "nncf" in rt_info:
             model.set_rt_info(_nncf_version, ["optimum", "nncf_version"])
@@ -1001,6 +1037,12 @@ def _get_submodels_and_export_configs(
         exporter,
     )
     stateful_per_model = [stateful] * len(models_for_export)
+
+    # VLM Eagle3 models need stateful KV cache despite model_type being "llama"
+    # (not in MULTI_MODAL_TEXT_GENERATION_MODELS) and task being "image-text-to-text".
+    if not stateful and getattr(export_config, "eagle3_vlm", False):
+        stateful_per_model = [True] * len(models_for_export)
+
     return export_config, models_for_export, stateful_per_model
 
 

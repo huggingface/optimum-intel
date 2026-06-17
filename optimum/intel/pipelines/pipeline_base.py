@@ -18,7 +18,6 @@ import torch
 from transformers import Pipeline
 from transformers import pipeline as transformers_pipeline
 
-from optimum.intel.utils import is_ipex_available, is_openvino_available
 from optimum.utils import is_transformers_version
 from optimum.utils.logging import get_logger
 
@@ -35,21 +34,17 @@ if TYPE_CHECKING:
         ProcessorMixin,
     )
 
-    if is_openvino_available():
-        from ..openvino.modeling_base import OVBaseModel
-
-    if is_ipex_available():
-        from ..ipex.modeling_base import IPEXModel
+    from ..openvino.modeling_base import OVBaseModel
 
 
 logger = get_logger(__name__)
 
 
 # The docstring is simply a copy of transformers.pipelines.pipeline's doc with minor modifications
-# to reflect the fact that this pipeline loads OpenVINO or IPEX models.
+# to reflect the fact that this pipeline loads OpenVINO models.
 def pipeline(  # noqa: D417
     task: Optional[str] = None,
-    model: Optional[Union[str, "OVBaseModel", "IPEXModel"]] = None,
+    model: Optional[Union[str, "OVBaseModel"]] = None,
     config: Optional[Union[str, "PretrainedConfig"]] = None,
     tokenizer: Optional[Union[str, "PreTrainedTokenizer", "PreTrainedTokenizerFast"]] = None,
     feature_extractor: Optional[Union[str, "FeatureExtractionMixin"]] = None,
@@ -68,7 +63,7 @@ def pipeline(  # noqa: D417
     accelerator: Optional[str] = None,
     **kwargs: Any,
 ) -> Pipeline:
-    """Utility factory method to build a [`Pipeline`] with an OpenVINO or IPEX model, similar to `transformers.pipeline`.
+    """Utility factory method to build a [`Pipeline`] with an OpenVINO model, similar to `transformers.pipeline`.
 
     A pipeline consists of:
 
@@ -120,9 +115,9 @@ def pipeline(  # noqa: D417
             - `"zero-shot-audio-classification"`: will return a [`ZeroShotAudioClassificationPipeline`].
             - `"zero-shot-object-detection"`: will return a [`ZeroShotObjectDetectionPipeline`].
 
-        model (`str` or [`OVBaseModel`] or [`IPEXModel`], *optional*):
+        model (`str` or [`OVBaseModel`], *optional*):
             The model that will be used by the pipeline to make predictions. This can be a model identifier or an
-            actual instance of a OpenVINO or IPEX model inheriting from [`OVBaseModel`] or [`IPEXModel`].
+            actual instance of a OpenVINO model inheriting from [`OVBaseModel`].
 
             If not provided, the default for the `task` will be loaded.
         config (`str` or [`PretrainedConfig`], *optional*):
@@ -205,7 +200,7 @@ def pipeline(  # noqa: D417
 
     >>> # Question answering pipeline, specifying the checkpoint identifier
     >>> oracle = pipeline(
-    ...     accelerator="ipex",
+    ...     accelerator="ov",
     ...     task="question-answering",
     ...     model="distilbert/distilbert-base-cased-distilled-squad",
     ...     tokenizer="google-bert/bert-base-cased",
@@ -218,12 +213,12 @@ def pipeline(  # noqa: D417
     ```
     """
 
-    if accelerator not in ("openvino", "ipex"):
+    if accelerator != "openvino":
         if accelerator is None:
             msg = "Impossible to instantiate a pipeline without specifying an `accelerator`."
         else:
             msg = f"`accelerator` {accelerator} is not supported."
-        raise ValueError(msg + " Supported list of `accelerator` is : ['openvino', 'ipex'].")
+        raise ValueError(msg + " Supported list of `accelerator` is : ['openvino'].")
 
     version_dependent_kwargs = {}
     if is_transformers_version(">=", "4.46.0"):

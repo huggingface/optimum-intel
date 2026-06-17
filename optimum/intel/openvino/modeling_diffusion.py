@@ -50,7 +50,7 @@ from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.utils import validate_hf_hub_args
 from openvino import Core
 from openvino._offline_transformations import compress_model_transformation
-from transformers import CLIPFeatureExtractor, CLIPTokenizer
+from transformers import CLIPImageProcessor, CLIPTokenizer
 from transformers.modeling_outputs import ModelOutput
 from transformers.utils import http_user_agent
 
@@ -170,7 +170,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         tokenizer: Optional[CLIPTokenizer] = None,
         tokenizer_2: Optional[CLIPTokenizer] = None,
         tokenizer_3: Optional[CLIPTokenizer] = None,
-        feature_extractor: Optional[CLIPFeatureExtractor] = None,
+        feature_extractor: Optional[CLIPImageProcessor] = None,
         # stable diffusion xl specific arguments
         force_zeros_for_empty_prompt: bool = True,
         requires_aesthetics_score: bool = False,

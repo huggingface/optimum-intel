@@ -31,15 +31,21 @@ from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
 from transformers.generation.utils import GenerateOutput, GenerationMode
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
-from transformers.models.mamba.modeling_mamba import MambaCache
 from transformers.utils.hub import PushToHubMixin
+
+from ..utils.import_utils import compare_versions, is_transformers_version
+
+
+if is_transformers_version("<", "5.5"):
+    from transformers.models.mamba.modeling_mamba import MambaCache
+else:
+    MambaCache = object
 
 from optimum.utils.normalized_config import NormalizedConfigManager
 
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
 from ...exporters.openvino.utils import SSM_MODELS
-from ..utils.import_utils import compare_versions
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import (
     OVConfig,
@@ -209,7 +215,12 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
 
     @staticmethod
     def _has_cache_inputs(model: openvino.Model) -> bool:
-        return any("past_key_values" in key.get_any_name() for key in model.inputs)
+        # `cache_params` is used by SSM/hybrid architectures (e.g. mamba, qwen3_next, qwen3_5)
+        # whose language model exposes conv/recurrent/key/value caches under the `cache_params.*` namespace
+        # instead of the standard `past_key_values.*` one.
+        return any(
+            "past_key_values" in key.get_any_name() or "cache_params" in key.get_any_name() for key in model.inputs
+        )
 
     @staticmethod
     def _get_model_with_updated_pkv_precision(model: openvino.Model, pkv_precision: Type) -> openvino.Model:
@@ -887,6 +898,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = OVBloomForCausalLM
         elif model_type == "gpt_bigcode":
             init_cls = OVGPTBigCodeForCausalLM
+        elif model_type == "phi3":
+            init_cls = OVPhi3ForCausalLM
         elif model_type in SSM_MODELS:
             init_cls = OVModelWithMambaForCausalLM
         else:
@@ -937,6 +950,48 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             )
 
         return causal_model
+
+
+class OVPhi3ForCausalLM(OVModelForCausalLM):
+    # Adapted from https://github.com/huggingface/transformers/blob/v4.57.0/src/transformers/models/phi3/modeling_phi3.py#L493
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        cache_position=None,
+        position_ids=None,
+        use_cache=True,
+        logits_to_keep=None,
+        **kwargs,
+    ):
+        # Overwritten -- this model may need to switch between short and long rope, invalidating the cache in the
+        # process
+
+        # When the first time input length reached long and short factor switching point, enforce re-compute cache
+        # The downside is slower inference at this single token position, however, this is better than wrong results
+        if (
+            past_key_values
+            and self.config.rope_scaling
+            and input_ids.shape[1] >= self.config.original_max_position_embeddings + 1
+        ):
+            past_length = cache_position[0]
+            if past_length <= self.config.original_max_position_embeddings:
+                past_key_values = None
+
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+            cache_position=cache_position,
+            position_ids=position_ids,
+            use_cache=use_cache,
+            logits_to_keep=logits_to_keep,
+            **kwargs,
+        )
+        return model_inputs
 
 
 class OVBloomForCausalLM(OVModelForCausalLM):
@@ -1094,7 +1149,9 @@ class OVCacheWithMambaStates(MambaCache):
         self.mamba_expand = getattr(config, "mamba_expand", None)
         self.mamba_d_state = getattr(config, "mamba_d_state", None)
         self.intermediate_size = config.intermediate_size
-        self.conv_kernel_size = getattr(config, "conv_kernel", getattr(config, "mamba_d_conv", None))
+        self.conv_kernel_size = getattr(
+            config, "conv_kernel", getattr(config, "mamba_d_conv", getattr(config, "conv_L_cache", None))
+        )
         if config.model_type == "granitemoehybrid":
             layer_types = getattr(config, "layer_types", None)
             self.num_key_value_heads = getattr(config, "num_key_value_heads", None)
@@ -1118,6 +1175,11 @@ class OVCacheWithMambaStates(MambaCache):
             # some of these layers are hybrid so they contain both attention and mamba blocks
             self.num_mamba_layers = config.num_hidden_layers
             self.num_attn_layers = len(hybrid_layer_ids) if hybrid_layer_ids else 0
+
+        if config.model_type in ["lfm2", "lfm2_moe"]:
+            layer_types = getattr(config, "layer_types", None)
+            self.num_attn_layers = layer_types.count("full_attention")
+            self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
 
         self.conv_states = conv_states
         if self.conv_states is None:
@@ -1449,8 +1511,15 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                 # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)
 
-                if self.config.model_type not in ["lfm2", "granitemoehybrid"]:
-                    # LFM2 and GraniteMoeHybrid (Granite-4.0) require the attention mask
+                if self.config.model_type not in [
+                    "lfm2",
+                    "lfm2_moe",
+                    "granitemoehybrid",
+                    "qwen3_next",
+                    "qwen3_5_text",
+                    "qwen3_5_moe_text",
+                ]:
+                    # LFM2, GraniteMoeHybrid (Granite-4.0), and Qwen3-Next require the attention mask
                     # to be the length of the full context, so default mask from OVModelForCausalLM needs to be used.
                     # Other models like Mamba typically do not require an attention_mask
                     # for the decoding step after the first token so use attention mask of ones.

@@ -4,9 +4,9 @@
 
 # Optimum Intel
 
-🤗 [Optimum Intel](https://huggingface.co/docs/optimum-intel/en/index) is the interface between the 🤗 Transformers and Diffusers libraries and the different tools and libraries provided by [OpenVINO](https://docs.openvino.ai) to accelerate end-to-end pipelines on Intel architectures.
+🤗 [Optimum Intel](https://huggingface.co/docs/optimum-intel/en/index) is the interface between the 🤗 Transformers, Diffusers, Sentence Transformers and timm libraries and the different tools and libraries provided by [OpenVINO](https://docs.openvino.ai) to accelerate end-to-end pipelines on Intel architectures.
 
-[OpenVINO](https://docs.openvino.ai) is an open-source toolkit that enables high performance inference capabilities for Intel CPUs, GPUs, and special DL inference accelerators ([see](https://docs.openvino.ai/2024/about-openvino/compatibility-and-support/supported-devices.html) the full list of supported devices). It is supplied with a set of tools to optimize your models with compression techniques such as quantization, pruning and knowledge distillation. Optimum Intel provides a simple interface to optimize your Transformers and Diffusers models, convert them to the OpenVINO Intermediate Representation (IR) format and run inference using OpenVINO Runtime.
+[OpenVINO](https://docs.openvino.ai) is an open-source toolkit that enables high performance inference capabilities for Intel CPUs, GPUs, and special DL inference accelerators ([see](https://docs.openvino.ai/2024/about-openvino/compatibility-and-support/supported-devices.html) the full list of supported devices). It is supplied with a set of tools to optimize your models with compression techniques such as quantization, pruning and knowledge distillation. Optimum Intel provides a simple interface to optimize your model, convert it to the OpenVINO Intermediate Representation (IR) format and run inference using OpenVINO Runtime.
 
 
 ## Installation
@@ -14,16 +14,15 @@
 To install the latest release of 🤗 Optimum Intel with the corresponding required dependencies, you can use `pip` as follows:
 
 ```bash
-python -m pip install -U "optimum-intel[openvino]"
+pip install -U optimum-intel
 ```
 
 Optimum Intel is a fast-moving project with regular additions of new model support, so you may want to install from source with the following command:
 
 ```bash
-python -m pip install "optimum-intel"@git+https://github.com/huggingface/optimum-intel.git
+pip install optimum-intel@git+https://github.com/huggingface/optimum-intel.git
 ```
 
-**Deprecation Notice:** The `extras` for `openvino` (e.g., `pip install optimum-intel[openvino,nncf]`), `nncf`, `neural-compressor`, `ipex` are **deprecated** and will be **removed in a future release**.  
 
 
 ## Export:
@@ -34,6 +33,8 @@ Below is an example of exporting [TinyLlama/TinyLlama_v1.1](https://huggingface.
 ```sh
 optimum-cli export openvino --model TinyLlama/TinyLlama_v1.1 ov_TinyLlama_v1_1
 ```
+
+To export a [model](https://huggingface.co/docs/optimum-intel/en/openvino/models) hosted on the Hub you can use our [space](https://huggingface.co/spaces/openvino/export). After conversion, a repository will be pushed under your namespace, this repository can be either public or private.
 
 Additional information on exporting models is available in the [documentation](https://huggingface.co/docs/optimum-intel/en/openvino/export).
 

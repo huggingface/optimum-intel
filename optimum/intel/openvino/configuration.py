@@ -381,6 +381,8 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "bits": 4,
         "sym": False,
         "group_size": 128,
+        "dataset": "gsm8k",
+        "quant_method": OVQuantizationMethod.AWQ,
     },
     "inceptionai/jais-13b": {
         "bits": 4,
@@ -410,6 +412,94 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "sym": False,
             "weight_only": True,
         },
+    },
+    "arcee-ai/Trinity-Mini": {
+        "quantization_config1": {
+            "bits": 4,
+            "sym": False,
+            "group_size": 64,
+            # With ignored scope below we keep some weights in their original precision during the first quantization
+            # run and then quantize them to int8 in the second run.
+            "ignored_scope": {"patterns": [".*self_attn.*", ".*router.*"]},
+        },
+        "quantization_config2": {
+            "bits": 8,
+            "sym": False,
+            "weight_only": True,
+        },
+    },
+    "OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B": {
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 128,
+                "ratio": 1.0,
+            },
+            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+            "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+        },
+    },
+    "qnguyen3/nanoLLaVA": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "contextual",
+        "scale_estimation": True,
+    },
+    "google/gemma-4-26B-A4B-it": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "quant_method": OVQuantizationMethod.AWQ,
+        "group_size_fallback": "adjust",
+        "dq_group_size": 64,
+    },
+    "google/gemma-4-26B-A4B": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "quant_method": OVQuantizationMethod.AWQ,
+        "group_size_fallback": "adjust",
+    },
+    "google/gemma-4-E4B-it": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "dataset": "contextual",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
+    "Qwen/Qwen3.5-35B-A3B": {
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "backup_precision": "int8_sym",
+                "group_size": 64,
+            },
+            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+            "vision_embeddings_merger_model": {"bits": 8, "sym": True, "weight_only": True},
+        },
+    },
+    "Qwen/Qwen3.6-35B-A3B": {
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "backup_precision": "int8_sym",
+                "group_size": 64,
+            },
+            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+            "vision_embeddings_merger_model": {"bits": 8, "sym": True, "weight_only": True},
+        },
+    },
+    "hexgrad/Kokoro-82M": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "group_size_fallback": "adjust",
     },
 }
 
@@ -531,6 +621,7 @@ _DEFAULT_IGNORED_SCOPE_CONFIGS = {
                 "__module.layers.27.mlp.up_proj/aten::linear/MatMul",
                 "__module.layers.27.mlp.gate_proj/aten::linear/MatMul",
             ],
+            "validate": False,
         },
     },
     "microsoft/speecht5_tts": {
@@ -539,6 +630,16 @@ _DEFAULT_IGNORED_SCOPE_CONFIGS = {
                 "__module.speech_decoder_postnet",
                 "__module.speecht5.decoder.prenet",
             ],
+        },
+    },
+    "google/gemma-4-26B-A4B-it": {
+        "lm_model": {
+            "patterns": [".*router.*"],
+        },
+    },
+    "google/gemma-4-26B-A4B": {
+        "lm_model": {
+            "patterns": [".*router.*"],
         },
     },
 }

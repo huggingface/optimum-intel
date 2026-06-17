@@ -11,10 +11,13 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import json
 import os
+import tempfile
 import time
 import unittest
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Dict, Optional
 
 import numpy as np
@@ -23,6 +26,120 @@ import torch
 
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import is_transformers_version
+
+
+def _create_tiny_kokoro_model():
+    """Generate a tiny random Kokoro TTS model for testing and return its local path.
+
+    Falls back to the original Hub id if the `kokoro` package is not installed.
+    Result is cached on disk under the system temp dir, so subsequent calls are cheap.
+    """
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_kokoro"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "tiny-kokoro-random.pth"
+    voice_file = output_dir / "voices" / "tiny_voice.pt"
+    if config_file.exists() and weights_file.exists() and voice_file.exists():
+        return str(output_dir)
+
+    from kokoro.istftnet import Decoder
+    from kokoro.modules import CustomAlbert, ProsodyPredictor, TextEncoder
+    from transformers import AlbertConfig
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    symbols = (
+        ";:,.!?-—()'\"/ "
+        "0123456789"
+        "abcdefghijklmnopqrstuvwxyz"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "əɚɝɪʊʌæɑɔɛɜɒɹɾθðŋʃʒʤʧˈˌ"
+        "àáâãäåèéêëìíîïòóôõöùúûüýÿ"
+    )
+    deduped = []
+    seen = set()
+    for ch in symbols:
+        if ch not in seen:
+            deduped.append(ch)
+            seen.add(ch)
+        if len(deduped) >= 177:
+            break
+    vocab = {ch: i + 1 for i, ch in enumerate(deduped)}
+
+    config = {
+        "model_type": "kokoro",
+        "export_model_type": "kokoro",
+        "hidden_dim": 512,
+        "style_dim": 128,
+        "n_token": 178,
+        "n_layer": 1,
+        "dim_in": 512,
+        "n_mels": 80,
+        "max_dur": 50,
+        "dropout": 0.2,
+        "text_encoder_kernel_size": 3,
+        "plbert": {
+            "hidden_size": 128,
+            "num_attention_heads": 2,
+            "intermediate_size": 256,
+            "max_position_embeddings": 512,
+            "num_hidden_layers": 2,
+            "dropout": 0.1,
+        },
+        "istftnet": {
+            "upsample_kernel_sizes": [20, 12],
+            "upsample_rates": [10, 6],
+            "gen_istft_hop_size": 5,
+            "gen_istft_n_fft": 20,
+            "resblock_dilation_sizes": [[1, 3, 5], [1, 3, 5], [1, 3, 5]],
+            "resblock_kernel_sizes": [3, 7, 11],
+            "upsample_initial_channel": 512,
+        },
+        "vocab": vocab,
+        "multispeaker": True,
+        "max_conv_dim": 512,
+    }
+
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+
+    bert = CustomAlbert(AlbertConfig(vocab_size=config["n_token"], **config["plbert"]))
+    bert_encoder = torch.nn.Linear(config["plbert"]["hidden_size"], config["hidden_dim"])
+    predictor = ProsodyPredictor(
+        style_dim=config["style_dim"],
+        d_hid=config["hidden_dim"],
+        nlayers=config["n_layer"],
+        max_dur=config["max_dur"],
+        dropout=config["dropout"],
+    )
+    text_encoder = TextEncoder(
+        channels=config["hidden_dim"],
+        kernel_size=config["text_encoder_kernel_size"],
+        depth=config["n_layer"],
+        n_symbols=config["n_token"],
+    )
+    decoder = Decoder(
+        dim_in=config["hidden_dim"],
+        style_dim=config["style_dim"],
+        dim_out=config["n_mels"],
+        **config["istftnet"],
+    )
+
+    torch.save(
+        {
+            "bert": bert.state_dict(),
+            "bert_encoder": bert_encoder.state_dict(),
+            "predictor": predictor.state_dict(),
+            "text_encoder": text_encoder.state_dict(),
+            "decoder": decoder.state_dict(),
+        },
+        weights_file,
+    )
+
+    voices_dir = output_dir / "voices"
+    voices_dir.mkdir(parents=True, exist_ok=True)
+    torch.save(torch.randn(256, dtype=torch.float32), voice_file)
+
+    return str(output_dir)
 
 
 SEED = 42
@@ -87,6 +204,8 @@ MODEL_NAMES = {
     "got_ocr2": "optimum-intel-internal-testing/tiny-random-got-ocr2-hf",
     "gemma3_text": "optimum-intel-internal-testing/tiny-random-gemma3-text",
     "gemma3": "optimum-intel-internal-testing/tiny-random-gemma3",
+    "gemma4": "optimum-intel-internal-testing/tiny-random-gemma4",
+    "gemma4_moe": "optimum-intel-internal-testing/tiny-random-gemma4-moe",
     "falcon": "optimum-intel-internal-testing/really-tiny-falcon-testing",
     "falcon-40b": "optimum-intel-internal-testing/tiny-random-falcon-40b",
     "falcon_mamba": "optimum-intel-internal-testing/tiny-falcon-mamba",
@@ -114,8 +233,10 @@ MODEL_NAMES = {
     "internlm2": "optimum-intel-internal-testing/tiny-random-internlm2",
     "internvl_chat": "optimum-intel-internal-testing/tiny-random-internvl2",
     "jais": "optimum-intel-internal-testing/tiny-random-jais",
+    "kokoro": _create_tiny_kokoro_model(),
     "levit": "optimum-intel-internal-testing/tiny-random-LevitModel",
     "lfm2": "optimum-intel-internal-testing/tiny-random-lfm2",
+    "lfm2_moe": "optimum-intel-internal-testing/tiny-random-lfm2-moe",
     "longt5": "optimum-intel-internal-testing/tiny-random-longt5",
     "llama": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
     "llama_awq": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
@@ -160,6 +281,7 @@ MODEL_NAMES = {
     "pix2struct": "optimum-intel-internal-testing/pix2struct-tiny-random",
     "phi": "optimum-intel-internal-testing/tiny-random-PhiForCausalLM",
     "phi3": "optimum-intel-internal-testing/tiny-random-Phi3ForCausalLM",
+    "phi3-longrope": "optimum-intel-internal-testing/tiny-random-phi3-longrope",
     "phimoe": "optimum-intel-internal-testing/phi-3.5-moe-tiny-random",
     "phi3_v": "optimum-intel-internal-testing/tiny-random-phi3-vision",
     "phi4mm": "optimum-intel-internal-testing/tiny-random-phi-4-multimodal",
@@ -172,6 +294,11 @@ MODEL_NAMES = {
     "qwen3": "optimum-intel-internal-testing/tiny-random-qwen3",
     "qwen3_moe": "optimum-intel-internal-testing/tiny-random-qwen3moe",
     "qwen3_vl": "optimum-intel-internal-testing/tiny-random-qwen3-vl",
+    "qwen3_vl_embedding": "optimum-intel-internal-testing/tiny-random-qwen3-vl-embedding",
+    "qwen3_next": "optimum-intel-internal-testing/tiny-random-qwen3-next",
+    "qwen3_5": "optimum-intel-internal-testing/tiny-random-qwen3.5",
+    "qwen3_5_moe": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
+    "qwen3_asr": "optimum-intel-internal-testing/tiny-random-qwen3-asr",
     "rembert": "optimum-intel-internal-testing/tiny-random-rembert",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",
     "roberta": "optimum-intel-internal-testing/tiny-random-roberta",
@@ -179,6 +306,7 @@ MODEL_NAMES = {
     "segformer": "optimum-intel-internal-testing/tiny-random-SegformerModel",
     "sentence-transformers-bert": "optimum-intel-internal-testing/stsb-bert-tiny-safetensors",
     "sam": "optimum-intel-internal-testing/sam-vit-tiny-random",
+    "smollm3": "optimum-intel-internal-testing/tiny-random-smollm3",
     "smolvlm": "optimum-intel-internal-testing/tiny-random-smolvlm2",
     "speecht5": "optimum-intel-internal-testing/tiny-random-SpeechT5ForTextToSpeech",
     "speech_to_text": "optimum-intel-internal-testing/tiny-random-Speech2TextModel",
@@ -213,7 +341,7 @@ MODEL_NAMES = {
     "wav2vec2-conformer": "optimum-intel-internal-testing/tiny-random-wav2vec2-conformer",
     "whisper": "optimum-intel-internal-testing/tiny-random-whisper",
     "xlm": "optimum-intel-internal-testing/tiny-random-xlm",
-    "xlm-roberta": "optimum-intel-internal-testing/tiny-xlm-roberta",
+    "xlm-roberta": "optimum-intel-internal-testing/tiny-random-xlm-roberta",
     "xglm": "optimum-intel-internal-testing/tiny-random-XGLMForCausalLM",
     "xverse": "optimum-intel-internal-testing/tiny-random-xverse",
     "glm4": "optimum-intel-internal-testing/tiny-random-glm4",
@@ -227,17 +355,29 @@ MODEL_NAMES = {
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
+    "qwen3_vl_eagle3": "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
+    "videochat_flash_qwen": "optimum-intel-internal-testing/tiny-videochat-flash-qwen",
 }
 
 EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7B")}
 
+# VLM-based Eagle3 draft models (AngelSlim Eagle3LlamaForCausalLM architecture).
+# These use Qwen3-VL MRoPE and target VLM models for speculative decoding.
+# Only used in the decoder test (not genai, since the VLM target needs image-text-to-text export).
+EAGLE3_VLM_MODELS = {
+    "qwen3_vl_eagle3": (
+        "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
+        "optimum-intel-internal-testing/tiny-random-qwen3-vl-layer10",
+    ),
+}
+
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "afmoe": {"model": 16},
-    "bert": {"model": 68},
+    "bert": {"model": 68 if is_transformers_version("<", "5") else 70},
     "roberta": {"model": 68},
     "albert": {"model": 84},
     "vit": {"model": 64},
-    "blenderbot": {"model": 70},
+    "blenderbot": {"model": 70 if is_transformers_version("<", "5") else 72},
     "cohere2": {"model": 30},
     "gpt2": {"model": 44},
     "granitemoehybrid": {"model": 118},
@@ -245,8 +385,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "distilbert": {"model": 66},
     "t5": {
         "encoder": 64,
-        "decoder": 104,
-        "decoder_with_past": 84,
+        "decoder": 104 if is_transformers_version("<", "5") else 106,
+        "decoder_with_past": 84 if is_transformers_version("<", "5") else 86,
     },
     "stable-diffusion": {
         "unet": 242,
@@ -334,6 +474,33 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_merger_model": 32,
         "vision_embeddings_pos_model": 1,
     },
+    "qwen3_vl_embedding": {
+        "lm_model": 28,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 104,
+        "vision_embeddings_pos_model": 1,
+    },
+    "videochat_flash_qwen": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 5,
+        "vision_projection_model": 2,
+    },
+    "qwen3_5": {
+        "lm_model": 70,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 10,
+        "vision_embeddings_pos_model": 1,
+    },
+    "qwen3_5_moe": {
+        "lm_model": 110,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 10,
+        "vision_embeddings_pos_model": 1,
+    },
     "sana": {
         "transformer": 58,
         "vae_decoder": 28,
@@ -356,9 +523,10 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "postnet": 10,
         "vocoder": 80,
     },
+    "kokoro": {"model": 352},
     "clip": {"model": 130},
-    "mamba": {"model": 322},
-    "falcon_mamba": {"model": 162},
+    "mamba": {"model": 324 if is_transformers_version("==", "5.0") else 322},
+    "falcon_mamba": {"model": 164 if is_transformers_version("==", "5.0") else 162},
     "minicpmo": {
         "lm_model": 16,
         "text_embeddings_model": 1,
@@ -367,15 +535,35 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     },
     "zamba2": {"model": 44},
     "exaone4": {"model": 16},
-    "lfm2": {"model": 52},
+    "lfm2": {"model": 52 if is_transformers_version("<", "5") else 54},
+    "lfm2_moe": {"model": 46},
     "hunyuan_v1_dense": {"model": 32},
     "qwen3_eagle3": {"model": 20},
+    "qwen3_vl_eagle3": {"model": 18},
+    "qwen3_next": {"model": 100},
+    "gemma4": {
+        "lm_model": 54,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 10,
+        "text_embeddings_per_layer_model": 1,
+    },
+    "gemma4_moe": {
+        "lm_model": 48,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 10,
+        "text_embeddings_per_layer_model": 0,
+    },
+    "smollm3": {"model": 30},
+    "qwen3_asr": {
+        "encoder": 36,
+        "decoder": 30,
+        "decoder_with_past": 30,
+    },
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
 
 REMOTE_CODE_MODELS = (
-    "afmoe",
     "chatglm",
     "minicpm",
     "baichuan2",
@@ -397,7 +585,20 @@ REMOTE_CODE_MODELS = (
     "minicpm3",
     "deepseek",
     "qwen3_eagle3",
+    "qwen3_vl_eagle3",
+    "qwen3_asr",
+    "videochat_flash_qwen",
 )
+
+if is_transformers_version("<", "5"):
+    REMOTE_CODE_MODELS += ("afmoe",)
+
+
+SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED = [
+    "bart",
+    "musicgen",
+    "whisper",
+]
 
 
 def get_num_quantized_nodes(model):
