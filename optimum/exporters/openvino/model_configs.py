@@ -72,6 +72,9 @@ from optimum.exporters.openvino.input_generators import (
     Gemma4DummyPastKeyValuesGenerator,
     GPTBigCodeDummyPastKeyValuesGenerator,
     Lfm2DummyPastKeyValuesGenerator,
+    LTX2ConnectorsDummyInputGenerator,
+    LTX2TransformerDummyInputGenerator,
+    LTX2VaeDummyInputGenerator,
     LTXTransformerDummyInputGenerator,
     LTXVaeDummyInputGenerator,
     MambaCacheDummyInputGenerator,
@@ -2342,44 +2345,6 @@ class Gemma3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
         return outputs
 
 
-class DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
-    SUPPORTED_INPUT_NAMES = (
-        "decoder_input_ids",
-        "decoder_attention_mask",
-        "encoder_outputs",
-        "encoder_hidden_states",
-        "encoder_attention_mask",
-    )
-
-
-class DummySanaTransformerVisionInputGenerator(DummyUnetVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = (
-        "pixel_values",
-        "pixel_mask",
-        "sample",
-        "latent_sample",
-        "guidance",
-    )
-
-    def __init__(
-        self,
-        task: str,
-        normalized_config: NormalizedVisionConfig,
-        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
-        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
-        width: int = DEFAULT_DUMMY_SHAPES["width"] // 8,
-        height: int = DEFAULT_DUMMY_SHAPES["height"] // 8,
-        # Reduce img shape by 4 for FLUX to reduce memory usage on conversion
-        **kwargs,
-    ):
-        super().__init__(task, normalized_config, batch_size, num_channels, width=width, height=height, **kwargs)
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name == "guidance":
-            return self.random_float_tensor([self.batch_size], framework=framework, dtype=float_dtype)
-        return super().generate(input_name, framework, int_dtype, float_dtype)
-
-
 @register_in_tasks_manager("sana-transformer", *["semantic-segmentation"], library_name="diffusers")
 class SanaTransformerOpenVINOConfig(UNetOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
@@ -2599,36 +2564,8 @@ class LTXVideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
         }
 
 
-class LTX2VaeDummyInputGenerator(DummyVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("pixel_values", "pixel_mask", "sample", "latent_sample", "timestep")
-
-    def __init__(
-        self,
-        task: str,
-        normalized_config: NormalizedVisionConfig,
-        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
-        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
-        width: int = DEFAULT_DUMMY_SHAPES["width"],
-        height: int = DEFAULT_DUMMY_SHAPES["height"],
-        num_frames: int = 1,
-        **kwargs,
-    ):
-        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
-        self.num_frames = num_frames
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name in ["sample", "latent_sample"]:
-            return self.random_float_tensor(
-                [self.batch_size, self.num_channels, self.num_frames, self.height, self.width]
-            )
-        if input_name == "timestep":
-            return self.random_int_tensor([1], max_value=20, min_value=1, framework=framework, dtype=int_dtype)
-
-        return super().generate(input_name, framework, int_dtype, float_dtype)
-
-
 @register_in_tasks_manager("ltx2-vae-encoder", *["semantic-segmentation"], library_name="diffusers")
-class LTX2VaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
+class LTX2VaeEncoderOpenVINOConfig(VaeEncoderOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (LTX2VaeDummyInputGenerator,)
 
     @property
@@ -2645,7 +2582,7 @@ class LTX2VaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
 
 
 @register_in_tasks_manager("ltx2-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
-class LTX2VaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
+class LTX2VaeDecoderOpenVINOConfig(VaeDecoderOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (LTX2VaeDummyInputGenerator,)
 
     @property
@@ -2661,113 +2598,8 @@ class LTX2VaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
         }
 
 
-class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = (
-        "hidden_states",
-        "audio_hidden_states",
-        "num_frames",
-        "height",
-        "width",
-        "fps",
-        "audio_num_frames",
-        "video_coords",
-        "audio_coords",
-        "audio_encoder_hidden_states",
-        "audio_encoder_attention_mask",
-    )
-
-    def __init__(
-        self,
-        task: str,
-        normalized_config: NormalizedVisionConfig,
-        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
-        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
-        width: int = 16,
-        height: int = 8,
-        num_frames: int = 2,
-        frame_rate: int = 24,
-        **kwargs,
-    ):
-        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
-        self.num_frames = num_frames
-        self.frame_rate = frame_rate
-        self.vae_scale_factors = normalized_config.config.vae_scale_factors
-        self.audio_in_channels = normalized_config.config.audio_in_channels
-        self.audio_scale_factor = normalized_config.config.audio_scale_factor
-        self.cross_attention_dim = normalized_config.config.cross_attention_dim
-        self.caption_channels = normalized_config.config.caption_channels
-        self.encoder_seq_length = 128
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        import torch
-
-        if input_name == "hidden_states":
-            return self.random_float_tensor(
-                [self.batch_size, self.num_frames * self.height * self.width, self.num_channels]
-            )
-        if input_name == "audio_hidden_states":
-            audio_num_frames = max(1, self.num_frames)
-            audio_mel_bins = 64 // self.audio_scale_factor
-            return self.random_float_tensor(
-                [self.batch_size, audio_num_frames * audio_mel_bins, self.audio_in_channels]
-            )
-        if input_name == "width":
-            return torch.tensor(self.width)
-        if input_name == "height":
-            return torch.tensor(self.height)
-        if input_name == "num_frames":
-            return torch.tensor(self.num_frames)
-        if input_name == "fps":
-            return torch.tensor(float(self.frame_rate))
-        if input_name == "audio_num_frames":
-            return torch.tensor(max(1, self.num_frames))
-        if input_name == "video_coords":
-            return self.random_float_tensor([self.batch_size, 3, self.num_frames * self.height * self.width, 2])
-        if input_name == "audio_coords":
-            audio_num_frames = max(1, self.num_frames)
-            audio_mel_bins = 64 // self.audio_scale_factor
-            return self.random_float_tensor([self.batch_size, 1, audio_num_frames * audio_mel_bins, 2])
-        if input_name == "audio_encoder_hidden_states":
-            return self.random_float_tensor(
-                [self.batch_size, self.encoder_seq_length, self.caption_channels]
-            )
-        if input_name == "audio_encoder_attention_mask":
-            return self.random_float_tensor([self.batch_size, self.encoder_seq_length])
-        return super().generate(input_name, framework, int_dtype, float_dtype)
-
-
-class LTX2ConnectorsDummyInputGenerator(DummyVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("text_encoder_hidden_states", "attention_mask")
-
-    def __init__(
-        self,
-        task: str,
-        normalized_config: NormalizedVisionConfig,
-        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
-        sequence_length: int = 128,
-        **kwargs,
-    ):
-        super().__init__(task, normalized_config, batch_size, **kwargs)
-        # Sequence length must be divisible by num_learnable_registers (128)
-        num_registers = getattr(normalized_config.config, "num_learnable_registers", 128)
-        self.sequence_length = max(sequence_length, num_registers)
-        self.sequence_length = (self.sequence_length // num_registers) * num_registers
-        self.caption_channels = normalized_config.config.caption_channels
-        text_proj_in_factor = getattr(normalized_config.config, "text_proj_in_factor", 1)
-        self.input_channels = self.caption_channels * text_proj_in_factor
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name == "text_encoder_hidden_states":
-            return self.random_float_tensor([self.batch_size, self.sequence_length, self.input_channels])
-        if input_name == "attention_mask":
-            # Binary 2D mask [batch, seq_len] matching LTX2TextConnectors.forward signature
-            import torch
-            return torch.ones(self.batch_size, self.sequence_length, dtype=torch.float32)
-        return super().generate(input_name, framework, int_dtype, float_dtype)
-
-
 @register_in_tasks_manager("ltx2-connectors", *["semantic-segmentation"], library_name="diffusers")
-class LTX2ConnectorsOpenVINOConfig(VaeEncoderOnnxConfig):
+class LTX2ConnectorsOpenVINOConfig(VaeEncoderOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (LTX2ConnectorsDummyInputGenerator,)
     _MODEL_PATCHER = LTX2ConnectorsPatcher
 
@@ -2828,90 +2660,6 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
             "out_sample": {0: "batch_size", 1: "video_sequence_length"},
             "audio_out_sample": {0: "batch_size", 1: "audio_sequence_length"},
         }
-
-
-class DummyMiniCPMVImageInputGenerator(DummyVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("pixel_values", "patch_attention_mask", "position_ids")
-
-    def __init__(
-        self,
-        task: str,
-        normalized_config: NormalizedVisionConfig,
-        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
-        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
-        width: int = DEFAULT_DUMMY_SHAPES["width"],
-        height: int = DEFAULT_DUMMY_SHAPES["height"],
-        **kwargs,
-    ):
-        super().__init__(task, normalized_config, batch_size, num_channels, width, height)
-        self.patch_size = normalized_config.config.patch_size
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name == "pixel_values":
-            return self.random_float_tensor(
-                shape=[
-                    self.batch_size,
-                    self.num_channels,
-                    self.patch_size,
-                    (self.height * self.width) // self.patch_size,
-                ],
-                framework=framework,
-                dtype=float_dtype,
-            )
-
-        if input_name == "patch_attention_mask":
-            return self.random_int_tensor(
-                shape=[self.batch_size, 1, (self.height // self.patch_size) * (self.width // self.patch_size)],
-                framework=framework,
-                dtype=float_dtype,
-                min_value=0,
-                max_value=2,
-            )
-
-        if input_name == "position_ids":
-            return self.random_int_tensor(
-                shape=[self.batch_size, (self.height // self.patch_size) * (self.width // self.patch_size)],
-                max_value=self.patch_size,
-            )
-
-
-class DummyMiniCPMVResampleInputGenerator(DummyVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("image_feature", "pos_embed", "key_padding_mask")
-
-    def __init__(
-        self,
-        task: str,
-        normalized_config: NormalizedVisionConfig,
-        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
-        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
-        width: int = DEFAULT_DUMMY_SHAPES["width"],
-        height: int = DEFAULT_DUMMY_SHAPES["height"],
-        **kwargs,
-    ):
-        super().__init__(task, normalized_config, batch_size, num_channels, width, height)
-        self.patch_size = normalized_config.config.patch_size
-        self.hidden_size = normalized_config.config.hidden_size
-        self.img_hidden_size = normalized_config.config.vision_config.hidden_size
-        self.feat_size = (normalized_config.config.vision_config.image_size // self.patch_size) * (
-            normalized_config.config.vision_config.image_size // self.patch_size
-        )
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name == "image_feature":
-            return self.random_float_tensor(
-                shape=[self.batch_size, self.feat_size, self.img_hidden_size], framework=framework, dtype=float_dtype
-            )
-
-        if input_name == "key_padding_mask":
-            return self.constant_tensor(
-                shape=[self.batch_size, self.feat_size],
-                framework=framework,
-                value=1,
-                dtype=DTYPE_MAPPER.pt(float_dtype),
-            )
-
-        if input_name == "pos_embed":
-            return self.random_float_tensor(shape=[self.feat_size, self.batch_size, self.hidden_size])
 
 
 class MiniCPMVConfigBehavior(str, enum.Enum):
