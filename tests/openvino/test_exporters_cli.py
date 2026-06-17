@@ -235,7 +235,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 14, "decoder": 22, "decoder_with_past": 25},
+            {"encoder": 14 if is_transformers_version("<", "5.5") else 26, "decoder": 22, "decoder_with_past": 25},
             {
                 "encoder": {"int8": 14 if is_transformers_version("<", "5.5") else 26},
                 "decoder": {"int8": 22},
@@ -247,7 +247,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 16, "decoder": 26, "decoder_with_past": 25},
+            {"encoder": 16 if is_transformers_version("<", "5.5") else 30, "decoder": 26, "decoder_with_past": 25},
             {
                 "encoder": {"f8e4m3": 14 if is_transformers_version("<", "5.5") else 26},
                 "decoder": {"f8e4m3": 22},
