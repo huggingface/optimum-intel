@@ -499,6 +499,7 @@ class OuroOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedOuroConfig
     MIN_TRANSFORMERS_VERSION = "4.53.0"
+    MAX_TRANSFORMERS_VERSION = "4.57.99" 
     _MODEL_PATCHER = OVDecoderModelPatcher
 
 
