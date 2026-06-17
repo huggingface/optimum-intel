@@ -4550,20 +4550,35 @@ class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
                 pkv = DynamicCache.from_legacy_cache(past_key_values)
             else:
                 pkv = DynamicCache(past_key_values)
-
-            outputs = self.model.language_model(
-                inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                use_cache=use_cache,
-                past_key_values=pkv,
-                visual_pos_masks=visual_pos_masks,
-                deepstack_visual_embeds=deepstack_visual_embeds,
-            )
-            hidden_states = outputs[0]
+            if hasattr(self, "model"):
+                outputs = self.model.language_model(
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    use_cache=use_cache,
+                    past_key_values=pkv,
+                    visual_pos_masks=visual_pos_masks,
+                    deepstack_visual_embeds=deepstack_visual_embeds,
+                )
+            else:
+                outputs = self.language_model(
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    use_cache=use_cache,
+                    past_key_values=pkv,
+                    visual_pos_masks=visual_pos_masks,
+                    deepstack_visual_embeds=deepstack_visual_embeds,
+                )
             # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-            logits = self.lm_head(hidden_states)
-            return (logits, postprocess_past_key_values(outputs.past_key_values))
+            if hasattr(self, "lm_head"):
+                logits = self.lm_head(outputs[0])
+            else:
+                return ModelOutput(
+                    last_hidden_state=outputs["last_hidden_state"],
+                    past_key_values=postprocess_past_key_values(outputs.past_key_values),
+                )
+            return ModelOutput(logits=logits, past_key_values=postprocess_past_key_values(outputs.past_key_values))
 
         model.__orig_forward = model.forward
         model.forward = types.MethodType(lm_forward, model)
