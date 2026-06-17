@@ -440,6 +440,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             quantization_config=quantization_config,
             compile=self._compile_only or enable_compilation,
             compile_only=self._compile_only,
+            use_cache=self.use_cache,
         )
         self.vision_embeddings = OVVisionEmbedding(vision_embeddings, self)
         for part in self.additional_parts:

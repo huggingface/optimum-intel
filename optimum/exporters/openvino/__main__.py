@@ -52,6 +52,8 @@ from .utils import (
     patch_qwenvl_configs,
 )
 
+import openvino as ov
+
 
 if is_transformers_version(">=", "4.55"):
     from transformers import Mxfp4Config
@@ -615,6 +617,64 @@ def main_export(
                 AutoBitLinear.load_hook = orig_load_hook
 
 
+def _ov_model_has_cache_or_state(model: ov.Model) -> bool:
+    # Return True when an exported OpenVINO model carries a cache/state contract.
+    for inp in model.inputs:
+        name = inp.get_any_name()
+        if "past_key_values" in name or "cache_params" in name:
+            return True
+
+    for op in model.get_ops():
+        if op.get_type_name() in {"ReadValue", "Assign"}:
+            return True
+
+    return False
+
+
+def _resolve_visual_lm_ir_path(
+    output: Path,
+    model_cls,
+    trust_remote_code: bool = False,
+) -> Optional[Path]:
+    config = AutoConfig.from_pretrained(
+        output,
+        trust_remote_code=trust_remote_code,
+    )
+
+    from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
+
+    concrete_model_cls = MODEL_TYPE_TO_CLS_MAPPING.get(config.model_type)
+    if concrete_model_cls is None:
+        return None
+
+    model_file_names = concrete_model_cls._all_ov_model_paths.copy()
+    lm_file_name = model_file_names.get("lm_model")
+    if lm_file_name is None:
+        return None
+
+    lm_path = output / lm_file_name
+    if not lm_path.exists():
+        return None
+
+    return lm_path
+
+
+def _exported_visual_model_requires_cache(
+    output: Path,
+    model_cls,
+    trust_remote_code: bool = False,
+) -> bool:
+    lm_path = _resolve_visual_lm_ir_path(
+        output=output,
+        model_cls=model_cls,
+        trust_remote_code=trust_remote_code,
+    )
+    if lm_path is None:
+        return False
+
+    model = ov.Core().read_model(lm_path)
+    return _ov_model_has_cache_or_state(model)
+
 def _main_quantize(
     model_name_or_path: str,
     task: str,
@@ -727,13 +787,28 @@ def _main_quantize(
         except (AttributeError, ImportError, KeyError) as e:
             raise RuntimeError(f"Wasn't able to locate OpenVINO class for task {original_task} ({task}).") from e
 
+    requested_use_cache = task.endswith("with-past")
+    if not requested_use_cache and task == "image-text-to-text":
+        requested_use_cache = _exported_visual_model_requires_cache(
+            output=output,
+            model_cls=model_cls,
+            trust_remote_code=trust_remote_code,
+        )
+
+    logger.info(
+        "OpenVINO quantization reload: task=%s task_with_past=%s resolved_use_cache=%s",
+        task,
+        task.endswith("with-past"),
+        requested_use_cache,
+    )
+
     # Step 2. Load the exported model
     model = model_cls.from_pretrained(
         output,
         compile=False,
         trust_remote_code=trust_remote_code,
         cache_dir=cache_dir,
-        use_cache=task.endswith("with-past"),
+        use_cache=requested_use_cache,
         **(model_kwargs or {}),
     )
 
