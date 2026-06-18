@@ -7088,7 +7088,13 @@ class BigBirdPegasusModelPatcher(OVSeq2SeqModelPatcher):
 def afmoe_moe_forward_patched(self, hidden_states):
     num_experts = self.config.num_experts
     batch_size, seq_len, hidden_dim = hidden_states.shape
-    routing_weights, selected_experts = self.router(hidden_states, self.expert_bias)
+    # transformers >= v5.4 (PR #44063): router returns (router_logits, top_scores, selected_experts)
+    # transformers <  v5.4: router returns (routing_weights, selected_experts)
+    router_output = self.router(hidden_states, self.expert_bias)
+    if len(router_output) == 3:
+        _, routing_weights, selected_experts = router_output
+    else:
+        routing_weights, selected_experts = router_output
     new_routing_weights = torch.zeros(batch_size * seq_len, self.config.num_experts, dtype=routing_weights.dtype)
     new_routing_weights.scatter_(dim=1, index=selected_experts, src=routing_weights)
     hidden_states = hidden_states.view(-1, hidden_dim)
@@ -7101,7 +7107,7 @@ def afmoe_moe_forward_patched(self, hidden_states):
 
     hidden_states = hidden_states.repeat(num_experts, 1)
     hidden_states = hidden_states.view(num_experts, -1, hidden_dim)
-    act_fn = self.experts[0].act_fn
+    act_fn = self.experts.act_fn if is_transformers_version(">=", "5.4") else self.experts[0].act_fn
 
     # compute experts outputs in a vectorized form
     gate = torch.bmm(hidden_states, self.gate_projs.transpose(1, 2))
@@ -7133,17 +7139,26 @@ class AfmoeModelPatcher(OVDecoderModelPatcher):
                 # with bf16 weights that leads to operands types mismatch in torch.bmm during TorchScript tracing
                 # Now we align with hidden_states (that will be always fp32 due to patching
                 # above for embedding layer during tracing)
-                afmoe_moe.down_projs = torch.concat(
-                    tuple(afmoe_moe.experts[i].down_proj.weight.unsqueeze(0) for i in range(num_experts)),
-                    dim=0,
-                )
-                afmoe_moe.gate_projs = torch.concat(
-                    tuple(afmoe_moe.experts[i].gate_proj.weight.unsqueeze(0) for i in range(num_experts)),
-                    dim=0,
-                )
-                afmoe_moe.up_projs = torch.concat(
-                    tuple(afmoe_moe.experts[i].up_proj.weight.unsqueeze(0) for i in range(num_experts)), dim=0
-                )
+
+                # transformers >= v5.4 (PR #44063): AfmoeExperts stores stacked gate_up_proj/down_proj
+                # transformers <  v5.4: AfmoeExperts is a ModuleList of AfmoeMLP with separate gate/up/down projs
+                if hasattr(afmoe_moe.experts, "gate_up_proj"):
+                    intermediate_dim = afmoe_moe.experts.gate_up_proj.shape[1] // 2
+                    afmoe_moe.gate_projs = afmoe_moe.experts.gate_up_proj[:, :intermediate_dim, :].detach()
+                    afmoe_moe.up_projs = afmoe_moe.experts.gate_up_proj[:, intermediate_dim:, :].detach()
+                    afmoe_moe.down_projs = afmoe_moe.experts.down_proj.detach()
+                else:
+                    afmoe_moe.down_projs = torch.concat(
+                        tuple(afmoe_moe.experts[i].down_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                        dim=0,
+                    ).detach()
+                    afmoe_moe.gate_projs = torch.concat(
+                        tuple(afmoe_moe.experts[i].gate_proj.weight.unsqueeze(0) for i in range(num_experts)),
+                        dim=0,
+                    ).detach()
+                    afmoe_moe.up_projs = torch.concat(
+                        tuple(afmoe_moe.experts[i].up_proj.weight.unsqueeze(0) for i in range(num_experts)), dim=0
+                    ).detach()
 
                 if is_openvino_version("<", "2026.1.0"):
                     afmoe_moe.down_projs = afmoe_moe.down_projs.float()
