@@ -685,9 +685,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "gemma4_moe": is_transformers_version(">=", "5.5"),
         "qwen3_5": is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"),
         "qwen3_5_moe": is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"),
+        "gemma4_unified": is_transformers_version(">=", "5.10"),
     }
     SUPPORTED_ARCHITECTURES += [arch for arch, supported in _is_model_supported.items() if supported]
     UNSUPPORTED_ARCHITECTURES.update(arch for arch, supported in _is_model_supported.items() if not supported)
+
     REMOTE_CODE_MODELS = [
         "internvl_chat",
         "minicpmv",
@@ -720,6 +722,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "qwen3_vl",
             "qwen3_5",
             "qwen3_5_moe",
+            "gemma4_unified",
         ]:
             from transformers import AutoModelForImageTextToText
 

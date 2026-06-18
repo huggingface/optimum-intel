@@ -113,6 +113,7 @@ class ExportModelTest(unittest.TestCase):
         "gemma4_moe": OVModelForVisualCausalLM,
         "qwen3_5": OVModelForVisualCausalLM,
         "qwen3_5_moe": OVModelForVisualCausalLM,
+        "gemma4_unified": OVModelForVisualCausalLM,
     }
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = {
