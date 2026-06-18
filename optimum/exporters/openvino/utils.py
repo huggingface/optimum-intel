@@ -330,6 +330,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "gemma3",
     "gemma3n",
     "gemma4",
+    "gemma4_unified",
     "idefics3",
     "smolvlm",
     "phi4mm",
