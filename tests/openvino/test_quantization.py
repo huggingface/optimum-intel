@@ -1168,10 +1168,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             {"bits": 4, "group_size": 8, "ratio": 0.5},
             {
                 "decoder": {"int8": 40, "int4": 4},
-                "encoder": {
-                    "int8": 24 if is_transformers_version("<", "5.5") else 44,
-                    "int4": 4 if is_transformers_version("<", "5.5") else 8,
-                },
+                "encoder": {"int8": 46, "int4": 6},
             },
         ),
     ]
@@ -1853,8 +1850,8 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 num_samples=1,
                 processor=MODEL_NAMES["whisper"],
             ),
-            {"encoder": 14, "decoder": 22},
-            {"encoder": {"int8": 14 if is_transformers_version("<", "5.5") else 26}, "decoder": {"int8": 22}},
+            {"encoder": 26, "decoder": 22},
+            {"encoder": {"int8": 26}, "decoder": {"int8": 22}},
         ),
     ]
 
