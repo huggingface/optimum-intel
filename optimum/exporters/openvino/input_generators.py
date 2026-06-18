@@ -980,6 +980,58 @@ class LTX2ConnectorsDummyInputGenerator(DummyVisionInputGenerator):
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
+class LTX2AudioVaeDecoderDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("latent_sample",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = 8,
+        num_frames: int = 2,
+        mel_bins: int = 16,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, **kwargs)
+        self.latent_channels = getattr(normalized_config.config, "latent_channels", 8)
+        self.num_frames = num_frames
+        self.mel_bins = mel_bins
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "latent_sample":
+            return self.random_float_tensor(
+                [self.batch_size, self.latent_channels, self.num_frames, self.mel_bins]
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class LTX2VocoderDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("hidden_states",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = 2,
+        num_frames: int = 8,
+        mel_bins: int = 64,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, **kwargs)
+        self.out_channels = getattr(normalized_config.config, "out_channels", 2)
+        self.num_frames = num_frames
+        self.mel_bins = mel_bins
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "hidden_states":
+            return self.random_float_tensor(
+                [self.batch_size, self.out_channels, self.num_frames, self.mel_bins]
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
 class DummyMiniCPMVImageInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("pixel_values", "patch_attention_mask", "position_ids")
 

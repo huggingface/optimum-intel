@@ -692,7 +692,7 @@ def export_from_model(
         )
 
     if library_name == "diffusers":
-        export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
+        export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino", task=task)
         stateful_submodels = False
     elif stateful and is_encoder_decoder and not custom_architecture:
         export_config, models_and_export_configs = _get_encoder_decoder_stateful_models_for_export(
@@ -1047,7 +1047,7 @@ def _get_submodels_and_export_configs(
 
 
 def get_diffusion_models_for_export_ext(
-    pipeline: "DiffusionPipeline", int_dtype: str = "int64", float_dtype: str = "fp32", exporter: str = "openvino"
+    pipeline: "DiffusionPipeline", int_dtype: str = "int64", float_dtype: str = "fp32", exporter: str = "openvino", task: Optional[str] = None
 ):
     is_sdxl = pipeline.__class__.__name__.startswith("StableDiffusionXL")
     is_sd3 = pipeline.__class__.__name__.startswith("StableDiffusion3")
@@ -1080,7 +1080,7 @@ def get_diffusion_models_for_export_ext(
     elif is_ltx_video:
         is_ltx2 = pipeline.__class__.__name__.startswith("LTX2")
         if is_ltx2:
-            models_for_export = get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+            models_for_export = get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype, task=task)
         else:
             models_for_export = get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     else:
@@ -1162,7 +1162,7 @@ def get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     return models_for_export
 
 
-def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
+def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype, task=None):
     models_for_export = {}
 
     # Text encoder (Gemma3) - wrap to always output hidden states.
@@ -1236,26 +1236,6 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     )
     models_for_export["transformer"] = (transformer, transformer_export_config)
 
-    # VAE Encoder
-    vae_encoder = copy.deepcopy(pipeline.vae)
-    if hasattr(pipeline.vae, "latents_mean") and pipeline.vae.latents_mean is not None:
-        vae_encoder.register_to_config(latents_mean_data=pipeline.vae.latents_mean.tolist())
-    if hasattr(pipeline.vae, "latents_std") and pipeline.vae.latents_std is not None:
-        vae_encoder.register_to_config(latents_std_data=pipeline.vae.latents_std.tolist())
-    vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
-    vae_config_constructor = TasksManager.get_exporter_config_constructor(
-        model=vae_encoder,
-        exporter=exporter,
-        library_name="diffusers",
-        task="semantic-segmentation",
-        model_type="ltx2-vae-encoder",
-    )
-    vae_encoder_export_config = vae_config_constructor(
-        vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
-    )
-    vae_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
-    models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
-
     # VAE Decoder
     vae_decoder = copy.deepcopy(pipeline.vae)
     if hasattr(pipeline.vae, "latents_mean") and pipeline.vae.latents_mean is not None:
@@ -1281,6 +1261,49 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     )
     vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
+
+    # Audio VAE decoder and vocoder for text-to-audio-video task
+    if task == "text-to-audio-video" and hasattr(pipeline, "audio_vae") and pipeline.audio_vae is not None:
+        # Audio VAE decoder
+        audio_vae_decoder = copy.deepcopy(pipeline.audio_vae)
+        audio_vae_decoder.forward = lambda latent_sample: {"sample": audio_vae_decoder.decode(z=latent_sample)}
+        audio_vae_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=audio_vae_decoder,
+            exporter=exporter,
+            library_name="diffusers",
+            task="semantic-segmentation",
+            model_type="ltx2-audio-vae-decoder",
+        )
+        audio_vae_export_config = audio_vae_config_constructor(
+            audio_vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        # Store latents_mean/std in config for un-normalization during inference
+        if hasattr(pipeline.audio_vae, "latents_mean") and pipeline.audio_vae.latents_mean is not None:
+            audio_vae_decoder.register_to_config(latents_mean_data=pipeline.audio_vae.latents_mean.tolist())
+        if hasattr(pipeline.audio_vae, "latents_std") and pipeline.audio_vae.latents_std is not None:
+            audio_vae_decoder.register_to_config(latents_std_data=pipeline.audio_vae.latents_std.tolist())
+        models_for_export["audio_vae_decoder"] = (audio_vae_decoder, audio_vae_export_config)
+
+        # Vocoder
+        if hasattr(pipeline, "vocoder") and pipeline.vocoder is not None:
+            vocoder = pipeline.vocoder
+            orig_vocoder_forward = vocoder.forward
+
+            def vocoder_forward(hidden_states):
+                return {"sample": orig_vocoder_forward(hidden_states)}
+
+            vocoder.forward = vocoder_forward
+            vocoder_config_constructor = TasksManager.get_exporter_config_constructor(
+                model=vocoder,
+                exporter=exporter,
+                library_name="diffusers",
+                task="semantic-segmentation",
+                model_type="ltx2-vocoder",
+            )
+            vocoder_export_config = vocoder_config_constructor(
+                vocoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+            )
+            models_for_export["vocoder"] = (vocoder, vocoder_export_config)
 
     return models_for_export
 
