@@ -867,8 +867,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del ov_model
         gc.collect()
 
-    HYBRID_ARCHITECTURES = ["granitemoehybrid", "lfm2", "qwen3_next"]
     # not including zamba2 - the Mamba mixer's torch_forward crashes on the second chunk
+    HYBRID_ARCHITECTURES = ["granitemoehybrid", "lfm2", "qwen3_next"]
+
+    # filter architectures depending on min/max transformers supported versions
+    HYBRID_ARCHITECTURES = [arch for arch in HYBRID_ARCHITECTURES if arch in get_supported_model_for_library("transformers")]
 
     @parameterized.expand(HYBRID_ARCHITECTURES, skip_on_empty=True)
     @pytest.mark.run_slow
