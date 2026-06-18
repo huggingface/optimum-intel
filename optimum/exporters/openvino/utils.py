@@ -560,6 +560,19 @@ def load_preprocessors(
     preprocessors = maybe_load_preprocessors(
         src_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
     )
+    if model_type == "fun_asr":
+        # FunASR has no root tokenizer; it lives in the bundled Qwen3 LLM subfolder. Load it so that
+        # the OpenVINO tokenizer/detokenizer IR gets exported alongside the model.
+        from transformers import AutoTokenizer
+
+        try:
+            preprocessors.append(
+                AutoTokenizer.from_pretrained(
+                    src_name_or_path, subfolder="Qwen3-0.6B", trust_remote_code=trust_remote_code
+                )
+            )
+        except Exception:
+            pass
     if model_type == "phi4mm":
         # audio feature extractor config overrides image processor config during saving, need to save it explicitly
         try:

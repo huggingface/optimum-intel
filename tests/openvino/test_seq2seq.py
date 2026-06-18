@@ -599,6 +599,19 @@ class FunASRTest(unittest.TestCase):
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
             model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
         )
+
+        # The standalone preprocess_input (no funasr dependency, OV tokenizer IR) must reproduce the
+        # prompt token ids and feature shape that funasr builds internally. Feature values are not
+        # compared exactly because funasr's frontend applies random dithering by default.
+        import soundfile as sf
+
+        waveform, sampling_rate = sf.read(wav_path, dtype="float32")
+        ov_inputs = ov_model.preprocess_input(waveform, sampling_rate, language="中文")
+        self.assertEqual(ov_inputs["input_features"].shape, input_features.shape)
+        self.assertTrue(torch.equal(ov_inputs["decoder_input_ids"], decoder_input_ids))
+
+        # Compare transcriptions using the exact inputs funasr produced (so both sides see the same
+        # dithered features), which keeps the text equality check deterministic.
         ov_generated_ids = ov_model.generate(
             input_features=input_features,
             decoder_input_ids=decoder_input_ids,

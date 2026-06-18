@@ -91,7 +91,10 @@ def infer_task(
         elif library_name == "kokoro":
             task = "text-to-audio"
         elif library_name == "funasr":
-            task = "automatic-speech-recognition"
+            # Use the with-past task so the encoder-decoder export is stateful (KV cache hidden in
+            # OpenVINO state). Without the `-with-past` suffix the decoder is exported stateless and
+            # incremental generation breaks (only the first token is correct).
+            task = "automatic-speech-recognition-with-past"
         else:
             try:
                 task = TasksManager._infer_task_from_model_name_or_path(

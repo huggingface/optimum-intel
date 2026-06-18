@@ -13,6 +13,7 @@
 #  limitations under the License.
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -51,6 +52,7 @@ from .utils import (
     OV_DECODER_NAME,
     OV_DECODER_WITH_PAST_NAME,
     OV_ENCODER_NAME,
+    OV_TOKENIZER_NAME,
     TemporaryDirectory,
     classproperty,
 )
@@ -614,6 +616,10 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         # now we use model_kwargs only for text-to-speech models to specify vocoder
         model_kwargs = kwargs if cls.export_feature == "text-to-audio" else None
 
+        # FunASR has no transformers processor, so its tokenizer/detokenizer IR is needed at inference
+        # time (e.g. by preprocess_input). Always export them for this model type.
+        convert_tokenizer = getattr(config, "model_type", None) == "fun_asr"
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -629,6 +635,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             stateful=stateful,
             variant=variant,
             model_kwargs=model_kwargs,
+            convert_tokenizer=convert_tokenizer,
         )
 
         # Reload the config from the export output directory, as the export process
@@ -1291,6 +1298,24 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
 
         return super().from_pretrained(model_id, export=export, config=config, **kwargs)
 
+    def _save_pretrained(self, save_directory: Union[str, Path]):
+        super()._save_pretrained(save_directory)
+        # FunASR has no transformers processor: its tokenizer/detokenizer IR (and the source tokenizer
+        # files) are exported alongside the model and are required by preprocess_input. Persist them.
+        if getattr(self.config, "model_type", None) == "fun_asr" and self.model_save_dir is not None:
+            src_dir = Path(self.model_save_dir)
+            save_directory = Path(save_directory)
+            tokenizer_assets = [
+                OV_TOKENIZER_NAME.format(""),
+                OV_TOKENIZER_NAME.format("").replace(".xml", ".bin"),
+                "openvino_detokenizer.xml",
+                "openvino_detokenizer.bin",
+            ]
+            for name in tokenizer_assets:
+                src = src_dir / name
+                if src.is_file() and src.resolve() != (save_directory / name).resolve():
+                    shutil.copyfile(src, save_directory / name)
+
     @staticmethod
     def _is_funasr_source(model_id, **kwargs) -> bool:
         from ...intel.utils.modeling_utils import _is_funasr_model
@@ -1357,6 +1382,143 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
             config.model_type = "fun_asr"
         config.is_encoder_decoder = True
         return cls._from_pretrained(model_id, config=config, **kwargs)
+
+    def preprocess_input(self, *args, **kwargs) -> Dict[str, torch.Tensor]:
+        """
+        Prepare raw inputs into the tensors expected by `generate()`.
+
+        This is a model-specific hook: speech models that do not ship a transformers processor
+        (e.g. FunASR) implement it to turn a waveform into `input_features` / `decoder_input_ids`.
+        The returned dictionary can be passed directly to `generate(**inputs)`.
+
+        Returns:
+            Dictionary with model inputs ready for `generate()`.
+        """
+        if getattr(self.config, "model_type", None) == "fun_asr":
+            return self._preprocess_input_funasr(*args, **kwargs)
+        raise NotImplementedError(
+            f"`preprocess_input` is not implemented for model type "
+            f"`{getattr(self.config, 'model_type', None)}`."
+        )
+
+    def _preprocess_input_funasr(
+        self,
+        waveforms: Union[np.ndarray, torch.Tensor, List],
+        sampling_rate: int,
+        language: str = "中文",
+        itn: bool = True,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Standalone FunASR preprocessing (no `funasr` dependency).
+
+        Reproduces FunASR's WavFrontend fbank+LFR features and the chat-style prompt with audio
+        placeholder tokens, using the OpenVINO tokenizer IR exported alongside the model.
+
+        Args:
+            waveforms: A single mono waveform (1-D array/tensor) or a batch (list / 2-D array).
+            sampling_rate: Sampling rate of `waveforms` in Hz.
+            language: FunASR prompt language tag (a Chinese word, e.g. "中文", "英文", "日文").
+            itn: Whether to apply inverse text normalization.
+
+        Returns:
+            Dictionary with `input_features` (B, T, 560) and `decoder_input_ids` (B, L).
+        """
+        import torchaudio
+        import torchaudio.compliance.kaldi as kaldi
+
+        # WavFrontend configuration (from the model's config.yaml frontend_conf).
+        target_fs, n_mels, frame_length, frame_shift, lfr_m, lfr_n = 16000, 80, 25, 10, 7, 6
+        audio_token_id = getattr(self.config, "audio_token_id", 0)
+
+        def _apply_lfr(inputs: torch.Tensor) -> torch.Tensor:
+            T = inputs.shape[0]
+            T_lfr = int(np.ceil(T / lfr_n))
+            left_padding = inputs[0].repeat((lfr_m - 1) // 2, 1)
+            inputs = torch.vstack((left_padding, inputs))
+            T = T + (lfr_m - 1) // 2
+            feat_dim = inputs.shape[-1]
+            strides = (lfr_n * feat_dim, 1)
+            sizes = (T_lfr, lfr_m * feat_dim)
+            last_idx = (T - lfr_m) // lfr_n + 1
+            num_padding = lfr_m - (T - last_idx * lfr_n)
+            if num_padding > 0:
+                num_padding = (2 * lfr_m - 2 * T + (T_lfr - 1 + last_idx) * lfr_n) / 2 * (T_lfr - last_idx)
+                inputs = torch.vstack([inputs] + [inputs[-1:]] * int(num_padding))
+            return inputs.as_strided(sizes, strides).clone().type(torch.float32)
+
+        def _extract_features(waveform: torch.Tensor) -> torch.Tensor:
+            if waveform.ndim > 1:  # reduce channels to mono
+                waveform = waveform.mean(0)
+            if sampling_rate != target_fs:
+                waveform = torchaudio.transforms.Resample(sampling_rate, target_fs)(waveform[None, :])[0, :]
+            wav = waveform.float() * (1 << 15)  # upscale_samples
+            wav = wav.unsqueeze(0)
+            mat = kaldi.fbank(
+                wav,
+                num_mel_bins=n_mels,
+                frame_length=min(frame_length, wav.shape[1] / target_fs * 1000),
+                frame_shift=frame_shift,
+                dither=0.0,
+                energy_floor=0.0,
+                window_type="hamming",
+                sample_frequency=target_fs,
+                snip_edges=True,
+            )
+            return _apply_lfr(mat)  # (T, 560)
+
+        def _num_audio_tokens(num_frames: int) -> int:
+            # use_low_frame_rate=True formula from FunASRNano.data_load_speech.
+            olens = 1 + (num_frames - 3 + 2 * 1) // 2
+            olens = 1 + (olens - 3 + 2 * 1) // 2
+            return (olens - 1) // 2 + 1
+
+        # Normalize input into a list of 1-D tensors.
+        if isinstance(waveforms, (list, tuple)):
+            wavs = [torch.as_tensor(np.asarray(w)) for w in waveforms]
+        else:
+            arr = waveforms if isinstance(waveforms, torch.Tensor) else torch.as_tensor(np.asarray(waveforms))
+            wavs = [arr] if arr.ndim == 1 else list(arr)
+
+        feats = [_extract_features(w) for w in wavs]
+        num_frames = [f.shape[0] for f in feats]
+        max_frames = max(num_frames)
+        feature_size = feats[0].shape[-1]
+        input_features = torch.zeros(len(feats), max_frames, feature_size, dtype=torch.float32)
+        for i, f in enumerate(feats):
+            input_features[i, : f.shape[0]] = f
+
+        # Build the chat prompt and tokenize it with the exported OpenVINO tokenizer IR.
+        asr_prompt = f"语音转写成{language}：" if itn else f"语音转写成{language}，不进行文本规整："
+        before = f"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{asr_prompt}"
+        after = "<|im_end|>\n<|im_start|>assistant\n"
+        before_ids = self._funasr_tokenizer_encode(before)
+        after_ids = self._funasr_tokenizer_encode(after)
+
+        prompt_ids = []
+        for nf in num_frames:
+            ids = before_ids + [audio_token_id] * _num_audio_tokens(nf) + after_ids
+            prompt_ids.append(torch.tensor(ids, dtype=torch.long))
+        max_len = max(t.shape[0] for t in prompt_ids)
+        decoder_input_ids = torch.zeros(len(prompt_ids), max_len, dtype=torch.long)
+        for i, t in enumerate(prompt_ids):
+            decoder_input_ids[i, : t.shape[0]] = t
+
+        return {"input_features": input_features, "decoder_input_ids": decoder_input_ids}
+
+    def _funasr_tokenizer_encode(self, text: str) -> List[int]:
+        """Encode text to token ids using the exported OpenVINO tokenizer IR."""
+        if getattr(self, "_ov_tokenizer", None) is None:
+            import openvino_tokenizers  # noqa: F401  (registers the tokenizer ops)
+
+            tokenizer_path = Path(self.model_save_dir) / OV_TOKENIZER_NAME.format("")
+            if not tokenizer_path.is_file():
+                raise FileNotFoundError(
+                    f"OpenVINO tokenizer IR not found at {tokenizer_path}. Re-export the model so the "
+                    "tokenizer/detokenizer IR is generated."
+                )
+            self._ov_tokenizer = Core().compile_model(str(tokenizer_path), "CPU")
+        result = self._ov_tokenizer([text])
+        return result["input_ids"][0].tolist()
 
     def _prepare_decoder_input_ids_for_generation(
         self, batch_size, model_input_name, model_kwargs, decoder_start_token_id, device=None
