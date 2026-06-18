@@ -227,12 +227,6 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
         if "per_layer_inputs" in self.input_names:
             per_layer_inputs = kwargs.pop("per_layer_inputs", None)
-            # if deepstack_visual_embeds is not None:
-            #     inputs["deepstack_visual_embeds"] = torch.Tensor(deepstack_visual_embeds)
-            # else:
-            #     num_layers = len(self.config.vision_config.deepstack_visual_indexes)
-            #     emd_dim = self.config.text_config.hidden_size
-            #     inputs["deepstack_visual_embeds"] = torch.zeros((num_layers, 1, emd_dim), dtype=torch.float32)
             if per_layer_inputs is None:
                 raise ValueError("Expected 'per_layer_inputs', but it was not passed")
             inputs["per_layer_inputs"] = torch.Tensor(per_layer_inputs)
@@ -806,7 +800,14 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             additional_kwargs["visual_pos_masks"] = extra_outputs[0]
             additional_kwargs["deepstack_visual_embeds"] = extra_outputs[1]
 
-        if self.config.model_type in ("gemma3n", "gemma4",) and extra_outputs:
+        if (
+            self.config.model_type
+            in (
+                "gemma3n",
+                "gemma4",
+            )
+            and extra_outputs
+        ):
             additional_kwargs["per_layer_inputs"] = extra_outputs[0]
 
         return self.language_model.forward(
@@ -819,7 +820,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             **additional_kwargs,
             **kwargs,
         )
-
 
     def _reorder_cache(self, past_key_values, beam_idx):
         return self.language_model._reorder_cache(past_key_values, beam_idx)
@@ -4010,7 +4010,7 @@ class _OVGemma3NForCausalLM(_OVGemma3ForCausalLM):
     additional_parts = ["text_embeddings_per_layer"]
 
     def get_multimodal_embeddings(
-            self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, **kwargs
+        self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, **kwargs
     ):
         embeds_from_args = kwargs.pop("inputs_embeds", None)
         inputs_embeds = (

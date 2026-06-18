@@ -5198,6 +5198,7 @@ def _gaussian_topk(self, inputs: torch.Tensor) -> torch.Tensor:
     cutoff_x = inputs_mean + inputs_std * std_multiplier
     return nn.functional.relu(inputs - cutoff_x)
 
+
 def gemma3n_language_model_forward(
     self,
     input_ids: Optional[torch.LongTensor] = None,  # text inputs
@@ -5214,11 +5215,9 @@ def gemma3n_language_model_forward(
     use_cache: Optional[bool] = None,
     output_attentions: Optional[bool] = None,
     output_hidden_states: Optional[bool] = None,
-    per_layer_inputs = None,
+    per_layer_inputs=None,
     **lm_kwargs,
 ):
-    from transformers.models.gemma3n.modeling_gemma3n import Gemma3nModelOutputWithPast
-
     if (input_ids is None) ^ (inputs_embeds is not None):
         raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
 
@@ -5351,7 +5350,6 @@ def gemma4_language_model_forward(
     input_features_mask: Optional[torch.Tensor] = None,
     position_ids: Optional[torch.LongTensor] = None,
     past_key_values: Optional[Cache] = None,
-
     mm_token_type_ids: Optional[torch.LongTensor] = None,
     cache_position: Optional[torch.LongTensor] = None,
     inputs_embeds: Optional[torch.FloatTensor] = None,
@@ -5421,7 +5419,7 @@ def gemma3n_lm_forward(
     position_ids: Optional[torch.LongTensor] = None,
     past_key_values: Optional[Cache] = None,
     inputs_embeds: Optional[torch.FloatTensor] = None,
-    per_layer_inputs = None,
+    per_layer_inputs=None,
     input_ids: Optional[torch.LongTensor] = None,  # text inputs
     pixel_values: Optional[torch.FloatTensor] = None,  # vision inputs
     input_features: Optional[torch.FloatTensor] = None,  # audio inputs
@@ -5435,8 +5433,8 @@ def gemma3n_lm_forward(
     logits_to_keep: Union[int, torch.Tensor] = 0,
     **lm_kwargs,
 ):
-    from transformers.models.gemma3n.modeling_gemma3n import Gemma3nCausalLMOutputWithPast
-    from optimum.exporters.onnx.model_patcher import preprocess_past_key_values, postprocess_past_key_values
+    from optimum.exporters.onnx.model_patcher import postprocess_past_key_values, preprocess_past_key_values
+
     output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
     output_hidden_states = (
         output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -5478,12 +5476,57 @@ def gemma3n_lm_forward(
         tmp_logits = tmp_logits * final_logit_softcapping
 
     outputs_dict = {
-       "logits": tmp_logits,
+        "logits": tmp_logits,
     }
 
     if use_cache:
         key_values = outputs.past_key_values
-        present_key_values = postprocess_past_key_values(key_values, ['logits', 'present.0.key', 'present.0.value', 'present.1.key', 'present.1.value', 'present.2.key', 'present.2.value', 'present.3.key', 'present.3.value', 'present.4.key', 'present.4.value', 'present.5.key', 'present.5.value', 'present.6.key', 'present.6.value', 'present.7.key', 'present.7.value', 'present.8.key', 'present.8.value', 'present.9.key', 'present.9.value', 'present.10.key', 'present.10.value', 'present.11.key', 'present.11.value', 'present.12.key', 'present.12.value', 'present.13.key', 'present.13.value', 'present.14.key', 'present.14.value', 'present.15.key', 'present.15.value', 'present.16.key', 'present.16.value', 'present.17.key', 'present.17.value', 'present.18.key', 'present.18.value', 'present.19.key', 'present.19.value'])
+        present_key_values = postprocess_past_key_values(
+            key_values,
+            [
+                "logits",
+                "present.0.key",
+                "present.0.value",
+                "present.1.key",
+                "present.1.value",
+                "present.2.key",
+                "present.2.value",
+                "present.3.key",
+                "present.3.value",
+                "present.4.key",
+                "present.4.value",
+                "present.5.key",
+                "present.5.value",
+                "present.6.key",
+                "present.6.value",
+                "present.7.key",
+                "present.7.value",
+                "present.8.key",
+                "present.8.value",
+                "present.9.key",
+                "present.9.value",
+                "present.10.key",
+                "present.10.value",
+                "present.11.key",
+                "present.11.value",
+                "present.12.key",
+                "present.12.value",
+                "present.13.key",
+                "present.13.value",
+                "present.14.key",
+                "present.14.value",
+                "present.15.key",
+                "present.15.value",
+                "present.16.key",
+                "present.16.value",
+                "present.17.key",
+                "present.17.value",
+                "present.18.key",
+                "present.18.value",
+                "present.19.key",
+                "present.19.value",
+            ],
+        )
         outputs_dict["past_key_values"] = present_key_values
     return tuple([value if not isinstance(value, list) else tuple(value) for value in outputs_dict.values()])
 
@@ -5642,7 +5685,9 @@ def gemma3n_text_forward(
     **kwargs,
 ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
     from collections.abc import Callable
+
     from transformers.models.gemma3n.modeling_gemma3n import apply_rotary_pos_emb as apply_rotary_pos_emb_gemma3n
+
     input_shape = hidden_states.shape[:-1]
     hidden_shape = (*input_shape, -1, self.config.head_dim)
 
@@ -5678,9 +5723,7 @@ def gemma3n_text_forward(
             "sliding_window": self.sliding_window,
         }
         if not self.is_kv_shared_layer:
-            key_states, value_states = past_key_values.update(
-                key_states, value_states, self.layer_idx, cache_kwargs
-            )
+            key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
         if self.store_full_length_kv:
             if not hasattr(past_key_values, "shared_layers"):
                 past_key_values.shared_layers = {}
@@ -5688,7 +5731,7 @@ def gemma3n_text_forward(
 
     attention_interface: Callable = gemma3n_eager_attention_forward_patched
     # if self.config._attn_implementation != "eager":
-        #     attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+    #     attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
     attn_output, attn_weights = attention_interface(
         self,
@@ -9135,8 +9178,7 @@ class Gemma3nPerLayerInputsGetterModelPatcher(ModelPatcher):
     ):
         model.__orig_forward = model.forward
 
-        def per_layer_inputs_forward(
-            self, input_ids: torch.Tensor) -> torch.Tensor:
+        def per_layer_inputs_forward(self, input_ids: torch.Tensor) -> torch.Tensor:
             per_layer_inputs_mask = torch.logical_and(input_ids >= 0, input_ids < self.vocab_size_per_layer_input)
             per_layer_inputs_tokens = torch.where(per_layer_inputs_mask, input_ids, torch.zeros_like(input_ids))
             per_layer_inputs = self.language_model.get_per_layer_inputs(per_layer_inputs_tokens)
@@ -9151,7 +9193,6 @@ class Gemma3nPerLayerInputsGetterModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
-
 
 
 # Patched implementation of the gated delta rule in recurrent form.

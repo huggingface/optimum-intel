@@ -102,6 +102,7 @@ from optimum.exporters.openvino.model_patcher import (
     FluxTransformerModelPatcher,
     Gemma2ModelPatcher,
     Gemma3LMModelPatcher,
+    Gemma3nImageEmbeddingsModelPatcher,
     Gemma3nLMModelPatcher,
     Gemma4ImageEmbeddingsModelPatcher,
     Gemma4LMModelPatcher,
@@ -169,8 +170,6 @@ from optimum.exporters.openvino.model_patcher import (
     VideoChatFlashQwenVisionEmbeddingModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
-    Gemma3nPerLayerInputsGetterModelPatcher,
-    Gemma3nImageEmbeddingsModelPatcher,
     _get_model_attribute,
 )
 from optimum.exporters.tasks import TasksManager
@@ -251,12 +250,6 @@ def _warn_potential_accuracy_issue_ov_2026_1(model_type: str, min_transformers_v
 def init_model_configs():
     if "open_clip" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
         TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["open_clip"] = {}
-
-    # TODO: not needed?
-    # TasksManager._CUSTOM_CLASSES[("pt", "gemma3n", "image-text-to-text")] = (
-    #     "transformers",
-    #     "Gemma3nForConditionalGeneration",
-    # )
     if "kokoro" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
         TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["kokoro"] = {}
     if "kokoro" not in TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP:
@@ -272,6 +265,7 @@ def init_model_configs():
             }
         except ImportError:
             pass
+
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "image-text-to-text")] = ("transformers", "AutoModelForCausalLM")
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "automatic-speech-recognition")] = (
         "transformers",
@@ -1317,6 +1311,7 @@ class Gemma4TextOpenVINOConfig(Gemma3TextOpenVINOConfig):
             inputs_or_outputs[f"{name}.{i}.key"] = {0: "batch_size", 2: decoder_sequence_name}
             inputs_or_outputs[f"{name}.{i}.value"] = {0: "batch_size", 2: decoder_sequence_name}
 
+
 @register_in_tasks_manager(
     "gemma3n_text",
     *[
@@ -1328,36 +1323,8 @@ class Gemma4TextOpenVINOConfig(Gemma3TextOpenVINOConfig):
     ],
     library_name="transformers",
 )
-class Gemma3nTextOpenVINOConfig(Gemma3TextOpenVINOConfig):
-    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Gemma4DummyPastKeyValuesGenerator)
-    DUMMY_PKV_GENERATOR_CLASS = Gemma4DummyPastKeyValuesGenerator
+class Gemma3nTextOpenVINOConfig(Gemma4TextOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
-
-    def add_past_key_values(self, inputs_or_outputs: dict[str, dict[int, str]], direction: str):
-        if direction not in ["inputs", "outputs"]:
-            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
-
-        if direction == "inputs":
-            decoder_sequence_name = "past_sequence_length"
-            name = "past_key_values"
-        else:
-            decoder_sequence_name = "past_sequence_length + sequence_length"
-            name = "present"
-
-        num_kv_shared_layers = self._normalized_config.config.num_kv_shared_layers
-        if num_kv_shared_layers > 0:
-            layer_types = self._normalized_config.config.layer_types[:-num_kv_shared_layers]
-        else:
-            layer_types = self._normalized_config.config.layer_types
-
-        for i, layer_type in enumerate(layer_types):
-            if layer_type == "sliding_attention":
-                inputs_or_outputs[f"{name}.{i}.key"] = {0: "batch_size", 2: decoder_sequence_name}
-                inputs_or_outputs[f"{name}.{i}.value"] = {0: "batch_size", 2: decoder_sequence_name}
-            else:
-                inputs_or_outputs[f"{name}.{i}.key"] = {0: "batch_size", 2: decoder_sequence_name}
-                inputs_or_outputs[f"{name}.{i}.value"] = {0: "batch_size", 2: decoder_sequence_name}
 
 
 @register_in_tasks_manager("deci", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -3887,6 +3854,7 @@ class Gemma3nConfigBehavior(str, enum.Enum):
     LANGUAGE = "language"
     TEXT_EMBEDDINGS_PER_LAYER = "text_embeddings_per_layer"
 
+
 class Gemma4ConfigBehavior(str, enum.Enum):
     VISION_EMBEDDINGS = "vision_embeddings"
     TEXT_EMBEDDINGS = "text_embeddings"
@@ -3898,6 +3866,7 @@ class Gemma4ConfigBehavior(str, enum.Enum):
 class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Gemma3nConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyTextInputGenerator)
+
     def __init__(
         self,
         config: "PretrainedConfig",
@@ -3916,7 +3885,6 @@ class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
             behavior=behavior,
         )
         self._behavior = behavior
-
 
     def with_behavior(self, behavior: Union[str, Gemma3nConfigBehavior]):
         """
@@ -3954,6 +3922,7 @@ class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
     def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
         if behavior == Gemma3nConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
             import torch
+
             class PerLayerInputsModule(torch.nn.Module):
                 def __init__(self, language_model, vocab_size_per_layer_input: int):
                     super().__init__()
@@ -3962,19 +3931,14 @@ class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
 
                 def forward(self, input_ids: torch.Tensor):
                     per_layer_inputs_mask = torch.logical_and(
-                        input_ids >= 0,
-                        input_ids < self.vocab_size_per_layer_input
+                        input_ids >= 0, input_ids < self.vocab_size_per_layer_input
                     )
 
                     per_layer_inputs_tokens = torch.where(
-                        per_layer_inputs_mask,
-                        input_ids,
-                        torch.zeros_like(input_ids)
+                        per_layer_inputs_mask, input_ids, torch.zeros_like(input_ids)
                     )
 
-                    per_layer_inputs = self.language_model.get_per_layer_inputs(
-                        per_layer_inputs_tokens
-                    )
+                    per_layer_inputs = self.language_model.get_per_layer_inputs(per_layer_inputs_tokens)
 
                     return per_layer_inputs
 
@@ -3988,20 +3952,26 @@ class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
 
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
             import torch
+
             class TextEmbeddingsModule(torch.nn.Module):
-                def __init__(self, model): #, vocab_size_per_layer_input: int):
+                def __init__(self, model):  # , vocab_size_per_layer_input: int):
                     super().__init__()
                     self.model = model
-                   # self.vocab_size_per_layer_input = vocab_size_per_layer_input
+
+                # self.vocab_size_per_layer_input = vocab_size_per_layer_input
 
                 def forward(self, input_ids: torch.Tensor):
                     inputs_embeds = self.model.get_input_embeddings()(input_ids)
                     vision_mask = torch.logical_and(
-                        input_ids >= self.model.model.embed_vision.vocab_offset, input_ids < self.model.model.embed_audio.vocab_offset
+                        input_ids >= self.model.model.embed_vision.vocab_offset,
+                        input_ids < self.model.model.embed_audio.vocab_offset,
                     )
-                    dummy_vision_token_id = self.model.model.embed_vision.vocab_offset + self.model.model.embed_vision.vocab_size - 1
+                    dummy_vision_token_id = (
+                        self.model.model.embed_vision.vocab_offset + self.model.model.embed_vision.vocab_size - 1
+                    )
                     vision_input_ids = torch.where(vision_mask, input_ids, dummy_vision_token_id).to(
-                        inputs_embeds.device)
+                        inputs_embeds.device
+                    )
                     vision_embeds = self.model.model.embed_vision(input_ids=vision_input_ids)
                     expanded_vision_mask = vision_mask.unsqueeze(-1).expand_as(inputs_embeds)
                     inputs_embeds = torch.where(expanded_vision_mask, vision_embeds, inputs_embeds)
@@ -4022,11 +3992,8 @@ class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
             return Gemma3nImageEmbeddingsModelPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
 
-
-
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-
         if self._behavior == Gemma3nConfigBehavior.LANGUAGE:
             inputs = super().inputs
             return inputs
@@ -4041,7 +4008,6 @@ class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
         if self._behavior == Gemma3nConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
             return {"text_embeds_per_layer": {}}
         return super().outputs
-
 
 
 @register_in_tasks_manager("gemma4", *["image-text-to-text"], library_name="transformers")
