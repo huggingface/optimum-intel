@@ -41,6 +41,7 @@ from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
 from .. import OVConfig
 from ..utils import is_transformers_version
+from ..utils.modeling_utils import _find_files_matching_pattern
 from .configuration import OVQuantizationConfigBase, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .utils import (
@@ -635,7 +636,16 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         exported_config_path = save_dir_path / "config.json"
         if exported_config_path.exists():
             original_name_or_path = getattr(config, "_name_or_path", None) or model_id
-            config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
+            try:
+                config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
+            except (KeyError, ValueError):
+                # Custom model types not registered with transformers AutoConfig (e.g. `fun_asr`,
+                # loaded via the funasr library) are stored as a plain PretrainedConfig.
+                config = PretrainedConfig.from_pretrained(save_dir_path)
+            # PretrainedConfig does not serialize the instance-level `model_type`; restore it
+            # from `export_model_type` so downstream model_type-based dispatch keeps working.
+            if not getattr(config, "model_type", None) and getattr(config, "export_model_type", None):
+                config.model_type = config.export_model_type
             # Preserve the original model identifier so that default quantization
             # config lookup based on the model id keeps working.
             config._name_or_path = original_name_or_path
@@ -1269,15 +1279,94 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
     main_input_name = "input_features"
     export_feature = "automatic-speech-recognition"
 
+    @classmethod
+    def from_pretrained(cls, model_id, export: bool = False, config: Optional["PretrainedConfig"] = None, **kwargs):
+        # FunASR models (e.g. Fun-ASR-Nano) are loaded via the funasr library and have no root
+        # config.json; transformers' AutoConfig / optimum's library inference cannot handle them.
+        # We detect them (either the original funasr repo, or an already-exported OpenVINO dir whose
+        # config.json carries `export_model_type == "fun_asr"`) and load the config ourselves,
+        # bypassing the standard inference path.
+        if config is None and cls._is_funasr_source(model_id, **kwargs):
+            return cls._from_pretrained_funasr(model_id, export=export, **kwargs)
+
+        return super().from_pretrained(model_id, export=export, config=config, **kwargs)
+
+    @staticmethod
+    def _is_funasr_source(model_id, **kwargs) -> bool:
+        from ...intel.utils.modeling_utils import _is_funasr_model
+        from optimum.exporters.tasks import TasksManager
+
+        cache_dir = kwargs.get("cache_dir", HUGGINGFACE_HUB_CACHE)
+        token = kwargs.get("token")
+        subfolder = kwargs.get("subfolder", "")
+        revision = kwargs.get("revision")
+        try:
+            all_files, _ = TasksManager.get_model_files(
+                model_id, subfolder=subfolder, cache_dir=cache_dir, revision=revision, token=token
+            )
+        except Exception:
+            all_files = []
+
+        # Original funasr repo (configuration.json + config.yaml, no root config.json).
+        if _is_funasr_model(model_id, all_files, cache_dir=cache_dir, token=token):
+            return True
+
+        # Previously exported OpenVINO model: config.json with export_model_type == "fun_asr".
+        if "config.json" in all_files:
+            try:
+                cfg = PretrainedConfig.from_pretrained(
+                    model_id, subfolder=subfolder, cache_dir=cache_dir, revision=revision, token=token
+                )
+                return getattr(cfg, "export_model_type", None) == "fun_asr"
+            except Exception:
+                return False
+        return False
+
+    @classmethod
+    def _from_pretrained_funasr(cls, model_id, export: bool = False, **kwargs):
+        """Loading entrypoint for FunASR models, bypassing optimum's library/config inference."""
+        # Determine whether OpenVINO IR already exists (load) or we need to export.
+        _export = export
+        try:
+            ov_files = _find_files_matching_pattern(
+                model_id,
+                pattern=cls._search_pattern,
+                subfolder=kwargs.get("subfolder", ""),
+                use_auth_token=kwargs.get("token"),
+                revision=kwargs.get("revision"),
+            )
+            _export = len(ov_files) == 0
+        except Exception:
+            pass
+
+        if _export:
+            # Build the export-time config directly from the funasr model.
+            from ...intel.utils.modeling_utils import _FunASRForSpeechSeq2Seq
+
+            funasr_wrapped = _FunASRForSpeechSeq2Seq.from_pretrained(
+                model_id, cache_dir=kwargs.get("cache_dir", HUGGINGFACE_HUB_CACHE), token=kwargs.get("token")
+            )
+            config = funasr_wrapped.config
+            del funasr_wrapped
+            return cls._export(model_id, config=config, **kwargs)
+
+        # Loading a previously exported model. PretrainedConfig does not serialize the instance-level
+        # `model_type` (it is a class attribute), so we restore it from `export_model_type`.
+        config = PretrainedConfig.from_pretrained(model_id)
+        if getattr(config, "export_model_type", None) == "fun_asr":
+            config.model_type = "fun_asr"
+        config.is_encoder_decoder = True
+        return cls._from_pretrained(model_id, config=config, **kwargs)
+
     def _prepare_decoder_input_ids_for_generation(
         self, batch_size, model_input_name, model_kwargs, decoder_start_token_id, device=None
     ):
         """
-        For qwen3_asr: skip prepending decoder_start_token_id since the full prompt
+        For qwen3_asr / fun_asr: skip prepending decoder_start_token_id since the full prompt
         (including chat template tokens) is already provided as decoder_input_ids.
         This matches the PyTorch model behavior where input_ids is used as-is.
         """
-        if getattr(self.config, "model_type", None) == "qwen3_asr":
+        if getattr(self.config, "model_type", None) in ("qwen3_asr", "fun_asr"):
             if model_kwargs is not None and "decoder_input_ids" in model_kwargs:
                 decoder_input_ids = model_kwargs.pop("decoder_input_ids")
             elif "input_ids" in model_kwargs and model_input_name != "input_ids":
@@ -1432,9 +1521,9 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
         config: "PretrainedConfig",
         **kwargs,
     ):
-        if "WhisperForConditionalGeneration" in getattr(config, "architectures", []):
+        if "WhisperForConditionalGeneration" in (getattr(config, "architectures", None) or []):
             return _OVModelForWhisper._from_pretrained(model_id, config, **kwargs)
-        elif getattr(config, "model_type", None) == "qwen3_asr":
+        elif getattr(config, "model_type", None) in ("qwen3_asr", "fun_asr"):
             # Ensure is_encoder_decoder is set for proper model loading
             config.is_encoder_decoder = True
             return super()._from_pretrained(model_id, config, **kwargs)

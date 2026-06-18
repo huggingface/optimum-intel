@@ -10302,6 +10302,179 @@ class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
             del self._model._orig_forward
 
 
+class FunASRModelPatcher(OVSeq2SeqModelPatcher):
+    """
+    Model patcher for FunASR (e.g. Fun-ASR-Nano) encoder-decoder export.
+
+    Encoder: SenseVoice audio encoder + adaptor. The SANM encoder attention/fsmn and the adaptor
+    attention use attention masks that, for batch-size-1 unpadded audio, are all-ones (no-ops) but
+    bake trace-time sequence lengths into the graph. We drop these masks so the exported encoder
+    works for dynamic audio lengths.
+
+    Decoder: a standard Qwen3 LLM. The audio embeddings produced by the encoder are spliced into the
+    decoder input embeddings at audio placeholder positions (token id == audio_token_id, which is 0
+    for FunASR), then the Qwen3 LM runs with self-attention KV cache only (no cross-attention).
+    """
+
+    def __enter__(self):
+        super().__enter__()
+
+        if self.real_config._behavior == "encoder":
+            self._patch_audio_encoder()
+        elif self.real_config._behavior == "decoder":
+            self._patch_decoder()
+
+    def _patch_audio_encoder(self):
+        # self._model is the _FunASRAudioEncoder wrapper (audio_encoder + audio_adaptor)
+        encoder_wrap = self._model
+        sense_voice = encoder_wrap.audio_encoder
+        adaptor = encoder_wrap.audio_adaptor
+
+        # Patch SANM encoder self-attention layers to drop the (all-ones) attention/fsmn mask.
+        sanm_layers = (
+            list(sense_voice.encoders0) + list(sense_voice.encoders) + list(sense_voice.tp_encoders)
+        )
+        for layer in sanm_layers:
+            attn = layer.self_attn
+            attn._orig_forward = attn.forward
+
+            def make_sanm_forward(att):
+                def patched_sanm_forward(x, mask=None, mask_shfit_chunk=None, mask_att_chunk_encoder=None):
+                    q_h, k_h, v_h, v = att.forward_qkv(x)
+                    # fsmn memory without masking
+                    fsmn = v.transpose(1, 2)
+                    fsmn = att.pad_fn(fsmn)
+                    fsmn = att.fsmn_block(fsmn)
+                    fsmn = fsmn.transpose(1, 2)
+                    fsmn_memory = fsmn + v
+                    q_h = q_h * att.d_k ** (-0.5)
+                    scores = torch.matmul(q_h, k_h.transpose(-2, -1))
+                    attn_weights = torch.softmax(scores, dim=-1)
+                    out = torch.matmul(attn_weights, v_h)
+                    n_batch = out.size(0)
+                    out = out.transpose(1, 2).contiguous().view(n_batch, -1, att.h * att.d_k)
+                    return att.linear_out(out) + fsmn_memory
+
+                return patched_sanm_forward
+
+            attn.forward = make_sanm_forward(attn)
+
+        # Patch adaptor transformer attention layers to drop the (all-ones) attention mask.
+        if getattr(adaptor, "blocks", None) is not None:
+            for block in adaptor.blocks:
+                attn = block.self_attn
+                attn._orig_forward = attn.forward
+
+                def make_adaptor_forward(att):
+                    def patched_adaptor_forward(query, key, value, mask=None):
+                        q, k, v = att.forward_qkv(query, key, value)
+                        scores = torch.matmul(q, k.transpose(-2, -1)) / (att.d_k**0.5)
+                        attn_weights = torch.softmax(scores, dim=-1)
+                        x = torch.matmul(attn_weights, v)
+                        n_batch = x.size(0)
+                        x = x.transpose(1, 2).contiguous().view(n_batch, -1, att.h * att.d_k)
+                        return att.linear_out(x)
+
+                    return patched_adaptor_forward
+
+                attn.forward = make_adaptor_forward(attn)
+
+        encoder_wrap._orig_forward = encoder_wrap.forward
+
+        def patched_encoder_forward(input_features):
+            # input_features: (batch, num_frames, feature_size)
+            speech_lengths = torch.tensor(
+                [input_features.shape[1]] * input_features.shape[0], dtype=torch.int32
+            )
+            encoder_out, encoder_out_lens = sense_voice(input_features, speech_lengths)
+            adaptor_out, _ = adaptor(encoder_out, encoder_out_lens)
+            return BaseModelOutput(last_hidden_state=adaptor_out)
+
+        encoder_wrap.forward = patched_encoder_forward
+
+    def _patch_decoder(self):
+        # self._model is the _FunASRForSpeechSeq2Seq wrapper
+        model = self._model
+        llm = model.llm
+        audio_token_id = getattr(model.config, "audio_token_id", 0)
+
+        # Force eager attention for stable OpenVINO tracing.
+        llm.config._attn_implementation = "eager"
+
+        model._orig_forward = model.forward
+
+        def patched_decoder_forward(
+            encoder_outputs=None,
+            decoder_input_ids=None,
+            attention_mask=None,
+            past_key_values=None,
+            cache_position=None,
+            **kwargs,
+        ):
+            if past_key_values is not None and isinstance(past_key_values, (list, tuple)):
+                cache = DynamicCache()
+                for layer_past in past_key_values:
+                    if len(layer_past) >= 2:
+                        cache.update(layer_past[0], layer_past[1], len(cache))
+                past_key_values = cache
+            elif past_key_values is None:
+                past_key_values = DynamicCache()
+
+            input_ids = decoder_input_ids
+            inputs_embeds = llm.get_input_embeddings()(input_ids)
+
+            # Splice audio embeddings into placeholder positions (token id == audio_token_id).
+            if encoder_outputs is not None:
+                if isinstance(encoder_outputs, (tuple, list)):
+                    encoder_hidden_states = encoder_outputs[0]
+                else:
+                    encoder_hidden_states = encoder_outputs
+                audio_features = encoder_hidden_states.reshape(-1, encoder_hidden_states.shape[-1])
+                audio_features = audio_features.to(inputs_embeds.device, inputs_embeds.dtype)
+
+                special_audio_mask = input_ids == audio_token_id  # [batch, seq]
+                audio_cumsum = special_audio_mask.long().cumsum(dim=-1) - 1
+                audio_cumsum = audio_cumsum.clamp(min=0)
+                gather_indices = audio_cumsum.unsqueeze(-1).expand(-1, -1, inputs_embeds.shape[-1])
+                audio_features_expanded = audio_features.unsqueeze(0).expand(inputs_embeds.shape[0], -1, -1)
+                gathered_audio = torch.gather(audio_features_expanded, 1, gather_indices)
+                mask_3d = special_audio_mask.unsqueeze(-1)
+                inputs_embeds = torch.where(mask_3d, gathered_audio, inputs_embeds)
+
+            outputs = llm.model(
+                attention_mask=attention_mask,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                use_cache=True,
+                cache_position=cache_position,
+            )
+
+            logits = llm.lm_head(outputs[0])
+
+            past_kv = outputs.past_key_values
+            flat_output = [logits]
+            if isinstance(past_kv, DynamicCache):
+                for layer in past_kv.layers:
+                    flat_output.append(layer.keys)
+                    flat_output.append(layer.values)
+            elif past_kv is not None:
+                legacy = past_kv if isinstance(past_kv, (list, tuple)) else past_kv.to_legacy_cache()
+                for layer_kv in legacy:
+                    flat_output.append(layer_kv[0])
+                    flat_output.append(layer_kv[1])
+
+            return tuple(flat_output)
+
+        model.forward = patched_decoder_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        if hasattr(self._model, "_orig_forward"):
+            self._model.forward = self._model._orig_forward
+            del self._model._orig_forward
+
+
 class KokoroModelPatcher(ModelPatcher):
     """
     Patches the Kokoro TTS model for OpenVINO export by redirecting forward

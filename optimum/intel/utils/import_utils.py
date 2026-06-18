@@ -117,6 +117,14 @@ if _kokoro_available:
     except importlib_metadata.PackageNotFoundError:
         _kokoro_available = False
 
+_funasr_available = importlib.util.find_spec("funasr") is not None
+_funasr_version = "N/A"
+if _funasr_available:
+    try:
+        _funasr_version = importlib_metadata.version("funasr")
+    except importlib_metadata.PackageNotFoundError:
+        _funasr_available = False
+
 _safetensors_version = "N/A"
 _safetensors_available = importlib.util.find_spec("safetensors") is not None
 if _safetensors_available:
@@ -300,6 +308,10 @@ def is_open_clip_available():
 
 def is_kokoro_available():
     return _kokoro_available
+
+
+def is_funasr_available():
+    return _funasr_available
 
 
 def is_safetensors_available():

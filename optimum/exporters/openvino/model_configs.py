@@ -69,6 +69,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyVisionPositionIdsPhi4InputGenerator,
     Eagle3DummyGenerator,
     Eagle3VLMDummyGenerator,
+    FunASRDummyAudioInputGenerator,
     Gemma4DummyPastKeyValuesGenerator,
     GPTBigCodeDummyPastKeyValuesGenerator,
     Lfm2DummyPastKeyValuesGenerator,
@@ -102,6 +103,7 @@ from optimum.exporters.openvino.model_patcher import (
     DeepseekPatcher,
     FalconModelPatcher,
     FluxTransformerModelPatcher,
+    FunASRModelPatcher,
     Gemma2ModelPatcher,
     Gemma3LMModelPatcher,
     Gemma4ImageEmbeddingsModelPatcher,
@@ -264,6 +266,22 @@ def init_model_configs():
                 _kokoro_module._KokoroForTextToSpeech = _KokoroForTextToSpeech
             TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP["kokoro"] = {
                 "text-to-audio": "_KokoroForTextToSpeech",
+            }
+        except ImportError:
+            pass
+
+    if "funasr" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
+        TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["funasr"] = {}
+    if "funasr" not in TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP:
+        from optimum.intel.utils.modeling_utils import _FunASRForSpeechSeq2Seq
+
+        try:
+            import funasr as _funasr_module
+
+            if not hasattr(_funasr_module, "_FunASRForSpeechSeq2Seq"):
+                _funasr_module._FunASRForSpeechSeq2Seq = _FunASRForSpeechSeq2Seq
+            TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP["funasr"] = {
+                "automatic-speech-recognition": "_FunASRForSpeechSeq2Seq",
             }
         except ImportError:
             pass
@@ -3522,6 +3540,70 @@ class Qwen3ASROpenVINOConfig(AudioToTextOpenVINOConfig):
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         """Override to exclude encoder KV cache since Qwen3-ASR has no cross-attention."""
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_decoder_sequence_length"
+            name = "past_key_values"
+        else:
+            decoder_sequence_name = "past_decoder_sequence_length + decoder_sequence_length"
+            name = "present"
+
+        for i in range(self._normalized_config.decoder_num_layers):
+            inputs_or_outputs[f"{name}.{i}.decoder.key"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
+
+
+@register_in_tasks_manager(
+    "fun_asr",
+    *[
+        "automatic-speech-recognition",
+        "automatic-speech-recognition-with-past",
+    ],
+    library_name="funasr",
+)
+class FunASROpenVINOConfig(AudioToTextOpenVINOConfig):
+    """OpenVINO export config for FunASR models (e.g. Fun-ASR-Nano).
+
+    FunASR is an encoder-decoder ASR model: a SenseVoice audio encoder + adaptor produces audio
+    embeddings (in the LLM hidden size) that are spliced into the Qwen3 decoder input embeddings at
+    audio placeholder positions. There is no cross-attention, so only self-attention KV cache is used.
+    """
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        FunASRDummyAudioInputGenerator,
+        DummySeq2SeqDecoderTextInputGenerator,
+        Qwen3ASRDummySeq2SeqPastKeyValuesGenerator,
+    )
+
+    NORMALIZED_CONFIG_CLASS = NormalizedSeq2SeqConfig.with_args(
+        decoder_num_layers="num_hidden_layers",
+        num_attention_heads="num_attention_heads",
+        # Use num_key_value_heads for KV cache shape generation (GQA)
+        decoder_num_attention_heads="num_key_value_heads",
+        feature_size="num_mel_bins",
+        allow_new=True,
+    )
+    _MODEL_PATCHER = FunASRModelPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {}
+        if self._behavior in {ConfigBehavior.ENCODER, ConfigBehavior.MONOLITH}:
+            # FunASR encoder consumes fbank features laid out as (batch, num_frames, feature_size).
+            common_inputs["input_features"] = {0: "batch_size", 1: "encoder_sequence_length"}
+        else:
+            common_inputs["encoder_outputs"] = {0: "batch_size", 1: "encoder_sequence_length"}
+
+        if self._behavior in {ConfigBehavior.DECODER, ConfigBehavior.MONOLITH}:
+            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
+            if self.use_past_in_inputs:
+                self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        """Override to exclude encoder KV cache since FunASR has no cross-attention."""
         if direction not in ["inputs", "outputs"]:
             raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
 
