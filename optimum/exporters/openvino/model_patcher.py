@@ -5208,7 +5208,7 @@ def gemma3n_language_model_forward(
     input_features_mask: Optional[torch.Tensor] = None,
     position_ids: Optional[torch.LongTensor] = None,
     past_key_values: Optional[Cache] = None,
-    token_type_ids: Optional[torch.LongTensor] = None,
+    mm_token_type_ids: Optional[torch.LongTensor] = None,
     cache_position: Optional[torch.LongTensor] = None,
     inputs_embeds: Optional[torch.FloatTensor] = None,
     labels: Optional[torch.LongTensor] = None,
@@ -5413,124 +5413,6 @@ def gemma4_language_model_forward(
     )
 
 
-def gemma3n_lm_forward(
-    self,
-    attention_mask: Optional[torch.Tensor] = None,
-    position_ids: Optional[torch.LongTensor] = None,
-    past_key_values: Optional[Cache] = None,
-    inputs_embeds: Optional[torch.FloatTensor] = None,
-    per_layer_inputs=None,
-    input_ids: Optional[torch.LongTensor] = None,  # text inputs
-    pixel_values: Optional[torch.FloatTensor] = None,  # vision inputs
-    input_features: Optional[torch.FloatTensor] = None,  # audio inputs
-    input_features_mask: Optional[torch.Tensor] = None,
-    token_type_ids: Optional[torch.LongTensor] = None,
-    cache_position: Optional[torch.LongTensor] = None,
-    labels: Optional[torch.LongTensor] = None,
-    use_cache: Optional[bool] = None,
-    output_attentions: Optional[bool] = None,
-    output_hidden_states: Optional[bool] = None,
-    logits_to_keep: Union[int, torch.Tensor] = 0,
-    **lm_kwargs,
-):
-    from optimum.exporters.onnx.model_patcher import postprocess_past_key_values, preprocess_past_key_values
-
-    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-    output_hidden_states = (
-        output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-    )
-    use_cache = False
-
-    if past_key_values is not None:
-        use_cache = True
-        num_atten_layers = len(past_key_values)
-        past_key_values = preprocess_past_key_values(past_key_values)
-
-    outputs = self.model.forward(
-        input_ids=input_ids,
-        pixel_values=pixel_values,
-        input_features=input_features,
-        attention_mask=attention_mask,
-        input_features_mask=input_features_mask,
-        position_ids=position_ids,
-        past_key_values=past_key_values,
-        token_type_ids=token_type_ids,
-        cache_position=cache_position,
-        inputs_embeds=inputs_embeds,
-        labels=labels,
-        use_cache=use_cache,
-        output_attentions=output_attentions,
-        output_hidden_states=output_hidden_states,
-        return_dict=True,
-        per_layer_inputs=per_layer_inputs,
-        **lm_kwargs,
-    )
-
-    hidden_states = outputs.last_hidden_state
-    # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-    slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
-    tmp_logits = self.lm_head(hidden_states[:, slice_indices, :])
-    if (final_logit_softcapping := self.config.get_text_config().final_logit_softcapping) is not None:
-        tmp_logits = tmp_logits / final_logit_softcapping
-        tmp_logits = torch.tanh(tmp_logits)
-        tmp_logits = tmp_logits * final_logit_softcapping
-
-    outputs_dict = {
-        "logits": tmp_logits,
-    }
-
-    if use_cache:
-        key_values = outputs.past_key_values
-        present_key_values = postprocess_past_key_values(
-            key_values,
-            [
-                "logits",
-                "present.0.key",
-                "present.0.value",
-                "present.1.key",
-                "present.1.value",
-                "present.2.key",
-                "present.2.value",
-                "present.3.key",
-                "present.3.value",
-                "present.4.key",
-                "present.4.value",
-                "present.5.key",
-                "present.5.value",
-                "present.6.key",
-                "present.6.value",
-                "present.7.key",
-                "present.7.value",
-                "present.8.key",
-                "present.8.value",
-                "present.9.key",
-                "present.9.value",
-                "present.10.key",
-                "present.10.value",
-                "present.11.key",
-                "present.11.value",
-                "present.12.key",
-                "present.12.value",
-                "present.13.key",
-                "present.13.value",
-                "present.14.key",
-                "present.14.value",
-                "present.15.key",
-                "present.15.value",
-                "present.16.key",
-                "present.16.value",
-                "present.17.key",
-                "present.17.value",
-                "present.18.key",
-                "present.18.value",
-                "present.19.key",
-                "present.19.value",
-            ],
-        )
-        outputs_dict["past_key_values"] = present_key_values
-    return tuple([value if not isinstance(value, list) else tuple(value) for value in outputs_dict.values()])
-
-
 # Gemma4 model forward, needs to be patched to pass 'per_layer_inputs',
 # Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/gemma4/modeling_gemma4.py#L2396
 def gemma4_lm_forward(
@@ -5602,41 +5484,6 @@ def gemma4_lm_forward(
         present_key_values = postprocess_past_key_values(key_values)
         outputs_dict["past_key_values"] = present_key_values
     return tuple([value if not isinstance(value, list) else tuple(value) for value in outputs_dict.values()])
-
-
-def gemma3n_eager_attention_forward_patched(
-    module: nn.Module,
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    attention_mask: Optional[torch.Tensor],
-    dropout: float = 0.0,
-    scaling: Optional[float] = None,
-    softcap: Optional[float] = None,
-    **kwargs,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    if scaling is None:
-        scaling = module.head_dim**-0.5
-
-    key_states = repeat_kv(key, module.num_key_value_groups)
-    value_states = repeat_kv(value, module.num_key_value_groups)
-
-    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
-
-    if softcap is not None:
-        attn_weights = attn_weights / softcap
-        attn_weights = torch.tanh(attn_weights)
-        attn_weights = attn_weights * softcap
-    if attention_mask is not None:  # no matter the length, we just slice it
-        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-        attn_weights = attn_weights + causal_mask
-    eps = 0.01
-    # upcast attention to fp32
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
-    attn_output = torch.matmul(attn_weights, value_states + eps)
-    attn_output = attn_output.transpose(1, 2).contiguous()
-    return attn_output, attn_weights
 
 
 # Needs to be patched to reshape 'attention_mask' to match attention weights
@@ -5729,9 +5576,7 @@ def gemma3n_text_forward(
                 past_key_values.shared_layers = {}
             past_key_values.shared_layers[self.layer_idx] = key_states, value_states
 
-    attention_interface: Callable = gemma3n_eager_attention_forward_patched
-    # if self.config._attn_implementation != "eager":
-    #     attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+    attention_interface: Callable = gemma4_eager_attention_forward_patched
 
     attn_output, attn_weights = attention_interface(
         self,
@@ -5825,16 +5670,16 @@ class Gemma3nLMModelPatcher(Gemma3LMModelPatcher):
     def __init__(self, config, model, model_kwargs):
         super().__init__(config, model, model_kwargs)
 
-        self.patched_forward = gemma3n_lm_forward
+        self.patched_forward = gemma4_lm_forward
         self.model_orig_forward = self.orig_forward
-        self.orig_forward = gemma3n_lm_forward
+        self.orig_forward = gemma4_lm_forward
 
         self.model_orig_language_model_forward = self._model.model.forward
 
     def __enter__(self):
         super().__enter__()
 
-        setattr(self._model, self.orig_forward_name, types.MethodType(gemma3n_lm_forward, self._model))
+        setattr(self._model, self.orig_forward_name, types.MethodType(gemma4_lm_forward, self._model))
         setattr(self._model.model, "forward", types.MethodType(gemma3n_language_model_forward, self._model))
 
         self._model.model.language_model._orig_project_per_layer_inputs = (
