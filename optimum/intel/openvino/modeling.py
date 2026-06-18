@@ -55,7 +55,10 @@ from ..utils.import_utils import is_timm_available, is_timm_version
 from .configuration import OVQuantizationConfigBase
 from .modeling_base import OVBaseModel
 from .modeling_sam import OVSamModel
-from .utils import _is_timm_ov_dir, ensure_numpy
+from .utils import (
+    _is_timm_ov_dir,
+    ensure_numpy,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -408,8 +411,16 @@ class OVModelForFeatureExtraction(OVModel):
 
     @classmethod
     def _from_pretrained(cls, model_id: Union[str, Path], config: PretrainedConfig, *args, **kwargs):
+        from .modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
+
         if config.model_type == "sam":
             return OVSamModel._from_pretrained(model_id, config, *args, **kwargs)
+        if config.model_type in MODEL_TYPE_TO_CLS_MAPPING.keys():
+            from .modeling_visual_language import OVModelForVisualCausalLM
+
+            return OVModelForVisualCausalLM.from_pretrained(
+                model_id, config=config, export_feature="feature-extraction", *args, **kwargs
+            )
         else:
             return super()._from_pretrained(model_id, config, *args, **kwargs)
 
@@ -571,16 +582,16 @@ class OVModelForImageClassification(OVModel):
                     "To load a timm model, please make sure to upgrade your `timm` version to at least 0.9.0, you can upgrade it by running `pip install --upgrade timm`"
                 )
 
-            from .modeling_timm import TimmConfig, TimmForImageClassification, TimmOnnxConfig
+            from .modeling_timm import TimmConfig, TimmForImageClassification, TimmOpenVINOConfig
 
             config = TimmConfig.from_pretrained(model_id, **kwargs)
             #  If locally saved timm model, directly load
             if local_timm_model:
                 return super()._from_pretrained(model_id=model_id, config=config)
             model = TimmForImageClassification.from_pretrained(model_id, **kwargs)
-            onnx_config = TimmOnnxConfig(model.config)
+            openvino_config = TimmOpenVINOConfig(model.config)
 
-            return cls._to_load(model=model, config=config, onnx_config=onnx_config, stateful=False, **kwargs)
+            return cls._to_load(model=model, config=config, exporter_config=openvino_config, stateful=False, **kwargs)
         else:
             return super().from_pretrained(
                 model_id=model_id,
@@ -716,7 +727,7 @@ CTC_EXAMPLE = r"""
 
 @add_start_docstrings(
     """
-    Onnx Model with a language modeling head on top for Connectionist Temporal Classification (CTC).
+    OpenVINO Model with a language modeling head on top for Connectionist Temporal Classification (CTC).
     """,
     MODEL_START_DOCSTRING,
 )
@@ -796,7 +807,7 @@ AUDIO_XVECTOR_EXAMPLE = r"""
 
 @add_start_docstrings(
     """
-    Onnx Model with an XVector feature extraction head on top for tasks like Speaker Verification.
+    OpenVINO Model with an XVector feature extraction head on top for tasks like Speaker Verification.
     """,
     MODEL_START_DOCSTRING,
 )

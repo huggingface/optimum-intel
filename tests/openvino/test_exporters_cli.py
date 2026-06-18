@@ -124,6 +124,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "4.57"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("feature-extraction", "qwen3_vl_embedding"),
+            ]
+        )
+
     if is_transformers_version(">=", "4.54.0"):
         SUPPORTED_ARCHITECTURES.extend(
             [
@@ -163,6 +170,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "granitemoehybrid"),
+                ("text-generation-with-past", "smollm3"),
             ]
         )
 
@@ -228,7 +236,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         "exaone4": 2,
         "bitnet": 2,
         "granitemoehybrid": 2,
+        "smollm3": 2,
         "qwen3_vl_eagle3": 0,
+        "qwen3_vl_embedding": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {

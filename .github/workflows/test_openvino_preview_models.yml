@@ -39,10 +39,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.2
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.10"
 
@@ -63,7 +63,13 @@ jobs:
       - name: Gemma 4 Validation
         run: |
           uv pip install transformers==5.5.0
-          pytest tests/openvino/${{ matrix.test-pattern }} -m gemma4 --durations=0
+          pytest tests/openvino/${{ matrix.test-pattern }} -k "gemma4 and not gemma4_unified" --durations=0
+
+      - name: Gemma 4 Unified Validation
+        if: ${{ matrix.test-pattern != '*quantization*' }}
+        run: |
+          uv pip install "transformers>=5.10,<5.11"
+          pytest tests/openvino/${{ matrix.test-pattern }} -k gemma4_unified --durations=0
 
       - name: Qwen3.5 and Qwen3.5-Moe Validation
         run: |

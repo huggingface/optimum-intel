@@ -1203,6 +1203,8 @@ class OVCalibrationDatasetBuilder:
                     )
                     if inputs["input_ids"].shape[1] > seq_len:
                         inputs["input_ids"] = inputs["input_ids"][:, :seq_len]
+                        if "attention_mask" in inputs:
+                            inputs["attention_mask"] = inputs["attention_mask"][:, :seq_len]
 
                 self.model(**inputs)
 
@@ -1307,7 +1309,6 @@ class OVQuantizer(OptimumQuantizer):
         ] = None,
         save_directory: Optional[Union[str, Path]] = None,
         ov_config: OVConfig = None,
-        file_name: Optional[str] = None,
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = False,
@@ -1326,8 +1327,6 @@ class OVQuantizer(OptimumQuantizer):
             ov_config (`OVConfig`, *optional*):
                 The configuration containing the parameters related to quantization. If not provided, 8-bit symmetric
                 weight-only quantization will be applied.
-            file_name (`str`, *optional*):
-                The model file name to use when saving the model. Overwrites the default file name `"model.onnx"`.
             batch_size (`int`, defaults to 1):
                 The number of calibration samples to load per batch.
             data_collator (`DataCollator`, *optional*):
