@@ -3871,13 +3871,6 @@ class Gemma3OpenVINOConfig(BaseVLMOpenVINOConfig):
         return super().with_behavior(behavior)
 
 
-class Gemma3nConfigBehavior(str, enum.Enum):
-    VISION_EMBEDDINGS = "vision_embeddings"
-    TEXT_EMBEDDINGS = "text_embeddings"
-    LANGUAGE = "language"
-    TEXT_EMBEDDINGS_PER_LAYER = "text_embeddings_per_layer"
-
-
 class Gemma4ConfigBehavior(str, enum.Enum):
     VISION_EMBEDDINGS = "vision_embeddings"
     TEXT_EMBEDDINGS = "text_embeddings"
@@ -3887,7 +3880,7 @@ class Gemma4ConfigBehavior(str, enum.Enum):
 
 @register_in_tasks_manager("gemma3n", *["image-text-to-text"], library_name="transformers")
 class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
-    SUPPORTED_BEHAVIORS = [model_type.value for model_type in Gemma3nConfigBehavior]
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in Gemma4ConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyTextInputGenerator)
 
     def __init__(
@@ -3896,7 +3889,7 @@ class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
         task: str = "feature-extraction",
         int_dtype: str = "int64",
         float_dtype: str = "fp32",
-        behavior: Gemma3nConfigBehavior = Gemma3nConfigBehavior.VISION_EMBEDDINGS,
+        behavior: Gemma4ConfigBehavior = Gemma4ConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
     ):
         super().__init__(
@@ -3909,17 +3902,17 @@ class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
         )
         self._behavior = behavior
 
-    def with_behavior(self, behavior: Union[str, Gemma3nConfigBehavior]):
+    def with_behavior(self, behavior: Union[str, Gemma4ConfigBehavior]):
         """
         Creates a config for different behaviour specific to Gemma3n.
 
         For LANGUAGE behavior, this explicitly uses the Gemma3n text model_type
         instead of relying on the underlying text_config.model_type value.
         """
-        if isinstance(behavior, str) and not isinstance(behavior, Gemma3nConfigBehavior):
-            behavior = Gemma3nConfigBehavior(behavior)
+        if isinstance(behavior, str) and not isinstance(behavior, Gemma4ConfigBehavior):
+            behavior = Gemma4ConfigBehavior(behavior)
 
-        if behavior == Gemma3nConfigBehavior.LANGUAGE:
+        if behavior == Gemma4ConfigBehavior.LANGUAGE:
             # Force the Gemma3n-specific text model type to ensure proper behavior
             model_type = "gemma3n_text"
             return get_vlm_text_generation_config(
@@ -3930,7 +3923,7 @@ class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
                 model_patcher=Gemma3nLMModelPatcher,
                 inputs_update={"per_layer_inputs": {0: "batch_size", 1: "sequence_length", 2: "num_hidden_layers"}},
             )
-        if behavior == Gemma3nConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+        if behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
             config = self.__class__(
                 self._orig_config,
                 task=self.task,
@@ -3943,7 +3936,7 @@ class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
         return super().with_behavior(behavior)
 
     def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
-        if behavior == Gemma3nConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+        if behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
             import torch
 
             class PerLayerInputsModule(torch.nn.Module):
@@ -4009,7 +4002,7 @@ class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
 
     def patch_model_for_export(self, model: Union["PreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
-        if self._behavior == Gemma3nConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+        if self._behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
             return ModelPatcher(self, model, model_kwargs)
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return Gemma3nImageEmbeddingsModelPatcher(self, model, model_kwargs)
@@ -4017,10 +4010,10 @@ class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        if self._behavior == Gemma3nConfigBehavior.LANGUAGE:
+        if self._behavior == Gemma4ConfigBehavior.LANGUAGE:
             inputs = super().inputs
             return inputs
-        if self._behavior == Gemma3nConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+        if self._behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
             return {
                 "input_ids": {0: "batch_size", 1: "sequence_length"},
             }
@@ -4028,7 +4021,7 @@ class Gemma3nOpenVINOConfig(Gemma3OpenVINOConfig):
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        if self._behavior == Gemma3nConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+        if self._behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
             return {"text_embeds_per_layer": {}}
         return super().outputs
 
