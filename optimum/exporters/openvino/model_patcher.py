@@ -6571,8 +6571,8 @@ def ov_causal_conv1d(conv_state, input_embeds, weight, bias):
     state_len = conv_state.shape[-1]
     groups = hidden_size // w_in_channels
 
-    input_embeds_new = torch.cat([conv_state, input_embeds], dim=-1).to(weight.dtype)
-    conv_out = F.conv1d(input_embeds_new, weight, bias, padding=0, groups=groups)
+    input_embeds_new = torch.cat([conv_state, input_embeds.to(conv_state.dtype)], dim=-1)
+    conv_out = F.conv1d(input_embeds_new.to(weight.dtype), weight, bias, padding=0, groups=groups)
     conv_out = conv_out[:, :, -seq_len:]
 
     new_conv_state = input_embeds_new[:, :, -state_len:]
@@ -6681,14 +6681,21 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
                 """
                 # Update the cache
                 layer_idx = self.attention_layer_idx_mapping[layer_idx]
+                compute_dtype = key_states.dtype
+
                 if self.key_cache[layer_idx].numel() == 0:
                     self.key_cache[layer_idx] = key_states
                     self.value_cache[layer_idx] = value_states
                 else:
-                    self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
-                    self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
+                    cache_dtype = self.key_cache[layer_idx].dtype
+                    self.key_cache[layer_idx] = torch.cat(
+                        [self.key_cache[layer_idx], key_states.to(cache_dtype)], dim=-2
+                    )
+                    self.value_cache[layer_idx] = torch.cat(
+                        [self.value_cache[layer_idx], value_states.to(cache_dtype)], dim=-2
+                    )
 
-                return self.key_cache[layer_idx], self.value_cache[layer_idx]
+                return self.key_cache[layer_idx].to(compute_dtype), self.value_cache[layer_idx].to(compute_dtype)
 
             def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
                 """
