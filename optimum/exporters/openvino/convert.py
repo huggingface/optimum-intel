@@ -761,6 +761,13 @@ def export_from_model(
         generation_config = getattr(model, "generation_config", None)
         if generation_config is not None:
             try:
+                # Todo: delete this check once phi-3 eos token get fixed in generation_configs.json
+                # Phi-3.5-vision ships stale eos_token_id=2 but its tokenizer eos is 32000, so add it as a stop token.
+                if model_type == "phi3_v":
+                    t = next((e for p in (preprocessors or []) if (e := getattr(p, "eos_token_id", None)) is not None), None)
+                    g = generation_config.eos_token_id
+                    if t is not None and t not in (g if isinstance(g, list) else [g]):
+                        generation_config.eos_token_id = (g if isinstance(g, list) else [g]) + [t]
                 generation_config.save_pretrained(output)
             except Exception as exception:
                 logger.warning(

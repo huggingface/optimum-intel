@@ -928,6 +928,26 @@ class OVCLIExportTestCase(unittest.TestCase):
 
         self._openvino_export(MODEL_NAMES[model_type], task, model_kwargs=model_kwargs, loading_kwargs=loading_kwargs)
 
+    @unittest.skipUnless(
+        is_transformers_version(">=", "4.40.0") and is_transformers_version("<=", "4.53.3"),
+        reason="Phi-3.5-vision export is only supported for transformers 4.40.0 - 4.53.3",
+    )
+    def test_export_phi3_v_eos_token_id(self):
+        # Phi-3.5-vision ships a stale eos_token_id=2 while its tokenizer eos is 32000, so export
+        # must add the tokenizer eos as a stop token to avoid infinite generation (issue #1630).
+        model_id = MODEL_NAMES["phi3_v"]
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {model_id} --task image-text-to-text --trust-remote-code {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            tokenizer_eos_token_id = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True).eos_token_id
+            with open(Path(tmpdir) / "generation_config.json") as fp:
+                eos_token_id = json.load(fp)["eos_token_id"]
+            eos_token_ids = eos_token_id if isinstance(eos_token_id, list) else [eos_token_id]
+            self.assertIn(tokenizer_eos_token_id, eos_token_ids)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
