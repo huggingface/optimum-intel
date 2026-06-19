@@ -4006,32 +4006,6 @@ class _OVGemma3ForCausalLM(OVModelForVisualCausalLM):
         return model_kwargs
 
 
-class _OVGemma3NForCausalLM(_OVGemma3ForCausalLM):
-    additional_parts = ["text_embeddings_per_layer"]
-
-    def get_multimodal_embeddings(
-        self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, **kwargs
-    ):
-        embeds_from_args = kwargs.pop("inputs_embeds", None)
-        inputs_embeds = (
-            embeds_from_args if embeds_from_args is not None else self.get_text_embeddings(input_ids, **kwargs)
-        )
-        per_layer_inputs = self.text_embeddings_per_layer(input_ids)
-        if pixel_values is not None:
-            vision_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, **kwargs)
-
-            if vision_embeds is not None:
-                inputs_embeds, attention_mask, position_ids = self.merge_vision_text_embeddings(
-                    vision_embeds,
-                    inputs_embeds,
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    **kwargs,
-                )
-        return inputs_embeds, attention_mask, position_ids, per_layer_inputs
-
-
 class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
     additional_parts = ["text_embeddings_per_layer"]
 
@@ -5984,7 +5958,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen2_5_vl_text": _OVQwen2_5_VLForCausalLM,
     "got_ocr2": _OVGotOCR2ForCausalLM,
     "gemma3": _OVGemma3ForCausalLM,
-    "gemma3n": _OVGemma3NForCausalLM,
+    "gemma3n": _OVGemma4ForCausalLM,
     "gemma4": _OVGemma4ForCausalLM,
     "gemma4_unified": _OVGemma4UnifiedForCausalLM,
     "idefics3": _OVIdefics3ForCausalLM,

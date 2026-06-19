@@ -9014,32 +9014,6 @@ class LlamaEagle3ForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         )
 
 
-class Gemma3nPerLayerInputsGetterModelPatcher(ModelPatcher):
-    def __init__(
-        self,
-        config: "OnnxConfig",
-        model: Union["PreTrainedModel"],
-        model_kwargs: Dict[str, Any] = None,
-    ):
-        model.__orig_forward = model.forward
-
-        def per_layer_inputs_forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-            per_layer_inputs_mask = torch.logical_and(input_ids >= 0, input_ids < self.vocab_size_per_layer_input)
-            per_layer_inputs_tokens = torch.where(per_layer_inputs_mask, input_ids, torch.zeros_like(input_ids))
-            per_layer_inputs = self.language_model.get_per_layer_inputs(per_layer_inputs_tokens)
-            return per_layer_inputs
-
-        model.forward = types.MethodType(per_layer_inputs_forward, model)
-        super().__init__(config, model, model_kwargs)
-
-    def __enter__(self):
-        super().__enter__()
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-        self._model.forward = self._model.__orig_forward
-
-
 # Patched implementation of the gated delta rule in recurrent form.
 # Adapted from:
 # https://github.com/huggingface/transformers/blob/v4.57-release/src/transformers/models/qwen3_next/modeling_qwen3_next.py#L522
