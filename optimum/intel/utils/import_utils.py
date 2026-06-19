@@ -361,7 +361,7 @@ def is_transformers_version(operation: str, version: str):
     """
     if not _transformers_available:
         return False
-    return compare_versions(parse(_transformers_version), operation, version)
+    return compare_versions(parse(parse(_transformers_version).base_version), operation, version)
 
 
 def is_tokenizers_version(operation: str, version: str):
