@@ -614,6 +614,7 @@ ARCH_TO_MODEL_CLASS = {
     "llava": "OVModelForVisualCausalLM",
     "qwen3_5_moe": "OVModelForVisualCausalLM",
     "gemma4_moe": "OVModelForVisualCausalLM",
+    "gemma4_unified": "OVModelForVisualCausalLM",
     "stable-diffusion": "OVDiffusionPipeline",
     "whisper": "OVModelForSpeechSeq2Seq",
     "bart": "OVModelForSeq2SeqLM",

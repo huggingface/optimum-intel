@@ -228,6 +228,36 @@ if is_transformers_version(">=", "5.5.0"):
         ],
     }
 
+if is_transformers_version(">=", "5.10"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["gemma4_unified"] = {
+        "convert": [
+            "SDPAFusion",
+            "SDPAFusionMatcher",
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "MakeStateful",
+            "DecompressionHandling",
+            "TransposeMatMul",
+            "CommonFusions",
+            "LinOpSequenceFusion",
+            "CommonDecompositions",
+            "CommonOptimizations",
+            "BroadcastTransition",
+            "MultiplyFusions",
+        ],
+        "compile": [
+            "RoPEFusionGPTNEOX",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "ConvertMatMulToFC",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "Snippets",
+            "Tokenization",
+            "ConvertBroadcast3",
+        ],
+    }
+
 
 def _get_flat_transforms(arch):
     """Return a flat list of all expected transformations (convert + compile) for an architecture."""
