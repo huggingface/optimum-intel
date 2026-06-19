@@ -16,6 +16,7 @@ import copy
 import gc
 import os
 import unittest
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
@@ -1284,6 +1285,19 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
         with TemporaryDirectory() as tmpdir:
             export_from_model(model=ref_model, output=tmpdir, task="text-to-audio", stateful=True)
+
+            # Verify that local voice .pt files were converted to .bin (regression for local export bug)
+            source_voices = sorted(Path(model_id).glob("voices/*.pt"))
+            self.assertGreater(len(source_voices), 0, "Test fixture has no source voice .pt files")
+            exported_voices = sorted(Path(tmpdir).glob("voices/*.bin"))
+            self.assertEqual(
+                len(exported_voices),
+                len(source_voices),
+                f"Expected {len(source_voices)} voice .bin files, found {len(exported_voices)}",
+            )
+            for bin_path in exported_voices:
+                self.assertGreater(bin_path.stat().st_size, 0, f"{bin_path.name} is empty")
+
             ov_model = self.OVMODEL_CLASS.from_pretrained(tmpdir, device=OPENVINO_DEVICE)
 
             self.assertIsInstance(ov_model, _OVModelForKokoroTextToSpeech)
