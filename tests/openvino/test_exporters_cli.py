@@ -329,11 +329,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
             {"encoder": 14, "decoder": 22, "decoder_with_past": 22}
             if is_transformers_version("<=", "4.45")
-            else {"encoder": 14, "decoder": 22, "decoder_with_past": 25},
+            else {"encoder": 26, "decoder": 22, "decoder_with_past": 25},
             (
                 {"encoder": {"int8": 26}, "decoder": {"int8": 22}, "decoder_with_past": {"int8": 17}}
                 if is_transformers_version("<=", "4.45")
-                else {"encoder": {"int8": 14}, "decoder": {"int8": 22}, "decoder_with_past": {"int8": 18}}
+                else {"encoder": {"int8": 26}, "decoder": {"int8": 22}, "decoder_with_past": {"int8": 18}}
             ),
         ),
         (
@@ -343,11 +343,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
             {"encoder": 16, "decoder": 26, "decoder_with_past": 23}
             if is_transformers_version("<=", "4.45")
-            else {"encoder": 16, "decoder": 26, "decoder_with_past": 25},
+            else {"encoder": 30, "decoder": 26, "decoder_with_past": 25},
             (
                 {"encoder": {"f8e4m3": 26}, "decoder": {"f8e4m3": 22}, "decoder_with_past": {"f8e4m3": 17}}
                 if is_transformers_version("<=", "4.45")
-                else {"encoder": {"f8e4m3": 14}, "decoder": {"f8e4m3": 22}, "decoder_with_past": {"f8e4m3": 18}}
+                else {"encoder": {"f8e4m3": 26}, "decoder": {"f8e4m3": 22}, "decoder_with_past": {"f8e4m3": 18}}
             ),
         ),
         (
