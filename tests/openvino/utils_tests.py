@@ -175,6 +175,7 @@ MODEL_NAMES = {
     "convbert": "optimum-intel-internal-testing/tiny-random-ConvBertForSequenceClassification",
     "cohere": "optimum-intel-internal-testing/tiny-random-CohereForCausalLM",
     "cohere2": "optimum-intel-internal-testing/tiny-random-aya-base",
+    "cohere2_moe": "optimum-internal-testing/tiny-random-Cohere2MoeForCausalLM",
     "chatglm": "optimum-intel-internal-testing/tiny-random-chatglm",
     "chatglm4": "optimum-intel-internal-testing/tiny-random-chatglm4",
     "codegen": "optimum-intel-internal-testing/tiny-random-CodeGenForCausalLM",
