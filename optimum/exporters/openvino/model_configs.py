@@ -98,6 +98,7 @@ from optimum.exporters.openvino.model_patcher import (
     BloomModelPatcher,
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
+    Cohere2MoePatcher,
     CommonImageEmbeddingsModelPatcher,
     DBRXModelPatcher,
     DeciLMModelPatcher,
@@ -812,6 +813,16 @@ class ArceeOpenVINOConfig(LlamaOpenVINOConfig):
 )
 class Cohere2OpenVINOConfig(LlamaOpenVINOConfig):
     pass
+
+
+@register_in_tasks_manager(
+    "cohere2_moe",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class Cohere2MoeOpenVINOConfig(Cohere2OpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "5.8.0"
+    _MODEL_PATCHER = Cohere2MoePatcher
 
 
 @register_in_tasks_manager("qwen", *["text-generation", "text-generation-with-past"])

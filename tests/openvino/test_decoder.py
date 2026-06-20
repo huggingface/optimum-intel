@@ -100,6 +100,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "minicpm3",
         "arctic",
         "deepseek",
+        "cohere2_moe",
         ## not supporter after v5
         "llama4",
         "bitnet",
@@ -197,6 +198,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "dbrx": 2,
         "cohere": 2,
         "cohere2": 2,
+        "cohere2_moe": 2,
         "qwen2": 2,
         "qwen2_moe": 4,
         "arctic": 4,
