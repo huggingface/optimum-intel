@@ -125,7 +125,6 @@ from optimum.exporters.openvino.model_patcher import (
     InternLMModelPatcher,
     InternVL2ChatLangModelPatcher,
     InternVLChatImageEmbeddingModelPatcher,
-    LocateAnythingImageEmbeddingModelPatcher,
     JaisModelPatcher,
     KokoroModelPatcher,
     Lfm2ModelPatcher,
@@ -135,6 +134,7 @@ from optimum.exporters.openvino.model_patcher import (
     LlavaImageEmbeddingModelPatcher,
     LlavaNextVideoImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
+    LocateAnythingImageEmbeddingModelPatcher,
     MairaImageEmbeddingModelPatcher,
     MambaPatcher,
     MiniCPM3Patcher,
@@ -2234,9 +2234,7 @@ def _build_locateanything_stock_qwen2(model):
     # source state dict; everything else must match.
     missing = [m for m in missing if m != "lm_head.weight"]
     if missing or unexpected:
-        logger.warning(
-            "LocateAnything LLM weight transfer: missing=%s unexpected=%s", missing, unexpected
-        )
+        logger.warning("LocateAnything LLM weight transfer: missing=%s unexpected=%s", missing, unexpected)
     stock.tie_weights()
     stock = stock.to(dtype=next(vendored.parameters()).dtype).eval()
     return stock
