@@ -40,21 +40,16 @@ def main():
     input_ids = np.load(os.path.join(ART, "input_ids.npy"))
     attention_mask = np.load(os.path.join(ART, "attention_mask.npy"))
     ref_logits = np.load(os.path.join(ART, "ref_prefill_logits.npy"))  # (S, V)
-    ref_feats = np.load(os.path.join(ART, "ref_vision_feats.npy"))      # (256, 2048)
+    ref_feats = np.load(os.path.join(ART, "ref_vision_feats.npy"))  # (256, 2048)
     meta = json.load(open(os.path.join(ART, "ref_meta.json")))
     img_tok = meta["image_token_index"]
 
-    model = OVModelForVisualCausalLM.from_pretrained(
-        args.ir_dir, trust_remote_code=True, device=args.device
-    )
+    model = OVModelForVisualCausalLM.from_pretrained(args.ir_dir, trust_remote_code=True, device=args.device)
     print(f"loaded OV model: {type(model).__name__} ir={args.ir_dir} device={args.device}")
 
     # ---- vision IR parity (MoonViT + mlp1) ----
     vreq = model.vision_embeddings.request
-    vout = vreq(
-        {"pixel_values": pixel_values.astype(np.float32),
-         "image_grid_hws": image_grid_hws.astype(np.int32)}
-    )
+    vout = vreq({"pixel_values": pixel_values.astype(np.float32), "image_grid_hws": image_grid_hws.astype(np.int32)})
     ov_feats = list(vout.values())[0]
     vcos = cossim(ov_feats.reshape(-1), ref_feats.reshape(-1))
     vper = cossim(ov_feats, ref_feats, axis=-1)
@@ -100,12 +95,14 @@ def main():
         s2 = cur_ids[0] == img_tok
         e[s2] = ov_feats.astype(e.dtype)
         lreq.reset_state()
-        r = lreq.infer({
-            "inputs_embeds": e[None].astype(np.float32),
-            "attention_mask": cur_mask.astype(np.int64),
-            "position_ids": pos,
-            "beam_idx": np.zeros(1, dtype=np.int32),
-        })
+        r = lreq.infer(
+            {
+                "inputs_embeds": e[None].astype(np.float32),
+                "attention_mask": cur_mask.astype(np.int64),
+                "position_ids": pos,
+                "beam_idx": np.zeros(1, dtype=np.int32),
+            }
+        )
         lg = list(r.values())[0][0]
         nxt = int(lg[-1].argmax())
         ov_greedy.append(nxt)

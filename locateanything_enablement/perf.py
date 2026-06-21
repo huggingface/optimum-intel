@@ -32,6 +32,7 @@ class Pipe:
     def __init__(self, ir_dir, device):
         from optimum.intel.openvino import OVModelForVisualCausalLM
         from transformers import AutoProcessor, AutoTokenizer
+
         self.tok = AutoTokenizer.from_pretrained(ir_dir, trust_remote_code=True)
         self.proc = AutoProcessor.from_pretrained(ir_dir, trust_remote_code=True)
         self.model = OVModelForVisualCausalLM.from_pretrained(ir_dir, trust_remote_code=True, device=device)
@@ -40,8 +41,9 @@ class Pipe:
 
     def prep(self, fn, q):
         img = Image.open(os.path.join(IMG_DIR, fn)).convert("RGB").resize((RES, RES), Image.BICUBIC)
-        messages = [{"role": "user", "content": [{"type": "image", "image": img},
-                                                 {"type": "text", "text": build_prompt(q)}]}]
+        messages = [
+            {"role": "user", "content": [{"type": "image", "image": img}, {"type": "text", "text": build_prompt(q)}]}
+        ]
         text = self.proc.py_apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         images, videos = self.proc.process_vision_info(messages)
         inputs = self.proc(text=[text], images=images, videos=videos, return_tensors="pt")
@@ -61,10 +63,14 @@ class Pipe:
         mask = am.copy()
         self.lreq.reset_state()
         t0 = time.time()
-        r = self.lreq.infer({"inputs_embeds": emb[None].astype(np.float32),
-                             "attention_mask": mask.astype(np.int64),
-                             "position_ids": np.arange(S, dtype=np.int64)[None],
-                             "beam_idx": np.zeros(1, dtype=np.int32)})
+        r = self.lreq.infer(
+            {
+                "inputs_embeds": emb[None].astype(np.float32),
+                "attention_mask": mask.astype(np.int64),
+                "position_ids": np.arange(S, dtype=np.int64)[None],
+                "beam_idx": np.zeros(1, dtype=np.int32),
+            }
+        )
         logits = list(r.values())[0][0]
         ttft = time.time() - t0
         nxt = int(logits[-1].argmax())
@@ -75,10 +81,14 @@ class Pipe:
             te1 = self.model.language_model.embed_tokens(np.array([[nxt]], dtype=np.int64))
             mask = np.concatenate([mask, [[1]]], axis=1)
             ts = time.time()
-            r = self.lreq.infer({"inputs_embeds": np.array(te1).astype(np.float32),
-                                 "attention_mask": mask.astype(np.int64),
-                                 "position_ids": np.array([[pos]], dtype=np.int64),
-                                 "beam_idx": np.zeros(1, dtype=np.int32)})
+            r = self.lreq.infer(
+                {
+                    "inputs_embeds": np.array(te1).astype(np.float32),
+                    "attention_mask": mask.astype(np.int64),
+                    "position_ids": np.array([[pos]], dtype=np.int64),
+                    "beam_idx": np.zeros(1, dtype=np.int32),
+                }
+            )
             itls.append(time.time() - ts)
             logits = list(r.values())[0][0]
             nxt = int(logits[-1].argmax())
@@ -114,15 +124,21 @@ def main():
                     itl_means.append(float(np.mean(itls)))
                 ntoks.append(n)
                 prefill_len = S
-            row = {"precision": prec, "device": dev, "prefill_len": prefill_len,
-                   "gen_tokens": int(np.median(ntoks)),
-                   "ttft_s_mean": round(float(np.mean(ttfts)), 4),
-                   "itl_ms_mean": round(float(np.mean(itl_means)) * 1000, 2) if itl_means else None,
-                   "tok_per_s": round(1.0 / float(np.mean(itl_means)), 2) if itl_means else None,
-                   "runs": args.runs}
+            row = {
+                "precision": prec,
+                "device": dev,
+                "prefill_len": prefill_len,
+                "gen_tokens": int(np.median(ntoks)),
+                "ttft_s_mean": round(float(np.mean(ttfts)), 4),
+                "itl_ms_mean": round(float(np.mean(itl_means)) * 1000, 2) if itl_means else None,
+                "tok_per_s": round(1.0 / float(np.mean(itl_means)), 2) if itl_means else None,
+                "runs": args.runs,
+            }
             rows.append(row)
-            print(f"  -> TTFT={row['ttft_s_mean']}s ITL={row['itl_ms_mean']}ms "
-                  f"({row['tok_per_s']} tok/s) gen={row['gen_tokens']} prefill={prefill_len}")
+            print(
+                f"  -> TTFT={row['ttft_s_mean']}s ITL={row['itl_ms_mean']}ms "
+                f"({row['tok_per_s']} tok/s) gen={row['gen_tokens']} prefill={prefill_len}"
+            )
             del pipe
     json.dump({"sample": f"{fn}::{q}", "rows": rows}, open(args.out, "w"), indent=2)
     print("\n==== PERF TABLE ====")

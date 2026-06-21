@@ -26,11 +26,14 @@ def make_image():
     # Deterministic synthetic RGB image at fixed resolution (content irrelevant for parity).
     rng = np.random.RandomState(0)
     base = np.linspace(0, 255, RES, dtype=np.float32)
-    img = np.stack([
-        np.tile(base, (RES, 1)),
-        np.tile(base[:, None], (1, RES)),
-        (rng.rand(RES, RES) * 255).astype(np.float32),
-    ], axis=-1)
+    img = np.stack(
+        [
+            np.tile(base, (RES, 1)),
+            np.tile(base[:, None], (1, RES)),
+            (rng.rand(RES, RES) * 255).astype(np.float32),
+        ],
+        axis=-1,
+    )
     # add a couple of solid rectangles
     img[80:200, 100:260, 0] = 30
     img[250:360, 300:420, 1] = 220
@@ -62,9 +65,16 @@ def main():
         image_grid_hws = torch.from_numpy(image_grid_hws)
     image_grid_hws = image_grid_hws.to(torch.int32)
 
-    print("pixel_values", tuple(pixel_values.shape), "grid", image_grid_hws.tolist(),
-          "input_ids", tuple(input_ids.shape),
-          "num_image_tokens", int((input_ids == model.config.image_token_index).sum()))
+    print(
+        "pixel_values",
+        tuple(pixel_values.shape),
+        "grid",
+        image_grid_hws.tolist(),
+        "input_ids",
+        tuple(input_ids.shape),
+        "num_image_tokens",
+        int((input_ids == model.config.image_token_index).sum()),
+    )
 
     @torch.no_grad()
     def vision_feats():
@@ -115,15 +125,20 @@ def main():
     np.save(os.path.join(OUT, "attention_mask.npy"), attention_mask.numpy())
     np.save(os.path.join(OUT, "ref_vision_feats.npy"), vision_feats().float().numpy())
     with open(os.path.join(OUT, "ref_meta.json"), "w") as f:
-        json.dump({
-            "query": QUERY, "resolution": RES,
-            "grid": image_grid_hws.tolist(),
-            "input_ids_len": int(input_ids.shape[1]),
-            "num_image_tokens": int((input_ids == model.config.image_token_index).sum()),
-            "greedy_tokens": greedy,
-            "greedy_text": tokenizer.decode(greedy),
-            "image_token_index": int(model.config.image_token_index),
-        }, f, indent=2)
+        json.dump(
+            {
+                "query": QUERY,
+                "resolution": RES,
+                "grid": image_grid_hws.tolist(),
+                "input_ids_len": int(input_ids.shape[1]),
+                "num_image_tokens": int((input_ids == model.config.image_token_index).sum()),
+                "greedy_tokens": greedy,
+                "greedy_text": tokenizer.decode(greedy),
+                "image_token_index": int(model.config.image_token_index),
+            },
+            f,
+            indent=2,
+        )
     print("saved reference artifacts to", OUT)
 
 
