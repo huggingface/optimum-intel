@@ -10406,8 +10406,11 @@ class LocateAnythingImageEmbeddingModelPatcher(ModelPatcher):
         model_kwargs = model_kwargs or {}
 
         # Neutralise the custom "magi" attention on every relevant config.
-        for cfg in (getattr(model, "config", None), getattr(model.config, "vision_config", None),
-                    getattr(model.config, "text_config", None)):
+        for cfg in (
+            getattr(model, "config", None),
+            getattr(model.config, "vision_config", None),
+            getattr(model.config, "text_config", None),
+        ):
             if cfg is not None and getattr(cfg, "_attn_implementation", None) != "sdpa":
                 cfg._attn_implementation = "sdpa"
 

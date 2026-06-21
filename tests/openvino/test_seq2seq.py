@@ -14,6 +14,7 @@
 
 import copy
 import gc
+import glob
 import os
 import unittest
 from tempfile import TemporaryDirectory
@@ -1184,6 +1185,175 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 device=OPENVINO_DEVICE,
             )
             self.assertIsInstance(ov_restored_model, type(ov_model))
+
+
+class OVLocateAnythingIntegrationTest(unittest.TestCase):
+    """Export + inference tests for the nvidia/LocateAnything-3B VLM.
+
+    LocateAnything-3B is a gated, ``trust_remote_code`` MoonViT + Qwen2.5 grounding VLM.
+    The OpenVINO export produces three weight-bearing sub-graphs (vision_embeddings,
+    text_embeddings and the stateful language model) following the InternVL layout. The
+    vision tower is exported at a fixed resolution (position embeddings and the 2x2 patch
+    merger are baked at export time), so inference must use the same grid as the export.
+
+    A tiny random fixture is used (see ``_create_tiny_locateanything_model``) so the whole
+    export+inference cycle stays fast and offline once the remote code is cached. The
+    custom "magi" Parallel-Box-Decoding fast path is out of scope: only the plain causal
+    (slow auto-regressive) language path is exported, so these tests exercise that path.
+    """
+
+    OVMODEL_CLASS = OVModelForVisualCausalLM
+    TASK = "image-text-to-text"
+    # Fixed export resolution baked into the vision sub-graph (see dummy input generator).
+    EXPORT_IMAGE_SIZE = 448
+
+    SUPPORTED_ARCHITECTURES = []
+    # Remote code is only compatible with transformers >=4.55,<5.0 (see the OV config's
+    # MIN/MAX_TRANSFORMERS_VERSION); gate the suite accordingly.
+    if is_transformers_version(">=", "4.55") and is_transformers_version("<", "5.0"):
+        SUPPORTED_ARCHITECTURES += ["locateanything"]
+
+    @classmethod
+    def setUpClass(cls):
+        if "locateanything" not in cls.SUPPORTED_ARCHITECTURES:
+            raise unittest.SkipTest("locateanything requires transformers >=4.55,<5.0")
+        cls.model_id = MODEL_NAMES["locateanything"]
+        # The fixture builder falls back to the Hub id when the (gated) remote code or
+        # weights are unavailable; skip rather than pull the full 3B model.
+        if not os.path.isdir(cls.model_id):
+            raise unittest.SkipTest(
+                "tiny-random locateanything fixture is unavailable (remote code/weights not cached)"
+            )
+        cls._tmpdir = TemporaryDirectory()
+        set_seed(SEED)
+        ov_model = cls.OVMODEL_CLASS.from_pretrained(
+            cls.model_id, export=True, trust_remote_code=True, compile=False, device=OPENVINO_DEVICE
+        )
+        ov_model.save_pretrained(cls._tmpdir.name)
+        cls.config = ov_model.config
+        del ov_model
+        gc.collect()
+
+    @classmethod
+    def tearDownClass(cls):
+        if hasattr(cls, "_tmpdir"):
+            cls._tmpdir.cleanup()
+
+    def _load(self):
+        return self.OVMODEL_CLASS.from_pretrained(self._tmpdir.name, trust_remote_code=True, device=OPENVINO_DEVICE)
+
+    def _grid(self):
+        # Vision graph is baked at EXPORT_IMAGE_SIZE; inference must use the same grid.
+        side = self.EXPORT_IMAGE_SIZE // self.config.vision_config.patch_size
+        return side, side
+
+    def _make_inputs(self, n_text=4):
+        grid_h, grid_w = self._grid()
+        num_patches = grid_h * grid_w
+        merge_h, merge_w = self.config.vision_config.merge_kernel_size
+        num_image_tokens = (grid_h // merge_h) * (grid_w // merge_w)
+        image_token_id = self.config.image_token_index
+        patch_size = self.config.vision_config.patch_size
+
+        pixel_values = torch.randn(num_patches, 3, patch_size, patch_size, dtype=torch.float32)
+        image_grid_hws = torch.tensor([[grid_h, grid_w]], dtype=torch.int32)
+        ids = list(range(5, 5 + n_text)) + [image_token_id] * num_image_tokens
+        input_ids = torch.tensor([ids], dtype=torch.long)
+        attention_mask = torch.ones_like(input_ids)
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "pixel_values": pixel_values,
+            "image_grid_hws": image_grid_hws,
+            "num_image_tokens": num_image_tokens,
+        }
+
+    def test_export_produces_three_subgraphs(self):
+        xml_files = sorted(os.path.basename(p) for p in glob.glob(os.path.join(self._tmpdir.name, "*.xml")))
+        self.assertEqual(
+            xml_files,
+            [
+                "openvino_language_model.xml",
+                "openvino_text_embeddings_model.xml",
+                "openvino_vision_embeddings_model.xml",
+            ],
+        )
+
+        ov_model = self._load()
+        self.assertIsInstance(ov_model, MODEL_TYPE_TO_CLS_MAPPING["locateanything"])
+        self.assertEqual(ov_model.config.model_type, "locateanything")
+        self.assertIn("vision_embeddings", ov_model.components)
+        self.assertIn("language_model", ov_model.components)
+        for component in ov_model.components.values():
+            self.assertIsInstance(component.model, openvino.Model)
+        # the language sub-graph is exported stateful (KV-cache)
+        self.assertTrue(ov_model.language_model.stateful)
+        self.assertTrue(model_has_state(ov_model.language_model.model))
+
+    def test_version_guard_is_declared(self):
+        from optimum.exporters.openvino.model_configs import LocateAnythingOpenVINOConfig
+
+        self.assertEqual(LocateAnythingOpenVINOConfig.MIN_TRANSFORMERS_VERSION, "4.55.0")
+        self.assertIsNotNone(LocateAnythingOpenVINOConfig.MAX_TRANSFORMERS_VERSION)
+        # MoonViT vision input generator must produce both required inputs.
+        gen_cls = LocateAnythingOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES[0]
+        self.assertEqual(gen_cls.SUPPORTED_INPUT_NAMES, ("pixel_values", "image_grid_hws"))
+
+    def test_forward(self):
+        ov_model = self._load()
+        ov_model.compile()
+        inputs = self._make_inputs()
+        inputs.pop("num_image_tokens")
+        outputs = ov_model(**inputs)
+        seq_len = inputs["input_ids"].shape[1]
+        self.assertEqual(
+            tuple(outputs.logits.shape),
+            (1, seq_len, self.config.text_config.vocab_size),
+        )
+        self.assertEqual(outputs.logits.dtype, torch.float32)
+
+    def test_generate(self):
+        ov_model = self._load()
+        ov_model.compile()
+        ov_model.generation_config.eos_token_id = None
+        inputs = self._make_inputs()
+        inputs.pop("num_image_tokens")
+        seq_len = inputs["input_ids"].shape[1]
+        new_tokens = 5
+        gen_config = GenerationConfig(
+            max_new_tokens=new_tokens, min_new_tokens=new_tokens, do_sample=False, eos_token_id=None
+        )
+        set_seed(SEED)
+        generated = ov_model.generate(**inputs, generation_config=gen_config)
+        self.assertEqual(generated.shape[0], 1)
+        self.assertEqual(generated.shape[1], seq_len + new_tokens)
+        self.assertEqual(generated.dtype, torch.int64)
+
+    def test_missing_image_grid_hws_raises(self):
+        # MoonViT is native resolution: the vision sub-graph requires image_grid_hws.
+        # Omitting it must fail loudly rather than silently produce wrong embeddings.
+        ov_model = self._load()
+        ov_model.compile()
+        inputs = self._make_inputs()
+        inputs.pop("num_image_tokens")
+        inputs.pop("image_grid_hws")
+        with self.assertRaises(Exception):
+            ov_model(**inputs)
+
+    def test_merge_without_image_tokens_raises(self):
+        # If the prompt has no image placeholder tokens there is nowhere to scatter the
+        # vision features; the merge step asserts on this unexpected scenario.
+        ov_model = self._load()
+        ov_model.compile()
+        inputs = self._make_inputs()
+        inputs.pop("num_image_tokens")
+        # replace every image placeholder with a plain text token
+        input_ids = inputs["input_ids"].clone()
+        input_ids[input_ids == self.config.image_token_index] = 1
+        inputs["input_ids"] = input_ids
+        inputs["attention_mask"] = torch.ones_like(input_ids)
+        with self.assertRaises(AssertionError):
+            ov_model(**inputs)
 
 
 class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):

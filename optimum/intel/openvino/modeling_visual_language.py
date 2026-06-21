@@ -1966,6 +1966,32 @@ class _OVLocateAnythingForCausalLM(_OVInternVLForCausalLM):
                 )
         return inputs_embeds, attention_mask, position_ids
 
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        image_sizes=None,
+        attention_mask=None,
+        image_grid_hws=None,
+        **kwargs,
+    ):
+        # MoonViT is native-resolution: image_grid_hws must reach the vision sub-graph.
+        # Declaring it here (and threading it into the model inputs) lets generate()
+        # accept it as a model kwarg and forwards it through every step.
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            image_sizes=image_sizes,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        model_inputs["image_grid_hws"] = image_grid_hws
+        return model_inputs
+
     @staticmethod
     def preprocess_inputs(
         text: str,
