@@ -125,11 +125,18 @@ def per_image_metrics(ov_boxes, gt_boxes):
             l1s.append(float(np.abs(a - b).mean()))
     l1 = float(np.mean(l1s)) if l1s else None
     count_match = int(n_ov == n_gt)
-    return {"f1_50": f1_50, "f1_mean": f1_mean, "corner_l1": l1,
-            "count_match": count_match, "n_ov": n_ov, "n_gt": n_gt}
+    return {
+        "f1_50": f1_50,
+        "f1_mean": f1_mean,
+        "corner_l1": l1,
+        "count_match": count_match,
+        "n_ov": n_ov,
+        "n_gt": n_gt,
+    }
 
 
 # --------------------------- PyTorch reference ---------------------------
+
 
 def compute_reference(refresh=False):
     path = os.path.join(ART, "reference_boxes.json")
@@ -148,8 +155,12 @@ def compute_reference(refresh=False):
     for fn, query in SAMPLES:
         key = f"{fn}::{query}"
         img = Image.open(os.path.join(IMG_DIR, fn)).convert("RGB").resize((RES, RES), Image.BICUBIC)
-        messages = [{"role": "user", "content": [{"type": "image", "image": img},
-                                                  {"type": "text", "text": build_prompt(query)}]}]
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": img}, {"type": "text", "text": build_prompt(query)}],
+            }
+        ]
         text = proc.py_apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         images, videos = proc.process_vision_info(messages)
         inputs = proc(text=[text], images=images, videos=videos, return_tensors="pt")
@@ -171,9 +182,13 @@ def compute_reference(refresh=False):
         t0 = time.time()
         for _ in range(MAX_NEW):
             with torch.no_grad():
-                o = model.language_model(input_ids=gen,
-                                         visual_features=feats.to(model.language_model.dtype),
-                                         image_token_index=idx, attention_mask=amask, use_cache=False)
+                o = model.language_model(
+                    input_ids=gen,
+                    visual_features=feats.to(model.language_model.dtype),
+                    image_token_index=idx,
+                    attention_mask=amask,
+                    use_cache=False,
+                )
             nxt = int(o.logits[0, -1].argmax())
             out.append(nxt)
             if nxt == EOS:
@@ -181,10 +196,16 @@ def compute_reference(refresh=False):
             gen = torch.cat([gen, torch.tensor([[nxt]], dtype=gen.dtype)], dim=1)
             amask = torch.cat([amask, torch.ones((1, 1), dtype=amask.dtype)], dim=1)
         decoded = tok.decode(out, skip_special_tokens=False)
-        ref[key] = {"text": decoded, "boxes": parse_boxes(decoded),
-                    "n_tokens": len(out), "seconds": round(time.time() - t0, 2),
-                    "prompt_len": int(ids.shape[1])}
-        print(f"[REF] {key}: {len(parse_boxes(decoded))} boxes, {len(out)} tok, {ref[key]['seconds']}s :: {decoded[:90]}")
+        ref[key] = {
+            "text": decoded,
+            "boxes": parse_boxes(decoded),
+            "n_tokens": len(out),
+            "seconds": round(time.time() - t0, 2),
+            "prompt_len": int(ids.shape[1]),
+        }
+        print(
+            f"[REF] {key}: {len(parse_boxes(decoded))} boxes, {len(out)} tok, {ref[key]['seconds']}s :: {decoded[:90]}"
+        )
     os.makedirs(ART, exist_ok=True)
     json.dump(ref, open(path, "w"), indent=2)
     return ref
@@ -192,10 +213,12 @@ def compute_reference(refresh=False):
 
 # --------------------------- OV pipeline ---------------------------
 
+
 class OVPipeline:
     def __init__(self, ir_dir, device):
         from optimum.intel.openvino import OVModelForVisualCausalLM
         from transformers import AutoProcessor, AutoTokenizer
+
         self.tok = AutoTokenizer.from_pretrained(ir_dir, trust_remote_code=True)
         self.proc = AutoProcessor.from_pretrained(ir_dir, trust_remote_code=True)
         self.model = OVModelForVisualCausalLM.from_pretrained(ir_dir, trust_remote_code=True, device=device)
@@ -204,14 +227,21 @@ class OVPipeline:
 
     def _inputs(self, fn, query):
         img = Image.open(os.path.join(IMG_DIR, fn)).convert("RGB").resize((RES, RES), Image.BICUBIC)
-        messages = [{"role": "user", "content": [{"type": "image", "image": img},
-                                                 {"type": "text", "text": build_prompt(query)}]}]
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": img}, {"type": "text", "text": build_prompt(query)}],
+            }
+        ]
         text = self.proc.py_apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         images, videos = self.proc.process_vision_info(messages)
         inputs = self.proc(text=[text], images=images, videos=videos, return_tensors="pt")
-        return (inputs["input_ids"].numpy(), inputs["attention_mask"].numpy(),
-                inputs["pixel_values"].numpy().astype(np.float32),
-                np.asarray(inputs["image_grid_hws"]).astype(np.int32))
+        return (
+            inputs["input_ids"].numpy(),
+            inputs["attention_mask"].numpy(),
+            inputs["pixel_values"].numpy().astype(np.float32),
+            np.asarray(inputs["image_grid_hws"]).astype(np.int32),
+        )
 
     def generate(self, fn, query, max_new=MAX_NEW):
         ids, am, pv, gh = self._inputs(fn, query)
@@ -226,10 +256,14 @@ class OVPipeline:
         mask = am.copy()
         self.lreq.reset_state()
         # prefill
-        r = self.lreq.infer({"inputs_embeds": emb[None].astype(np.float32),
-                             "attention_mask": mask.astype(np.int64),
-                             "position_ids": np.arange(S, dtype=np.int64)[None],
-                             "beam_idx": np.zeros(1, dtype=np.int32)})
+        r = self.lreq.infer(
+            {
+                "inputs_embeds": emb[None].astype(np.float32),
+                "attention_mask": mask.astype(np.int64),
+                "position_ids": np.arange(S, dtype=np.int64)[None],
+                "beam_idx": np.zeros(1, dtype=np.int32),
+            }
+        )
         logits = list(r.values())[0][0]
         nxt = int(logits[-1].argmax())
         out = [nxt]
@@ -240,10 +274,14 @@ class OVPipeline:
             te1 = self.model.language_model.embed_tokens(np.array([[nxt]], dtype=np.int64))
             e1 = np.array(te1).astype(np.float32)
             mask = np.concatenate([mask, [[1]]], axis=1)
-            r = self.lreq.infer({"inputs_embeds": e1,
-                                 "attention_mask": mask.astype(np.int64),
-                                 "position_ids": np.array([[pos]], dtype=np.int64),
-                                 "beam_idx": np.zeros(1, dtype=np.int32)})
+            r = self.lreq.infer(
+                {
+                    "inputs_embeds": e1,
+                    "attention_mask": mask.astype(np.int64),
+                    "position_ids": np.array([[pos]], dtype=np.int64),
+                    "beam_idx": np.zeros(1, dtype=np.int32),
+                }
+            )
             if ttft is None:
                 ttft = time.time() - t0
             logits = list(r.values())[0][0]
@@ -267,21 +305,30 @@ def run_matrix(precisions, devices, ref):
                 decoded, ov_boxes = pipe.generate(fn, query)
                 m = per_image_metrics(ov_boxes, ref[key]["boxes"])
                 per.append(m)
-                print(f"  {key}: ov={m['n_ov']} gt={m['n_gt']} f1@.5={m['f1_50']:.3f} "
-                      f"f1mean={m['f1_mean']:.3f} L1={m['corner_l1']}")
+                print(
+                    f"  {key}: ov={m['n_ov']} gt={m['n_gt']} f1@.5={m['f1_50']:.3f} "
+                    f"f1mean={m['f1_mean']:.3f} L1={m['corner_l1']}"
+                )
             f1_50 = float(np.mean([p["f1_50"] for p in per]))
             f1_mean = float(np.mean([p["f1_mean"] for p in per]))
             l1vals = [p["corner_l1"] for p in per if p["corner_l1"] is not None]
             corner_l1 = float(np.mean(l1vals)) if l1vals else None
             count_match = int(sum(p["count_match"] for p in per))
-            row = {"precision": prec, "device": dev, "n_images": len(SAMPLES),
-                   "f1_at_0.5": round(f1_50, 4), "f1_mean": round(f1_mean, 4),
-                   "mean_corner_l1_px448": round(corner_l1, 2) if corner_l1 is not None else None,
-                   "count_matched_images": count_match,
-                   "per_image": per}
+            row = {
+                "precision": prec,
+                "device": dev,
+                "n_images": len(SAMPLES),
+                "f1_at_0.5": round(f1_50, 4),
+                "f1_mean": round(f1_mean, 4),
+                "mean_corner_l1_px448": round(corner_l1, 2) if corner_l1 is not None else None,
+                "count_matched_images": count_match,
+                "per_image": per,
+            }
             rows.append(row)
-            print(f"  -> {prec}/{dev}: F1@.5={f1_50:.4f} F1mean={f1_mean:.4f} "
-                  f"L1={corner_l1} countmatch={count_match}/{len(SAMPLES)}")
+            print(
+                f"  -> {prec}/{dev}: F1@.5={f1_50:.4f} F1mean={f1_mean:.4f} "
+                f"L1={corner_l1} countmatch={count_match}/{len(SAMPLES)}"
+            )
             del pipe
     return rows
 
@@ -300,16 +347,21 @@ def main():
     devices = [d.strip() for d in args.devices.split(",") if d.strip()]
     rows = run_matrix(precisions, devices, ref)
 
-    summary = {"reference": "PyTorch nvidia/LocateAnything-3B bf16 slow-AR (GT)",
-               "resolution": RES, "n_samples": len(SAMPLES),
-               "table": [{k: v for k, v in r.items() if k != "per_image"} for r in rows],
-               "rows": rows}
+    summary = {
+        "reference": "PyTorch nvidia/LocateAnything-3B bf16 slow-AR (GT)",
+        "resolution": RES,
+        "n_samples": len(SAMPLES),
+        "table": [{k: v for k, v in r.items() if k != "per_image"} for r in rows],
+        "rows": rows,
+    }
     json.dump(summary, open(args.out, "w"), indent=2)
     print("\n==== SUMMARY TABLE ====")
     print(f"{'prec':6} {'device':8} {'F1@0.5':8} {'F1@mean':8} {'L1(px448)':10} {'count':8}")
     for r in summary["table"]:
-        print(f"{r['precision']:6} {r['device']:8} {r['f1_at_0.5']:<8} {r['f1_mean']:<8} "
-              f"{str(r['mean_corner_l1_px448']):10} {r['count_matched_images']}/{r['n_images']}")
+        print(
+            f"{r['precision']:6} {r['device']:8} {r['f1_at_0.5']:<8} {r['f1_mean']:<8} "
+            f"{str(r['mean_corner_l1_px448']):10} {r['count_matched_images']}/{r['n_images']}"
+        )
     print("saved", args.out)
 
 
