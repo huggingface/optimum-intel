@@ -63,7 +63,6 @@ from optimum.intel.utils.import_utils import (
     is_transformers_version,
 )
 
-
 if is_transformers_version(">=", "4.43") and is_transformers_version("<", "4.48"):
     from transformers.models.clip.modeling_clip import CLIPAttention, CLIPSdpaAttention
 
@@ -2589,7 +2588,7 @@ def _persimmon_self_attn_sdpa_forward(
     fused_qkv = self.query_key_value(hidden_states)
 
     # 3 x [batch_size, seq_length, num_heads, head_dim]
-    (query_states, key_states, value_states) = self._split_heads(fused_qkv)
+    query_states, key_states, value_states = self._split_heads(fused_qkv)
 
     if self.qk_layernorm:
         query_states = self.q_layernorm(query_states)
