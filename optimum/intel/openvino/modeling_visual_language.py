@@ -5933,7 +5933,107 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM, Qwen3_5Model, Qwen3_5Visio
         return super().generate(*args, **kwargs)
 
 
+
+class _OVYoutuVLForCausalLM(OVModelForVisualCausalLM):
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image = None,
+        processor = None,
+        tokenizer = None,
+        config = None,
+        video = None,
+        audio = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        return processor(text=text, images=image, return_tensors="pt")
+
+    def get_vision_embeddings(self, pixel_values, pixel_attention_mask=None, spatial_shapes=None, **kwargs):
+        if pixel_values is None:
+            return None
+        return self.vision_embeddings(pixel_values=pixel_values, pixel_attention_mask=pixel_attention_mask, spatial_shapes=spatial_shapes).last_hidden_state
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        import torch
+        import numpy as np
+        
+        vision_embeds = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        
+        if input_ids is None:
+            return inputs_embeds, attention_mask, position_ids
+
+        mask = input_ids == self.config.image_token_id
+        if not mask.any():
+            return inputs_embeds, attention_mask, position_ids
+            
+        mask_unsqueezed = mask.unsqueeze(-1)
+        mask_expanded = mask_unsqueezed.expand_as(inputs_embeds)
+        image_mask = mask_expanded.to(inputs_embeds.device)
+        vision_embeds = vision_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+        
+        if len(vision_embeds.shape) == 2:
+            vision_embeds = vision_embeds.unsqueeze(0)
+            
+        inputs_embeds = inputs_embeds.masked_scatter(image_mask, vision_embeds)
+        
+        return inputs_embeds, attention_mask, position_ids
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        pixel_attention_mask=None,
+        spatial_shapes=None,
+        attention_mask=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        if pixel_values is not None:
+            model_inputs["pixel_attention_mask"] = pixel_attention_mask
+            model_inputs["spatial_shapes"] = spatial_shapes
+        return model_inputs
+
+    def forward(
+        self,
+        input_ids,
+        pixel_values=None,
+        pixel_attention_mask=None,
+        spatial_shapes=None,
+        past_key_values=None,
+        inputs_embeds=None,
+        attention_mask=None,
+        position_ids=None,
+        **kwargs,
+    ):
+        result = super().forward(
+            input_ids,
+            pixel_values=pixel_values,
+            pixel_attention_mask=pixel_attention_mask,
+            spatial_shapes=spatial_shapes,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            **kwargs,
+        )
+        return result
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
+    "youtu_vl": _OVYoutuVLForCausalLM,
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
     "llava_next_video": _OVLlavaNextVideoForCausalLM,
