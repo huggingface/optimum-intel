@@ -219,7 +219,6 @@ from optimum.utils.normalized_config import (
     NormalizedVisionConfig,
 )
 
-
 COMMON_TEXT_TASKS = [
     "feature-extraction",
     "fill-mask",

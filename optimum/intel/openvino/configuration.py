@@ -40,7 +40,6 @@ from .utils import (
     PREDEFINED_VISUAL_LM_DATASETS,
 )
 
-
 if is_nncf_available():
     import nncf
 
