@@ -1784,3 +1784,43 @@ class DummyKokoroInputGenerator(DummyInputGenerator):
             return self.random_int_tensor(shape=[1], min_value=1, max_value=10, framework=framework, dtype=float_dtype)
         else:
             raise ValueError(f"Unsupported input {input_name} for DummyKokoroInputGenerator")
+
+
+class DummyLocateAnythingVisionInputGenerator(DummyInputGenerator):
+    """
+    Dummy input generator for the nvidia/LocateAnything-3B MoonViT vision encoder.
+
+    Produces packed patch pixels ``pixel_values`` of shape ``(L_pre, 3, patch, patch)``
+    and ``image_grid_hws`` of shape ``(num_images, 2)`` for a fixed export resolution.
+    For a ``height`` x ``width`` image with ``patch_size`` p, ``L_pre = (height/p) * (width/p)``.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "image_grid_hws")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 1,
+        height: int = 448,
+        width: int = 448,
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        self.normalized_config = normalized_config
+        self.patch_size = getattr(normalized_config.config, "patch_size", 14)
+        self.grid_h = height // self.patch_size
+        self.grid_w = width // self.patch_size
+        self.num_patches = self.grid_h * self.grid_w
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            return self.random_float_tensor(
+                shape=[self.num_patches, 3, self.patch_size, self.patch_size],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "image_grid_hws":
+            return torch.tensor([[self.grid_h, self.grid_w]], dtype=torch.int32)
+        raise ValueError(f"Unsupported input {input_name} for DummyLocateAnythingVisionInputGenerator")
