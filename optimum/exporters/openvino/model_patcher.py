@@ -10317,3 +10317,238 @@ class KokoroModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model._orig_forward
+
+
+class YoutuVLImageEmbeddingsModelPatcher(ModelPatcher):
+    """
+    Patches YoutuVLForConditionalGeneration for vision-embeddings export.
+
+    The YoutuVL vision pipeline combines a Siglip2VisionTransformer (siglip2)
+    with a VLPatchMerger (merger).  We redirect the model's forward to call
+    those two components in sequence so that the exported sub-graph takes
+    (pixel_values, pixel_attention_mask, spatial_shapes) and returns the
+    merged image-feature tensor.
+
+    We also patch Siglip2Encoder.forward to remove the ``torch.unique_consecutive``
+    call which is not supported by OpenVINO, and to avoid the ``None`` constant
+    produced by that same code path.
+    """
+
+    def __init__(self, config, model, model_kwargs=None):
+        def vision_forward(self_model, pixel_values, pixel_attention_mask, spatial_shapes):
+            # Run vision encoder
+            vision_output = self_model.siglip2(
+                pixel_values, pixel_attention_mask, spatial_shapes
+            ).last_hidden_state
+            # Run patch merger
+            image_features = self_model.merger(vision_output, spatial_shapes)
+            return {"image_features": image_features}
+
+        model._orig_forward = model.forward
+        model.forward = types.MethodType(vision_forward, model)
+        super().__init__(config, model, model_kwargs or {})
+
+    def __enter__(self):
+        super().__enter__()
+        # Patch Siglip2Encoder.forward to remove torch.unique_consecutive
+        # (not supported by OpenVINO) and related None constants.
+        encoder = self._model.siglip2.vision_model.encoder
+
+        def _patched_rot_pos_emb(self_enc, spatial_shapes):
+            """
+            Vectorised replacement for Siglip2Encoder.rot_pos_emb.
+
+            The original code uses ``for h, w in spatial_shapes:`` which causes
+            a prim::ListUnpack/Split node on the dynamic batch dimension of
+            ``spatial_shapes`` that OpenVINO cannot validate.  Here we extract
+            the first (and only supported) row directly via indexing.
+            """
+            h = spatial_shapes[0, 0]
+            w = spatial_shapes[0, 1]
+
+            hpos_ids = torch.arange(h, device=spatial_shapes.device).unsqueeze(1).expand(-1, w)
+            hpos_ids = hpos_ids.reshape(
+                h // self_enc.spatial_merge_size,
+                self_enc.spatial_merge_size,
+                w // self_enc.spatial_merge_size,
+                self_enc.spatial_merge_size,
+            ).permute(0, 2, 1, 3).flatten()
+
+            wpos_ids = torch.arange(w, device=spatial_shapes.device).unsqueeze(0).expand(h, -1)
+            wpos_ids = wpos_ids.reshape(
+                h // self_enc.spatial_merge_size,
+                self_enc.spatial_merge_size,
+                w // self_enc.spatial_merge_size,
+                self_enc.spatial_merge_size,
+            ).permute(0, 2, 1, 3).flatten()
+
+            pos_ids = torch.stack([hpos_ids, wpos_ids], dim=-1)  # (h*w, 2)
+            max_grid_size = spatial_shapes.max()
+            rotary_pos_emb_full = self_enc.rotary_pos_emb(max_grid_size)
+            rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+            return rotary_pos_emb
+
+        def _patched_get_window_index(self_enc, spatial_shapes):
+            """
+            Vectorised replacement for Siglip2Encoder.get_window_index.
+
+            Same motivation as _patched_rot_pos_emb: avoids ``for h, w in
+            spatial_shapes:`` tracing pitfalls.
+            """
+            grid_h = spatial_shapes[0, 0]
+            grid_w = spatial_shapes[0, 1]
+            grid_t = 1
+
+            llm_grid_h = grid_h // self_enc.spatial_merge_size
+            llm_grid_w = grid_w // self_enc.spatial_merge_size
+            vit_merger_window_size = (
+                self_enc.window_size // self_enc.spatial_merge_size // self_enc.patch_size
+            )
+
+            index = torch.arange(grid_t * llm_grid_h * llm_grid_w, device=spatial_shapes.device).reshape(
+                grid_t, llm_grid_h, llm_grid_w
+            )
+            pad_h = (vit_merger_window_size - llm_grid_h % vit_merger_window_size) % vit_merger_window_size
+            pad_w = (vit_merger_window_size - llm_grid_w % vit_merger_window_size) % vit_merger_window_size
+            num_windows_h = (llm_grid_h + pad_h) // vit_merger_window_size
+            num_windows_w = (llm_grid_w + pad_w) // vit_merger_window_size
+
+            import torch.nn.functional as F_local
+            index_padded = F_local.pad(index, (0, pad_w, 0, pad_h), "constant", -100)
+            index_padded = index_padded.reshape(
+                grid_t, num_windows_h, vit_merger_window_size, num_windows_w, vit_merger_window_size
+            ).permute(0, 1, 3, 2, 4).reshape(
+                grid_t, num_windows_h * num_windows_w, vit_merger_window_size, vit_merger_window_size
+            )
+            seqlens = (index_padded != -100).sum([2, 3]).reshape(-1)
+            index_padded_flat = index_padded.reshape(-1)
+            index_new = index_padded_flat[index_padded_flat != -100]
+            window_index = index_new  # single image: no offset needed
+
+            cu_seqlens_tmp = seqlens.cumsum(0) * self_enc.spatial_merge_unit
+            cu_window_seqlens = [0] + cu_seqlens_tmp.tolist()
+            return window_index, cu_window_seqlens
+
+        encoder._orig_rot_pos_emb = encoder.rot_pos_emb
+        encoder.rot_pos_emb = types.MethodType(_patched_rot_pos_emb, encoder)
+        encoder._orig_get_window_index = encoder.get_window_index
+        encoder.get_window_index = types.MethodType(_patched_get_window_index, encoder)
+
+        def _patched_encoder_forward(
+            self_enc,
+            inputs_embeds,
+            spatial_shapes,
+            attention_mask=None,
+            output_attentions=None,
+            output_hidden_states=None,
+        ):
+            from transformers.modeling_outputs import BaseModelOutput
+
+            output_attentions = (
+                output_attentions
+                if output_attentions is not None
+                else self_enc.config.output_attentions
+            )
+            output_hidden_states = (
+                output_hidden_states
+                if output_hidden_states is not None
+                else self_enc.config.output_hidden_states
+            )
+
+            encoder_states = () if output_hidden_states else None
+            all_attentions = () if output_attentions else None
+
+            # Cast hidden_states to match LayerNorm weight dtype to avoid
+            # bf16/fp32 mismatch in the Siglip2 encoder when the model is
+            # loaded in bfloat16 but the LayerNorm weights are stored in fp32.
+            if len(self_enc.layers) > 0:
+                target_dtype = self_enc.layers[0].layer_norm1.weight.dtype
+                hidden_states = inputs_embeds.to(target_dtype)
+            else:
+                hidden_states = inputs_embeds
+            rotary_pos_emb = self_enc.rot_pos_emb(spatial_shapes)
+            window_index, cu_window_seqlens = self_enc.get_window_index(spatial_shapes)
+            # Build cu_window_seqlens tensor without torch.unique_consecutive
+            # (unique_consecutive is not supported by OpenVINO).  For fixed
+            # spatial shapes the list already contains unique values.
+            cu_window_seqlens_tensor = torch.tensor(
+                cu_window_seqlens,
+                device=hidden_states.device,
+                dtype=torch.int32,
+            )
+
+            seq_len, _ = hidden_states.size()
+            hidden_states = hidden_states.reshape(
+                seq_len // self_enc.spatial_merge_unit, self_enc.spatial_merge_unit, -1
+            )
+            hidden_states = hidden_states[window_index, :, :]
+            hidden_states = hidden_states.reshape(seq_len, -1)
+            rotary_pos_emb = rotary_pos_emb.reshape(
+                seq_len // self_enc.spatial_merge_unit, self_enc.spatial_merge_unit, -1
+            )
+            rotary_pos_emb = rotary_pos_emb[window_index, :, :]
+            rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
+            emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+            position_embeddings = (emb.cos(), emb.sin())
+
+            cu_seqlens = torch.repeat_interleave(
+                spatial_shapes[:, 0] * spatial_shapes[:, 1], 1
+            ).cumsum(dim=0, dtype=torch.int32)
+            cu_seqlens = torch.nn.functional.pad(cu_seqlens, (1, 0), value=0)
+
+            for layer_num, encoder_layer in enumerate(self_enc.layers):
+                if output_hidden_states:
+                    encoder_states = encoder_states + (hidden_states,)
+
+                if (1 + layer_num) % 8 == 0 or layer_num == len(self_enc.layers) - 1:
+                    cu_seqlens_now = cu_seqlens
+                else:
+                    cu_seqlens_now = cu_window_seqlens_tensor
+
+                layer_outputs = encoder_layer(
+                    hidden_states,
+                    attention_mask,
+                    cu_seqlens=cu_seqlens_now,
+                    position_embeddings=position_embeddings,
+                )
+
+                hidden_states = layer_outputs[0]
+                if output_attentions:
+                    all_attentions = all_attentions + (layer_outputs[1],)
+
+            hidden_states = hidden_states.reshape(
+                seq_len // self_enc.spatial_merge_unit, self_enc.spatial_merge_unit, -1
+            )
+            reverse_indices = torch.argsort(window_index)
+            hidden_states = hidden_states[reverse_indices, :, :]
+            hidden_states = hidden_states.reshape(seq_len, -1)
+
+            if output_hidden_states:
+                encoder_states = encoder_states + (hidden_states,)
+
+            return BaseModelOutput(
+                last_hidden_state=hidden_states,
+                hidden_states=encoder_states,
+                attentions=all_attentions,
+            )
+
+        encoder._orig_forward = encoder.forward
+        encoder.forward = types.MethodType(_patched_encoder_forward, encoder)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        # Restore model forward
+        if hasattr(self._model, "_orig_forward"):
+            self._model.forward = self._model._orig_forward
+            del self._model._orig_forward
+        # Restore encoder forward
+        encoder = self._model.siglip2.vision_model.encoder
+        if hasattr(encoder, "_orig_forward"):
+            encoder.forward = encoder._orig_forward
+            del encoder._orig_forward
+        if hasattr(encoder, "_orig_rot_pos_emb"):
+            encoder.rot_pos_emb = encoder._orig_rot_pos_emb
+            del encoder._orig_rot_pos_emb
+        if hasattr(encoder, "_orig_get_window_index"):
+            encoder.get_window_index = encoder._orig_get_window_index
+            del encoder._orig_get_window_index

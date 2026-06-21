@@ -1784,3 +1784,70 @@ class DummyKokoroInputGenerator(DummyInputGenerator):
             return self.random_int_tensor(shape=[1], min_value=1, max_value=10, framework=framework, dtype=float_dtype)
         else:
             raise ValueError(f"Unsupported input {input_name} for DummyKokoroInputGenerator")
+
+
+class DummyYoutuVLVisionInputGenerator(DummyVisionInputGenerator):
+    """
+    Dummy input generator for the YoutuVL vision embeddings sub-graph.
+
+    The Siglip2VisionTransformer used by YoutuVL takes pre-extracted patch
+    features (not raw pixel images), an attention mask, and spatial shapes:
+
+      * ``pixel_values``        – (num_images, num_patches, in_features)
+      * ``pixel_attention_mask``– (num_images, num_patches)  [int]
+      * ``spatial_shapes``      – (num_images, 2)  [[grid_h, grid_w] …]
+
+    We use a 4×4 patch grid by default so num_patches = 16.  The patch
+    feature dimension is ``num_channels * patch_size² = 3 * 16² = 768``.
+    """
+
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "pixel_attention_mask",
+        "spatial_shapes",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = 1,
+        **kwargs,
+    ):
+        # The YoutuVL vision encoder processes one image at a time; force
+        # num_images=1 regardless of the global batch_size to avoid a shape
+        # mismatch when the embeddings layer flattens (num_images * num_patches)
+        # into a single sequence before entering the Siglip2Encoder.
+        super().__init__(task=task, normalized_config=normalized_config, batch_size=1, **kwargs)
+        self.num_images = 1
+        patch_size = getattr(normalized_config, "patch_size", 16)
+        num_channels = getattr(normalized_config, "num_channels", 3)
+        # in_features == -1 means derived from patch_size and num_channels
+        in_features = getattr(normalized_config, "in_features", -1)
+        if in_features <= 0:
+            in_features = num_channels * patch_size * patch_size
+        self.in_features = in_features
+        # Use a small 4×4 patch grid per image
+        self.grid_h = 4
+        self.grid_w = 4
+        self.num_patches = self.grid_h * self.grid_w  # 16
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        import torch
+
+        if input_name == "pixel_values":
+            return self.random_float_tensor(
+                shape=[self.num_images, self.num_patches, self.in_features],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        elif input_name == "pixel_attention_mask":
+            return torch.ones(
+                self.num_images, self.num_patches, dtype=torch.long
+            )
+        elif input_name == "spatial_shapes":
+            return torch.tensor(
+                [[self.grid_h, self.grid_w]] * self.num_images, dtype=torch.long
+            )
+        else:
+            return super().generate(input_name, framework=framework, int_dtype=int_dtype, float_dtype=float_dtype)

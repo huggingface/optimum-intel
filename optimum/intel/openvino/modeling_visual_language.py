@@ -5933,6 +5933,109 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM, Qwen3_5Model, Qwen3_5Visio
         return super().generate(*args, **kwargs)
 
 
+class _OVYoutuVLForCausalLM(OVModelForVisualCausalLM):
+    """
+    OpenVINO inference class for YoutuVLForConditionalGeneration (Tencent Youtu-VL).
+
+    The vision pipeline (Siglip2 encoder + VLPatchMerger) is exported as the
+    ``openvino_vision_embeddings_model`` sub-graph and processes one image at a
+    time.  Image tokens in the text sequence are replaced by the merged visual
+    features via ``masked_scatter``.
+    """
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        # Decoding step – no vision computation needed
+        if input_ids is not None and input_ids.shape[1] == 1 and kwargs.get("past_key_values") is not None:
+            return None
+
+        pixel_attention_mask = kwargs.get("pixel_attention_mask")
+        spatial_shapes = kwargs.get("spatial_shapes")
+
+        # pixel_values: (num_images, num_patches, in_features)
+        # Process each image individually (model was traced with batch=1)
+        all_image_features = []
+        num_images = pixel_values.shape[0]
+        for i in range(num_images):
+            pv_i = pixel_values[i : i + 1]  # (1, num_patches, in_features)
+            pam_i = pixel_attention_mask[i : i + 1] if pixel_attention_mask is not None else None
+            ss_i = spatial_shapes[i : i + 1] if spatial_shapes is not None else None
+
+            result = self.vision_embeddings(
+                pv_i,
+                pixel_attention_mask=pam_i,
+                spatial_shapes=ss_i,
+            )
+            # result.last_hidden_state == image_features: (tokens_i, hidden_size)
+            feat_i = result.last_hidden_state
+            if isinstance(feat_i, np.ndarray):
+                feat_i = torch.from_numpy(feat_i)
+            all_image_features.append(feat_i)
+
+        # (total_image_tokens, hidden_size)
+        return torch.cat(all_image_features, dim=0)
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+
+        # image_features: (total_image_tokens, hidden_size)
+        # inputs_embeds: (bs, seq_len, hidden_size)
+        mask = input_ids == self.config.image_token_id          # (bs, seq_len)
+        mask_expanded = mask.unsqueeze(-1).expand_as(inputs_embeds)  # (bs, seq_len, hidden_size)
+        image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
+        # masked_scatter requires a flat source – unsqueeze(0) to make it (1, tokens, hidden)
+        image_features = image_features.unsqueeze(0)
+        new_inputs_embeds = inputs_embeds.masked_scatter(mask_expanded, image_features)
+        return new_inputs_embeds, attention_mask, position_ids
+
+    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, inputs_embeds=None,
+                                       pixel_values=None, image_sizes=None, attention_mask=None,
+                                       spatial_shapes=None, **kwargs):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            image_sizes=image_sizes,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        model_inputs["spatial_shapes"] = spatial_shapes
+        return model_inputs
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required for YoutuVL.")
+        if video is not None:
+            raise ValueError("Video input is not supported for YoutuVL.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported for YoutuVL.")
+
+        conversation = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": text}],
+            }
+        ]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+        inputs = processor(images=image, text=text_prompt, return_tensors="pt")
+        return inputs
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
@@ -5962,4 +6065,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_5_moe_text": _OVQwen3_5ForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
+    "youtu_vl": _OVYoutuVLForCausalLM,
 }

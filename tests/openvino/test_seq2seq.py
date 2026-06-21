@@ -705,6 +705,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         SUPPORTED_ARCHITECTURES += ["videochat_flash_qwen"]
         SUPPORT_VIDEO += ["videochat_flash_qwen"]
 
+    if is_transformers_version(">=", "4.49.0") and is_transformers_version("<=", "4.57.6"):
+        SUPPORTED_ARCHITECTURES += ["youtu_vl"]
+
     if is_transformers_version("<", "4.54.0"):
         # remote code models differs after transformers v4.54
         SUPPORTED_ARCHITECTURES += ["llava-qwen2", "phi3_v"]
