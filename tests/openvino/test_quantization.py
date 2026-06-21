@@ -1084,6 +1084,11 @@ class OVWeightCompressionTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen3_vl", False))
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "hunyuan_v1_dense", False))
 
+    if is_transformers_version(">=", "4.57"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append(
+            (OVModelForFeatureExtraction, "qwen3_vl_embedding", False)
+        )
+
     if is_transformers_version("==", "4.57.6"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForSpeechSeq2Seq, "qwen3_asr", True))
 
@@ -1171,7 +1176,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             {"bits": 4, "group_size": 8, "ratio": 0.5},
             {
                 "decoder": {"int8": 40, "int4": 4},
-                "encoder": {"int8": 24, "int4": 4},
+                "encoder": {"int8": 46, "int4": 6},
             },
         ),
     ]
@@ -1862,8 +1867,8 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 num_samples=1,
                 processor=MODEL_NAMES["whisper"],
             ),
-            {"encoder": 14, "decoder": 22},
-            {"encoder": {"int8": 14}, "decoder": {"int8": 22}},
+            {"encoder": 26, "decoder": 22},
+            {"encoder": {"int8": 26}, "decoder": {"int8": 22}},
         ),
     ]
 

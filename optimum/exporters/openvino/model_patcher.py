@@ -4502,20 +4502,35 @@ class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
                 pkv = DynamicCache.from_legacy_cache(past_key_values)
             else:
                 pkv = DynamicCache(past_key_values)
-
-            outputs = self.model.language_model(
-                inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                use_cache=use_cache,
-                past_key_values=pkv,
-                visual_pos_masks=visual_pos_masks,
-                deepstack_visual_embeds=deepstack_visual_embeds,
-            )
-            hidden_states = outputs[0]
+            if hasattr(self, "model"):
+                outputs = self.model.language_model(
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    use_cache=use_cache,
+                    past_key_values=pkv,
+                    visual_pos_masks=visual_pos_masks,
+                    deepstack_visual_embeds=deepstack_visual_embeds,
+                )
+            else:
+                outputs = self.language_model(
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    use_cache=use_cache,
+                    past_key_values=pkv,
+                    visual_pos_masks=visual_pos_masks,
+                    deepstack_visual_embeds=deepstack_visual_embeds,
+                )
             # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-            logits = self.lm_head(hidden_states)
-            return (logits, postprocess_past_key_values(outputs.past_key_values))
+            if hasattr(self, "lm_head"):
+                logits = self.lm_head(outputs[0])
+            else:
+                return ModelOutput(
+                    last_hidden_state=outputs["last_hidden_state"],
+                    past_key_values=postprocess_past_key_values(outputs.past_key_values),
+                )
+            return ModelOutput(logits=logits, past_key_values=postprocess_past_key_values(outputs.past_key_values))
 
         model.__orig_forward = model.forward
         model.forward = types.MethodType(lm_forward, model)
@@ -9281,6 +9296,296 @@ class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
                         and module.output_max == float("inf")
                     ):
                         module.forward = module.orig_forward
+
+
+# Builds the gemma4_unified causal mask dict. Unlike gemma4, the bidirectional vision
+# attention applies to BOTH the full-attention and sliding-attention masks (gemma4 only
+# un-masks the sliding mask), so vision tokens in the same image block attend to each other
+# regardless of layer type. Mirrors transformers create_masks_for_generate with
+# block_sequence_ids when use_bidirectional_attention == "vision".
+# Original code: https://github.com/huggingface/transformers/blob/v5.10.0/src/transformers/models/gemma4_unified/modeling_gemma4_unified.py#L992
+def _create_gemma4_unified_bidirectional_mask_dict(
+    attention_mask_2d, mm_token_type_ids, inputs_embeds, sliding_window
+):
+    dtype = inputs_embeds.dtype
+    device = inputs_embeds.device
+    min_dtype = torch.finfo(dtype).min
+
+    batch_size = inputs_embeds.shape[0]
+    seq_len = inputs_embeds.shape[1]
+    target_len = attention_mask_2d.shape[-1]
+    past_len = target_len - seq_len
+
+    # Standard causal mask [seq_len, target_len]
+    causal_mask = torch.full((seq_len, target_len), min_dtype, dtype=dtype, device=device)
+    causal_mask = torch.triu(causal_mask, diagonal=past_len + 1)
+
+    # Apply padding from attention_mask_2d
+    padding_mask = (1.0 - attention_mask_2d[:, None, None, :].to(dtype=dtype, device=device)) * min_dtype
+    full_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1) + padding_mask
+    mm_token_type_ids = torch.nn.functional.pad(
+        mm_token_type_ids, (0, target_len - mm_token_type_ids.shape[-1]), value=0
+    )
+
+    # Sliding window causal mask
+    sliding_mask = full_mask.clone()
+    row_pos = torch.arange(seq_len, device=device).unsqueeze(1) + past_len
+    col_pos = torch.arange(target_len, device=device).unsqueeze(0)
+    beyond_window = (row_pos - col_pos) >= sliding_window
+    sliding_mask = sliding_mask.masked_fill(beyond_window[None, None, :, :], min_dtype)
+
+    # Identify contiguous vision groups (trace-friendly, no in-place ops)
+    # mm_token_type_ids: [batch, total_len] - 0=text, 1=image, 2=video/audio
+    is_vision = (mm_token_type_ids == 1) | (mm_token_type_ids == 2)
+    is_prev_vision = torch.nn.functional.pad(is_vision[:, :-1].to(dtype=torch.int32), (1, 0), value=0).bool()
+    new_vision_starts = is_vision & ~is_prev_vision
+    vision_group_ids = torch.cumsum(new_vision_starts.to(dtype=torch.int32), dim=1) - 1
+    vision_group_ids = torch.where(is_vision, vision_group_ids, torch.tensor(-1, dtype=torch.int32, device=device))
+
+    query_groups = vision_group_ids[:, past_len : past_len + seq_len]  # [batch, seq_len]
+    key_groups = vision_group_ids  # [batch, total_len]
+    same_group = (query_groups.unsqueeze(2) == key_groups.unsqueeze(1)) & (key_groups.unsqueeze(1) >= 0)
+    same_group = same_group.unsqueeze(1)  # [batch, 1, seq_len, total_len]
+
+    # Un-mask same-group vision tokens in both masks (bidirectional attention within an image).
+    full_mask = full_mask.masked_fill(same_group, 0.0)
+    sliding_mask = sliding_mask.masked_fill(same_group, 0.0)
+
+    return {
+        "full_attention": full_mask,
+        "sliding_attention": sliding_mask,
+    }
+
+
+# The gemma4_unified text attention mirrors gemma4 but always exposes its own KV
+# (the released 12B checkpoint sets num_kv_shared_layers=0, so no layer reuses
+# another layer's KV) and fuses v_proj into k_proj when attention_k_eq_v is set
+# (then self.v_proj is None and value_states reuse key_states before normalization).
+# Needs to be patched so the attention runs the trace-friendly eager implementation
+# and reshapes the attention mask to match the attention weights.
+# Original code: https://github.com/huggingface/transformers/blob/main/src/transformers/models/gemma4_unified/modeling_gemma4_unified.py#L405
+def gemma4_unified_text_attention_forward(
+    self,
+    hidden_states: torch.Tensor,
+    position_embeddings: torch.Tensor,
+    attention_mask: Optional[torch.Tensor],
+    past_key_values: Optional[Cache] = None,
+    cache_position: Optional[torch.LongTensor] = None,
+    **kwargs,
+) -> tuple:
+    from transformers.models.gemma4_unified.modeling_gemma4_unified import apply_rotary_pos_emb
+
+    input_shape = hidden_states.shape[:-1]
+    hidden_shape = (*input_shape, -1, self.head_dim)
+
+    cos, sin = position_embeddings
+
+    query_states = self.q_proj(hidden_states).view(hidden_shape)
+    query_states = self.q_norm(query_states)
+    query_states = apply_rotary_pos_emb(query_states, cos, sin, unsqueeze_dim=2)
+    query_states = query_states.transpose(1, 2)
+
+    key_states = self.k_proj(hidden_states).view(hidden_shape)
+    # When attention_k_eq_v is set the layer has no v_proj and reuses keys as values.
+    value_states = self.v_proj(hidden_states).view(hidden_shape) if self.v_proj is not None else key_states
+
+    key_states = self.k_norm(key_states)
+    key_states = apply_rotary_pos_emb(key_states, cos, sin, unsqueeze_dim=2)
+    key_states = key_states.transpose(1, 2)
+
+    value_states = self.v_norm(value_states)
+    value_states = value_states.transpose(1, 2)
+
+    if past_key_values is not None:
+        # Match HF Gemma4UnifiedTextAttention: store the full-length KV (no sliding-window
+        # eviction in the cache). Sliding attention is enforced solely via the attention mask,
+        # so passing a sliding_window here would wrongly evict cached KV during decode.
+        key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx)
+
+    # Reuse the gemma4 eager attention which already handles GQA repeat, softcapping and mask reshaping.
+    attn_output, attn_weights = gemma4_eager_attention_forward_patched(
+        self,
+        query_states,
+        key_states,
+        value_states,
+        attention_mask,
+        dropout=self.attention_dropout if self.training else 0.0,
+        scaling=self.scaling,
+        sliding_window=self.sliding_window,
+        **kwargs,
+    )
+
+    attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+    attn_output = self.o_proj(attn_output)
+    return attn_output, attn_weights
+
+
+# Forward method of the gemma4_unified language model (the inner Gemma4UnifiedModel).
+# The OV language model receives already-merged inputs_embeds (vision soft tokens are scattered
+# in Python) plus a precomputed token_type_ids, and must build the gemma3-style bidirectional
+# vision attention mask itself (the original relies on input_ids and the multimodal towers).
+# Original code: https://github.com/huggingface/transformers/blob/main/src/transformers/models/gemma4_unified/modeling_gemma4_unified.py#L992
+def gemma4_unified_language_model_forward(
+    self,
+    input_ids: Optional[torch.LongTensor] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    past_key_values: Optional[Cache] = None,
+    mm_token_type_ids: Optional[torch.LongTensor] = None,
+    cache_position: Optional[torch.LongTensor] = None,
+    inputs_embeds: Optional[torch.FloatTensor] = None,
+    use_cache: Optional[bool] = None,
+    output_attentions: Optional[bool] = None,
+    output_hidden_states: Optional[bool] = None,
+    **lm_kwargs,
+):
+    from transformers.models.gemma4_unified.modeling_gemma4_unified import Gemma4UnifiedModelOutputWithPast
+
+    if (input_ids is None) ^ (inputs_embeds is not None):
+        raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+
+    # Larger gemma4 models use gemma3-style bidirectional attention for vision tokens.
+    use_bidirectional = getattr(self.config.get_text_config(), "use_bidirectional_attention", None) == "vision"
+    if use_bidirectional and mm_token_type_ids is not None:
+        attention_mask = _create_gemma4_unified_bidirectional_mask_dict(
+            attention_mask,
+            mm_token_type_ids,
+            inputs_embeds,
+            self.config.get_text_config().sliding_window,
+        )
+
+    outputs = self.model.language_model(
+        input_ids=None,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+        past_key_values=past_key_values,
+        inputs_embeds=inputs_embeds,
+        use_cache=use_cache,
+        output_attentions=output_attentions,
+        output_hidden_states=output_hidden_states,
+        cache_position=cache_position,
+        **lm_kwargs,
+    )
+
+    return Gemma4UnifiedModelOutputWithPast(
+        last_hidden_state=outputs.last_hidden_state,
+        past_key_values=outputs.past_key_values if use_cache else None,
+        hidden_states=outputs.hidden_states,
+        attentions=outputs.attentions,
+    )
+
+
+# Top-level gemma4_unified forward producing logits (with final logit softcapping) and KV cache.
+# Mirrors gemma4_lm_forward but without per_layer_inputs (the unified text model has no PLE).
+# Original code: https://github.com/huggingface/transformers/blob/main/src/transformers/models/gemma4_unified/modeling_gemma4_unified.py#L1224
+def gemma4_unified_lm_forward(
+    self,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    past_key_values: Optional[Cache] = None,
+    inputs_embeds: Optional[torch.FloatTensor] = None,
+    token_type_ids: Optional[torch.LongTensor] = None,
+    input_ids: Optional[torch.LongTensor] = None,
+    cache_position: Optional[torch.LongTensor] = None,
+    labels: Optional[torch.LongTensor] = None,
+    use_cache: Optional[bool] = None,
+    output_attentions: Optional[bool] = None,
+    output_hidden_states: Optional[bool] = None,
+    logits_to_keep: Union[int, torch.Tensor] = 0,
+    **lm_kwargs,
+):
+    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+    output_hidden_states = (
+        output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+    )
+    use_cache = False
+
+    if past_key_values is not None:
+        use_cache = True
+        past_key_values = preprocess_past_key_values(past_key_values)
+
+    outputs = self.model(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+        past_key_values=past_key_values,
+        mm_token_type_ids=token_type_ids,
+        cache_position=cache_position,
+        inputs_embeds=inputs_embeds,
+        labels=labels,
+        use_cache=use_cache,
+        output_attentions=output_attentions,
+        output_hidden_states=output_hidden_states,
+        return_dict=True,
+        **lm_kwargs,
+    )
+
+    hidden_states = outputs.last_hidden_state
+    slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+    tmp_logits = self.lm_head(hidden_states[:, slice_indices, :])
+    if (final_logit_softcapping := self.config.get_text_config().final_logit_softcapping) is not None:
+        tmp_logits = tmp_logits / final_logit_softcapping
+        tmp_logits = torch.tanh(tmp_logits)
+        tmp_logits = tmp_logits * final_logit_softcapping
+
+    outputs_dict = {
+        "logits": tmp_logits,
+    }
+
+    if use_cache:
+        key_values = outputs.past_key_values
+        present_key_values = postprocess_past_key_values(key_values)
+        outputs_dict["past_key_values"] = present_key_values
+    return tuple([value if not isinstance(value, list) else tuple(value) for value in outputs_dict.values()])
+
+
+class Gemma4UnifiedLMModelPatcher(Gemma3LMModelPatcher):
+    def __init__(self, config, model, model_kwargs):
+        super().__init__(config, model, model_kwargs)
+
+        self.patched_forward = gemma4_unified_lm_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = gemma4_unified_lm_forward
+
+        self.model_orig_language_model_forward = self._model.model.forward
+
+    def __enter__(self):
+        super().__enter__()
+
+        setattr(self._model, self.orig_forward_name, types.MethodType(gemma4_unified_lm_forward, self._model))
+        setattr(self._model.model, "forward", types.MethodType(gemma4_unified_language_model_forward, self._model))
+        for decoder_layer in self._model.model.language_model.layers:
+            decoder_layer.self_attn.orig_forward = decoder_layer.self_attn.forward
+            decoder_layer.self_attn.forward = types.MethodType(
+                gemma4_unified_text_attention_forward, decoder_layer.self_attn
+            )
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        for decoder_layer in self._model.model.language_model.layers:
+            decoder_layer.self_attn.forward = decoder_layer.self_attn.orig_forward
+
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+        setattr(self._model.model, "forward", self.model_orig_language_model_forward)
+
+
+# The gemma4_unified vision tower is encoder-free: get_image_features projects raw merged
+# pixel patches through Gemma4UnifiedVisionEmbedder. The default get_image_features strips
+# padding patches via boolean indexing on a data-dependent mask, which is not trace-friendly,
+# so we export the embedder directly and keep all patches (padding positions are dropped later
+# when soft tokens are scattered into the text sequence by mm_token_type_ids).
+class Gemma4UnifiedImageEmbeddingsModelPatcher(ModelPatcher):
+    def __init__(self, config, model, model_kwargs):
+        super().__init__(config, model, model_kwargs)
+
+        embed_vision = model.model.embed_vision
+
+        def patched_forward(pixel_values, image_position_ids):
+            outputs = embed_vision(pixel_values, image_position_ids)
+            return {"last_hidden_state": outputs}
+
+        self.patched_forward = patched_forward
 
 
 # Patches the MoE block with a vectorized implementation.
