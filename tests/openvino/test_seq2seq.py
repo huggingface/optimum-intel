@@ -684,7 +684,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             SUPPORT_AUDIO.append("phi4mm")
 
     if is_transformers_version(">=", "4.50"):
-        SUPPORTED_ARCHITECTURES += ["gemma3"]
+        SUPPORTED_ARCHITECTURES += ["gemma3", "gemma3n"]
         # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
         if is_transformers_version("<", "5"):
             SUPPORTED_ARCHITECTURES += ["smolvlm"]
@@ -736,6 +736,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "maira2",
         "phi4mm",
         "videochat_flash_qwen",
+        "gemma3n"
     ]
     IMAGE = Image.open(
         requests.get(

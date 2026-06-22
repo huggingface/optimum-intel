@@ -5169,36 +5169,10 @@ def _project_per_layer_inputs(
     )
 
 
-def _gaussian_topk(self, inputs: torch.Tensor) -> torch.Tensor:
-    target_sparsity_tensor = torch.tensor(self.activation_sparsity, dtype=torch.float32, device=inputs.device)
-
-    def normal_icdf_approx(p):
-        p = torch.clamp(p, 1e-7, 1 - 1e-7)
-        a1 = -3.969683028665376e01
-        a2 = 2.209460984245205e02
-        a3 = -2.759285104469687e02
-        a4 = 1.383577518672690e02
-        a5 = -3.066479806614716e01
-        a6 = 2.506628277459239e00
-        b1 = -5.447609879822406e01
-        b2 = 1.615858368580409e02
-        b3 = -1.556989798598866e02
-        b4 = 6.680131188771972e01
-        b5 = -1.328068155288572e01
-        q = p - 0.5
-        r = q * q
-        num = (((((a1 * r + a2) * r + a3) * r + a4) * r + a5) * r + a6) * q
-        den = ((((b1 * r + b2) * r + b3) * r + b4) * r + b5) * r + 1.0
-        return num / den
-
-    std_multiplier = normal_icdf_approx(target_sparsity_tensor)
-    std_multiplier = std_multiplier.type(inputs.dtype)
-    inputs_mean = torch.mean(inputs, dim=-1, keepdim=True)
-    inputs_std = torch.std(inputs, dim=-1, keepdim=True, unbiased=False)
-    cutoff_x = inputs_mean + inputs_std * std_multiplier
-    return nn.functional.relu(inputs - cutoff_x)
-
-
+# Forward method of the language model of Gemma3n, needs to be patched to pass 'per_layer_inputs',
+# as original code fails to create per_layer_inputs without the providing of input_ids,
+# while OV language model expects only inputs_embeds without input_ids.
+# Original code: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/gemma3n/modeling_gemma3n.py#L2016
 def gemma3n_language_model_forward(
     self,
     input_ids: Optional[torch.LongTensor] = None,  # text inputs
@@ -5259,7 +5233,8 @@ def gemma3n_language_model_forward(
         )
         inputs_embeds = inputs_embeds.masked_scatter(special_audio_mask, audio_features)
 
-    outputs = self.language_model(
+    language_model = self.language_model if hasattr(self, "language_model") else self.model.language_model
+    outputs = language_model(
         input_ids=None,
         per_layer_inputs=per_layer_inputs,
         attention_mask=attention_mask,
@@ -5690,8 +5665,6 @@ class Gemma3nLMModelPatcher(Gemma3LMModelPatcher):
         )
 
         for decoder_layer in self._model.model.language_model.layers:
-            decoder_layer.mlp._orig_gaussian_topk = decoder_layer.mlp._gaussian_topk
-            decoder_layer.mlp._gaussian_topk = types.MethodType(_gaussian_topk, decoder_layer.mlp)
             decoder_layer.self_attn.orig_forward = decoder_layer.self_attn.forward
             decoder_layer.self_attn.forward = types.MethodType(gemma3n_text_forward, decoder_layer.self_attn)
 
@@ -5702,7 +5675,6 @@ class Gemma3nLMModelPatcher(Gemma3LMModelPatcher):
         )
 
         for decoder_layer in self._model.model.language_model.layers:
-            decoder_layer.mlp._gaussian_topk = decoder_layer.mlp._orig_gaussian_topk
             decoder_layer.self_attn.forward = decoder_layer.self_attn.orig_forward
 
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
