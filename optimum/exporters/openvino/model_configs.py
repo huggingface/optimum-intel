@@ -3926,10 +3926,14 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
                             break
             if image_seq_length is not None:
                 self._normalized_config.image_seq_length = image_seq_length
-        elif self._behavior in (
-            Gemma4ConfigBehavior.TEXT_EMBEDDINGS,
-            Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER,
-        ) and config.model_type == "gemma4":
+        elif (
+            self._behavior
+            in (
+                Gemma4ConfigBehavior.TEXT_EMBEDDINGS,
+                Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER,
+            )
+            and config.model_type == "gemma4"
+        ):
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator,)
             self._config = config.text_config
             self._normalized_config = NormalizedTextConfig(self._config)
@@ -4143,7 +4147,7 @@ class Gemma3nOpenVINOConfig(Gemma4OpenVINOConfig):
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if self._behavior == Gemma4ConfigBehavior.VISION_EMBEDDINGS:
-            return {'pixel_values': {0: 'batch_size', 2: 'height', 3: 'width'}}
+            return {"pixel_values": {0: "batch_size", 2: "height", 3: "width"}}
         return super().inputs
 
 

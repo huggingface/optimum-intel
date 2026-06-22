@@ -736,7 +736,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "maira2",
         "phi4mm",
         "videochat_flash_qwen",
-        "gemma3n"
+        "gemma3n",
     ]
     IMAGE = Image.open(
         requests.get(
