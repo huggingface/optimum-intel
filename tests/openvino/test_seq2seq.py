@@ -19,7 +19,6 @@ import unittest
 from tempfile import TemporaryDirectory
 
 import numpy as np
-import openvino
 import pytest
 import requests
 import torch
@@ -66,6 +65,8 @@ from optimum.intel.openvino.modeling_text2speech import (
 from optimum.intel.openvino.modeling_visual_language import MODEL_PARTS_CLS_MAPPING, MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+
+import openvino
 
 
 # AutoModelForVision2Seq is deprecated since v4.54
