@@ -37,6 +37,7 @@ jobs:
             "*modeling*",
             "*diffusion*",
             "*quantization*",
+            "*transformation*",
           ]
         transformers-version: ["4.57.6", "5.3.0", "latest"]
 
@@ -56,7 +57,7 @@ jobs:
           pip install --upgrade pip uv
           uv pip install .[tests] librosa diffusers
 
-      - if: ${{ matrix.test-pattern == '*modeling*' || matrix.test-pattern == '*quantization*' }}
+      - if: ${{ matrix.test-pattern == '*modeling*' || matrix.test-pattern == '*quantization*' || matrix.test-pattern == '*transformation*' }}
         name: Install OpenVINO
         run: |
           uv pip install openvino==2025.3.0 openvino-tokenizers==2025.3.0
