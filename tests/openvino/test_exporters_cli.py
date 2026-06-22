@@ -177,6 +177,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     if is_transformers_version(">=", "4.57.0"):
         SUPPORTED_ARCHITECTURES.extend(
             [
+                ("automatic-speech-recognition", "cohere_asr"),
                 ("text-generation-with-past", "hunyuan_v1_dense"),
             ]
         )
@@ -229,6 +230,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "speecht5": 2,
         "kokoro": 0,  # uses g2p, no tokenizer
         "clip": 2,
+        "cohere_asr": 2,
         "mamba": 2,
         "falcon_mamba": 2,
         "qwen3": 2,

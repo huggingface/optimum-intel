@@ -325,6 +325,15 @@ def init_model_configs():
             "AutoModel",
         )
 
+    TasksManager._CUSTOM_CLASSES[("pt", "cohere_asr", "automatic-speech-recognition")] = (
+        "transformers",
+        "AutoModelForSpeechSeq2Seq",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "cohere_asr", "automatic-speech-recognition-with-past")] = (
+        "transformers",
+        "AutoModelForSpeechSeq2Seq",
+    )
+
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["fill"] = {"flux": "FluxFillPipeline"}
@@ -3535,6 +3544,83 @@ class Qwen3ASROpenVINOConfig(AudioToTextOpenVINOConfig):
         for i in range(self._normalized_config.decoder_num_layers):
             inputs_or_outputs[f"{name}.{i}.decoder.key"] = {0: "batch_size", 2: decoder_sequence_name}
             inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
+
+
+@register_in_tasks_manager(
+    "cohere_asr",
+    *[
+        "automatic-speech-recognition",
+        "automatic-speech-recognition-with-past",
+    ],
+    library_name="transformers",
+)
+class CohereAsrOpenVINOConfig(WhisperOpenVINOConfig):
+    """
+    OpenVINO export config for CohereAsrForConditionalGeneration.
+    Architecture: Conformer encoder + Transformer decoder, same tensor
+    contract as Whisper (input_features → encoder; encoder_outputs +
+    decoder_input_ids + past_key_values → decoder logits).
+    """
+
+    NORMALIZED_CONFIG_CLASS = NormalizedSeq2SeqConfig.with_args(
+        encoder_num_layers="encoder_layers",
+        decoder_num_layers="decoder_layers",
+        hidden_size="hidden_size",
+        num_attention_heads="num_attention_heads",
+        decoder_num_attention_heads="num_key_value_heads",
+        feature_size="num_mel_bins",
+        allow_new=True,
+    )
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "automatic-speech-recognition",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        def _get(obj, key, default=None):
+            if obj is None:
+                return default
+            if isinstance(obj, dict):
+                return obj.get(key, default)
+            return getattr(obj, key, default)
+
+        encoder = getattr(config, "encoder", None)
+        decoder = getattr(config, "transf_decoder", None)
+        decoder_cfg = _get(decoder, "config_dict")
+        preprocessor = getattr(config, "preprocessor", None)
+
+        if encoder is not None:
+            config.encoder_layers = _get(encoder, "n_layers")
+            config.num_mel_bins = _get(encoder, "feat_in")
+            config.d_model = _get(encoder, "d_model")
+
+        if decoder_cfg is not None:
+            config.decoder_layers = _get(decoder_cfg, "num_layers")
+            config.hidden_size = _get(decoder_cfg, "hidden_size")
+            config.num_attention_heads = _get(decoder_cfg, "num_attention_heads")
+            config.num_key_value_heads = _get(
+                decoder_cfg, "num_key_value_heads", _get(decoder_cfg, "num_attention_heads")
+            )
+            config.vocab_size = getattr(config, "vocab_size", None) or _get(decoder_cfg, "vocab_size")
+
+        if getattr(config, "num_mel_bins", None) is None and preprocessor is not None:
+            config.num_mel_bins = _get(preprocessor, "features")
+
+        if getattr(config, "decoder_start_token_id", None) is None:
+            config.decoder_start_token_id = 0
+
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+            **kwargs,
+        )
 
 
 @register_in_tasks_manager(
