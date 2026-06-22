@@ -275,7 +275,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # llama4_text is the text sub-model of llama4 (VLM), tested in the VLM group
         supported_architectures.discard("llama4_text")
         # *_text variants below are sub-models of VLM architectures tested in the seq2seq group
-        supported_architectures -= {"qwen3_vl_text", "qwen3_5_text", "qwen3_5_moe_text", "gemma4_text", "gemma4_unified"}
+        supported_architectures -= {
+            "qwen3_vl_text",
+            "qwen3_5_text",
+            "qwen3_5_moe_text",
+            "gemma4_text",
+            "gemma4_unified",
+        }
 
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
         untested_architectures = supported_architectures - tested_architectures
