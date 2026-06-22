@@ -371,6 +371,7 @@ class ExportModelTest(unittest.TestCase):
             if len(only_onnx) > 0:
                 logger.warning(f"The following architectures export {only_onnx} is supported by ONNX but not OpenVINO")
 
+
 class Flux2KleinSupportUnitTest(unittest.TestCase):
     def test_get_flux_ids_dim_from_object_axes_dims_rope_list(self):
         class Cfg:
@@ -396,9 +397,7 @@ class Flux2KleinSupportUnitTest(unittest.TestCase):
         class Encoder:
             config = EncCfg()
 
-        model_type = _resolve_flux_text_encoder_model_type(
-            Encoder(), default_model_type="clip-text", tokenizer=None
-        )
+        model_type = _resolve_flux_text_encoder_model_type(Encoder(), default_model_type="clip-text", tokenizer=None)
         self.assertEqual(model_type, "gemma2-text-encoder")
 
     def test_resolve_flux_text_encoder_model_type_from_tokenizer_name(self):
@@ -425,9 +424,7 @@ class Flux2KleinSupportUnitTest(unittest.TestCase):
         class Encoder:
             config = EncCfg()
 
-        model_type = _resolve_flux_text_encoder_model_type(
-            Encoder(), default_model_type="clip-text", tokenizer=None
-        )
+        model_type = _resolve_flux_text_encoder_model_type(Encoder(), default_model_type="clip-text", tokenizer=None)
         self.assertEqual(model_type, "clip-text")
 
 
