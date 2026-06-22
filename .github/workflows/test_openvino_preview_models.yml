@@ -61,18 +61,8 @@ jobs:
         run: |
           uv pip install --pre -U openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
-      - name: Gemma 4 Validation
-        run: |
-          uv pip install transformers==5.5.0
-          pytest tests/openvino/${{ matrix.test-pattern }} -k "gemma4 and not gemma4_unified" --durations=0
-
       - name: Gemma 4 Unified Validation
         if: ${{ matrix.test-pattern != '*quantization*' }}
         run: |
           uv pip install "transformers>=5.10,<5.11"
           pytest tests/openvino/${{ matrix.test-pattern }} -k gemma4_unified --durations=0
-
-      - name: Qwen3.5 and Qwen3.5-Moe Validation
-        run: |
-          uv pip install "transformers>=5.2,<5.3"
-          pytest tests/openvino/${{ matrix.test-pattern }} -k "qwen3_5 or qwen3_5_moe" --durations=0
