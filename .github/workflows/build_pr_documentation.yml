@@ -23,7 +23,7 @@ jobs:
       PR_CLONE_URL: ${{ github.event.pull_request.head.repo.clone_url }}
 
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v6.0.3
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
