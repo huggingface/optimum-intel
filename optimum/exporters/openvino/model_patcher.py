@@ -5139,6 +5139,7 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
             del self._model.model._orig_update_causual_mask
 
 
+# Original code: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/gemma3n/modeling_gemma3n.py#L1758
 def _project_per_layer_inputs(
     self,
     inputs_embeds: torch.Tensor,
