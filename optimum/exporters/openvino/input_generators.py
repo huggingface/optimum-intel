@@ -1294,6 +1294,38 @@ class DummyGemma4VisionInputGenerator(DummyVisionInputGenerator):
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
+class DummyMolmo2VisionInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "image_token_pooling")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        self.num_patches = normalized_config.config.image_num_pos
+        self.pixels_per_patch = (
+            normalized_config.config.image_patch_size * normalized_config.config.image_patch_size * 3
+        )
+        self.num_crops = 2
+        self.num_pooled_tokens = self.num_patches // 2
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            shape = [self.num_crops, self.num_patches, self.pixels_per_patch]
+            return self.random_float_tensor(shape, min_value=0, max_value=1, framework=framework, dtype=float_dtype)
+        if input_name == "image_token_pooling":
+            pool_dim = 4
+            shape = [1, self.num_pooled_tokens, pool_dim]
+            return self.random_int_tensor(
+                shape, max_value=self.num_crops * self.num_patches, framework=framework, dtype=int_dtype
+            )
+        return None
+
+
 class DummyVisionPositionIdsInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("patch_attention_mask", "patch_position_ids")
 
