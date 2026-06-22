@@ -716,6 +716,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     if is_transformers_version(">=", "5.5"):
         SUPPORTED_ARCHITECTURES += ["gemma4", "gemma4_moe"]
 
+    if is_transformers_version(">=", "5.10"):
+        SUPPORTED_ARCHITECTURES += ["gemma4_unified"]
+
     if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
         SUPPORTED_ARCHITECTURES += ["qwen3_5", "qwen3_5_moe"]
 
@@ -756,6 +759,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "qwen3_vl",
             "qwen3_5",
             "qwen3_5_moe",
+            "gemma4_unified",
         ]:
             from transformers import AutoModelForImageTextToText
 

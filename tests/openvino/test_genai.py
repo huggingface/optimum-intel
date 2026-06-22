@@ -145,7 +145,6 @@ class LLMPipelineTestCase(unittest.TestCase):
         "cohere",
         "qwen2",
         "qwen2_moe",
-        "phi3",
         "gemma2",
         "granite",
         "granitemoe",
@@ -166,6 +165,8 @@ class LLMPipelineTestCase(unittest.TestCase):
         ALL_SUPPORTED_ARCHITECTURES += ("qwen",)
     if is_transformers_version(">=", "4.48.0"):
         ALL_SUPPORTED_ARCHITECTURES += ("cohere2",)
+    if is_transformers_version(">=", "4.49"):
+        ALL_SUPPORTED_ARCHITECTURES += ("phi3",)
     if is_transformers_version(">=", "4.50"):
         ALL_SUPPORTED_ARCHITECTURES += ("gemma3_text",)
     if is_transformers_version(">=", "4.51.0"):
@@ -173,7 +174,7 @@ class LLMPipelineTestCase(unittest.TestCase):
     if is_transformers_version(">=", "4.51.3"):
         ALL_SUPPORTED_ARCHITECTURES += ("glm4",)
     if is_transformers_version(">=", "4.53.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("arcee",)
+        ALL_SUPPORTED_ARCHITECTURES += ("arcee", "smollm3")
     if is_transformers_version(">=", "4.54.0") and is_transformers_version("<", "5"):
         ALL_SUPPORTED_ARCHITECTURES += ("exaone4",)
     if is_transformers_version(">=", "4.55.1"):

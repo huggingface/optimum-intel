@@ -105,7 +105,7 @@ class ExportModelTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.53.0"):
-        SUPPORTED_ARCHITECTURES.update({"granitemoehybrid": OVModelForCausalLM})
+        SUPPORTED_ARCHITECTURES.update({"granitemoehybrid": OVModelForCausalLM, "smollm3": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.update({"exaone4": OVModelForCausalLM, "lfm2": OVModelForCausalLM})
@@ -119,6 +119,9 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "5.5.0"):
         SUPPORTED_ARCHITECTURES.update({"gemma4": OVModelForVisualCausalLM})
         SUPPORTED_ARCHITECTURES.update({"gemma4_moe": OVModelForVisualCausalLM})
+
+    if is_transformers_version(">=", "5.10.0"):
+        SUPPORTED_ARCHITECTURES.update({"gemma4_unified": OVModelForVisualCausalLM})
 
     if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
         SUPPORTED_ARCHITECTURES.update({"qwen3_5": OVModelForVisualCausalLM})
