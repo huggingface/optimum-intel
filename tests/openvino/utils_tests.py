@@ -356,7 +356,7 @@ MODEL_NAMES = {
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
-    "flux.2-klein": "optimum-intel-internal-testing/tiny-random-flux.2-klein-4b",
+    "flux.2-klein": "optimum-intel-internal-testing/tiny-random-flux.2-klein",
     "qwen3_vl_eagle3": "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
     "videochat_flash_qwen": "optimum-intel-internal-testing/tiny-videochat-flash-qwen",
 }

@@ -29,7 +29,7 @@ from utils_tests import (
 
 from optimum.exporters.openvino import export_from_model, main_export
 from optimum.exporters.openvino.convert import _resolve_flux_text_encoder_model_type
-from optimum.exporters.openvino.model_configs import _get_flux_ids_dim
+from optimum.exporters.openvino.input_generators import _get_flux_ids_dim
 from optimum.exporters.openvino.model_configs import BertOpenVINOConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
