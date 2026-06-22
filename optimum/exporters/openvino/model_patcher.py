@@ -10317,3 +10317,358 @@ class KokoroModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model._orig_forward
+
+
+def _minicpmv46_vision_attn_forward(
+    self,
+    hidden_states: torch.Tensor,
+    cu_seqlens=None,
+    max_seqlen=None,
+    attention_mask=None,
+    **kwargs,
+):
+    batch_size, q_len, _ = hidden_states.size()
+    query_states = self.q_proj(hidden_states)
+    key_states = self.k_proj(hidden_states)
+    value_states = self.v_proj(hidden_states)
+
+    query_states = query_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+    key_states = key_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+    value_states = value_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+    attn_output = torch.nn.functional.scaled_dot_product_attention(
+        query_states, key_states, value_states, attn_mask=None, is_causal=False
+    )
+    attn_output = attn_output.transpose(1, 2).contiguous()
+    attn_output = attn_output.reshape(batch_size, q_len, -1)
+    attn_output = self.out_proj(attn_output)
+    return attn_output, None
+
+
+def _minicpmv46_vit_merger_forward(self, hidden_states, target_sizes, cu_seqlens=None):
+    residual = hidden_states
+    hidden_states = self.layer_norm1(hidden_states)
+
+    batch_size, seq_len, _ = hidden_states.size()
+    query_states = self.self_attn.q_proj(hidden_states)
+    key_states = self.self_attn.k_proj(hidden_states)
+    value_states = self.self_attn.v_proj(hidden_states)
+
+    num_heads = self.self_attn.num_heads
+    head_dim = self.self_attn.head_dim
+    window_h, window_w = self.window_kernel_size
+
+    height = target_sizes[0, 0]
+    width = target_sizes[0, 1]
+    num_windows_h = height // window_h
+    num_windows_w = width // window_w
+    window_size = window_h * window_w
+
+    query_states = query_states.view(batch_size, seq_len, num_heads, head_dim)
+    key_states = key_states.view(batch_size, seq_len, num_heads, head_dim)
+    value_states = value_states.view(batch_size, seq_len, num_heads, head_dim)
+
+    query_states = query_states.view(batch_size, num_windows_h, window_h, num_windows_w, window_w, num_heads, head_dim)
+    query_states = query_states.permute(0, 1, 3, 5, 2, 4, 6).reshape(
+        batch_size * num_windows_h * num_windows_w, num_heads, window_size, head_dim
+    )
+    key_states = key_states.view(batch_size, num_windows_h, window_h, num_windows_w, window_w, num_heads, head_dim)
+    key_states = key_states.permute(0, 1, 3, 5, 2, 4, 6).reshape(
+        batch_size * num_windows_h * num_windows_w, num_heads, window_size, head_dim
+    )
+    value_states = value_states.view(batch_size, num_windows_h, window_h, num_windows_w, window_w, num_heads, head_dim)
+    value_states = value_states.permute(0, 1, 3, 5, 2, 4, 6).reshape(
+        batch_size * num_windows_h * num_windows_w, num_heads, window_size, head_dim
+    )
+
+    attn_output = torch.nn.functional.scaled_dot_product_attention(
+        query_states, key_states, value_states, attn_mask=None, is_causal=False
+    )
+    attn_output = attn_output.reshape(batch_size, num_windows_h, num_windows_w, num_heads, window_h, window_w, head_dim)
+    attn_output = attn_output.permute(0, 1, 4, 2, 5, 3, 6).reshape(batch_size, seq_len, -1)
+    attn_output = self.self_attn.out_proj(attn_output)
+
+    hidden_states = residual + attn_output
+
+    embed_dim = hidden_states.shape[-1]
+    merged_h = num_windows_h
+    merged_w = num_windows_w
+
+    patch = hidden_states[0, :, :]
+    patch_5d = patch.view(merged_h, window_h, merged_w, window_w, embed_dim).permute(0, 2, 1, 3, 4)
+    hidden_state = patch_5d.reshape(merged_h * merged_w, window_h * window_w * embed_dim)
+    residual_mean = patch_5d.reshape(merged_h * merged_w, window_h * window_w, embed_dim).mean(dim=1)
+
+    hidden_state = self.pre_norm(hidden_state)
+    hidden_state = self.linear_1(hidden_state)
+    hidden_state = self.act(hidden_state)
+    hidden_state = self.linear_2(hidden_state)
+
+    new_hidden_states = (hidden_state + residual_mean).unsqueeze(0)
+    return new_hidden_states
+
+
+def _minicpmv46_vision_model_forward(self, pixel_values, target_sizes=None, use_vit_merger=True):
+    from transformers.modeling_outputs import BaseModelOutputWithPooling
+
+    hidden_states = self.embeddings(pixel_values, target_sizes=target_sizes)
+
+    insert_layer_id = self.config.insert_layer_id if use_vit_merger else -1
+    if use_vit_merger and insert_layer_id >= 0:
+        for layer_index, encoder_layer in enumerate(self.encoder.layers):
+            hidden_states = encoder_layer(hidden_states, attention_mask=None)
+            if layer_index == insert_layer_id:
+                hidden_states = self.vit_merger(hidden_states, target_sizes)
+    else:
+        for encoder_layer in self.encoder.layers:
+            hidden_states = encoder_layer(hidden_states, attention_mask=None)
+
+    last_hidden_state = self.post_layernorm(hidden_states)
+    return BaseModelOutputWithPooling(last_hidden_state=last_hidden_state)
+
+
+def _minicpmv46_merger_forward(self, image_feature, target_sizes):
+    merge_h, merge_w = self.merge_kernel_size
+    height = target_sizes[0, 0]
+    width = target_sizes[0, 1]
+    num_patches = height * width
+
+    embed_dim = image_feature.shape[-1]
+    merged_h = height // merge_h
+    merged_w = width // merge_w
+
+    hidden_state = (
+        image_feature[0, :num_patches, :]
+        .view(merged_h, merge_h, merged_w, merge_w, embed_dim)
+        .permute(0, 2, 1, 3, 4)
+        .reshape(merged_h * merged_w, merge_h * merge_w * embed_dim)
+    )
+    hidden_state = self.mlp[0](hidden_state)
+
+    for i in range(1, self.merger_times):
+        inner_dim = hidden_state.shape[-1]
+        cur_h = merged_h // merge_h
+        cur_w = merged_w // merge_w
+        hidden_state = (
+            hidden_state.view(cur_h, merge_h, cur_w, merge_w, inner_dim)
+            .permute(0, 2, 1, 3, 4)
+            .reshape(cur_h * cur_w, merge_h * merge_w * inner_dim)
+        )
+        hidden_state = self.mlp[i](hidden_state)
+        merged_h = cur_h
+        merged_w = cur_w
+
+    return hidden_state.unsqueeze(0)
+
+
+class MiniCPMV46LMModelPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from transformers.cache_utils import DynamicCache
+
+        from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
+
+        from ._ov_ops import convert_recurrent_attention_cell
+
+        super().__init__(config, model, model_kwargs)
+
+        if hasattr(self._model, "model") and hasattr(self._model.model, "language_model"):
+            self._text_model = self._model.model.language_model
+            self._text_config = self._model.config.text_config
+        elif hasattr(self._model, "model") and hasattr(self._model.model, "layers"):
+            self._text_model = self._model.model
+            self._text_config = self._model.config
+        else:
+            self._text_model = self._model
+            self._text_config = self._model.config
+
+        text_config = self._text_config
+
+        class MiniCPMV46CacheWrap(DynamicCache):
+            def __init__(self, cfg, conv_states, recurrent_states, key_cache, value_cache):
+                super().__init__(config=cfg)
+                self._conv_states = conv_states
+                self._recurrent_states = recurrent_states
+                self._key_cache = key_cache
+                self._value_cache = value_cache
+                self.conv_states = conv_states
+                self.recurrent_states = recurrent_states
+                self.full_attn_mapping = {}
+                self.linear_attn_mapping = {}
+                full_attn_layer_idx = 0
+                linear_attn_layer_idx = 0
+                for i in range(len(cfg.layer_types)):
+                    if cfg.layer_types[i] == "full_attention":
+                        self.full_attn_mapping[i] = full_attn_layer_idx
+                        full_attn_layer_idx += 1
+                    elif cfg.layer_types[i] == "linear_attention":
+                        self.linear_attn_mapping[i] = linear_attn_layer_idx
+                        linear_attn_layer_idx += 1
+                for i, layer in enumerate(self.layers):
+                    if cfg.layer_types[i] == "linear_attention":
+                        idx = self.linear_attn_mapping[i]
+                        layer.conv_states = conv_states[idx]
+                        layer.is_conv_states_initialized = True
+                        layer.recurrent_states = recurrent_states[idx]
+                        layer.is_recurrent_states_initialized = True
+                        layer._has_previous_state = True
+                    elif cfg.layer_types[i] == "full_attention":
+                        idx = self.full_attn_mapping[i]
+                        layer.keys = key_cache[idx]
+                        layer.values = value_cache[idx]
+                        layer.is_initialized = True
+
+            def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
+                mapped_idx = self.full_attn_mapping[layer_idx]
+                if self._key_cache[mapped_idx] is None:
+                    self._key_cache[mapped_idx] = key_states
+                    self._value_cache[mapped_idx] = value_states
+                else:
+                    self._key_cache[mapped_idx] = torch.cat([self._key_cache[mapped_idx], key_states], dim=2)
+                    self._value_cache[mapped_idx] = torch.cat([self._value_cache[mapped_idx], value_states], dim=2)
+                self.layers[layer_idx].keys = self._key_cache[mapped_idx]
+                self.layers[layer_idx].values = self._value_cache[mapped_idx]
+                self.layers[layer_idx].is_initialized = True
+                return self._key_cache[mapped_idx], self._value_cache[mapped_idx]
+
+            def get_seq_length(self, layer_idx=0):
+                if layer_idx in self.full_attn_mapping:
+                    mapped_idx = self.full_attn_mapping[layer_idx]
+                    if mapped_idx < len(self._key_cache) and self._key_cache[mapped_idx] is not None:
+                        return self._key_cache[mapped_idx].shape[-2]
+                for mapped_idx in range(len(self._key_cache)):
+                    if self._key_cache[mapped_idx] is not None:
+                        return self._key_cache[mapped_idx].shape[-2]
+                return 0
+
+            def has_previous_state(self):
+                return True
+
+        num_full_attn_layers = text_config.layer_types.count("full_attention")
+        num_linear_attn_layers = text_config.layer_types.count("linear_attention")
+
+        def patched_forward(
+            input_ids=None,
+            attention_mask=None,
+            cache_params=None,
+            inputs_embeds=None,
+            position_ids=None,
+        ):
+            use_cache = False
+            wrapped_cache_params = None
+            if cache_params is not None:
+                use_cache = True
+                conv_states = []
+                recurrent_states = []
+                key_cache = []
+                value_cache = []
+
+                for idx in range(num_linear_attn_layers):
+                    conv_states.append(cache_params[2 * idx])
+                    recurrent_states.append(cache_params[2 * idx + 1])
+
+                for idx in range(num_full_attn_layers):
+                    key_cache.append(cache_params[2 * num_linear_attn_layers + 2 * idx])
+                    value_cache.append(cache_params[2 * num_linear_attn_layers + 2 * idx + 1])
+
+                wrapped_cache_params = MiniCPMV46CacheWrap(
+                    text_config, conv_states, recurrent_states, key_cache, value_cache
+                )
+
+            outputs_lm = self.model_orig_forward(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=wrapped_cache_params,
+                use_cache=use_cache,
+            )
+            logits = outputs_lm.logits if hasattr(outputs_lm, "logits") else self._model.lm_head(outputs_lm[0])
+            past_kv = outputs_lm.past_key_values if hasattr(outputs_lm, "past_key_values") else None
+
+            outputs = {"logits": logits}
+
+            if use_cache:
+                present_key_values = []
+                for idx in range(num_linear_attn_layers):
+                    present_key_values.append(past_kv.conv_states[idx])
+                    present_key_values.append(past_kv.recurrent_states[idx])
+
+                for idx in range(num_full_attn_layers):
+                    present_key_values.append(past_kv._key_cache[idx])
+                    present_key_values.append(past_kv._value_cache[idx])
+
+                outputs["present_key_values"] = present_key_values
+
+            return outputs
+
+        self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+        self.module_extensions = {
+            RecurrentAttentionCell: ModuleExtension(RecurrentAttentionCell, "RecurrentAttentionCellOp"),
+        }
+        self.conversion_extensions = [
+            ConversionExtension("RecurrentAttentionCellOp", convert_recurrent_attention_cell),
+        ]
+
+    def __enter__(self):
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
+        for idx, decoder_layer in enumerate(self._text_model.layers):
+            layer_type = self._text_config.layer_types[idx]
+            if layer_type == "linear_attention":
+                linear_attn_layer = decoder_layer.linear_attn
+                linear_attn_layer._orig_forward = linear_attn_layer.forward
+                linear_attn_layer.forward = types.MethodType(qwen3_5_gated_delta_net_forward, linear_attn_layer)
+                linear_attn_layer.recurrent_gated_delta_rule = patched_recurrent_gated_delta_rule
+                linear_attn_layer.recurrent_attention_cell = RecurrentAttentionCell()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+        for idx, decoder_layer in enumerate(self._text_model.layers):
+            layer_type = self._text_config.layer_types[idx]
+            if layer_type == "linear_attention":
+                linear_attn_layer = decoder_layer.linear_attn
+                linear_attn_layer.forward = linear_attn_layer._orig_forward
+
+
+class MiniCPMV46VisionEmbeddingsModelPatcher(ModelPatcher):
+    def __init__(self, config, model, model_kwargs):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(_minicpmv46_vision_model_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+        for layer in self._model.encoder.layers:
+            layer.self_attn._orig_forward = layer.self_attn.forward
+            layer.self_attn.forward = types.MethodType(_minicpmv46_vision_attn_forward, layer.self_attn)
+        if hasattr(self._model, "vit_merger"):
+            self._model.vit_merger._orig_forward = self._model.vit_merger.forward
+            self._model.vit_merger.forward = types.MethodType(_minicpmv46_vit_merger_forward, self._model.vit_merger)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        for layer in self._model.encoder.layers:
+            layer.self_attn.forward = layer.self_attn._orig_forward
+        if hasattr(self._model, "vit_merger"):
+            self._model.vit_merger.forward = self._model.vit_merger._orig_forward
+
+
+class MiniCPMV46MergerModelPatcher(ModelPatcher):
+    def __init__(self, config, model, model_kwargs):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(_minicpmv46_merger_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward

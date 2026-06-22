@@ -258,6 +258,7 @@ MODEL_NAMES = {
     "minicpm": "optimum-intel-internal-testing/tiny-random-minicpm",
     "minicpm3": "optimum-intel-internal-testing/tiny-random-minicpm3",
     "minicpmv": "optimum-intel-internal-testing/tiny-random-minicpmv-2_6",
+    "minicpmv4_6": "optimum-intel-internal-testing/tiny-random-minicpmv4_6",
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
     "mistral-nemo": "optimum-intel-internal-testing/tiny-random-mistral-nemo",
@@ -528,6 +529,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "clip": {"model": 130},
     "mamba": {"model": 324 if is_transformers_version("==", "5.0") else 322},
     "falcon_mamba": {"model": 164 if is_transformers_version("==", "5.0") else 162},
+    "minicpmv4_6": {
+        "lm_model": 32,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 16,
+        "merger_model": 4,
+    },
     "minicpmo": {
         "lm_model": 16,
         "text_embeddings_model": 1,
