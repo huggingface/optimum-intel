@@ -5214,11 +5214,11 @@ def gemma3n_language_model_forward(
     if input_features is not None and input_features_mask is not None:
         audio_features, audio_mask = self.get_audio_features(input_features, ~input_features_mask)
 
-    # The Gemma3nProcessor expects all audio to be 30s in length and inserts 188 audio soft tokens into the
-    # text to account for this. However, the audio preprocessing and encoder do not guarantee they will
-    # produce 188 soft tokens; they will produce at most that many tokens, but they may produce fewer tokens
-    # depending on the length of the longest audio input in the batch. When we encounter this situation, we pad
-    # the audio feature out to 188 soft tokens with the embedding of the last token in the embed_audio vocab.
+        # The Gemma3nProcessor expects all audio to be 30s in length and inserts 188 audio soft tokens into the
+        # text to account for this. However, the audio preprocessing and encoder do not guarantee they will
+        # produce 188 soft tokens; they will produce at most that many tokens, but they may produce fewer tokens
+        # depending on the length of the longest audio input in the batch. When we encounter this situation, we pad
+        # the audio feature out to 188 soft tokens with the embedding of the last token in the embed_audio vocab.
         audio_padding_toks = torch.tensor([[self.vocab_size - 1]], dtype=torch.long, device=audio_features.device)
         audio_padding_embs = self.embed_audio(input_ids=audio_padding_toks)
         audio_features = torch.where(audio_mask.unsqueeze(-1), audio_padding_embs, audio_features)

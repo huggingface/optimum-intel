@@ -3934,10 +3934,7 @@ class _OVGemma3ForCausalLM(OVModelForVisualCausalLM):
                 self.get_text_embeddings(torch.tensor([[self.config.image_token_index]], dtype=torch.long))[0]
             )
         else:
-            if self.config.model_type == "gemma3n":
-                special_image_mask = (input_ids == self.config.image_token_id).unsqueeze(-1)
-            else:
-                special_image_mask = (input_ids == self.config.image_token_index).unsqueeze(-1)
+            special_image_mask = (input_ids == self.config.image_token_index).unsqueeze(-1)
             special_image_mask = special_image_mask.expand_as(inputs_embeds)
 
             image_features = image_features.to(inputs_embeds.dtype)
