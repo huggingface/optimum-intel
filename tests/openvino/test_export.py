@@ -122,6 +122,9 @@ class ExportModelTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.update({"gemma4": OVModelForVisualCausalLM})
         SUPPORTED_ARCHITECTURES.update({"gemma4_moe": OVModelForVisualCausalLM})
 
+    if is_transformers_version(">=", "5.10.0"):
+        SUPPORTED_ARCHITECTURES.update({"gemma4_unified": OVModelForVisualCausalLM})
+
     if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
         SUPPORTED_ARCHITECTURES.update({"qwen3_5": OVModelForVisualCausalLM})
         SUPPORTED_ARCHITECTURES.update({"qwen3_5_moe": OVModelForVisualCausalLM})

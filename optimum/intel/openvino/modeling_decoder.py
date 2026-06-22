@@ -1208,26 +1208,25 @@ class OVCacheWithMambaStates(MambaCache):
         self.ssm_states = ssm_states
         if self.ssm_states is None:
             self.ssm_states: List[torch.Tensor] = []
-            if config.model_type in ["lfm2_moe", "lfm2"]:
-                for _ in range(self.num_mamba_layers):
-                    if self.n_mamba_heads and self.mamba_headdim:
-                        # Mamba2 block
-                        ssm_state_shape = (
-                            self.max_batch_size,
-                            self.n_mamba_heads,
-                            self.mamba_headdim,
-                            self.ssm_state_size,
-                        )
-                    else:
-                        # Mamba block
-                        ssm_state_shape = (self.max_batch_size, self.intermediate_size, self.ssm_state_size)
-
-                    ssm_state: torch.Tensor = torch.zeros(
-                        ssm_state_shape,
-                        device=self.device,
-                        dtype=dtype,
+            for _ in range(self.num_mamba_layers):
+                if self.n_mamba_heads and self.mamba_headdim:
+                    # Mamba2 block
+                    ssm_state_shape = (
+                        self.max_batch_size,
+                        self.n_mamba_heads,
+                        self.mamba_headdim,
+                        self.ssm_state_size,
                     )
-                    self.ssm_states.append(ssm_state)
+                else:
+                    # Mamba block
+                    ssm_state_shape = (self.max_batch_size, self.intermediate_size, self.ssm_state_size)
+
+                ssm_state: torch.Tensor = torch.zeros(
+                    ssm_state_shape,
+                    device=self.device,
+                    dtype=dtype,
+                )
+                self.ssm_states.append(ssm_state)
 
         self.key_cache = key_cache
         if self.key_cache is None:
