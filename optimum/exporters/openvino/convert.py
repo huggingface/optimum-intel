@@ -1349,6 +1349,7 @@ def _resolve_flux_text_encoder_model_type(text_encoder, default_model_type: str,
 
     return default_model_type
 
+
 def _resolve_vae_scaling_factor(vae_config) -> Optional[float]:
     scaling_factor = getattr(vae_config, "scaling_factor", None)
     if scaling_factor is not None:
@@ -1474,7 +1475,11 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     vae_decoder = copy.deepcopy(pipeline.vae)
     if vae_scaling_factor is not None:
         vae_decoder.register_to_config(scaling_factor=float(vae_scaling_factor))
-    if hasattr(vae_decoder, "bn") and hasattr(vae_decoder.bn, "running_mean") and hasattr(vae_decoder.bn, "running_var"):
+    if (
+        hasattr(vae_decoder, "bn")
+        and hasattr(vae_decoder.bn, "running_mean")
+        and hasattr(vae_decoder.bn, "running_var")
+    ):
         vae_decoder.register_to_config(
             **{
                 "bn_running_mean_data": vae_decoder.bn.running_mean.detach().cpu().tolist(),
@@ -1510,6 +1515,7 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     )
 
     return models_for_export
+
 
 def _get_encoder_decoder_stateful_models_for_export(
     model: "PreTrainedModel",
