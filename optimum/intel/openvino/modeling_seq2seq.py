@@ -13,6 +13,7 @@
 #  limitations under the License.
 import logging
 import os
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -1060,7 +1061,7 @@ class OVDecoder(OVModelPart):
     """,
     INPUTS_DOCSTRING,
 )
-class OVModelForVision2Seq(OVModelForSeq2SeqLM):
+class OVModelForImageTextToText(OVModelForSeq2SeqLM):
     auto_model_class = AutoModelForImageTextToText
     main_input_name = "pixel_values"
     export_feature = "image-to-text"
@@ -1119,7 +1120,7 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
         + IMAGE_TO_TEXT_EXAMPLE.format(
             processor_class=_PROCESSOR_FOR_DOC,
             tokenizer_class=_TOKENIZER_FOR_DOC,
-            model_class="OVModelForVision2Seq",
+            model_class="OVModelForImageTextToText",
             checkpoint="microsoft/trocr-small-handwritten",
         )
     )
@@ -1165,15 +1166,15 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
     """,
     INPUTS_DOCSTRING,
 )
-class OVModelForPix2Struct(OVModelForVision2Seq):
+class OVModelForPix2Struct(OVModelForImageTextToText):
     auto_model_class = Pix2StructForConditionalGeneration
     main_input_name = "flattened_patches"
     export_feature = "image-to-text"
 
-    # this is needed to avoid circular calls when OVModelForVision2Seq is called to instantiate a OVModelForPix2Struct
+    # this is needed to avoid circular calls when OVModelForImageTextToText is called to instantiate a OVModelForPix2Struct
     @classmethod
     def _from_pretrained(cls, model_id: Union[str, Path], config: "PretrainedConfig", **kwargs):
-        return super(OVModelForVision2Seq, cls)._from_pretrained(model_id, config, **kwargs)
+        return super(OVModelForImageTextToText, cls)._from_pretrained(model_id, config, **kwargs)
 
     def prepare_inputs_for_generation(
         self,
@@ -1247,6 +1248,18 @@ class OVModelForPix2Struct(OVModelForVision2Seq):
                     shapes[inputs][1] = -1
         model.reshape(shapes)
         return model
+
+
+class OVModelForVision2Seq(OVModelForImageTextToText):
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        warnings.warn(
+            "OVModelForVision2Seq is deprecated and will be removed in a future release. "
+            "Use OVModelForImageTextToText instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        return super().from_pretrained(*args, **kwargs)
 
 
 @add_start_docstrings(

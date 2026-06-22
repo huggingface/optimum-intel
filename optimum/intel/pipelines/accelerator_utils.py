@@ -32,8 +32,8 @@ from optimum.intel.openvino import (
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
     OVModelForTextToSpeechSeq2Seq,
+    OVModelForImageTextToText,
     OVModelForTokenClassification,
-    OVModelForVision2Seq,
     OVModelForVisualCausalLM,
     OVModelForZeroShotImageClassification,
 )
@@ -54,7 +54,7 @@ OV_TASKS_MAPPING = {
     "fill-mask": (OVModelForMaskedLM,),
     "image-classification": (OVModelForImageClassification,),
     "image-text-to-text": (OVModelForVisualCausalLM,),
-    "image-to-text": (OVModelForVision2Seq,),
+    "image-to-text": (OVModelForImageTextToText,),
     "question-answering": (OVModelForQuestionAnswering,),
     "summarization": (OVModelForSeq2SeqLM,),
     "text2text-generation": (OVModelForSeq2SeqLM,),

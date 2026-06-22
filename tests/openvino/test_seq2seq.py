@@ -51,10 +51,10 @@ from optimum.exporters.openvino.stateful import model_has_state
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
+    OVModelForImageTextToText,
     OVModelForSeq2SeqLM,
     OVModelForSpeechSeq2Seq,
     OVModelForTextToSpeechSeq2Seq,
-    OVModelForVision2Seq,
     OVModelForVisualCausalLM,
 )
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
@@ -533,7 +533,7 @@ class Qwen3ASRTest(unittest.TestCase):
         gc.collect()
 
 
-class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
+class OVModelForImageTextToTextIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ["vision-encoder-decoder", "trocr"]
     # GOT-OCR2 models shouldn't be exported using the task image-to-text (currently equivalent to exporting the model using image-text-to-text) and will be deprecated v1.29
     # TODO: move pix2struct tests from OVModelForPix2StructIntegrationTest
@@ -546,7 +546,7 @@ class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
     }
 
     TASK = "image-to-text"
-    OVMODEL_CLASS = OVModelForVision2Seq
+    OVMODEL_CLASS = OVModelForImageTextToText
     AUTOMODEL_CLASS = AutoModelForImageTextToText
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
@@ -1246,7 +1246,7 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
 class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ["pix2struct"]
     TASK = "image-to-text"  # is it fine as well with visual-question-answering?
-    OVMODEL_CLASS = OVModelForVision2Seq
+    OVMODEL_CLASS = OVModelForImageTextToText
     AUTOMODEL_CLASS = AutoModelForImageTextToText
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
