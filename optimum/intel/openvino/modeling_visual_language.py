@@ -4128,20 +4128,27 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
     # ── Class-level override so from_pretrained skips audio when file is absent ──────
     @classmethod
     def from_pretrained(cls, model_id, **kwargs):
-        """Load model; audio embeddings are optional (skipped if not found)."""
-        audio_path = None
-        if isinstance(model_id, (str, os.PathLike)):
-            audio_path = os.path.join(str(model_id), "openvino_audio_embeddings_model.xml")
+        """Load model; audio embeddings are optional (skipped if not found).
 
-        if audio_path is not None and not os.path.exists(audio_path):
-            # Backwards compat: load without audio_embeddings
-            _orig_parts = cls.additional_parts
-            cls.additional_parts = [p for p in _orig_parts if p != "audio_embeddings"]
-            try:
-                result = super().from_pretrained(model_id, **kwargs)
-            finally:
-                cls.additional_parts = _orig_parts
-            return result
+        For local directories: if ``openvino_audio_embeddings_model.xml`` is absent,
+        the audio sub-model is silently skipped (backwards compatibility).
+
+        For HF Hub IDs: the parent's ``hf_hub_download`` try/except already handles
+        optional files gracefully, so we pass through without stripping anything.
+        """
+        # Only apply the local-dir fast-path.  Hub IDs are NOT local directories,
+        # so os.path.isdir() is False for them and they fall through to super().
+        if isinstance(model_id, (str, os.PathLike)) and os.path.isdir(str(model_id)):
+            audio_path = os.path.join(str(model_id), "openvino_audio_embeddings_model.xml")
+            if not os.path.exists(audio_path):
+                # Backwards compat: load without audio_embeddings
+                _orig_parts = cls.additional_parts
+                cls.additional_parts = [p for p in _orig_parts if p != "audio_embeddings"]
+                try:
+                    result = super().from_pretrained(model_id, **kwargs)
+                finally:
+                    cls.additional_parts = _orig_parts
+                return result
 
         return super().from_pretrained(model_id, **kwargs)
 
