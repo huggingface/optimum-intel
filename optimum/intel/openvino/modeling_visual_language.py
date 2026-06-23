@@ -535,24 +535,36 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             file_names = {k: os.path.join(model_id, model_file_names[k]) for k in model_file_names}
         else:
             file_names = {}
+            optional_keys = {f"{p}_model" for p in model_cls.additional_parts} | \
+                            {f"{p}_model_bin" for p in model_cls.additional_parts}
             for name, file_name in model_file_names.items():
-                model_cache_path = hf_hub_download(
-                    repo_id=model_id,
-                    filename=file_name,
-                    token=token,
-                    revision=revision,
-                    cache_dir=cache_dir,
-                    force_download=force_download,
-                    local_files_only=local_files_only,
-                )
-                file_names[name] = model_cache_path
-            model_save_dir = Path(model_cache_path).parent
+                try:
+                    model_cache_path = hf_hub_download(
+                        repo_id=model_id,
+                        filename=file_name,
+                        token=token,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        local_files_only=local_files_only,
+                    )
+                    file_names[name] = model_cache_path
+                except Exception:
+                    if name in optional_keys:
+                        logger.warning(f"Optional model file '{file_name}' not found in Hub, skipping.")
+                    else:
+                        raise
+            model_save_dir = Path(next(v for k, v in file_names.items() if "_bin" not in k)).parent
         if not compile_only:
             language_model = model_cls.load_model(file_names["lm_model"])
             text_embeddings = model_cls.load_model(file_names["text_embeddings_model"])
             vision_embeddings = model_cls.load_model(file_names["vision_embeddings_model"])
             for part in model_cls.additional_parts:
-                kwargs[part] = model_cls.load_model(file_names[f"{part}_model"])
+                part_path = file_names[f"{part}_model"]
+                if os.path.exists(part_path):
+                    kwargs[part] = model_cls.load_model(part_path)
+                else:
+                    logger.warning(f"Optional model part '{part}' not found at {part_path}, skipping.")
         else:
             language_model = model_cls._compile_model(
                 file_names["lm_model"],
@@ -573,12 +585,16 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 model_save_dir,
             )
             for part in model_cls.additional_parts:
-                kwargs[part] = model_cls._compile_model(
-                    file_names[f"{part}_model"],
-                    kwargs.get("device", "CPU"),
-                    kwargs.get("ov_config"),
-                    model_save_dir,
-                )
+                part_path = file_names[f"{part}_model"]
+                if os.path.exists(part_path):
+                    kwargs[part] = model_cls._compile_model(
+                        part_path,
+                        kwargs.get("device", "CPU"),
+                        kwargs.get("ov_config"),
+                        model_save_dir,
+                    )
+                else:
+                    logger.warning(f"Optional model part '{part}' not found at {part_path}, skipping.")
         try:
             generation_config = GenerationConfig.from_pretrained(
                 model_id,
@@ -695,7 +711,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     @property
     def _component_names(self) -> List[str]:
         base_components = ["language_model", "vision_embeddings"]
-        additional_components = [part for part in self.additional_parts if hasattr(self, part)]
+        additional_components = [part for part in self.additional_parts if getattr(self, part, None) is not None]
         return base_components + additional_components
 
     @property
@@ -703,7 +719,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         # TODO (nikita.savelyevv): Consider deprecating `lm_model` in favor of `language_model`
         model_names = ["lm_model", "text_embeddings_model", "vision_embeddings_model"]
         for part in self.additional_parts:
-            if hasattr(self, part):
+            if getattr(self, part, None) is not None:
                 model_names.append(part + "_model")
         return model_names
 
@@ -4164,7 +4180,7 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         input_features_mask: Optional[torch.Tensor] = None,
         input_ids: Optional[torch.Tensor] = None,
     ) -> Optional[torch.Tensor]:
-        """Run the audio embedder and return [batch, n_valid_frames, hidden_size].
+        """Run the audio embedder and return the valid-frame embeddings.
 
         Args:
             input_features: raw waveform frames, shape [batch, n_frames, 640].
@@ -4172,7 +4188,8 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
             input_ids: used to skip audio on decode steps (single-token extension).
 
         Returns:
-            Tensor [n_valid_frames_total, hidden_size] or None if skipped.
+            Tensor of shape [n_valid_frames_total, hidden_size] (padding frames
+            removed via ``input_features_mask``), or None if called on a decode step.
         """
         if input_ids is not None and input_ids.shape[1] == 1:
             # Decode step — audio was already merged in the prefill pass.
@@ -4223,6 +4240,13 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
 
         special_audio_mask = (input_ids == audio_token_id).unsqueeze(-1).expand_as(inputs_embeds)
         audio_embeds = audio_embeds.to(inputs_embeds.dtype)
+        expected = int(special_audio_mask.sum() / inputs_embeds.shape[-1])
+        if audio_embeds.shape[0] != expected:
+            raise ValueError(
+                f"Audio token count mismatch: {expected} <audio> positions in input_ids "
+                f"but audio_embeds has {audio_embeds.shape[0]} frames. "
+                "Check that the processor and model were exported with the same audio config."
+            )
         inputs_embeds = inputs_embeds.masked_scatter(special_audio_mask, audio_embeds)
         return inputs_embeds, attention_mask, position_ids
 
@@ -4249,7 +4273,7 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
             **kwargs,
         )
 
-    def prepare_inputs_and_embeddings(
+    def get_multimodal_embeddings(
         self,
         input_ids,
         pixel_values=None,
@@ -4257,9 +4281,8 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         position_ids=None,
         **kwargs,
     ):
-        """Extend parent to also scatter audio tokens when input_features is provided."""
-        # Parent handles vision
-        inputs_embeds, attention_mask, position_ids = super().prepare_inputs_and_embeddings(
+        """Extend parent (vision) to also scatter audio soft tokens into the embedding stream."""
+        inputs_embeds, attention_mask, position_ids = super().get_multimodal_embeddings(
             input_ids,
             pixel_values=pixel_values,
             attention_mask=attention_mask,
@@ -4267,9 +4290,8 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
             **kwargs,
         )
 
-        # Audio
         input_features = kwargs.get("input_features")
-        if input_features is not None:
+        if input_features is not None and self.audio_embeddings is not None:
             input_features_mask = kwargs.get("input_features_mask")
             audio_embeds = self.get_audio_embeddings(
                 input_features,

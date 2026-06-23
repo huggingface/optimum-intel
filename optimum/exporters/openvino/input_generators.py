@@ -577,10 +577,11 @@ class DummyGemma4UnifiedAudioInputGenerator(DummyInputGenerator):
                 dtype=float_dtype,
             )
         if input_name == "input_features_mask":
-            # All frames valid (True) for the dummy trace.
-            import torch
-            return torch.ones(
-                (self.batch_size, self.num_audio_frames), dtype=torch.bool
+            # All frames valid (1=valid) for the dummy trace.
+            return self.constant_tensor(
+                shape=[self.batch_size, self.num_audio_frames],
+                value=1,
+                framework=framework,
             )
         raise ValueError(f"Unknown input name: {input_name}")
 
