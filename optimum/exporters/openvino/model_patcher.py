@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import functools
 import inspect
 import logging
@@ -9767,6 +9768,8 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
             self._text_model = self._model.model
             self._text_config = self._model.model.config
 
+        self._output_hidden_states = getattr(self._text_config, "mtp_num_hidden_layers", 0) > 0
+
         class Qwen3_5DynamicCacheWrap(Qwen3_5DynamicCache):
             def __init__(self, config, conv_states, recurrent_states, key_cache, value_cache):
                 # Call parent constructor with all required arguments
@@ -9863,22 +9866,31 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
                     position_ids=position_ids,
                     past_key_values=wrapped_cache_params,
                     use_cache=use_cache,
+                    output_hidden_states=self._output_hidden_states,
                 )
                 hidden_states = outputs_lm[0]
                 logits = self._model.lm_head(hidden_states)
                 past_kv = outputs_lm.past_key_values
+                last_hidden_states = outputs_lm.hidden_states[-1] if self._output_hidden_states else None
             else:
                 causal_lm_output = self.model_orig_forward(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     past_key_values=wrapped_cache_params,
                     use_cache=use_cache,
+                    output_hidden_states=self._output_hidden_states,
                 )
                 logits = causal_lm_output.logits
                 past_kv = causal_lm_output.past_key_values
+                last_hidden_states = (
+                    causal_lm_output.hidden_states[-1] if self._output_hidden_states else None
+                )
             outputs = {
                 "logits": logits,
             }
+
+            if self._output_hidden_states:
+                outputs["last_hidden_state"] = last_hidden_states
 
             if use_cache:
                 present_key_values = []
@@ -9964,6 +9976,234 @@ class Qwen3_5VisionEmbMergerPatcher(ModelPatcher):
         for block in self._model.blocks:
             block.forward = block._orig_forward
             block.attn.forward = block.attn._orig_forward
+
+
+class Qwen3_5MTPModule(nn.Module):
+    """
+    Standalone PyTorch module wrapping the MTP (Multi-Token Prediction) head weights
+    from Qwen3.5 for independent OpenVINO export.
+    """
+
+    def __init__(self, text_config):
+        super().__init__()
+        from transformers.models.qwen3_5.modeling_qwen3_5 import (
+            Qwen3_5DecoderLayer,
+            Qwen3_5RMSNorm,
+            Qwen3_5TextConfig,
+            Qwen3_5TextRotaryEmbedding,
+        )
+
+        self.config = text_config
+        hidden_size = text_config.hidden_size
+
+        # MTP-specific layers
+        self.pre_fc_norm_embedding = Qwen3_5RMSNorm(hidden_size, eps=text_config.rms_norm_eps)
+        self.pre_fc_norm_hidden = Qwen3_5RMSNorm(hidden_size, eps=text_config.rms_norm_eps)
+        self.fc = nn.Linear(hidden_size * 2, hidden_size, bias=False)
+
+        # Single decoder layer (full attention type)
+        mtp_config = Qwen3_5TextConfig(
+            vocab_size=text_config.vocab_size,
+            hidden_size=text_config.hidden_size,
+            intermediate_size=text_config.intermediate_size,
+            num_hidden_layers=1,
+            num_attention_heads=text_config.num_attention_heads,
+            num_key_value_heads=text_config.num_key_value_heads,
+            hidden_act=text_config.hidden_act,
+            max_position_embeddings=text_config.max_position_embeddings,
+            rms_norm_eps=text_config.rms_norm_eps,
+            attention_bias=text_config.attention_bias,
+            head_dim=text_config.head_dim,
+            rope_parameters=text_config.rope_parameters,
+            layer_types=["full_attention"],
+        )
+        self.layers = nn.ModuleList([Qwen3_5DecoderLayer(mtp_config, layer_idx=0)])
+        self.rotary_emb = Qwen3_5TextRotaryEmbedding(mtp_config)
+
+        # Final norm
+        self.norm = Qwen3_5RMSNorm(hidden_size, eps=text_config.rms_norm_eps)
+
+    @classmethod
+    def from_pretrained_model(cls, model):
+        """Create MTP module and load weights from the full Qwen3.5 model checkpoint."""
+        from huggingface_hub import hf_hub_download
+        from safetensors import safe_open
+
+        config = model.config
+        text_config = getattr(config, "text_config", config)
+        mtp_module = cls(text_config)
+
+
+        # Load MTP-specific weights from the checkpoint
+        model_name = getattr(config, "_name_or_path", None)
+        if model_name:
+            try:
+                index_path = hf_hub_download(model_name, "model.safetensors.index.json")
+                import json
+
+                with open(index_path) as f:
+                    index = json.load(f)
+                mtp_keys = [k for k in index["weight_map"].keys() if k.startswith("mtp.")]
+                shard_files = set(index["weight_map"][k] for k in mtp_keys)
+                for shard_file in shard_files:
+                    shard_path = hf_hub_download(model_name, shard_file)
+                    with safe_open(shard_path, framework="pt") as f:
+                        for key in f.keys():
+                            if key.startswith("mtp."):
+                                param_name = key[4:]  # strip "mtp." prefix
+                                tensor = f.get_tensor(key)
+                                _set_nested_attr(mtp_module, param_name, tensor)
+            except Exception:
+                # Try single safetensors file
+                try:
+                    model_path = hf_hub_download(model_name, "model.safetensors-00001-of-00001.safetensors")
+                    with safe_open(model_path, framework="pt") as f:
+                        for key in f.keys():
+                            if key.startswith("mtp."):
+                                param_name = key[4:]
+                                tensor = f.get_tensor(key)
+                                _set_nested_attr(mtp_module, param_name, tensor)
+                except Exception:
+                    pass
+
+        # Override model_type so patch_stateful uses standard decoder path
+        # (qwen3_5_text is in SSM_MODELS which routes to hybrid_ssm stateful logic)
+        mtp_module.config = copy.deepcopy(text_config)
+        mtp_module.config.model_type = "qwen3_5_mtp"
+        return mtp_module
+
+    def forward(self, hidden_states, inputs_embeds, attention_mask=None, position_ids=None, past_key_values=None):
+        h_norm = self.pre_fc_norm_hidden(hidden_states)
+        e_norm = self.pre_fc_norm_embedding(inputs_embeds)
+        combined = torch.cat([h_norm, e_norm], dim=-1)
+        x = self.fc(combined)
+
+        layer = self.layers[0]
+        x = layer(
+            x,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+        )[0]
+
+        x = self.norm(x)
+
+        return x
+
+
+def _set_nested_attr(module, name, tensor):
+    """Set a nested attribute on a module from a dot-separated name."""
+    parts = name.split(".")
+    for part in parts[:-1]:
+        if part.isdigit():
+            module = module[int(part)]
+        else:
+            module = getattr(module, part)
+    param_name = parts[-1]
+    if hasattr(module, param_name):
+        param = getattr(module, param_name)
+        if isinstance(param, nn.Parameter):
+            param.data = tensor
+        else:
+            setattr(module, param_name, nn.Parameter(tensor))
+    else:
+        setattr(module, param_name, nn.Parameter(tensor))
+
+
+class _MTPDynamicCache:
+    """Minimal cache wrapper for MTP export that avoids DynamicCache's layer-based API."""
+
+    def __init__(self, key_states, value_states):
+        self.key_cache = [key_states]
+        self.value_cache = [value_states]
+
+    def get_seq_length(self, layer_idx=0):
+        if len(self.key_cache) > layer_idx and self.key_cache[layer_idx] is not None:
+            return self.key_cache[layer_idx].shape[-2]
+        return 0
+
+    def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
+        if self.key_cache[layer_idx] is not None:
+            key_states = torch.cat([self.key_cache[layer_idx], key_states], dim=2)
+            value_states = torch.cat([self.value_cache[layer_idx], value_states], dim=2)
+        self.key_cache[layer_idx] = key_states
+        self.value_cache[layer_idx] = value_states
+        return key_states, value_states
+
+
+class Qwen3_5MTPModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        def patched_forward(
+            hidden_states=None,
+            inputs_embeds=None,
+            attention_mask=None,
+            position_ids=None,
+            past_key_values=None,
+        ):
+            use_cache = past_key_values is not None
+            wrapped_cache = None
+            past_key_values_length = 0
+            if use_cache:
+                wrapped_cache = _MTPDynamicCache(past_key_values[0], past_key_values[1])
+                past_key_values_length = past_key_values[0].shape[2]
+
+            h_norm = self._model.pre_fc_norm_hidden(hidden_states)
+            e_norm = self._model.pre_fc_norm_embedding(inputs_embeds)
+            combined = torch.cat([h_norm, e_norm], dim=-1)
+            x = self._model.fc(combined)
+
+            # Compute rotary position embeddings (MRoPE: expand to 3D)
+            if position_ids.ndim == 2:
+                rope_position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)
+            else:
+                rope_position_ids = position_ids
+            position_embeddings = self._model.rotary_emb(x, rope_position_ids)
+
+            # Build causal 4D attention mask from 2D attention_mask
+            batch_size, seq_length = x.shape[:2]
+            total_length = seq_length + past_key_values_length
+
+            # Create causal mask [batch, 1, seq_len, total_len]
+            causal_mask = torch.zeros(
+                (batch_size, 1, seq_length, total_length),
+                device=x.device,
+                dtype=x.dtype,
+            )
+            # Fill upper triangle as causal (mask future positions)
+            causal_mask[:, :, :, past_key_values_length:] = torch.triu(
+                torch.full((seq_length, seq_length), torch.finfo(x.dtype).min, device=x.device, dtype=x.dtype),
+                diagonal=1,
+            )
+            # Apply padding mask from attention_mask
+            if attention_mask is not None:
+                padding_mask = (1.0 - attention_mask[:, None, None, :total_length].to(x.dtype)) * torch.finfo(x.dtype).min
+                causal_mask = causal_mask + padding_mask
+
+            layer = self._model.layers[0]
+            x = layer(
+                x,
+                position_embeddings=position_embeddings,
+                attention_mask=causal_mask,
+                position_ids=rope_position_ids,
+                past_key_values=wrapped_cache,
+            )
+
+            x = self._model.norm(x)
+
+            outputs = {"last_hidden_state": x}
+            if use_cache:
+                outputs["present_key_values"] = [wrapped_cache.key_cache[0], wrapped_cache.value_cache[0]]
+            return outputs
+
+        self.patched_forward = patched_forward
+        self.orig_forward = patched_forward
 
 
 # Patches the MoE block with a vectorized implementation.
