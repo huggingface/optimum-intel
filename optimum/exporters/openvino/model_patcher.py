@@ -8685,6 +8685,26 @@ def _dflash_apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
     return q_embed, k_embed
 
 
+def _dflash_repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+    """repeat_kv that inserts the group dim with reshape instead of unsqueeze.
+
+    The GPU plugin's UnsqueezeBroadcastReshapeSDPAFusion only fuses the repeat_kv
+    away when the group-dim insertion is a Reshape feeding the Broadcast (the
+    Reshape(Concat) path). The stock repeat_kv uses ``[:, :, None, :, :]`` which
+    exports as Unsqueeze and is only accepted on top of a KVCache op - which the
+    DFlash draft never has, since it attends over ``cat([cache, block])``. Emitting
+    a Reshape lets the fusion match, so the draft runs native-GQA SDPA (micro
+    kernel) instead of materializing the broadcast each step.
+    """
+    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
+    if n_rep == 1:
+        return hidden_states
+    hidden_states = hidden_states.reshape(batch, num_key_value_heads, 1, slen, head_dim).expand(
+        batch, num_key_value_heads, n_rep, slen, head_dim
+    )
+    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+
+
 def _dflash_attention_mask(
     query_states: torch.Tensor,
     key_states: torch.Tensor,
@@ -8821,12 +8841,12 @@ class Qwen3DFlashAttention(nn.Module):
         bsz, q_len = hidden_states.shape[:-1]
         ctx_len = target_hidden.shape[1]
 
-        query_states = self.q_proj(hidden_states).view(bsz, q_len, -1, self.head_dim)
+        query_states = self.q_proj(hidden_states).view(bsz, q_len, self.config.num_attention_heads, self.head_dim)
         query_states = self.q_norm(query_states).transpose(1, 2)
 
         kv_hidden_states = torch.cat([target_hidden, hidden_states], dim=1)
-        key_states = self.k_proj(kv_hidden_states).view(bsz, ctx_len + q_len, -1, self.head_dim)
-        value_states = self.v_proj(kv_hidden_states).view(bsz, ctx_len + q_len, -1, self.head_dim)
+        key_states = self.k_proj(kv_hidden_states).view(bsz, ctx_len + q_len, self.config.num_key_value_heads, self.head_dim)
+        value_states = self.v_proj(kv_hidden_states).view(bsz, ctx_len + q_len, self.config.num_key_value_heads, self.head_dim)
         key_states = self.k_norm(key_states).transpose(1, 2)
         value_states = value_states.transpose(1, 2)
 
@@ -8862,8 +8882,16 @@ class Qwen3DFlashAttention(nn.Module):
         if self.config._attn_implementation != "eager":
             attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
             if self.config._attn_implementation == "sdpa" and self.num_key_value_groups > 1:
-                key_states = repeat_kv(key_states, self.num_key_value_groups)
-                value_states = repeat_kv(value_states, self.num_key_value_groups)
+                # Re-pin the static head / head_dim before repeat_kv. cldnn collapses the
+                # cat([cache, block]) layout to fully-dynamic, which hides the KV head count
+                # from the GPU SDPA's GQA dispatch and forces the slow ref kernel. A Reshape
+                # with literal head dims sitting between the cat and the group-dim expansion
+                # restores static heads, so the plugin's repeat_kv fusion yields native-GQA
+                # SDPA (micro kernel) with no materialized broadcast.
+                key_states = key_states.reshape(bsz, self.config.num_key_value_heads, -1, self.head_dim)
+                value_states = value_states.reshape(bsz, self.config.num_key_value_heads, -1, self.head_dim)
+                key_states = _dflash_repeat_kv(key_states, self.num_key_value_groups)
+                value_states = _dflash_repeat_kv(value_states, self.num_key_value_groups)
                 attention_module = SimpleNamespace(is_causal=self.is_causal)
 
         attn_output, attn_weights = attention_interface(
