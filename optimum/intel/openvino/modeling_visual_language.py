@@ -4101,9 +4101,35 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
 
 
 class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
-    # gemma4_unified (e.g. google/gemma-4-12B) has an encoder-free vision embedder and no
-    # per-layer text embeddings. The vision embedder consumes pre-merged pixel patches plus
-    # 2D patch position ids and returns one soft token per (pooled) patch.
+    # gemma4_unified (e.g. google/gemma-4-12B) has encoder-free vision AND audio embedders:
+    #   Vision: raw merged pixel patches → LM space  (openvino_vision_embeddings_model)
+    #   Audio : raw waveform frames (640-dim) → LM space (openvino_audio_embeddings_model, optional)
+    #
+    # The audio model is optional for backwards compatibility with models exported before
+    # audio support was added. If the file is absent, audio input raises ValueError.
+    additional_parts = ["audio_embeddings"]
+
+    # ── Class-level override so from_pretrained skips audio when file is absent ──────
+    @classmethod
+    def from_pretrained(cls, model_id, **kwargs):
+        """Load model; audio embeddings are optional (skipped if not found)."""
+        audio_path = None
+        if isinstance(model_id, (str, os.PathLike)):
+            audio_path = os.path.join(str(model_id), "openvino_audio_embeddings_model.xml")
+
+        if audio_path is not None and not os.path.exists(audio_path):
+            # Backwards compat: load without audio_embeddings
+            _orig_parts = cls.additional_parts
+            cls.additional_parts = [p for p in _orig_parts if p != "audio_embeddings"]
+            try:
+                result = super().from_pretrained(model_id, **kwargs)
+            finally:
+                cls.additional_parts = _orig_parts
+            return result
+
+        return super().from_pretrained(model_id, **kwargs)
+
+    # ── Vision ────────────────────────────────────────────────────────────────────────
     def get_vision_embeddings(self, pixel_values, input_ids=None, image_position_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
@@ -4114,8 +4140,7 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
     ):
         image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
-        # The vision embedder keeps padding patches; drop them so the number of soft tokens
-        # matches the number of image placeholder positions in the text sequence.
+        # The vision embedder keeps padding patches; drop them via the position grid mask.
         image_position_ids = kwargs.get("image_position_ids")
         if image_position_ids is not None:
             image_position_ids = (
@@ -4132,6 +4157,138 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
         return inputs_embeds, attention_mask, position_ids
 
+    # ── Audio ─────────────────────────────────────────────────────────────────────────
+    def get_audio_embeddings(
+        self,
+        input_features: torch.Tensor,
+        input_features_mask: Optional[torch.Tensor] = None,
+        input_ids: Optional[torch.Tensor] = None,
+    ) -> Optional[torch.Tensor]:
+        """Run the audio embedder and return [batch, n_valid_frames, hidden_size].
+
+        Args:
+            input_features: raw waveform frames, shape [batch, n_frames, 640].
+            input_features_mask: bool mask, True=valid, shape [batch, n_frames].
+            input_ids: used to skip audio on decode steps (single-token extension).
+
+        Returns:
+            Tensor [n_valid_frames_total, hidden_size] or None if skipped.
+        """
+        if input_ids is not None and input_ids.shape[1] == 1:
+            # Decode step — audio was already merged in the prefill pass.
+            return None
+
+        audio_model = getattr(self, "audio_embeddings", None)
+        if audio_model is None:
+            raise ValueError(
+                "Audio input was provided but this model was exported without "
+                "`openvino_audio_embeddings_model.xml`. Re-export with --task "
+                "image-text-to-text to include audio support."
+            )
+
+        if isinstance(input_features, np.ndarray):
+            input_features = torch.from_numpy(input_features)
+
+        # audio_embeddings.forward(audio_signal) → [batch, n_frames, 3840]
+        audio_out = audio_model(input_features)
+        if isinstance(audio_out, np.ndarray):
+            audio_out = torch.from_numpy(audio_out)
+
+        # Strip padding frames (same logic as Gemma4UnifiedModel.forward)
+        if input_features_mask is not None:
+            if isinstance(input_features_mask, np.ndarray):
+                input_features_mask = torch.from_numpy(input_features_mask).bool()
+            audio_out = audio_out[input_features_mask.to(audio_out.device)]
+        else:
+            # No mask: treat all frames as valid, flatten to [batch*n_frames, hidden_size]
+            audio_out = audio_out.reshape(-1, audio_out.shape[-1])
+
+        return audio_out  # [n_valid_frames_total, hidden_size]
+
+    def merge_audio_text_embeddings(
+        self,
+        audio_embeds: torch.Tensor,
+        inputs_embeds: torch.Tensor,
+        input_ids: torch.Tensor,
+        attention_mask=None,
+        position_ids=None,
+    ):
+        """Scatter audio soft tokens into the embedding sequence."""
+        if isinstance(inputs_embeds, np.ndarray):
+            inputs_embeds = torch.from_numpy(inputs_embeds)
+
+        audio_token_id = getattr(self.config, "audio_token_id", None)
+        if audio_token_id is None:
+            raise ValueError("Config has no `audio_token_id`. Cannot scatter audio embeddings.")
+
+        special_audio_mask = (input_ids == audio_token_id).unsqueeze(-1).expand_as(inputs_embeds)
+        audio_embeds = audio_embeds.to(inputs_embeds.dtype)
+        inputs_embeds = inputs_embeds.masked_scatter(special_audio_mask, audio_embeds)
+        return inputs_embeds, attention_mask, position_ids
+
+    # ── Main forward ─────────────────────────────────────────────────────────────────
+    def forward(
+        self,
+        input_ids,
+        pixel_values=None,
+        token_type_ids=None,
+        input_features=None,
+        input_features_mask=None,
+        **kwargs,
+    ):
+        mm_token_type_ids = kwargs.pop("mm_token_type_ids", None)
+        if token_type_ids is None and mm_token_type_ids is not None:
+            token_type_ids = mm_token_type_ids
+
+        return super().forward(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            token_type_ids=token_type_ids,
+            input_features=input_features,
+            input_features_mask=input_features_mask,
+            **kwargs,
+        )
+
+    def prepare_inputs_and_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        **kwargs,
+    ):
+        """Extend parent to also scatter audio tokens when input_features is provided."""
+        # Parent handles vision
+        inputs_embeds, attention_mask, position_ids = super().prepare_inputs_and_embeddings(
+            input_ids,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            **kwargs,
+        )
+
+        # Audio
+        input_features = kwargs.get("input_features")
+        if input_features is not None:
+            input_features_mask = kwargs.get("input_features_mask")
+            audio_embeds = self.get_audio_embeddings(
+                input_features,
+                input_features_mask=input_features_mask,
+                input_ids=input_ids,
+            )
+            if audio_embeds is not None:
+                if isinstance(inputs_embeds, np.ndarray):
+                    inputs_embeds = torch.from_numpy(inputs_embeds)
+                inputs_embeds, attention_mask, position_ids = self.merge_audio_text_embeddings(
+                    audio_embeds,
+                    inputs_embeds,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                )
+
+        return inputs_embeds, attention_mask, position_ids
+
     def prepare_inputs_for_generation(
         self,
         input_ids,
@@ -4142,6 +4299,8 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         attention_mask=None,
         mm_token_type_ids=None,
         image_position_ids=None,
+        input_features=None,
+        input_features_mask=None,
         **kwargs,
     ):
         model_inputs = super().prepare_inputs_for_generation(
@@ -4153,22 +4312,11 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
             attention_mask=attention_mask,
             **kwargs,
         )
-        # Map mm_token_type_ids (from the Gemma4Unified processor) to token_type_ids and
-        # propagate the patch positions needed by the vision embedder.
         model_inputs["token_type_ids"] = mm_token_type_ids
         model_inputs["image_position_ids"] = image_position_ids
+        model_inputs["input_features"] = input_features
+        model_inputs["input_features_mask"] = input_features_mask
         return model_inputs
-
-    def forward(self, input_ids, pixel_values=None, token_type_ids=None, **kwargs):
-        mm_token_type_ids = kwargs.pop("mm_token_type_ids", None)
-        if token_type_ids is None and mm_token_type_ids is not None:
-            token_type_ids = mm_token_type_ids
-        return super().forward(
-            input_ids=input_ids,
-            pixel_values=pixel_values,
-            token_type_ids=token_type_ids,
-            **kwargs,
-        )
 
     @staticmethod
     def preprocess_inputs(
@@ -4183,15 +4331,17 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         if processor is None:
             raise ValueError("Processor is required.")
         if video is not None:
-            raise ValueError("Video input is not supported")
-        if audio is not None:
-            raise ValueError("Audio input is not supported")
-        # The gemma4_unified processor has no chat template, so build the prompt directly.
-        # An image is referenced by the processor's image token placeholder.
+            raise ValueError("Video input is not yet supported for gemma4_unified via OpenVINO.")
+
+        # Build prompt text; image/audio tokens are inserted before the query.
         if image is not None:
-            image_token = getattr(processor, "image_token", "<|image|>")
+            image_token = getattr(processor, "image_token", "<image>")
             text = f"{image_token}{text}"
-        return processor(images=image, text=text, return_tensors="pt")
+        if audio is not None:
+            audio_token = getattr(processor, "audio_token", "<audio>")
+            text = f"{audio_token}{text}"
+
+        return processor(images=image, audio=audio, text=text, return_tensors="pt")
 
     def _update_model_kwargs_for_generation(
         self,
@@ -4208,6 +4358,10 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         )
         model_kwargs.pop("mm_token_type_ids", None)
         model_kwargs.pop("image_position_ids", None)
+        # Keep input_features / input_features_mask only for the prefill step;
+        # drop on decode steps (audio was already embedded).
+        model_kwargs.pop("input_features", None)
+        model_kwargs.pop("input_features_mask", None)
         return model_kwargs
 
 

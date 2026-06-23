@@ -9553,6 +9553,33 @@ class Gemma4UnifiedImageEmbeddingsModelPatcher(ModelPatcher):
         self.patched_forward = patched_forward
 
 
+# The gemma4_unified audio embedder (embed_audio) is encoder-free: it projects raw
+# waveform frames [batch, n_frames, 640] through Gemma4UnifiedMultimodalEmbedder
+# (RMSNorm → Linear 640→3840). There are no data-dependent ops, so the patching is
+# minimal — we just unwrap the model to expose the simple forward signature needed
+# for tracing and strip the @can_return_tuple decorator side-effects.
+class Gemma4UnifiedAudioEmbeddingsModelPatcher(ModelPatcher):
+    """Patches the Gemma4Unified audio embedder for OV export.
+
+    The audio embedder (model.model.embed_audio) is a
+    Gemma4UnifiedMultimodalEmbedder: RMSNorm + Linear(640 → 3840).
+    Input  : input_features [batch, n_frames, 640]
+    Output : last_hidden_state [batch, n_frames, 3840]
+    No data-dependent operations — straightforward to trace.
+    """
+
+    def __init__(self, config, model, model_kwargs):
+        super().__init__(config, model, model_kwargs)
+
+        embed_audio = model.model.embed_audio
+
+        def patched_forward(input_features):
+            outputs = embed_audio(inputs_embeds=input_features)
+            return {"last_hidden_state": outputs}
+
+        self.patched_forward = patched_forward
+
+
 # Patches the MoE block with a vectorized implementation.
 # The vectorized form is required to ensure correct torch.jit tracing for this component.
 # Original implementation: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/lfm2_moe/modeling_lfm2_moe.py#L167

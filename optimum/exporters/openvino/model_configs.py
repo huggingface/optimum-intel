@@ -43,6 +43,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyAudioPhi4MMInputGenerator,
     DummyFluxTextInputGenerator,
     DummyFluxTransformerInputGenerator,
+    DummyGemma4UnifiedAudioInputGenerator,
     DummyGemma4UnifiedVisionInputGenerator,
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
@@ -106,6 +107,7 @@ from optimum.exporters.openvino.model_patcher import (
     Gemma3LMModelPatcher,
     Gemma4ImageEmbeddingsModelPatcher,
     Gemma4LMModelPatcher,
+    Gemma4UnifiedAudioEmbeddingsModelPatcher,
     Gemma4UnifiedImageEmbeddingsModelPatcher,
     Gemma4UnifiedLMModelPatcher,
     GptJModelPatcher,
@@ -1330,7 +1332,7 @@ class Gemma4UnifiedTextOpenVINOConfig(Gemma4TextOpenVINOConfig):
     # attention, optional global KV heads / head dim), so add_past_key_values is inherited.
     # It has no per-layer embeddings (PLE), so no extra inputs are required.
     MIN_TRANSFORMERS_VERSION = "5.10"
-    MAX_TRANSFORMERS_VERSION = "5.10.99"
+    MAX_TRANSFORMERS_VERSION = "5.99.99"
 
 
 @register_in_tasks_manager("deci", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -4048,15 +4050,20 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
         return super().outputs
 
 
+class _Gemma4UnifiedAudioBehavior(str, enum.Enum):
+    """Extra behavior value for gemma4_unified audio embedder export."""
+    AUDIO_EMBEDDINGS = "audio_embeddings"
+
+
 @register_in_tasks_manager("gemma4_unified", *["image-text-to-text"], library_name="transformers")
 class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
-    # gemma4_unified (e.g. google/gemma-4-12B) reuses the gemma3 VLM scaffolding but has an
-    # encoder-free vision embedder and no per-layer text embeddings. We only support text and
-    # vision (audio is not exported).
-    SUPPORTED_BEHAVIORS = [model_type.value for model_type in VLMConfigBehavior]
+    # gemma4_unified (e.g. google/gemma-4-12B) has an encoder-free vision AND audio embedder.
+    # Supports text, vision, and audio modalities.
+    _AUDIO_BEHAVIOR = _Gemma4UnifiedAudioBehavior.AUDIO_EMBEDDINGS.value
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in VLMConfigBehavior] + [_AUDIO_BEHAVIOR]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyTextInputGenerator)
     MIN_TRANSFORMERS_VERSION = "5.10"
-    MAX_TRANSFORMERS_VERSION = "5.10.99"
+    MAX_TRANSFORMERS_VERSION = "5.99.99"
 
     def __init__(
         self,
@@ -4097,9 +4104,34 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator,)
             self._config = config.text_config
             self._normalized_config = NormalizedTextConfig(self._config)
+        elif str(self._behavior) == self._AUDIO_BEHAVIOR:
+            # Audio embedder: RMSNorm + Linear(640 → 3840)
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4UnifiedAudioInputGenerator,)
+            self._config = config.audio_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
     def with_behavior(self, behavior: Union[str, VLMConfigBehavior]):
         if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            if behavior == self._AUDIO_BEHAVIOR:
+                # Return a new config instance configured for audio embedding export
+                new_cfg = self.__class__(
+                    config=self._orig_config,
+                    task=getattr(self, "task", "feature-extraction"),
+                    int_dtype=self.int_dtype,
+                    float_dtype=self.float_dtype,
+                    behavior=behavior,   # keep as string — handled in __init__
+                    preprocessors=getattr(self, "_preprocessors", None),
+                )
+                new_cfg._behavior = behavior
+                new_cfg._model_type = "gemma4_unified_audio"
+                new_cfg.OUTPUTS = {
+                    "last_hidden_state": {0: "batch_size", 1: "num_audio_frames"},
+                }
+                new_cfg.INPUTS = {
+                    "input_features": {0: "batch_size", 1: "num_audio_frames"},
+                }
+                new_cfg._model_patcher = Gemma4UnifiedAudioEmbeddingsModelPatcher
+                return new_cfg
             behavior = VLMConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.LANGUAGE:
@@ -4117,6 +4149,11 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
         return super().with_behavior(behavior)
 
     def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        # Handle audio before trying VLMConfigBehavior conversion
+        if str(behavior) == self._AUDIO_BEHAVIOR:
+            # Return the embed_audio sub-module directly; the patcher wraps its forward.
+            return model
+
         if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
             behavior = VLMConfigBehavior(behavior)
 
@@ -4141,18 +4178,32 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
 
     def patch_model_for_export(self, model, model_kwargs=None):
         model_kwargs = model_kwargs or {}
+        if str(self._behavior) == self._AUDIO_BEHAVIOR:
+            return Gemma4UnifiedAudioEmbeddingsModelPatcher(self, model, model_kwargs)
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return Gemma4UnifiedImageEmbeddingsModelPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
+        if str(self._behavior) == self._AUDIO_BEHAVIOR:
+            return {
+                "input_features": {0: "batch_size", 1: "num_audio_frames"},
+            }
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return {
                 "pixel_values": {0: "batch_size", 1: "num_patches"},
                 "image_position_ids": {0: "batch_size", 1: "num_patches"},
             }
         return super().inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if str(self._behavior) == self._AUDIO_BEHAVIOR:
+            return {
+                "last_hidden_state": {0: "batch_size", 1: "num_audio_frames"},
+            }
+        return super().outputs
 
 
 @register_in_tasks_manager("idefics3", *["image-text-to-text"], library_name="transformers")

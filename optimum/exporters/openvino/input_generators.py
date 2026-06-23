@@ -550,6 +550,41 @@ class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         return past_key_values
 
 
+class DummyGemma4UnifiedAudioInputGenerator(DummyInputGenerator):
+    """Generates dummy audio inputs for tracing Gemma4Unified's audio embedder.
+
+    The Gemma4Unified audio embedder (embed_audio) takes raw waveform frames:
+      input_features : [batch, n_audio_frames, audio_embed_dim=640]
+    Each frame represents audio_samples_per_token=640 raw samples at 16 kHz (40 ms).
+    """
+
+    SUPPORTED_INPUT_NAMES = ("input_features", "input_features_mask")
+
+    def __init__(self, task, normalized_config, batch_size=1, **kwargs):
+        # DummyInputGenerator has no __init__; set required attributes directly.
+        self.task = task
+        self.normalized_config = normalized_config
+        self.batch_size = batch_size
+        self.audio_embed_dim = getattr(normalized_config, "audio_embed_dim", 640)
+        # Use a small fixed frame count for tracing (actual count is dynamic at runtime).
+        self.num_audio_frames = 10
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "input_features":
+            return self.random_float_tensor(
+                shape=[self.batch_size, self.num_audio_frames, self.audio_embed_dim],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "input_features_mask":
+            # All frames valid (True) for the dummy trace.
+            import torch
+            return torch.ones(
+                (self.batch_size, self.num_audio_frames), dtype=torch.bool
+            )
+        raise ValueError(f"Unknown input name: {input_name}")
+
+
 class DummyLLavaMultiModalProjectorInputGenerator(DummyInputGenerator):
     SUPPORTED_INPUT_NAMES = ["image_features"]
 
