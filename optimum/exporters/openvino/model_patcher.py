@@ -21,6 +21,7 @@ import math
 import types
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -35,7 +36,7 @@ from transformers.modeling_outputs import (
     BaseModelOutputWithPooling,
     CausalLMOutputWithPast,
 )
-from transformers.modeling_utils import PreTrainedModel
+from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import (
     LlamaAttention,
@@ -8684,6 +8685,36 @@ def _dflash_apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
     return q_embed, k_embed
 
 
+def _dflash_attention_mask(
+    query_states: torch.Tensor,
+    key_states: torch.Tensor,
+    cache_position: Optional[torch.LongTensor],
+    sliding_window: Optional[int],
+    attention_mask: Optional[torch.Tensor] = None,
+) -> Optional[torch.Tensor]:
+    q_len = query_states.shape[-2]
+    kv_len = key_states.shape[-2]
+    device = query_states.device
+    dtype = query_states.dtype
+    full_mask = torch.zeros((q_len, kv_len), dtype=dtype, device=device)
+
+    if sliding_window is not None:
+        if cache_position is None:
+            query_positions = torch.arange(kv_len - q_len, kv_len, device=device)
+        else:
+            query_positions = cache_position[-q_len:].to(device)
+
+        key_positions = torch.arange(kv_len, device=device)
+        outside_window = (query_positions.reshape(-1, 1) - key_positions.reshape(1, -1)) >= sliding_window
+        full_mask = full_mask.masked_fill(outside_window, torch.finfo(dtype).min)
+
+    full_mask = full_mask[None, None, :, :].expand(query_states.shape[0], 1, -1, -1)
+
+    if attention_mask is None:
+        return full_mask
+    return attention_mask[:, :, :, :kv_len] + full_mask
+
+
 def _dflash_resolve_tensor_file(config: PretrainedConfig, tensor_name: str) -> str:
     target_model = getattr(config, "dflash_target_model", None)
     if target_model is None:
@@ -8774,7 +8805,8 @@ class Qwen3DFlashAttention(nn.Module):
         self.o_proj = nn.Linear(config.num_attention_heads * self.head_dim, config.hidden_size, bias=config.attention_bias)
         self.q_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
         self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
-        self.sliding_window = config.sliding_window if config.layer_types[layer_idx] == "sliding_attention" else None
+        self.attention_type = config.layer_types[layer_idx]
+        self.sliding_window = config.sliding_window if self.attention_type == "sliding_attention" else None
 
     def forward(
         self,
@@ -8817,9 +8849,25 @@ class Qwen3DFlashAttention(nn.Module):
 
         key_states = torch.cat([target_key_states, block_key_states], dim=2)
         value_states = torch.cat([target_value_states, block_value_states], dim=2)
+        attention_mask = _dflash_attention_mask(
+            query_states,
+            key_states,
+            cache_position,
+            self.sliding_window,
+            attention_mask,
+        )
 
-        attn_output, attn_weights = qwen3_eager_attention_forward(
-            self,
+        attention_interface = qwen3_eager_attention_forward
+        attention_module = self
+        if self.config._attn_implementation != "eager":
+            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+            if self.config._attn_implementation == "sdpa" and self.num_key_value_groups > 1:
+                key_states = repeat_kv(key_states, self.num_key_value_groups)
+                value_states = repeat_kv(value_states, self.num_key_value_groups)
+                attention_module = SimpleNamespace(is_causal=self.is_causal)
+
+        attn_output, attn_weights = attention_interface(
+            attention_module,
             query_states,
             key_states,
             value_states,
@@ -8885,6 +8933,9 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
 
     def __init__(self, config) -> None:
         super().__init__(config)
+        if not hasattr(config, "_orig_attn_implementation"):
+            config._orig_attn_implementation = config._attn_implementation
+        config._attn_implementation = "sdpa"
         self.layers = nn.ModuleList(
             [Qwen3DFlashDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
