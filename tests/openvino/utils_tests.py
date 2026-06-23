@@ -165,6 +165,7 @@ MODEL_NAMES = {
     "qwen2_moe": "optimum-intel-internal-testing/tiny-random-qwen1.5-moe",
     "qwen2_vl": "optimum-intel-internal-testing/tiny-random-qwen2vl",
     "qwen2_5_vl": "optimum-intel-internal-testing/tiny-random-qwen2.5-vl",
+    "youtu_vl": "optimum-intel-internal-testing/tiny-random-youtu-vl",
     "qwen3": "optimum-intel-internal-testing/tiny-random-qwen3",
     "qwen3_moe": "optimum-intel-internal-testing/tiny-random-qwen3moe",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",
@@ -316,6 +317,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 1,
         "vision_embeddings_merger_model": 10,
+    },
+    "youtu_vl": {
+        "lm_model": 34,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 14,
     },
     "sana": {
         "transformer": 58,

@@ -1018,6 +1018,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "llava_next_video", False),
         (OVModelForVisualCausalLM, "minicpmv", True),
         (OVModelForVisualCausalLM, "qwen2_vl", False),
+        (OVModelForVisualCausalLM, "youtu_vl", True),
     ]
 
     if is_transformers_version("<", "4.54.0"):
