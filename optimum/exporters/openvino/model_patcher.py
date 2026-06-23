@@ -8712,6 +8712,14 @@ def _dflash_attention_mask(
     sliding_window: Optional[int],
     attention_mask: Optional[torch.Tensor] = None,
 ) -> Optional[torch.Tensor]:
+    # Full-attention layers (no sliding window) with no caller-supplied mask would
+    # produce an all-zeros additive mask, i.e. a no-op. Return None so the exported
+    # SDPA runs maskless: the plugin then drops the per-step O(context) mask
+    # broadcast and the kernel skips loading a useless mask. is_causal stays False
+    # (set on the attention module), so semantics are unchanged - full bidirectional
+    # attention over the whole prefix+block. SWA layers and any real mask fall through.
+    if sliding_window is None and attention_mask is None:
+        return None
     q_len = query_states.shape[-2]
     kv_len = key_states.shape[-2]
     device = query_states.device
