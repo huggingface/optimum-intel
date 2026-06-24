@@ -711,6 +711,8 @@ class DummySanaTransformerVisionInputGenerator(DummyUnetVisionInputGenerator):
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
+# _get_flux_ids_dim determines how many coordinate axes the RoPE positional
+# embedding system uses. For standard Flux it's always 3, Flux.2 - 4
 def _get_flux_ids_dim(config: "PretrainedConfig") -> int:
     for key in ("axes_dims_rope", "axes_dim", "axes_dims"):
         value = config.get(key, None)
