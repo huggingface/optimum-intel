@@ -57,6 +57,13 @@ jobs:
           pip install --upgrade pip uv
           uv pip install .[tests] librosa diffusers
 
+      - name: Restore HF models cache
+        id: hf-cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-models
+
       - if: ${{ matrix.test-pattern == '*modeling*' || matrix.test-pattern == '*quantization*' || matrix.test-pattern == '*transformation*' }}
         name: Install OpenVINO
         run: |
@@ -86,6 +93,25 @@ jobs:
         if: ${{ env.HF_TOKEN == '' }}
         run: |
           python tests/scripts/login_with_ci_token.py
+
+      - name: Pre-download models for cache
+        if: >-
+          steps.hf-cache-restore.outputs.cache-hit != 'true' &&
+          env.HF_TOKEN != '' &&
+          matrix.test-pattern == '*decoder*' &&
+          matrix.transformers-version == 'latest'
+        run: python tests/scripts/download_cached_models.py
+
+      - name: Save cache
+        if: >-
+          steps.hf-cache-restore.outputs.cache-hit != 'true' &&
+          env.HF_TOKEN != '' &&
+          matrix.test-pattern == '*decoder*' &&
+          matrix.transformers-version == 'latest'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-models
 
       - name: Test with Pytest
         run: |
