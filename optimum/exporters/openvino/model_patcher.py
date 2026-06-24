@@ -9984,6 +9984,8 @@ class Qwen3_5MTPModule(nn.Module):
     from Qwen3.5 for independent OpenVINO export.
     """
 
+    __module__ = "transformers.models.qwen3_5"
+
     def __init__(self, text_config):
         super().__init__()
         from transformers.models.qwen3_5.modeling_qwen3_5 import (
@@ -10147,11 +10149,15 @@ class Qwen3_5MTPModelPatcher(ModelPatcher):
             position_ids=None,
             past_key_values=None,
         ):
+            dtype = self._model.fc.weight.dtype
+            hidden_states = hidden_states.to(dtype)
+            inputs_embeds = inputs_embeds.to(dtype)
+
             use_cache = past_key_values is not None
             wrapped_cache = None
             past_key_values_length = 0
             if use_cache:
-                wrapped_cache = _MTPDynamicCache(past_key_values[0], past_key_values[1])
+                wrapped_cache = _MTPDynamicCache(past_key_values[0].to(dtype), past_key_values[1].to(dtype))
                 past_key_values_length = past_key_values[0].shape[2]
 
             h_norm = self._model.pre_fc_norm_hidden(hidden_states)
@@ -10170,17 +10176,14 @@ class Qwen3_5MTPModelPatcher(ModelPatcher):
             batch_size, seq_length = x.shape[:2]
             total_length = seq_length + past_key_values_length
 
-            # Create causal mask [batch, 1, seq_len, total_len]
-            causal_mask = torch.zeros(
-                (batch_size, 1, seq_length, total_length),
-                device=x.device,
-                dtype=x.dtype,
-            )
-            # Fill upper triangle as causal (mask future positions)
-            causal_mask[:, :, :, past_key_values_length:] = torch.triu(
-                torch.full((seq_length, seq_length), torch.finfo(x.dtype).min, device=x.device, dtype=x.dtype),
-                diagonal=1,
-            )
+            # Create causal mask using comparison (trace-friendly, no static shapes)
+            # row indices [0..seq_length-1], col indices [0..total_length-1]
+            row_idx = torch.arange(seq_length, device=x.device).unsqueeze(1) + past_key_values_length
+            col_idx = torch.arange(total_length, device=x.device).unsqueeze(0)
+            # causal: mask where col > row (future positions)
+            causal_bool = col_idx > row_idx  # [seq_length, total_length]
+            causal_mask = causal_bool.unsqueeze(0).unsqueeze(0).to(x.dtype) * torch.finfo(x.dtype).min
+
             # Apply padding mask from attention_mask
             if attention_mask is not None:
                 padding_mask = (1.0 - attention_mask[:, None, None, :total_length].to(x.dtype)) * torch.finfo(x.dtype).min

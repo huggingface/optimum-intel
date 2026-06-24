@@ -6015,7 +6015,7 @@ class Qwen3_5MTPOpenVINOConfig(OpenVINOConfig):
         common_inputs = OrderedDict(
             {
                 "hidden_states": {0: "batch_size", 1: "sequence_length"},
-                "inputs_embeds": {0: "batch_size", 1: "sequence_length", 2: "hidden_size"},
+                "inputs_embeds": {0: "batch_size", 1: "sequence_length"},
                 "attention_mask": {0: "batch_size", 1: "past_sequence_length + sequence_length"},
                 "position_ids": {0: "batch_size", 1: "sequence_length"},
             }
