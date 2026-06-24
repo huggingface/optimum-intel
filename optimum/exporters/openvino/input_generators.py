@@ -593,7 +593,13 @@ class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
     ):
         self.task = task
         self.batch_size = batch_size
-        self.pooled_projection_dim = normalized_config.config.pooled_projection_dim
+        config = normalized_config.config
+        pooled_projection_dim = getattr(config, "pooled_projection_dim", None)
+        # FrozenDict / dict requires get() method for attribute access
+        # getattr() will just return None
+        if pooled_projection_dim is None and hasattr(config, "get"):
+            pooled_projection_dim = config.get("pooled_projection_dim", None)
+        self.pooled_projection_dim = pooled_projection_dim
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         shape = [self.batch_size, self.pooled_projection_dim]
