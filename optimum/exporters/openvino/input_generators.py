@@ -593,13 +593,9 @@ class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
     ):
         self.task = task
         self.batch_size = batch_size
-        config = normalized_config.config
-        pooled_projection_dim = config.get("pooled_projection_dim", None)
-        self.pooled_projection_dim = pooled_projection_dim
+        self.pooled_projection_dim = normalized_config.config.pooled_projection_dim
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if self.pooled_projection_dim is None:
-            raise ValueError("`pooled_projection_dim` is required to generate `pooled_projections` input.")
         shape = [self.batch_size, self.pooled_projection_dim]
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
@@ -738,6 +734,7 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
         num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
         width: int = DEFAULT_DUMMY_SHAPES["width"] // 4,
         height: int = DEFAULT_DUMMY_SHAPES["height"] // 4,
+        # Reduce img shape by 4 for FLUX to reduce memory usage on conversion
         **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
