@@ -10077,7 +10077,7 @@ class Qwen3_5MTPModule(nn.Module):
     def forward(self, hidden_states, inputs_embeds, attention_mask=None, position_ids=None, past_key_values=None):
         h_norm = self.pre_fc_norm_hidden(hidden_states)
         e_norm = self.pre_fc_norm_embedding(inputs_embeds)
-        combined = torch.cat([h_norm, e_norm], dim=-1)
+        combined = torch.cat([e_norm, h_norm], dim=-1)
         x = self.fc(combined)
 
         layer = self.layers[0]
@@ -10162,7 +10162,7 @@ class Qwen3_5MTPModelPatcher(ModelPatcher):
 
             h_norm = self._model.pre_fc_norm_hidden(hidden_states)
             e_norm = self._model.pre_fc_norm_embedding(inputs_embeds)
-            combined = torch.cat([h_norm, e_norm], dim=-1)
+            combined = torch.cat([e_norm, h_norm], dim=-1)
             x = self._model.fc(combined)
 
             # Compute rotary position embeddings (MRoPE: expand to 3D)
