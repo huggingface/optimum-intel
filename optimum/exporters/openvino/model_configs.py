@@ -2478,9 +2478,7 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
         common_inputs.pop("sample", None)
 
         config = self._normalized_config.config
-        pooled_projection_dim = getattr(config, "pooled_projection_dim", None)
-        if pooled_projection_dim is None and hasattr(config, "get"):
-            pooled_projection_dim = config.get("pooled_projection_dim", None)
+        pooled_projection_dim = config.get("pooled_projection_dim", None)
 
         if pooled_projection_dim is None:
             common_inputs.pop("pooled_projections", None)

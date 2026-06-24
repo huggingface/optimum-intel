@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import math
+from transformers import PretrainedConfig
 from typing import Optional, Tuple
 
 import torch
@@ -593,10 +594,7 @@ class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
         self.task = task
         self.batch_size = batch_size
         config = normalized_config.config
-        pooled_projection_dim = getattr(config, "pooled_projection_dim", None)
-        if pooled_projection_dim is None and hasattr(config, "get"):
-            pooled_projection_dim = config.get("pooled_projection_dim", None)
-
+        pooled_projection_dim = config.get("pooled_projection_dim", None)
         self.pooled_projection_dim = pooled_projection_dim
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
@@ -710,22 +708,14 @@ class DummySanaTransformerVisionInputGenerator(DummyUnetVisionInputGenerator):
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
-def _get_flux_ids_dim(config) -> int:
-    for attr_name in ("axes_dims_rope", "axes_dim", "axes_dims"):
-        value = getattr(config, attr_name, None)
+def _get_flux_ids_dim(config: "PretrainedConfig") -> int:
+    for key in ("axes_dims_rope", "axes_dim", "axes_dims"):
+        value = config.get(key, None)
         if value is not None:
             if isinstance(value, (list, tuple)):
                 return len(value)
             if isinstance(value, int):
                 return value
-    if hasattr(config, "get"):
-        for key in ("axes_dims_rope", "axes_dim", "axes_dims"):
-            value = config.get(key, None)
-            if value is not None:
-                if isinstance(value, (list, tuple)):
-                    return len(value)
-                if isinstance(value, int):
-                    return value
     return 3
 
 
