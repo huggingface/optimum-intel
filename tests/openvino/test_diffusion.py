@@ -532,6 +532,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
             np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
 
+
 class OVPipelineForImage2ImageTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [
         "stable-diffusion",

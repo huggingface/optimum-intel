@@ -2313,6 +2313,7 @@ class Gemma2TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
             "attention_mask": {0: "batch_size", 1: "sequence_length"},
         }
 
+
 @register_in_tasks_manager("qwen3-text-encoder", *["feature-extraction"], library_name="diffusers")
 class Qwen3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
     @property

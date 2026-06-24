@@ -21,8 +21,8 @@ from abc import abstractmethod
 from collections import OrderedDict
 from pathlib import Path
 from tempfile import gettempdir
-from typing import Any, Dict, List, Optional, Tuple, Union
 from types import SimpleNamespace
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import openvino
@@ -822,9 +822,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 else:
                     ids_dim = int(ids_dim.get_length())
 
-                shapes[inputs] = (
-                    [batch_size, -1, ids_dim] if is_diffusers_version("<", "0.31.0") else [-1, ids_dim]
-                )
+                shapes[inputs] = [batch_size, -1, ids_dim] if is_diffusers_version("<", "0.31.0") else [-1, ids_dim]
 
             elif inputs.get_any_name() in ["height", "width", "num_frames", "rope_interpolation_scale"]:
                 shapes[inputs] = inputs.get_partial_shape()
@@ -1208,7 +1206,9 @@ class OVModelTextEncoder(OVPipelinePart):
             hidden_states = []
 
             if self.hidden_states_output_names:
-                hidden_states = [torch.from_numpy(ov_outputs[out_name]) for out_name in self.hidden_states_output_names]
+                hidden_states = [
+                    torch.from_numpy(ov_outputs[out_name]) for out_name in self.hidden_states_output_names
+                ]
             else:
                 for i, out in enumerate(self.model.outputs):
                     if i == 0:

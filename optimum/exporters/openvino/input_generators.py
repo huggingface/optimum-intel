@@ -603,6 +603,7 @@ class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
         shape = [self.batch_size, self.pooled_projection_dim]
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
+
 class DummyTransformerTimestpsInputGenerator(DummyTimestepInputGenerator):
     SUPPORTED_INPUT_NAMES = ("timestep", "text_embeds", "time_ids", "timestep_cond", "guidance")
 
