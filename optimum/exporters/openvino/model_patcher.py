@@ -8727,11 +8727,12 @@ def _dflash_attention_mask(
     full_mask = torch.zeros((q_len, kv_len), dtype=dtype, device=device)
 
     if sliding_window is not None:
-        if cache_position is None:
-            query_positions = torch.arange(kv_len - q_len, kv_len, device=device)
-        else:
-            query_positions = cache_position[-q_len:].to(device)
-
+        # The window test is purely relative: (query_pos - key_pos) >= window. The
+        # cached target K/V may be a sliding-window slice of the full context, so
+        # kv_len already reflects the kept keys. A 0-based frame over the kept KV
+        # (queries are the last q_len entries) reproduces the exact distances whether
+        # or not the cache was sliced, so no absolute offset is needed.
+        query_positions = torch.arange(kv_len - q_len, kv_len, device=device)
         key_positions = torch.arange(kv_len, device=device)
         outside_window = (query_positions.reshape(-1, 1) - key_positions.reshape(1, -1)) >= sliding_window
         full_mask = full_mask.masked_fill(outside_window, torch.finfo(dtype).min)
@@ -8740,7 +8741,10 @@ def _dflash_attention_mask(
 
     if attention_mask is None:
         return full_mask
-    return attention_mask[:, :, :, :kv_len] + full_mask
+    # Keep the last kv_len columns: with a sliding-window slice the kept keys are the
+    # final (kept_context + block) entries of the caller mask; this is the whole mask
+    # when nothing was sliced.
+    return attention_mask[:, :, :, -kv_len:] + full_mask
 
 
 def _dflash_resolve_tensor_file(config: PretrainedConfig, tensor_name: str) -> str:
@@ -8874,6 +8878,18 @@ class Qwen3DFlashAttention(nn.Module):
                 self.layer_idx,
                 cache_kwargs,
             )
+
+        if self.sliding_window is not None:
+            # Sliding layers only need the last `sliding_window` committed target
+            # tokens: a block query at position p attends to keys in (p - window, p],
+            # so the earliest block query reaches back at most window-1 target tokens.
+            # Slicing the cached target K/V here makes the read-concat and the SDPA
+            # O(window) instead of O(context). The per-query window mask built below
+            # still trims exactly within the kept set, so this is output-equivalent to
+            # the previous full-cache + mask path (softmax over the same unmasked keys).
+            # The negative slice is a no-op while context <= window (clamped to all).
+            target_key_states = target_key_states[:, :, -self.sliding_window :, :]
+            target_value_states = target_value_states[:, :, -self.sliding_window :, :]
 
         key_states = torch.cat([target_key_states, block_key_states], dim=2)
         value_states = torch.cat([target_value_states, block_value_states], dim=2)
