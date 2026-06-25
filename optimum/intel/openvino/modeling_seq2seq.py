@@ -24,6 +24,8 @@ from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import CompiledModel, Core
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
+from torch import nn
+from torch.nn import functional as F
 from transformers import (
     AutoConfig,
     AutoModelForImageTextToText,
@@ -55,8 +57,6 @@ from .utils import (
     TemporaryDirectory,
     classproperty,
 )
-from torch import nn
-from torch.nn import functional as F
 
 
 core = Core()
