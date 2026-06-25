@@ -79,6 +79,7 @@ EXTRAS_REQUIRE = {
     "nncf": ["nncf>=2.19.0"],
     "openvino": ["nncf>=2.19.0", "openvino>=2026.0", "openvino-tokenizers>=2026.0"],
     "diffusers": ["diffusers"],
+    "transformers-switch": ["uv>=0.8.4"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
 }
