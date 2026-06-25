@@ -4014,9 +4014,6 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
                     self.vocab_size_per_layer_input = vocab_size_per_layer_input
                     self.config = config
 
-                # Original code: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/gemma3n/modeling_gemma3n.py#L2081-L2089
-                # Patching is needed to move the preparation of per_layer_inputs outside the language model's forward,
-                # as this part requires input_ids to be passed to forward, while for VLM models we pass only input_embeds.
                 def forward(self, input_ids: torch.Tensor):
                     # 26B-A4B has hidden_size_per_layer_input=0 (PLE disabled)
                     if self.language_model.config.hidden_size_per_layer_input <= 0:
@@ -4132,6 +4129,7 @@ class Gemma3nOpenVINOConfig(Gemma4OpenVINOConfig):
 
     def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
         if behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+            import torch
 
             class PerLayerInputsModule(torch.nn.Module):
                 def __init__(self, language_model, vocab_size_per_layer_input: int):
@@ -4139,6 +4137,9 @@ class Gemma3nOpenVINOConfig(Gemma4OpenVINOConfig):
                     self.language_model = language_model
                     self.vocab_size_per_layer_input = vocab_size_per_layer_input
 
+                # Original code: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/gemma3n/modeling_gemma3n.py#L2081-L2089
+                # Patching is needed to move the preparation of per_layer_inputs outside the language model's forward,
+                # as this part requires input_ids to be passed to forward, while for VLM models we pass only input_embeds.
                 def forward(self, input_ids: torch.Tensor):
                     per_layer_inputs_mask = torch.logical_and(
                         input_ids >= 0, input_ids < self.vocab_size_per_layer_input
