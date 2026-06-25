@@ -104,6 +104,7 @@ else:
     StableDiffusion3InpaintPipeline = object
     FluxPipeline = object
 
+
 if is_diffusers_version(">=", "0.31.0"):
     from diffusers import FluxImg2ImgPipeline, FluxInpaintPipeline
 else:
@@ -120,6 +121,7 @@ if is_diffusers_version(">=", "0.33.0"):
     from diffusers import SanaSprintPipeline
 else:
     SanaSprintPipeline = object
+
 
 if is_diffusers_version(">=", "0.35.0"):
     from diffusers.models.cache_utils import CacheMixin
@@ -1820,7 +1822,6 @@ if is_diffusers_version(">=", "0.30.0"):
     OV_INPAINT_PIPELINES_MAPPING["stable-diffusion-3"] = OVStableDiffusion3InpaintPipeline
     OV_TEXT2IMAGE_PIPELINES_MAPPING["flux"] = OVFluxPipeline
 
-
 if is_diffusers_version(">=", "0.31.0"):
     SUPPORTED_OV_PIPELINES.extend([OVFluxImg2ImgPipeline, OVFluxInpaintPipeline])
     OV_INPAINT_PIPELINES_MAPPING["flux"] = OVFluxInpaintPipeline
@@ -1831,6 +1832,7 @@ if is_diffusers_version(">=", "0.32.0"):
     SUPPORTED_OV_PIPELINES.append(OVFluxFillPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana"] = OVSanaPipeline
     SUPPORTED_OV_PIPELINES.append(OVSanaPipeline)
+
 
 if is_diffusers_version(">=", "0.33.0"):
     SUPPORTED_OV_PIPELINES.append(OVSanaSprintPipeline)
