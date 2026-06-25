@@ -2314,6 +2314,7 @@ class Gemma2TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
         }
 
 
+#@register_in_tasks_manager("qwen3-text-encoder", *["feature-extraction"], library_name="diffusers")
 @register_in_tasks_manager("qwen3-text-encoder", *["feature-extraction"], library_name="diffusers")
 class Qwen3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
     @property
