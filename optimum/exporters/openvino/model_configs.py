@@ -4079,6 +4079,42 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
 
 @register_in_tasks_manager("gemma3n", *["image-text-to-text"], library_name="transformers")
 class Gemma3nOpenVINOConfig(Gemma4OpenVINOConfig):
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: Gemma4ConfigBehavior = Gemma4ConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            behavior=behavior,
+            preprocessors=preprocessors,
+        )
+        # For VISION_EMBEDDINGS, the vision model contains a reshape that uses
+        # vision_soft_tokens_per_image as a fixed constant. The dummy input must
+        # produce spatial output matching that value, so we extract image size
+        # from the preprocessor to ensure the trace uses the correct dimensions.
+        if self._behavior == Gemma4ConfigBehavior.VISION_EMBEDDINGS and config.model_type == "gemma3n":
+            image_size = None
+            if preprocessors is not None:
+                for p in preprocessors:
+                    ip = getattr(p, "image_processor", p)
+                    size = getattr(ip, "size", None)
+                    if size is not None:
+                        if isinstance(size, dict):
+                            image_size = size.get("height", size.get("shortest_edge"))
+                        elif isinstance(size, (int, float)):
+                            image_size = int(size)
+                        break
+            if image_size is not None:
+                self._config.image_size = image_size
+
     def with_behavior(self, behavior: Union[str, Gemma4ConfigBehavior]):
         if behavior == Gemma4ConfigBehavior.LANGUAGE:
             return get_vlm_text_generation_config(
@@ -4111,7 +4147,9 @@ class Gemma3nOpenVINOConfig(Gemma4OpenVINOConfig):
                     per_layer_inputs = self.language_model.get_per_layer_inputs(per_layer_inputs_tokens)
                     return per_layer_inputs
 
-            model = PerLayerInputsModule(self._get_language_model(model), model.config.text_config.vocab_size_per_layer_input)
+            model = PerLayerInputsModule(
+                self._get_language_model(model), model.config.text_config.vocab_size_per_layer_input
+            )
             return model
 
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
