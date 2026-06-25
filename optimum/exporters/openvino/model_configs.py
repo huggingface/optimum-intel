@@ -3978,7 +3978,33 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
         return super().with_behavior(behavior)
 
     def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
-        if behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+        if behavior in [VLMConfigBehavior.VISION_EMBEDDINGS, Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER]:
+            return model
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            import torch
+
+            class TextEmbeddingsModule(torch.nn.Module):
+                def __init__(self, model):
+                    super().__init__()
+                    self.model = model
+
+                def forward(self, input_ids: torch.Tensor):
+                    inputs_embeds = self.model.get_input_embeddings()(input_ids)
+                    return inputs_embeds
+
+            text_embedding = TextEmbeddingsModule(model)
+            text_embedding.config = model.model.language_model.config
+            return text_embedding
+
+        return super().get_model_for_behavior(model, behavior)
+
+    def patch_model_for_export(self, model, model_kwargs=None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+            return ModelPatcher(self, model, model_kwargs)
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return Gemma4ImageEmbeddingsModelPatcher(self, model, model_kwargs)
+        if self._behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
             import torch
 
             class PerLayerInputsModule(torch.nn.Module):
@@ -3988,6 +4014,9 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
                     self.vocab_size_per_layer_input = vocab_size_per_layer_input
                     self.config = config
 
+                # Original code: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/gemma3n/modeling_gemma3n.py#L2081-L2089
+                # Patching is needed to move the preparation of per_layer_inputs outside the language model's forward,
+                # as this part requires input_ids to be passed to forward, while for VLM models we pass only input_embeds.
                 def forward(self, input_ids: torch.Tensor):
                     # 26B-A4B has hidden_size_per_layer_input=0 (PLE disabled)
                     if self.language_model.config.hidden_size_per_layer_input <= 0:
@@ -4027,32 +4056,6 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
                 model.model.language_model, model.config.text_config.vocab_size_per_layer_input, model.config
             )
             return model
-        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
-            return model
-        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
-            import torch
-
-            class TextEmbeddingsModule(torch.nn.Module):
-                def __init__(self, model):
-                    super().__init__()
-                    self.model = model
-
-                def forward(self, input_ids: torch.Tensor):
-                    inputs_embeds = self.model.get_input_embeddings()(input_ids)
-                    return inputs_embeds
-
-            text_embedding = TextEmbeddingsModule(model)
-            text_embedding.config = model.model.language_model.config
-            return text_embedding
-
-        return super().get_model_for_behavior(model, behavior)
-
-    def patch_model_for_export(self, model, model_kwargs=None):
-        model_kwargs = model_kwargs or {}
-        if self._behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
-            return ModelPatcher(self, model, model_kwargs)
-        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
-            return Gemma4ImageEmbeddingsModelPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
 
     @property
