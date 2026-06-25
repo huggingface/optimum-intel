@@ -292,6 +292,7 @@ MODEL_NAMES = {
     "qwen2_moe": "optimum-intel-internal-testing/tiny-random-qwen1.5-moe",
     "qwen2_vl": "optimum-intel-internal-testing/tiny-random-qwen2vl",
     "qwen2_5_vl": "optimum-intel-internal-testing/tiny-random-qwen2.5-vl",
+    "youtu_vl": "optimum-intel-internal-testing/tiny-random-youtu-vl",
     "qwen3": "optimum-intel-internal-testing/tiny-random-qwen3",
     "qwen3_moe": "optimum-intel-internal-testing/tiny-random-qwen3moe",
     "qwen3_vl": "optimum-intel-internal-testing/tiny-random-qwen3-vl",
@@ -468,6 +469,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 1,
         "vision_embeddings_merger_model": 10,
     },
+<<<<<<< ours
     "qwen3_vl": {
         "lm_model": 30,
         "text_embeddings_model": 1,
@@ -501,6 +503,13 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 1,
         "vision_embeddings_merger_model": 10,
         "vision_embeddings_pos_model": 1,
+=======
+    "youtu_vl": {
+        "lm_model": 34,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 14,
+>>>>>>> theirs
     },
     "sana": {
         "transformer": 58,
