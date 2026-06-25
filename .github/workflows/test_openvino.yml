@@ -114,6 +114,8 @@ jobs:
           key: hf-models
 
       - name: Test with Pytest
+        env:
+          HF_HUB_OFFLINE: "1"
         run: |
           pytest tests/openvino/${{ matrix.test-pattern }} --durations=0
 
