@@ -1063,6 +1063,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelOpenCLIPForZeroShotImageClassification, "open-clip", False),
         (OVModelForVisualCausalLM, "llava", False),
         (OVModelForVisualCausalLM, "qwen2_vl", False),
+        (OVModelForVisualCausalLM, "youtu_vl", True),
     ]
 
     if is_transformers_version("<", "4.54.0"):

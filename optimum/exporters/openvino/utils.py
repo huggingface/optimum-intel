@@ -336,19 +336,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "phi4_multimodal",
     "llama4",
     "minicpmo",
-    "videochat_flash_qwen",
-]
-
-SSM_MODELS = [
-    "mamba",
-    "falcon_mamba",
-    "zamba2",
-    "lfm2",
-    "lfm2_moe",
-    "granitemoehybrid",
-    "qwen3_next",
-    "qwen3_5_text",
-    "qwen3_5_moe_text",
+    "youtu_vl",
 ]
 
 # All transformers, diffusers, timm and sentence transformers models that were supported via optimum-onnx OnnxConfigs for which support is now removed
