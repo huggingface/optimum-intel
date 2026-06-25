@@ -2314,7 +2314,6 @@ class Gemma2TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
         }
 
 
-#@register_in_tasks_manager("qwen3-text-encoder", *["feature-extraction"], library_name="diffusers")
 @register_in_tasks_manager("qwen3-text-encoder", *["feature-extraction"], library_name="diffusers")
 class Qwen3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
     @property
@@ -2482,6 +2481,8 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
         config = self._normalized_config.config
         pooled_projection_dim = config.get("pooled_projection_dim", None)
 
+        # FLUX.2 (klein): replaced CLIP+T5 with a single Qwen3 encoder
+        # Qwen3 produces sequence embeddings but no pooled embedding
         if pooled_projection_dim is None:
             common_inputs.pop("pooled_projections", None)
 
