@@ -41,9 +41,12 @@ def _create_tiny_kokoro_model():
     if config_file.exists() and weights_file.exists() and voice_file.exists():
         return str(output_dir)
 
-    from kokoro.istftnet import Decoder
-    from kokoro.modules import CustomAlbert, ProsodyPredictor, TextEncoder
-    from transformers import AlbertConfig
+    try:
+        from kokoro.istftnet import Decoder
+        from kokoro.modules import CustomAlbert, ProsodyPredictor, TextEncoder
+        from transformers import AlbertConfig
+    except ImportError:
+        return "hexgrad/Kokoro-82M"
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -140,6 +143,81 @@ def _create_tiny_kokoro_model():
     torch.save(torch.randn(256, dtype=torch.float32), voice_file)
 
     return str(output_dir)
+
+
+def _create_tiny_molmo2_model():
+    """Generate a tiny random Molmo2 model for testing and return its local path.
+
+    Falls back to the original Hub id if tiny model creation fails.
+    Result is cached on disk under the system temp dir, so subsequent calls are cheap.
+    """
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_molmo2"
+    config_file = output_dir / "config.json"
+    weights_files = ("model.safetensors", "pytorch_model.bin", "model.bin")
+    if config_file.exists() and any((output_dir / weight_name).exists() for weight_name in weights_files):
+        with open(config_file, "r", encoding="utf-8") as f:
+            cached_config = json.load(f)
+
+        cached_vit_config = cached_config.get("vit_config", {})
+        cached_text_config = cached_config.get("text_config", {})
+        if (
+            cached_vit_config.get("hidden_size") == 64
+            and cached_vit_config.get("image_default_input_size") == [28, 28]
+            and cached_vit_config.get("image_num_pos") == 4
+            and cached_config.get("adapter_config", {}).get("text_hidden_size") == 64
+            and cached_config.get("adapter_config", {}).get("vit_layers") == [-1, -2]
+            and cached_text_config.get("hidden_size") == 64
+        ):
+            return str(output_dir)
+
+    try:
+        from transformers import AutoConfig, AutoModelForImageTextToText
+
+        config = AutoConfig.from_pretrained("allenai/MolmoWeb-4B", trust_remote_code=True)
+
+        config.vit_config.num_hidden_layers = 2
+        config.vit_config.hidden_size = 64
+        config.vit_config.intermediate_size = 128
+        config.vit_config.num_attention_heads = 4
+        config.vit_config.num_key_value_heads = 4
+        config.vit_config.head_dim = 16
+        config.vit_config.image_default_input_size = (28, 28)
+        config.vit_config.image_patch_size = 14
+        config.vit_config.image_num_pos = 4
+
+        if hasattr(config.adapter_config, "num_layers"):
+            config.adapter_config.num_layers = 2
+        if hasattr(config.adapter_config, "dim"):
+            config.adapter_config.dim = 64
+        if hasattr(config.adapter_config, "hidden_size"):
+            config.adapter_config.hidden_size = 64
+        if hasattr(config.adapter_config, "text_hidden_size"):
+            config.adapter_config.text_hidden_size = 64
+        if hasattr(config.adapter_config, "intermediate_size"):
+            config.adapter_config.intermediate_size = 128
+        if hasattr(config.adapter_config, "num_attention_heads"):
+            config.adapter_config.num_attention_heads = 4
+        if hasattr(config.adapter_config, "num_key_value_heads"):
+            config.adapter_config.num_key_value_heads = 4
+        if hasattr(config.adapter_config, "head_dim"):
+            config.adapter_config.head_dim = 16
+        if hasattr(config.adapter_config, "vit_layers"):
+            config.adapter_config.vit_layers = [-1, -2]
+
+        config.text_config.num_hidden_layers = 2
+        config.text_config.hidden_size = 64
+        config.text_config.intermediate_size = 128
+        config.text_config.num_attention_heads = 2
+        config.text_config.num_key_value_heads = 2
+        config.text_config.head_dim = 32
+        config.text_config.vocab_size = 152064
+
+        model = AutoModelForImageTextToText.from_config(config, trust_remote_code=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        model.save_pretrained(output_dir)
+        return str(output_dir)
+    except Exception:
+        return "allenai/MolmoWeb-4B"
 
 
 SEED = 42
@@ -259,6 +337,7 @@ MODEL_NAMES = {
     "minicpm3": "optimum-intel-internal-testing/tiny-random-minicpm3",
     "minicpmv": "optimum-intel-internal-testing/tiny-random-minicpmv-2_6",
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
+    "molmo2": _create_tiny_molmo2_model(),
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
     "mistral-nemo": "optimum-intel-internal-testing/tiny-random-mistral-nemo",
     "mixtral": "optimum-intel-internal-testing/tiny-mixtral",
@@ -594,6 +673,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_vl_eagle3",
     "qwen3_asr",
     "videochat_flash_qwen",
+    "molmo2",
 )
 
 if is_transformers_version("<", "5"):
@@ -612,6 +692,7 @@ ARCH_TO_MODEL_CLASS = {
     "qwen3_moe": "OVModelForCausalLM",
     "llama4": "OVModelForCausalLM",
     "llava": "OVModelForVisualCausalLM",
+    "molmo2": "OVModelForVisualCausalLM",
     "qwen3_5_moe": "OVModelForVisualCausalLM",
     "gemma4_moe": "OVModelForVisualCausalLM",
     "gemma4_unified": "OVModelForVisualCausalLM",
