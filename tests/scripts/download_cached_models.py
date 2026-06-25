@@ -25,18 +25,8 @@ from utils_tests import MODEL_NAMES
 
 # github actions repo cache limit is 10 GB so using 9 GB
 CACHE_LIMIT = 9 * 10**9
-
-# checkpoints always excluded from the cache
-SKIP_MODEL_NAMES = {
-    "AngelSlim/Qwen3-1.7B_eagle3",
-    "optimum-intel-internal-testing/all-mpnet-base-v2",
-    "optimum-intel-internal-testing/all-MiniLM-L6-v2",
-    "optimum-intel-internal-testing/opt-125m",
-    "optimum-intel-internal-testing/opt-125m-gptq-4bit",
-    "optimum-intel-internal-testing/trocr-small-handwritten",
-    "optimum-intel-internal-testing/bge-small-en-v1.5",
-    "optimum-intel-internal-testing/sew-d-tiny-100k-ft-ls100h",
-}
+# exclude model larger than 100 MB
+MODEL_SIZE_THRESHOLD = 100 * 10**6
 
 
 def hub_size(api: HfApi, repo_id: str) -> int:
@@ -50,35 +40,26 @@ def hub_size(api: HfApi, repo_id: str) -> int:
 
 def main() -> None:
     api = HfApi()
-    skip_names = []
     candidates = {}
 
     for name, repo_id in MODEL_NAMES.items():
         if not isinstance(repo_id, str) or not repo_id or repo_id.startswith("/"):
-            continue
-        if repo_id in SKIP_MODEL_NAMES:
-            skip_names.append(name)
             continue
         candidates[repo_id] = name
 
     if os.path.exists(constants.HF_HUB_CACHE):
         cache_info = scan_cache_dir()
         cached_repos = {repo.repo_id for repo in cache_info.repos}
-        # sum of all valid repo sizes in the cache-system
         sum_repo_size = cache_info.size_on_disk
     else:
         cached_repos = set()
         sum_repo_size = 0
 
-    print(f"Skipped         : {len(skip_names)}  ({', '.join(skip_names)})")
-    print(f"Candidates      : {len(candidates)}")
-
     downloaded = []
-    skipped_size = []
+    skipped_too_large = []
+    skipped_cache_full = []
     failed = []
-
     force_update = os.environ.get("FORCE_DOWNLOAD", "").lower() in ("1", "true", "yes")
-
     for repo_id, name in candidates.items():
         if not force_update and repo_id in cached_repos:
             continue
@@ -88,8 +69,12 @@ def main() -> None:
             failed.append(name)
             continue
 
+        if size > MODEL_SIZE_THRESHOLD:
+            skipped_too_large.append(name)
+            continue
+
         if sum_repo_size + size > CACHE_LIMIT:
-            skipped_size.append(name)
+            skipped_cache_full.append(name)
             continue
 
         try:
@@ -100,9 +85,10 @@ def main() -> None:
             print(f"[FAIL]  {name}: {e}", file=sys.stderr)
             failed.append(repo_id)
 
-    print(f"Downloaded     : {len(downloaded)}  ({', '.join(downloaded)})")
-    print(f"Skipped (size) : {len(skipped_size)}  ({', '.join(skipped_size)})")
-    print(f"Loading failed : {len(failed)}  ({', '.join(failed)})")
+    print(f"Downloaded          : {len(downloaded)}  ({', '.join(downloaded)})")
+    print(f"Skipped (too large) : {len(skipped_too_large)}  ({', '.join(skipped_too_large)})")
+    print(f"Skipped (cache full): {len(skipped_cache_full)}  ({', '.join(skipped_cache_full)})")
+    print(f"Loading failed      : {len(failed)}  ({', '.join(failed)})")
 
 
 if __name__ == "__main__":
