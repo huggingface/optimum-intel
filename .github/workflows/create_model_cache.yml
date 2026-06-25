@@ -16,6 +16,7 @@ permissions:
 
 env:
   HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
+  UV_SYSTEM_PYTHON: true
 
 jobs:
   create-cache:
