@@ -50,7 +50,6 @@ def hub_size(api: HfApi, repo_id: str) -> int:
 
 def main() -> None:
     api = HfApi()
-
     skip_names = []
     candidates = {}
 
@@ -78,8 +77,10 @@ def main() -> None:
     skipped_size = []
     failed = []
 
+    force_update = os.environ.get("FORCE_DOWNLOAD", "").lower() in ("1", "true", "yes")
+
     for repo_id, name in candidates.items():
-        if repo_id in cached_repos:
+        if not force_update and repo_id in cached_repos:
             continue
 
         size = hub_size(api, repo_id)
