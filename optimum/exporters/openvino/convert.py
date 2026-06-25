@@ -1366,17 +1366,6 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     transformer_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["transformer"] = (transformer, transformer_export_config)
 
-    def _resolve_vae_scaling_factor(vae_config) -> Optional[float]:
-        scaling_factor = getattr(vae_config, "scaling_factor", None)
-        if scaling_factor is not None:
-            return float(scaling_factor)
-
-        block_out_channels = getattr(vae_config, "block_out_channels", None)
-        if block_out_channels:
-            return float(2 ** (len(block_out_channels) - 1))
-
-        return None
-
     # VAE Encoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L565
     vae_encoder = copy.deepcopy(pipeline.vae)
     # vae_scaling_factor is used at inference to scale latents
