@@ -4129,7 +4129,6 @@ class Gemma3nOpenVINOConfig(Gemma4OpenVINOConfig):
 
     def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
         if behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
-            import torch
 
             class PerLayerInputsModule(torch.nn.Module):
                 def __init__(self, language_model, vocab_size_per_layer_input: int):
