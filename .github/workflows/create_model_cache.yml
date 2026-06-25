@@ -21,8 +21,8 @@ jobs:
   create-cache:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event.label.name == 'create-model-cache' ||
-      github.event.label.name == 'create-model-cache-force'
+      github.event.label.name == 'create-hf-cache' ||
+      github.event.label.name == 'create-hf-cache-force'
     runs-on: ubuntu-22.04
 
     steps:
@@ -55,7 +55,7 @@ jobs:
       - name: Download models for cache
         run: python tests/scripts/download_cached_models.py
         env:
-          FORCE_DOWNLOAD: ${{ inputs.force_update || github.event.label.name == 'create-model-cache-force' }}
+          FORCE_DOWNLOAD: ${{ inputs.force_update || github.event.label.name == 'create-hf-cache-force' }}
 
       - name: Delete existing cache entry
         run: gh cache delete hf-models --repo ${{ github.repository }} || true
