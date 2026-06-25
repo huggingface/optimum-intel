@@ -3938,6 +3938,14 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
             self._config = config.text_config
             self._normalized_config = NormalizedTextConfig(self._config)
 
+    @staticmethod
+    def _get_language_model(model):
+        if hasattr(model, "language_model"):
+            return model.language_model
+        if hasattr(model, "model") and hasattr(model.model, "language_model"):
+            return model.model.language_model
+        raise AttributeError("Gemma3n model does not expose language_model")
+
     def with_behavior(self, behavior: Union[str, Gemma4ConfigBehavior]):
         if isinstance(behavior, str) and not isinstance(behavior, Gemma4ConfigBehavior):
             behavior = Gemma4ConfigBehavior(behavior)
@@ -4103,7 +4111,7 @@ class Gemma3nOpenVINOConfig(Gemma4OpenVINOConfig):
                     per_layer_inputs = self.language_model.get_per_layer_inputs(per_layer_inputs_tokens)
                     return per_layer_inputs
 
-            model = PerLayerInputsModule(model.language_model, model.config.text_config.vocab_size_per_layer_input)
+            model = PerLayerInputsModule(self._get_language_model(model), model.config.text_config.vocab_size_per_layer_input)
             return model
 
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
@@ -4133,7 +4141,7 @@ class Gemma3nOpenVINOConfig(Gemma4OpenVINOConfig):
                     return inputs_embeds
 
             text_embedding = TextEmbeddingsModule(model)
-            text_embedding.config = model.language_model.config
+            text_embedding.config = self._get_language_model(model).config
             return text_embedding
 
         return super().get_model_for_behavior(model, behavior)
