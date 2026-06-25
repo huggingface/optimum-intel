@@ -49,6 +49,8 @@ from optimum.exporters.openvino.input_generators import (
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMVImageInputGenerator,
     DummyMiniCPMVResampleInputGenerator,
+    DummyMolmo2TextPastKeyValuesGenerator,
+    DummyMolmo2VisionInputGenerator,
     DummyPhi3VisionProjectionInputGenerator,
     DummyQwen2VLLMInputGenerator,
     DummyQwen2VLVisionEmbedInputGenerator,
@@ -140,6 +142,8 @@ from optimum.exporters.openvino.model_patcher import (
     MistralModelPatcher,
     MixtralModelPatcher,
     ModelPatcher,
+    Molmo2LMModelPatcher,
+    Molmo2VisionBackbonePatcher,
     MPTModelPatcher,
     OVDecoderModelPatcher,
     OVSeq2SeqModelPatcher,
@@ -268,6 +272,10 @@ def init_model_configs():
         except ImportError:
             pass
 
+    TasksManager._CUSTOM_CLASSES[("pt", "molmo2", "image-text-to-text")] = (
+        "transformers",
+        "AutoModelForImageTextToText",
+    )
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "image-text-to-text")] = ("transformers", "AutoModelForCausalLM")
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "automatic-speech-recognition")] = (
         "transformers",
@@ -6061,3 +6069,128 @@ class TrOCROpenVINOConfig(TextSeq2SeqOpenVINOConfig):
         decoder_num_attention_heads="decoder_attention_heads",
         hidden_size="hidden_size",
     )
+
+
+@register_in_tasks_manager(
+    "molmo2_text",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class Molmo2TextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    """Export config for the Molmo2 text-only sub-model (decoder)."""
+
+    MIN_TRANSFORMERS_VERSION = "4.55"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyMolmo2TextPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = DummyMolmo2TextPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = OVDecoderModelPatcher
+
+
+@register_in_tasks_manager("molmo2", *["image-text-to-text"], library_name="transformers")
+class Molmo2OpenVINOConfig(BaseVLMOpenVINOConfig):
+    """Export config for the full Molmo2 VLM (molmo2).
+
+    Three subgraphs are exported:
+    * VISION_EMBEDDINGS  - Molmo2VisionBackbone -> (last_hidden_state, valid_token_mask)
+    * TEXT_EMBEDDINGS    - Molmo2Embedding (wte)
+    * LANGUAGE           - Molmo2ForConditionalGeneration with LM head
+    """
+
+    MIN_TRANSFORMERS_VERSION = "4.55"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyMolmo2VisionInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+            behavior=behavior,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            # Keep full molmo2 config so vit_config + adapter_config are accessible.
+            self._config = config
+            self._normalized_config = NormalizedVisionConfig(config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "images": {0: "batch_size", 1: "num_crops", 2: "num_patches"},
+                "pooled_patches_idx": {0: "batch_size", 1: "num_pooled"},
+            }
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "last_hidden_state": {0: "num_image_tokens"},
+                "valid_token_mask": {0: "num_pooled_total"},
+            }
+        return {}
+
+    def with_behavior(self, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "molmo2_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
+            )
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "molmo2_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Molmo2LMModelPatcher,
+                inputs_update={"token_type_ids": {0: "batch_size", 1: "sequence_length"}},
+            )
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def get_model_for_behavior(self, model: "PreTrainedModel", behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            vision_backbone = model.model.vision_backbone
+            if not hasattr(vision_backbone, "config"):
+                vision_backbone.config = model.config
+            return vision_backbone
+        # TEXT_EMBEDDINGS: base returns model.get_input_embeddings() = Molmo2Embedding (wte)
+        # LANGUAGE: base returns model (has lm_head)
+        return super().get_model_for_behavior(model, behavior)
+
+    def patch_model_for_export(
+        self,
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return Molmo2VisionBackbonePatcher(self, model, model_kwargs)

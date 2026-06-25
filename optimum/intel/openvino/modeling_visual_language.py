@@ -5933,6 +5933,286 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM, Qwen3_5Model, Qwen3_5Visio
         return super().generate(*args, **kwargs)
 
 
+class _OVMolmo2ForCausalLM(OVModelForVisualCausalLM):
+    """OpenVINO runtime class for allenai/MolmoWeb-4B and the Molmo2 model family.
+
+    Three OV subgraphs:
+    * vision_embeddings : (images, pooled_patches_idx) -> (last_hidden_state, valid_token_mask)
+    * text_embeddings   : (input_ids,) -> (inputs_embeds,)
+    * language_model    : (inputs_embeds, attention_mask, position_ids,
+                           token_type_ids, past_key_values) -> (logits, past_key_values)
+    """
+
+    # ------------------------------------------------------------------ #
+    # Vision helpers                                                       #
+    # ------------------------------------------------------------------ #
+
+    def get_vision_embeddings(
+        self,
+        pixel_values,
+        input_ids=None,
+        image_token_pooling=None,
+        image_grids=None,
+        image_num_crops=None,
+        **kwargs,
+    ):
+        """Run Molmo2VisionBackbone OV subgraph and return filtered feature vectors.
+
+        Returns None during decode steps (input_ids.shape[1] == 1).
+        """
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        if pixel_values is None:
+            return None
+
+        images, pooled_patches_idx = self._build_batched_images(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            image_token_pooling=image_token_pooling,
+            image_grids=image_grids,
+            image_num_crops=image_num_crops,
+        )
+
+        out = self.vision_embeddings(images, pooled_patches_idx=pooled_patches_idx)
+        feats = out.last_hidden_state  # [total_pooled, dim]
+        valid_mask = out.pooler_output  # [total_pooled]
+
+        if isinstance(valid_mask, np.ndarray):
+            feats = feats[valid_mask.astype(bool)]
+        else:
+            feats = feats[valid_mask.bool()]
+
+        return feats
+
+    def _build_batched_images(
+        self,
+        input_ids,
+        pixel_values,
+        image_token_pooling,
+        image_grids,
+        image_num_crops,
+    ):
+        """Python port of Molmo2Model.build_batched_images.
+
+        Converts flat pixel_values tensor + per-image metadata into padded
+        (images, pooled_patches_idx) tensors consumed by the vision backbone.
+        """
+
+        # -------------------------------------------------------------- #
+        # Helper: cast numpy arrays to tensors
+        # -------------------------------------------------------------- #
+        def _to_tensor(x):
+            return torch.from_numpy(x) if isinstance(x, np.ndarray) else x
+
+        input_ids = _to_tensor(input_ids)
+        pixel_values = _to_tensor(pixel_values)
+        image_token_pooling = _to_tensor(image_token_pooling)
+        image_grids = _to_tensor(image_grids)
+        image_num_crops = _to_tensor(image_num_crops)
+
+        image_end_token_id = self.config.image_end_token_id
+        # Each image contributes 2 image_end tokens (start + end sentinel)
+        raw_counts = (input_ids == image_end_token_id).sum(1)
+        counts = raw_counts // 2  # number of images per batch item [N]
+        N = counts.size(0)
+        device = input_ids.device
+
+        first_prod = image_grids[:, :2].prod(dim=1)
+        second_prod = image_grids[:, 2:].prod(dim=1)
+        num_pooled_patches_per_image = (first_prod + second_prod).to(image_num_crops.dtype)
+
+        n_crops, n_patches, pixels_per_patch = pixel_values.shape
+
+        example_ids_for_image = torch.arange(N, device=device).repeat_interleave(counts)
+
+        crops_per_example = torch.zeros(N, dtype=image_num_crops.dtype, device=image_num_crops.device)
+        crops_per_example.index_add_(0, example_ids_for_image, image_num_crops)
+        patches_per_image = image_num_crops * n_patches
+
+        counts_list = [int(x) for x in counts.tolist()]
+        index_offset_per_example_list = []
+        offset_img = 0
+        for c in counts_list:
+            per_img_patches = patches_per_image[offset_img : offset_img + c]
+            index_offset = [0] + per_img_patches.cumsum(0).tolist()[:-1]
+            index_offset_per_example_list.append(index_offset)
+            offset_img += c
+
+        num_pooled_patches_per_example = torch.zeros(
+            N,
+            dtype=num_pooled_patches_per_image.dtype,
+            device=num_pooled_patches_per_image.device,
+        )
+        num_pooled_patches_per_example.index_add_(0, example_ids_for_image, num_pooled_patches_per_image)
+
+        M = int(crops_per_example.max().item())
+        images = torch.full(
+            (N, M, n_patches, pixels_per_patch),
+            fill_value=-1,
+            dtype=pixel_values.dtype,
+            device=pixel_values.device,
+        )
+        offset_crop = 0
+        for i in range(N):
+            num = int(crops_per_example[i].item())
+            images[i, :num] = pixel_values[offset_crop : offset_crop + num]
+            offset_crop += num
+
+        P = int(num_pooled_patches_per_example.max().item())
+        _, pool_dim = image_token_pooling.shape
+        new_token_pooling = torch.full(
+            (N, P, pool_dim),
+            fill_value=-1,
+            dtype=image_token_pooling.dtype,
+            device=image_token_pooling.device,
+        )
+
+        patch_offset = 0
+        img_offset = 0
+        for i, c in enumerate(counts_list):
+            num_patches = int(num_pooled_patches_per_example[i].item())
+            cur = image_token_pooling[patch_offset : patch_offset + num_patches].clone()
+
+            index_offset_per_example = index_offset_per_example_list[i]
+            per_img_pooled = num_pooled_patches_per_image[img_offset : img_offset + c]
+
+            offset = 0
+            for j in range(c):
+                idx_off = int(index_offset_per_example[j])
+                n = int(per_img_pooled[j].item())
+                cur_slice = cur[offset : offset + n]
+                cur[offset : offset + n] = torch.where(cur_slice >= 0, cur_slice + idx_off, cur_slice)
+                offset += n
+
+            new_token_pooling[i, :num_patches] = cur
+            patch_offset += num_patches
+            img_offset += c
+
+        return images, new_token_pooling
+
+    # ------------------------------------------------------------------ #
+    # Text / merge helpers                                                 #
+    # ------------------------------------------------------------------ #
+
+    def get_text_embeddings(self, input_ids, **kwargs):
+        """Embed input_ids, clamping -1 padding indices before the lookup."""
+        if isinstance(input_ids, np.ndarray):
+            input_ids_t = torch.from_numpy(input_ids)
+        else:
+            input_ids_t = input_ids
+        input_ids_clamped = input_ids_t * (input_ids_t != -1).to(input_ids_t.dtype)
+        return self.language_model.embed_tokens(input_ids_clamped)
+
+    def merge_vision_text_embeddings(
+        self,
+        vision_embeds,
+        inputs_embeds,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        **kwargs,
+    ):
+        """Scatter-ADD vision features into inputs_embeds at image_patch_id positions.
+
+        Molmo2 uses ``+=`` (not replace) for the image placeholder tokens.
+        """
+        image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds_t = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+
+        if input_ids is not None:
+            input_ids_t = torch.from_numpy(input_ids) if isinstance(input_ids, np.ndarray) else input_ids
+            is_image_patch = input_ids_t.view(-1) == self.config.image_patch_id
+            if is_image_patch.sum() > 0:
+                image_features = image_features.to(dtype=inputs_embeds_t.dtype)
+                flat_embeds = inputs_embeds_t.view(-1, inputs_embeds_t.shape[-1])
+                flat_embeds[is_image_patch] = flat_embeds[is_image_patch] + image_features
+                inputs_embeds_t = flat_embeds.view(inputs_embeds_t.shape)
+
+        return inputs_embeds_t, attention_mask, position_ids
+
+    # ------------------------------------------------------------------ #
+    # Generation helpers                                                   #
+    # ------------------------------------------------------------------ #
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        attention_mask=None,
+        token_type_ids=None,
+        image_token_pooling=None,
+        image_grids=None,
+        image_num_crops=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            **kwargs,
+        )
+        # Pass Molmo2-specific image metadata on the prefill step
+        if past_key_values is None:
+            model_inputs["image_token_pooling"] = image_token_pooling
+            model_inputs["image_grids"] = image_grids
+            model_inputs["image_num_crops"] = image_num_crops
+        return model_inputs
+
+    def _update_model_kwargs_for_generation(
+        self,
+        outputs,
+        model_kwargs: Dict[str, Any],
+        is_encoder_decoder: bool = False,
+        num_new_tokens: int = 1,
+    ) -> Dict[str, Any]:
+        model_kwargs = super()._update_model_kwargs_for_generation(
+            outputs=outputs,
+            model_kwargs=model_kwargs,
+            is_encoder_decoder=is_encoder_decoder,
+            num_new_tokens=num_new_tokens,
+        )
+        # Drop prefill-only inputs after the first generation step
+        model_kwargs.pop("token_type_ids", None)
+        model_kwargs.pop("image_token_pooling", None)
+        model_kwargs.pop("image_grids", None)
+        model_kwargs.pop("image_num_crops", None)
+        return model_kwargs
+
+    # ------------------------------------------------------------------ #
+    # Preprocessing                                                        #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image=None,
+        processor=None,
+        tokenizer=None,
+        config=None,
+        video=None,
+        audio=None,
+    ):
+        if processor is None:
+            raise ValueError("A processor is required for Molmo2.")
+        if video is not None:
+            raise ValueError("Video input is not supported for Molmo2.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported for Molmo2.")
+
+        conversation = [{"role": "user", "content": [{"type": "text", "text": text}]}]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+        inputs = processor(images=image, text=text_prompt, return_tensors="pt")
+        return inputs
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
@@ -5962,4 +6242,6 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_5_moe_text": _OVQwen3_5ForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
+    "molmo2": _OVMolmo2ForCausalLM,
+    "molmo2_text": _OVMolmo2ForCausalLM,
 }

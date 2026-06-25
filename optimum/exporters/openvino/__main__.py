@@ -525,7 +525,13 @@ def main_export(
             if library_name == "transformers":
                 has_remote_code = hasattr(config, "auto_map")
                 if has_remote_code and trust_remote_code and task == "image-text-to-text":
-                    task_model_loading = "text-generation"
+                    auto_map = getattr(config, "auto_map", {}) or {}
+                    # Some remote-code VLMs (e.g. molmo2) only expose an
+                    # AutoModelForImageTextToText entry and must be loaded with that class.
+                    # Older remote-code VLMs (internvl2, minicpmv, phi3_v, ...) expose
+                    # AutoModelForCausalLM and are loaded as text-generation.
+                    if "AutoModelForImageTextToText" not in auto_map or "AutoModelForCausalLM" in auto_map:
+                        task_model_loading = "text-generation"
 
             model = TasksManager.get_model_from_task(
                 task_model_loading,

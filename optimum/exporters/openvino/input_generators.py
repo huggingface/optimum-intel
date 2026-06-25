@@ -1784,3 +1784,71 @@ class DummyKokoroInputGenerator(DummyInputGenerator):
             return self.random_int_tensor(shape=[1], min_value=1, max_value=10, framework=framework, dtype=float_dtype)
         else:
             raise ValueError(f"Unsupported input {input_name} for DummyKokoroInputGenerator")
+
+
+class DummyMolmo2TextPastKeyValuesGenerator(MistralDummyPastKeyValuesGenerator):
+    """Molmo2 text head_dim (128) differs from hidden_size/num_heads; read head_dim from config."""
+
+    def __init__(
+        self,
+        task,
+        normalized_config,
+        batch_size=DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length=DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, sequence_length, **kwargs)
+        self.head_dim = getattr(normalized_config, "head_dim", self.head_dim)
+
+
+class DummyMolmo2VisionInputGenerator(DummyInputGenerator):
+    """Generates dummy inputs for Molmo2VisionBackbone.
+
+    images: f32 [batch, n_crops, n_patches, pixels_per_patch]
+    pooled_patches_idx: int64 [batch, n_pooled, pool_dim]
+    """
+
+    SUPPORTED_INPUT_NAMES = ("images", "pooled_patches_idx")
+
+    def __init__(
+        self,
+        task,
+        normalized_config,
+        batch_size=DEFAULT_DUMMY_SHAPES["batch_size"],
+        **kwargs,
+    ):
+        self.batch_size = batch_size
+        config = getattr(normalized_config, "_config", None) or getattr(normalized_config, "config", normalized_config)
+        vit_cfg = getattr(config, "vit_config", None)
+        patch_size = getattr(vit_cfg, "image_patch_size", 14) if vit_cfg else 14
+        h, w = getattr(vit_cfg, "image_default_input_size", (378, 378)) if vit_cfg else (378, 378)
+        h_patches = h // patch_size
+        w_patches = w // patch_size
+        self.n_patches = h_patches * w_patches
+        self.pixels_per_patch = 3 * patch_size * patch_size
+        self.n_crops = 1
+        pool_size = 2
+        pooled_h = (h_patches + pool_size - 1) // pool_size
+        pooled_w = (w_patches + pool_size - 1) // pool_size
+        self.n_pooled = max(1, pooled_h * pooled_w)
+        self.pool_dim = pool_size * pool_size
+
+    def generate(self, input_name, framework="pt", int_dtype="int64", float_dtype="fp32"):
+        if input_name == "images":
+            return self.random_float_tensor(
+                [self.batch_size, self.n_crops, self.n_patches, self.pixels_per_patch],
+                min_value=-1,
+                max_value=1,
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "pooled_patches_idx":
+            max_idx = max(0, self.n_crops * self.n_patches - 1)
+            return self.random_int_tensor(
+                [self.batch_size, self.n_pooled, self.pool_dim],
+                min_value=0,
+                max_value=max_idx,
+                framework=framework,
+                dtype=int_dtype,
+            )
+        raise ValueError(f"Unsupported input {input_name!r} for DummyMolmo2VisionInputGenerator")

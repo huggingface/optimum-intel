@@ -10317,3 +10317,176 @@ class KokoroModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model._orig_forward
+
+
+class Molmo2VisionBackbonePatcher(ModelPatcher):
+    """Patcher for Molmo2VisionBackbone.
+
+    Removes the data-dependent boolean index ``[valid_token.flatten()]`` that
+    produces a variable-shape output, which is not traceable.  Instead the
+    patched forward returns ALL pooled features + the valid_token mask so that
+    the OV runtime class can filter in Python.
+
+    OVVisionEmbedding maps the tuple outputs to:
+        last_hidden_state  = pooled_features.view(-1, dim)
+        pooler_output      = valid_token.flatten()
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def patched_forward(
+            self_bb,
+            images: torch.Tensor,
+            pooled_patches_idx: torch.Tensor,
+        ):
+            batch_size, _num_image = images.shape[:2]
+            images = images.to(device=self_bb.device, dtype=self_bb.dtype)
+            image_features = self_bb.encode_image(images)
+
+            image_features = self_bb.image_feature_dropout(image_features)
+            dim = image_features.shape[-1]
+            valid = pooled_patches_idx >= 0
+            valid_token = torch.any(valid, -1)  # [batch, n_pooled]
+
+            batch_idx = torch.arange(pooled_patches_idx.shape[0], dtype=torch.long, device=pooled_patches_idx.device)
+            batch_idx = torch.tile(
+                batch_idx.view(batch_size, 1, 1),
+                [1, pooled_patches_idx.shape[1], pooled_patches_idx.shape[2]],
+            )
+
+            to_pool = image_features.reshape(batch_size, -1, dim)[batch_idx, torch.clip(pooled_patches_idx, 0)]
+            to_pool = to_pool * valid.to(self_bb.dtype)[:, :, :, None]
+            to_pool = to_pool.reshape([-1, pooled_patches_idx.shape[-1], dim])
+
+            if self_bb.adapter_config.pooling_attention_mask:
+                attn_mask = valid.reshape([-1, 1, 1, valid.shape[-1]])
+                denom = valid.view(-1, to_pool.shape[-2]).float().sum(-1)
+                denom = torch.where(denom == 0, 1, denom)
+                query = to_pool.sum(-2, keepdim=True) / denom[:, None, None].to(to_pool.dtype)
+            else:
+                attn_mask = None
+                query = to_pool.mean(-2, keepdim=True)
+
+            pooled_features = self_bb.image_pooling_2d(query, to_pool, attn_mask=attn_mask)
+            pooled_features = pooled_features.reshape([batch_size, -1, pooled_features.shape[-1]])
+            pooled_features = self_bb.image_projector(pooled_features)
+
+            # Return ALL features (no boolean index) + valid mask — data-dependent
+            # indexing removed for traceability.
+            return pooled_features.view(-1, pooled_features.shape[-1]), valid_token.flatten()
+
+        model.forward = types.MethodType(patched_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Molmo2LMModelPatcher(OVDecoderModelPatcher):
+    """Patcher for Molmo2ForConditionalGeneration (language model subgraph).
+
+    Unconditionally wraps forward to:
+    1. Convert legacy past_key_values tuple → DynamicCache.
+    2. Pre-compute 4D bidirectional attention mask via _gemma3_mm_update_causal_mask.
+    3. Patch ``create_causal_mask`` in the molmo2 module to pass a 4D mask unchanged.
+    4. Call original forward with inputs_embeds + 4D mask.
+    5. Convert DynamicCache back to legacy tuple via postprocess_past_key_values.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        def forward(
+            self_model,
+            attention_mask,
+            position_ids,
+            past_key_values,
+            token_type_ids,
+            inputs_embeds,
+            use_cache=True,
+        ):
+            pkv = DynamicCache(past_key_values)
+
+            past_seen_tokens = past_key_values[0][0].shape[-2]
+            cache_position = torch.arange(
+                past_seen_tokens,
+                past_seen_tokens + inputs_embeds.shape[1],
+                device=inputs_embeds.device,
+            )
+
+            # The bidirectional image mask only matters during prefill, where
+            # ``token_type_ids`` and ``inputs_embeds`` share the same sequence length.
+            # When tracing the decode-with-past subgraph the dummy ``token_type_ids``
+            # spans the full target length; align it with the current tokens so the
+            # 4D mask construction stays shape-consistent.
+            if token_type_ids is not None and token_type_ids.shape[1] != inputs_embeds.shape[1]:
+                token_type_ids = token_type_ids[:, : inputs_embeds.shape[1]]
+
+            # Build 4D bidirectional attention mask (reuse Gemma3 helper)
+            mask4d = _gemma3_mm_update_causal_mask(
+                self_model,
+                attention_mask,
+                token_type_ids,
+                None,
+                cache_position,
+                inputs_embeds,
+            )
+
+            result = self_model.__orig_forward(
+                input_ids=None,
+                inputs_embeds=inputs_embeds,
+                attention_mask=mask4d,
+                position_ids=position_ids,
+                past_key_values=pkv,
+                cache_position=cache_position,
+                use_cache=use_cache,
+                logits_to_keep=0,
+            )
+            upd_pkv = result["past_key_values"]
+            result["past_key_values"] = postprocess_past_key_values(upd_pkv)
+            return result
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        import inspect as _inspect
+
+        super().__enter__()
+        # Patch create_causal_mask in the molmo2 module so a 4D mask is returned unchanged.
+        # Both Molmo2Model and Molmo2TextModel call it independently from the same module.
+        module = _inspect.getmodule(type(self._model))
+        if module is not None and hasattr(module, "create_causal_mask"):
+            self._orig_molmo2_create_causal_mask = module.create_causal_mask
+            orig_cc = self._orig_molmo2_create_causal_mask
+
+            def _passthrough_create_causal_mask(**kwargs):
+                attn_mask = kwargs.get("attention_mask")
+                if isinstance(attn_mask, torch.Tensor) and attn_mask.dim() == 4:
+                    return attn_mask
+                return orig_cc(**kwargs)
+
+            module.create_causal_mask = _passthrough_create_causal_mask
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        import inspect as _inspect
+
+        super().__exit__(exc_type, exc_value, traceback)
+        # Restore create_causal_mask
+        module = _inspect.getmodule(type(self._model))
+        if module is not None and hasattr(self, "_orig_molmo2_create_causal_mask"):
+            module.create_causal_mask = self._orig_molmo2_create_causal_mask
+            del self._orig_molmo2_create_causal_mask
+        # Restore original forward
+        self._model.forward = self._model.__orig_forward
