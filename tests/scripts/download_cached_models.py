@@ -27,7 +27,7 @@ from utils_tests import MODEL_NAMES
 CACHE_LIMIT = 9 * 10**9
 
 # checkpoints always excluded from the cache
-SKIP_ALWAYS = {
+SKIP_MODEL_NAMES = {
     "AngelSlim/Qwen3-1.7B_eagle3",
     "optimum-intel-internal-testing/all-mpnet-base-v2",
     "optimum-intel-internal-testing/all-MiniLM-L6-v2",
@@ -51,14 +51,14 @@ def hub_size(api: HfApi, repo_id: str) -> int:
 def main() -> None:
     api = HfApi()
 
-    skip_always_names = []
+    skip_names = []
     candidates = {}
 
     for name, repo_id in MODEL_NAMES.items():
         if not isinstance(repo_id, str) or not repo_id or repo_id.startswith("/"):
             continue
-        if repo_id in SKIP_ALWAYS:
-            skip_always_names.append(name)
+        if repo_id in SKIP_MODEL_NAMES:
+            skip_names.append(name)
             continue
         candidates[repo_id] = name
 
@@ -71,7 +71,7 @@ def main() -> None:
         cached_repos = set()
         sum_repo_size = 0
 
-    print(f"Skipped         : {len(skip_always_names)}  ({', '.join(skip_always_names)})")
+    print(f"Skipped         : {len(skip_names)}  ({', '.join(skip_names)})")
     print(f"Candidates      : {len(candidates)}")
 
     downloaded = []
