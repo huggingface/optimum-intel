@@ -14,7 +14,6 @@
 
 import inspect
 import logging
-import re
 from collections import namedtuple
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -24,7 +23,7 @@ from transformers.utils import is_torch_available
 
 from openvino import Dimension, PartialShape, Symbol
 from openvino.utils.types import get_element_type
-from optimum.exporters.openvino.base import OpenVINOConfig
+from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import is_safetensors_available
 from optimum.utils import is_diffusers_available
@@ -87,7 +86,7 @@ def flattenize_inputs(inputs: List[Any]):
 
 
 def _get_input_info(
-    model: Union["PreTrainedModel", "ModelMixin"], config: OpenVINOConfig, dummy_inputs: Dict[str, Any]
+    model: Union["PreTrainedModel", "ModelMixin"], config: OnnxConfig, dummy_inputs: Dict[str, Any]
 ) -> List[InputInfo]:
     sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
     inputs = config.ordered_inputs(model)
@@ -108,90 +107,17 @@ def _get_input_info(
         if name in inputs:
             named_dims = inputs[name]
             for idx, dim_name in named_dims.items():
-                orig_dim_name = dim_name
-                if isinstance(orig_dim_name, tuple):
-                    dim_name, min_value, max_value = dim_name
                 if dim_name in name_to_symbol:
                     symbol = name_to_symbol[dim_name]
                 else:
                     symbol = Symbol()
                     name_to_symbol[dim_name] = symbol
                 dim = Dimension(-1)
-                if isinstance(orig_dim_name, tuple):
-                    dim = Dimension(min_value, max_value)
-                else:
-                    dim = Dimension(-1)
                 dim.set_symbol(symbol)
                 shape[idx] = dim
         info = InputInfo(name=name, shape=shape, type=type, example=example)
         input_info.append(info)
     return input_info
-
-
-def _get_dynamic_shapes_info(
-    model: Union["PreTrainedModel", "ModelMixin"], config: OpenVINOConfig, dummy_inputs: Dict[str, Any]
-) -> List[InputInfo]:
-    import torch
-
-    sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
-    inputs = config.ordered_inputs(model)
-    input_info = {}
-    signature = set(sig.parameters)
-
-    name_to_symbol = {}
-
-    for name, named_dims in inputs.items():
-        info = {}
-        for idx, dim_name in named_dims.items():
-            if dim_name in name_to_symbol:
-                symbol = name_to_symbol[dim_name]
-            else:
-                symbol = torch.export.Dim.DYNAMIC
-                name_to_symbol[dim_name] = symbol
-            info[idx] = symbol
-        if name in signature:
-            input_info[name] = info
-        else:
-            pattern = r"^([a-zA-Z_]+)\.(\d+)\.(key|value)$"
-            match = re.match(pattern, name)
-
-            if match:
-                prefix, number, key_or_value = match.groups()
-                number = int(number)
-                assert prefix in signature
-                if prefix not in input_info:
-                    input_info[prefix] = []
-                if key_or_value == "key":
-                    assert len(input_info[prefix]) == number
-                    input_info[prefix].append((info,))
-                else:
-                    input_info[prefix][number] += (info,)
-    return input_info
-
-
-def _normalize_element(elem: Any, dtype: Any) -> Any:
-    import torch
-
-    if isinstance(elem, torch.Tensor):
-        return elem.to(dtype) if elem.dtype.is_floating_point else elem
-    if isinstance(elem, (list, tuple)):
-        return type(elem)(_normalize_element(e, dtype) for e in elem)
-    if isinstance(elem, dict):
-        return {k: _normalize_element(v, dtype) for k, v in elem.items()}
-    return elem
-
-
-def _normalize_dummy_inputs(dummy_inputs: Dict[str, Any], dtype: Any) -> Dict[str, Any]:
-    new_dummy = {}
-    for name, value in dummy_inputs.items():
-        new_dummy[name] = _normalize_element(value, dtype)
-    return new_dummy
-
-
-def _get_model_dtype(model):
-    for param in model.parameters():
-        return param.dtype
-    return getattr(model, "dtype", torch.float32)
 
 
 def remove_none_from_dummy_inputs(dummy_inputs: Dict[str, Any]):
@@ -248,7 +174,7 @@ def _get_open_clip_submodels_fn_and_export_configs(
     library_name: str = "open_clip",
     task: Optional[str] = None,
     preprocessors: List = None,
-    custom_export_configs: Dict[str, "OpenVINOConfig"] = None,
+    custom_export_configs: Dict[str, "OnnxConfig"] = None,
     fn_get_submodels: Callable = None,
 ):
     custom_export = {}
@@ -290,28 +216,6 @@ def _get_open_clip_submodels_fn_and_export_configs(
     return custom_export, fn_get_submodels
 
 
-def _get_kokoro_submodels_fn_and_export_configs(
-    model,
-    library_name: str = "kokoro",
-    task: Optional[str] = None,
-    preprocessors: List = None,
-    custom_export_configs: Dict[str, "OpenVINOConfig"] = None,
-    fn_get_submodels: Callable = None,
-):
-    export_config_constructor = TasksManager.get_exporter_config_constructor(
-        model=model, exporter="openvino", task=task, library_name="kokoro"
-    )
-    kokoro_export_config = export_config_constructor(model.config, task=task)
-    custom_export_configs = {"model": kokoro_export_config}
-
-    def _get_kokoro_submodels(model):
-        return {"model": model}
-
-    fn_get_submodels = _get_kokoro_submodels
-
-    return custom_export_configs, fn_get_submodels
-
-
 MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llava",
     "llava_next",
@@ -323,89 +227,18 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "phi3_v",
     "qwen2_vl",
     "qwen2_5_vl",
-    "qwen3_vl",
-    "qwen3_5",
-    "qwen3_5_moe",
     "got_ocr2",
     "gemma3",
-    "gemma4",
-    "gemma4_unified",
     "idefics3",
     "smolvlm",
     "phi4mm",
     "phi4_multimodal",
     "llama4",
     "minicpmo",
-    "videochat_flash_qwen",
+    "youtu_vl",
 ]
 
-SSM_MODELS = [
-    "mamba",
-    "falcon_mamba",
-    "zamba2",
-    "lfm2",
-    "lfm2_moe",
-    "granitemoehybrid",
-    "qwen3_next",
-    "qwen3_5_text",
-    "qwen3_5_moe_text",
-]
-
-# All transformers, diffusers, timm and sentence transformers models that were supported via optimum-onnx OnnxConfigs for which support is now removed
-ONNX_SUPPORTED_ARCHITECTURES = {
-    "big_bird",
-    "chinese_clip",
-    "colpali",
-    "convnextv2",
-    "cvt",
-    "d_fine",
-    "decision_transformer",
-    "default-timm-config",
-    "detr",
-    "dinov2",
-    "dpt",
-    "efficientnet",
-    "encoder-decoder",
-    "glpn",
-    "groupvit",
-    "helium",
-    "hiera",
-    "imagegpt",
-    "layoutlm",
-    "layoutlmv3",
-    "lilt",
-    "longformer",
-    "markuplm",
-    "maskformer",
-    "mctct",
-    "megatron-bert",
-    "metaclip_2",
-    "mgp-str",
-    "modernbert",
-    "moonshine",
-    "musicgen",
-    "nemotron",
-    "owlv2",
-    "owlvit",
-    "patchtsmixer",
-    "patchtst",
-    "pvt",
-    "regnet",
-    "rt_detr",
-    "rt_detr_v2",
-    "siglip_vision_model",
-    "speech_to_text",
-    "splinter",
-    "swin2sr",
-    "swinv2",
-    "table-transformer",
-    "visual_bert",
-    "vit_mae",
-    "vit_msn",
-    "vitpose",
-    "vits",
-    "yolos",
-}
+SSM_MODELS = ["mamba", "falcon_mamba", "zamba2", "lfm2", "granitemoehybrid"]
 
 
 def save_config(config, save_dir):
