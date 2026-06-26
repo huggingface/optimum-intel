@@ -39,7 +39,6 @@ def hub_size(api: HfApi, repo_id: str) -> int:
 
 
 def main() -> None:
-
     api = HfApi()
     candidates = {}
     for name, repo_id in MODEL_NAMES.items():
