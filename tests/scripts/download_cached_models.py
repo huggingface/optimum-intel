@@ -60,6 +60,7 @@ def main() -> None:
     skipped_cache_full = []
     failed = []
     force_update = os.environ.get("FORCE_DOWNLOAD", "").lower() in ("1", "true", "yes")
+    force_update = True
     for repo_id, name in candidates.items():
         if not force_update and repo_id in cached_repos:
             continue
@@ -89,9 +90,25 @@ def main() -> None:
     print(f"Skipped (too large) : {len(skipped_too_large)}  ({', '.join(skipped_too_large)})")
     print(f"Skipped (cache full): {len(skipped_cache_full)}  ({', '.join(skipped_cache_full)})")
     print(f"Loading failed      : {len(failed)}  ({', '.join(failed)})")
-
-    actual_size = scan_cache_dir().size_on_disk / 10**9
+    final_cache_info = scan_cache_dir()
+    actual_size = final_cache_info.size_on_disk / 10**9
     print(f"Actual cache        : {actual_size:.2f} GB, sum_repo_size {sum_repo_size / 10**9:.0f} GB")
+
+    final_cached_repos = {repo.repo_id for repo in final_cache_info.repos}
+    name_of = {repo_id: name for name, repo_id in MODEL_NAMES.items()}
+    downloaded_repo_ids = {repo_id for name, repo_id in MODEL_NAMES.items() if name in set(downloaded)}
+
+    in_cache_not_downloaded = final_cached_repos - downloaded_repo_ids
+    in_downloaded_not_in_cache = downloaded_repo_ids - final_cached_repos
+
+    print(
+        f"In cache but not in downloaded ({len(in_cache_not_downloaded)}): "
+        f"{', '.join(name_of.get(r, r) for r in sorted(in_cache_not_downloaded))}"
+    )
+    print(
+        f"In downloaded but not in cache ({len(in_downloaded_not_in_cache)}): "
+        f"{', '.join(name_of.get(r, r) for r in sorted(in_downloaded_not_in_cache))}"
+    )
 
 
 if __name__ == "__main__":
