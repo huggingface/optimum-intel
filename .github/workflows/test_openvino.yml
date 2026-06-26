@@ -43,6 +43,8 @@ jobs:
 
     runs-on: ubuntu-22.04
 
+    if: ${{ matrix.transformers-version != '4.45.0' || env.HF_TOKEN != '' }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v6.0.2
@@ -94,6 +96,10 @@ jobs:
         if: ${{ env.HF_TOKEN == '' }}
         run: |
           python tests/scripts/login_with_ci_token.py
+
+      - name: Use cached models offline to avoid Hub rate limits
+        if: ${{ env.HF_TOKEN == '' && (matrix.test-pattern == '*seq2seq*' || matrix.test-pattern == '*diffusion*' || matrix.test-pattern == '*transformation*') }}
+        run: echo "HF_HUB_OFFLINE=1" >> $GITHUB_ENV
 
       - name: Test with Pytest
         run: |
