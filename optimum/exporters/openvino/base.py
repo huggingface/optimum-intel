@@ -315,6 +315,18 @@ class OpenVINOConfigWithPast(OpenVINOConfig, ABC):
         return common_outputs
 
     @property
+    def output_name_aliases(self) -> dict[str, list[str]]:
+        """Additional (secondary) tensor names to attach to exported OpenVINO output tensors.
+
+        Maps a primary output name (a key of `outputs`) to a list of extra tensor names that
+        should be added to the *same* OpenVINO output tensor.
+
+        Returns:
+            `Dict[str, List[str]]`: A mapping of primary output name to a list of alias names.
+        """
+        return {}
+
+    @property
     def values_override(self) -> dict[str, Any] | None:
         if hasattr(self._config, "use_cache"):
             return {"use_cache": self.use_past}
