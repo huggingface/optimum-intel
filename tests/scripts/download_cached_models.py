@@ -25,8 +25,8 @@ from utils_tests import MODEL_NAMES
 
 # github actions repo cache limit is 10 GB so using 9 GB
 CACHE_LIMIT = 9 * 10**9
-# exclude model larger than 100 MB
-MODEL_SIZE_THRESHOLD = 100 * 10**6
+# exclude model larger than 200 MB
+MODEL_SIZE_THRESHOLD = 200 * 10**6
 
 
 def hub_size(api: HfApi, repo_id: str) -> int:
