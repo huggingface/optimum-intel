@@ -47,6 +47,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
+    DummyLocateAnythingVisionInputGenerator,
     DummyMiniCPMVImageInputGenerator,
     DummyMiniCPMVResampleInputGenerator,
     DummyPhi3VisionProjectionInputGenerator,
@@ -130,6 +131,7 @@ from optimum.exporters.openvino.model_patcher import (
     LlavaImageEmbeddingModelPatcher,
     LlavaNextVideoImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
+    LocateAnythingImageEmbeddingModelPatcher,
     MairaImageEmbeddingModelPatcher,
     MambaPatcher,
     MarianModelPatcher,
@@ -2086,6 +2088,148 @@ class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return InternVLChatImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+
+@register_in_tasks_manager("locateanything", *["image-text-to-text"], library_name="transformers")
+class LocateAnythingOpenVINOConfig(BaseVLMOpenVINOConfig):
+    """OpenVINO export config for nvidia/LocateAnything-3B.
+
+    Architecture: MoonViT-SO-400M vision encoder + ``mlp1`` projector
+    (4608 -> 2048) + Qwen2.5-3B language model with InternVL-style image-token
+    scatter. Three sub-models are exported following the InternVL layout:
+      - ``vision_embeddings``: MoonViT + ``mlp1`` -> (L_post, llm_hidden) features
+      - ``text_embeddings``: token embedding lookup
+      - ``language``: Qwen2.5 decoder (stateful)
+
+    The language sub-graph is exported from a standard ``transformers`` Qwen2
+    rebuilt from the vendored weights, since the vendored decoder uses the custom
+    "magi" block-diffusion path (data-dependent control flow) that is only needed
+    for Parallel Box Decoding; the "slow" pure auto-regressive path is plain
+    causal Qwen2 and therefore numerically identical.
+
+    Requires ``trust_remote_code=True`` and ``transformers>=4.55,<5.0``.
+    """
+
+    MIN_TRANSFORMERS_VERSION = "4.55.0"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLocateAnythingVisionInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {0: "num_patches"},
+                "image_grid_hws": {0: "num_images"},
+            }
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "num_merged_tokens"}}
+        return {}
+
+    def with_behavior(self, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "qwen2", self._orig_config.text_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "qwen2",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                InternVL2ChatLangModelPatcher,
+            )
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return _build_locateanything_stock_qwen2(model)
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return model
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = _get_model_attribute(model, "language_model").get_input_embeddings()
+            text_embedding.config = _get_model_attribute(model, "language_model").config
+            return text_embedding
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return LocateAnythingImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+
+def _build_locateanything_stock_qwen2(model):
+    """Rebuild a standard ``transformers`` Qwen2ForCausalLM from the vendored LLM.
+
+    The vendored LocateAnything decoder is a custom Qwen2 with block-diffusion
+    ("magi") attention and data-dependent control flow that does not trace. The
+    pure auto-regressive (causal) path is mathematically identical to a stock
+    Qwen2, so we copy the weights into a standard implementation for export.
+    """
+    from transformers import Qwen2Config as _HFQwen2Config
+    from transformers import Qwen2ForCausalLM as _HFQwen2ForCausalLM
+
+    vendored = _get_model_attribute(model, "language_model")
+    cfg_dict = vendored.config.to_dict()
+    cfg_dict["_attn_implementation"] = "sdpa"
+    hf_config = _HFQwen2Config(**{k: v for k, v in cfg_dict.items() if k != "_attn_implementation"})
+    hf_config._attn_implementation = "sdpa"
+
+    stock = _HFQwen2ForCausalLM(hf_config)
+    state = vendored.state_dict()
+    missing, unexpected = stock.load_state_dict(state, strict=False)
+    # ``lm_head.weight`` is tied to the embeddings and may be absent from the
+    # source state dict; everything else must match.
+    missing = [m for m in missing if m != "lm_head.weight"]
+    if missing or unexpected:
+        logger.warning("LocateAnything LLM weight transfer: missing=%s unexpected=%s", missing, unexpected)
+    stock.tie_weights()
+    stock = stock.to(dtype=next(vendored.parameters()).dtype).eval()
+    return stock
 
 
 @register_in_tasks_manager(

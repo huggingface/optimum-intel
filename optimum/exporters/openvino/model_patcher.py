@@ -10317,3 +10317,151 @@ class KokoroModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model._orig_forward
+
+
+# ======================================================================
+# LocateAnything (nvidia/LocateAnything-3B) vision patcher
+# ======================================================================
+# The MoonViT-SO-400M vision tower of LocateAnything is not torch.jit.trace
+# friendly out of the box. Two constructs must be neutralised for a fixed
+# resolution export:
+#   1. ``apply_rope`` uses ``torch.view_as_complex`` / complex multiply for the
+#      learnable 2D RoPE. Complex ops do not lower to OpenVINO, so the rotation
+#      is rewritten with real-valued cos/sin math, and ``Rope2DPosEmb`` is made
+#      to emit real (cos, sin) frequencies (avoiding ``torch.polar``).
+#   2. ``sdpa_attention`` builds a per-image block mask from ``cu_seqlens`` with
+#      a python loop over tensor values. For single-image fixed resolution export
+#      all patches attend to each other, so a clean full-attention SDPA is used.
+# In addition the projector ``mlp1`` is folded into the vision sub-graph (as in
+# InternVL) so the exported vision model already returns LLM-dimension features,
+# and ``tie_weights`` is forced (the model __init__ skips post_init and would
+# otherwise leave ``lm_head`` untied).
+
+
+def _locateanything_real_apply_rope(xq, xk, freqs):
+    """Real-valued 2D RoPE replacing torch.view_as_complex in MoonViT.
+
+    ``freqs`` is a real tensor of shape ``(seq, head_dim // 2, 2)`` holding
+    ``[cos, sin]`` for each frequency. Implements complex multiply
+    ``(a + i b)(cos + i sin)`` on the interleaved even/odd lanes of the input.
+    """
+    cos = freqs[..., 0].unsqueeze(-2)  # (seq, 1, head_dim//2)
+    sin = freqs[..., 1].unsqueeze(-2)
+
+    def _rotate(x):
+        xf = x.float()
+        x_pair = xf.view(*xf.shape[:-1], -1, 2)
+        a = x_pair[..., 0]
+        b = x_pair[..., 1]
+        out_a = a * cos - b * sin
+        out_b = a * sin + b * cos
+        return torch.stack([out_a, out_b], dim=-1).flatten(start_dim=-2).type_as(x)
+
+    return _rotate(xq), _rotate(xk)
+
+
+def _locateanything_clean_sdpa(q, k, v, q_cu_seqlens=None, k_cu_seqlens=None):
+    """Full-attention SDPA for MoonViT single-image fixed-resolution export.
+
+    Inputs are packed ``(seq, num_heads, head_dim)``; returns ``(seq, hidden)``.
+    """
+    seq_length = q.shape[0]
+    q = q.transpose(0, 1)
+    k = k.transpose(0, 1)
+    v = v.transpose(0, 1)
+    attn_output = F.scaled_dot_product_attention(q, k, v)
+    attn_output = attn_output.transpose(0, 1).reshape(seq_length, -1)
+    return attn_output
+
+
+def _locateanything_real_get_freqs_cis(self, grid_hws):
+    """Real-valued replacement for ``Rope2DPosEmb.get_freqs_cis``.
+
+    Returns a real tensor ``(sum(h*w), dim // 2, 2)`` with interleaved
+    ``[x_freq, y_freq]`` lanes (matching the original complex layout), so that
+    no ``torch.polar`` / complex tensors enter the traced graph.
+    """
+    dim = self.dim
+    theta_base = self.theta_base
+    dim_range = torch.arange(0, dim, 4, device=grid_hws.device)[: dim // 4].float()
+    inv_freq = 1.0 / (theta_base ** (dim_range / dim))  # (dim//4,)
+
+    outs = []
+    for h, w in grid_hws.tolist():
+        flat_pos = torch.arange(0, h * w, device=grid_hws.device).float()
+        x_pos = flat_pos % w
+        y_pos = torch.div(flat_pos, w, rounding_mode="floor")
+        x_ang = torch.outer(x_pos, inv_freq)  # (h*w, dim//4)
+        y_ang = torch.outer(y_pos, inv_freq)
+        cos = torch.stack([x_ang.cos(), y_ang.cos()], dim=-1).reshape(h * w, dim // 2)
+        sin = torch.stack([x_ang.sin(), y_ang.sin()], dim=-1).reshape(h * w, dim // 2)
+        outs.append(torch.stack([cos, sin], dim=-1))  # (h*w, dim//2, 2)
+    return torch.cat(outs, dim=0)
+
+
+class LocateAnythingImageEmbeddingModelPatcher(ModelPatcher):
+    """Patcher exporting MoonViT + ``mlp1`` projector as a single vision sub-graph."""
+
+    def __init__(self, config: "OpenVINOConfig", model: "PreTrainedModel", model_kwargs: Dict[str, Any]):
+        model_kwargs = model_kwargs or {}
+
+        # Neutralise the custom "magi" attention on every relevant config.
+        for cfg in (
+            getattr(model, "config", None),
+            getattr(model.config, "vision_config", None),
+            getattr(model.config, "text_config", None),
+        ):
+            if cfg is not None and getattr(cfg, "_attn_implementation", None) != "sdpa":
+                cfg._attn_implementation = "sdpa"
+
+        # The model __init__ skips post_init(); force weight tying so lm_head is
+        # consistent (does not affect the vision graph but keeps the model valid).
+        if hasattr(model, "tie_weights"):
+            model.tie_weights()
+
+        model.__orig_forward = model.forward
+
+        def vision_embed_forward(self, pixel_values, image_grid_hws):
+            vit_embeds = self.vision_model(pixel_values=pixel_values, grid_hws=image_grid_hws)
+            if isinstance(vit_embeds, (list, tuple)):
+                vit_embeds = torch.cat(vit_embeds, dim=0)
+            return self.mlp1(vit_embeds)
+
+        model.forward = types.MethodType(vision_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        import sys
+
+        vision_model = self._model.vision_model
+        encoder = vision_model.encoder
+        self._moonvit_module = sys.modules[type(encoder.blocks[0]).__module__]
+
+        # 1. real-valued RoPE (replace module-level apply_rope + per-instance freqs)
+        self._orig_apply_rope = getattr(self._moonvit_module, "apply_rope", None)
+        self._moonvit_module.apply_rope = _locateanything_real_apply_rope
+        self._orig_get_freqs_cis = encoder.rope_2d.get_freqs_cis
+        encoder.rope_2d.get_freqs_cis = types.MethodType(_locateanything_real_get_freqs_cis, encoder.rope_2d)
+
+        # 2. clean full-attention SDPA for every encoder block
+        self._orig_attn_funcs = dict(self._moonvit_module.VL_VISION_ATTENTION_FUNCTIONS)
+        self._moonvit_module.VL_VISION_ATTENTION_FUNCTIONS["sdpa"] = _locateanything_clean_sdpa
+        self._orig_block_impl = []
+        for block in encoder.blocks:
+            self._orig_block_impl.append(block.attn_implementation)
+            block.attn_implementation = "sdpa"
+
+        super().__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+        encoder = self._model.vision_model.encoder
+        if self._orig_apply_rope is not None:
+            self._moonvit_module.apply_rope = self._orig_apply_rope
+        encoder.rope_2d.get_freqs_cis = self._orig_get_freqs_cis
+        self._moonvit_module.VL_VISION_ATTENTION_FUNCTIONS.clear()
+        self._moonvit_module.VL_VISION_ATTENTION_FUNCTIONS.update(self._orig_attn_funcs)
+        for block, impl in zip(encoder.blocks, self._orig_block_impl):
+            block.attn_implementation = impl

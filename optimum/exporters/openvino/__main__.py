@@ -526,6 +526,20 @@ def main_export(
                 has_remote_code = hasattr(config, "auto_map")
                 if has_remote_code and trust_remote_code and task == "image-text-to-text":
                     task_model_loading = "text-generation"
+                    # Some remote-code VLMs (e.g. locateanything) only register the
+                    # generic "AutoModel" entry in their auto_map. Loading them as a
+                    # causal LM then fails because no "AutoModelForCausalLM" entry
+                    # exists. Mirror the "AutoModel" mapping so the causal-LM loader
+                    # can resolve the remote class, and pass the patched config along.
+                    auto_map = getattr(config, "auto_map", None)
+                    if (
+                        isinstance(auto_map, dict)
+                        and "AutoModelForCausalLM" not in auto_map
+                        and "AutoModel" in auto_map
+                    ):
+                        auto_map["AutoModelForCausalLM"] = auto_map["AutoModel"]
+                        config.auto_map = auto_map
+                        loading_kwargs["config"] = config
 
             model = TasksManager.get_model_from_task(
                 task_model_loading,

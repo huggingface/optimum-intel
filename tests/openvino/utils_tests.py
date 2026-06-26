@@ -13,6 +13,7 @@
 #  limitations under the License.
 import json
 import os
+import shutil
 import tempfile
 import time
 import unittest
@@ -142,6 +143,104 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+LOCATEANYTHING_MODEL_ID = "nvidia/LocateAnything-3B"
+
+
+def _create_tiny_locateanything_model():
+    """Generate a tiny random nvidia/LocateAnything-3B model and return its local path.
+
+    LocateAnything-3B is a gated, ``trust_remote_code`` VLM (MoonViT vision encoder +
+    Qwen2.5 LLM). There is no public tiny checkpoint, so a minimal random model is built
+    from the remote modeling code: a 2-layer MoonViT (hidden 64) + a 2-layer Qwen2 LLM
+    (hidden 64, vocab 1024). The remote ``*.py`` files are copied next to the weights so
+    the fixture loads fully offline once cached.
+
+    Falls back to the canonical Hub id if the remote code/weights are unavailable (e.g.
+    no network and nothing cached), so importing this module never fails.
+    """
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_locateanything"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+    modeling_file = output_dir / "modeling_locateanything.py"
+    if config_file.exists() and weights_file.exists() and modeling_file.exists():
+        return str(output_dir)
+
+    try:
+        from transformers import AutoConfig, set_seed
+        from transformers.dynamic_module_utils import get_class_from_dynamic_module
+
+        base_config = AutoConfig.from_pretrained(LOCATEANYTHING_MODEL_ID, trust_remote_code=True)
+        vision_config = {
+            "model_type": "moonvit",
+            "hidden_size": 64,
+            "num_attention_heads": 4,
+            "num_hidden_layers": 2,
+            "intermediate_size": 128,
+            "init_pos_emb_height": 8,
+            "init_pos_emb_width": 8,
+            "patch_size": 14,
+            "merge_kernel_size": [2, 2],
+        }
+        text_config = {
+            "architectures": ["Qwen2ForCausalLM"],
+            "model_type": "qwen2",
+            "hidden_size": 64,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "num_hidden_layers": 2,
+            "intermediate_size": 128,
+            "vocab_size": 1024,
+            "max_position_embeddings": 2048,
+            "tie_word_embeddings": True,
+            "rope_theta": 1000000.0,
+            "bos_token_id": 1,
+            "eos_token_id": 2,
+        }
+        config = base_config.__class__(
+            vision_config=vision_config,
+            text_config=text_config,
+            image_token_index=10,
+        )
+        config.image_token_index = 10
+
+        model_cls = get_class_from_dynamic_module(
+            "modeling_locateanything.LocateAnythingForConditionalGeneration",
+            LOCATEANYTHING_MODEL_ID,
+            trust_remote_code=True,
+        )
+        set_seed(SEED)
+        model = model_cls(config).to(torch.float32).eval()
+        model.tie_weights()
+
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        model.save_pretrained(output_dir)
+
+        from huggingface_hub import snapshot_download
+
+        snapshot = snapshot_download(LOCATEANYTHING_MODEL_ID, allow_patterns=["*.py"])
+        for py_file in Path(snapshot).glob("*.py"):
+            shutil.copy(py_file, output_dir / py_file.name)
+
+        # ``save_pretrained`` drops the remote ``auto_map`` for unregistered dynamic
+        # classes; restore it so the fixture loads with trust_remote_code offline.
+        with open(config_file, encoding="utf-8") as f:
+            saved_config = json.load(f)
+        saved_config["auto_map"] = {
+            "AutoConfig": "configuration_locateanything.LocateAnythingConfig",
+            "AutoModel": "modeling_locateanything.LocateAnythingForConditionalGeneration",
+        }
+        with open(config_file, "w", encoding="utf-8") as f:
+            json.dump(saved_config, f, indent=2)
+
+        return str(output_dir)
+    except Exception:  # noqa: BLE001 - any failure falls back to the Hub id
+        if output_dir.exists():
+            shutil.rmtree(output_dir, ignore_errors=True)
+        return LOCATEANYTHING_MODEL_ID
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -246,6 +345,7 @@ MODEL_NAMES = {
     "llava_next": "optimum-intel-internal-testing/tiny-random-llava-next",
     "llava_next_mistral": "optimum-intel-internal-testing/tiny-random-llava-next-mistral",
     "llava_next_video": "optimum-intel-internal-testing/tiny-random-llava-next-video",
+    "locateanything": _create_tiny_locateanything_model(),
     "m2m_100": "optimum-intel-internal-testing/tiny-random-m2m_100",
     "olmo2": "optimum-intel-internal-testing/tiny-random-olmo2",
     "opt": "optimum-intel-internal-testing/tiny-random-OPTModel",

@@ -1908,6 +1908,110 @@ class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
         return generation_config, model_kwargs
 
 
+class _OVLocateAnythingForCausalLM(_OVInternVLForCausalLM):
+    """OVModelForVisualCausalLM for nvidia/LocateAnything-3B.
+
+    The vision sub-graph already folds the ``mlp1`` projector (InternVL style), so
+    ``get_vision_embeddings`` returns LLM-dimension features that are scattered
+    into the token embeddings at ``config.image_token_index`` (151665). MoonViT is
+    native resolution, so ``image_grid_hws`` must be forwarded to the vision model
+    and kept out of the language model kwargs.
+    """
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, image_grid_hws=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        image_features = self.vision_embeddings(
+            pixel_values=pixel_values, image_grid_hws=image_grid_hws
+        ).last_hidden_state
+        return image_features
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, input_embeds, input_ids, attention_mask, position_ids=None, **kwargs
+    ):
+        input_embeds = torch.from_numpy(input_embeds) if isinstance(input_embeds, np.ndarray) else input_embeds
+        vision_embeds = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        image_token_id = getattr(self.config, "image_token_index", 151665)
+
+        B, N, C = input_embeds.shape
+        input_embeds = input_embeds.reshape(B * N, C)
+        input_ids = input_ids.reshape(B * N)
+        selected = input_ids == image_token_id
+        assert selected.sum() != 0
+        input_embeds[selected] = vision_embeds.reshape(-1, C).to(input_embeds.dtype)
+        input_embeds = input_embeds.reshape(B, N, C)
+        return input_embeds, attention_mask, position_ids
+
+    def get_multimodal_embeddings(
+        self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        # image_grid_hws is needed by the vision model only; keep it out of the LLM kwargs.
+        image_grid_hws = kwargs.pop("image_grid_hws", None)
+        embeds_from_args = kwargs.pop("inputs_embeds", None)
+        inputs_embeds = (
+            embeds_from_args if embeds_from_args is not None else self.get_text_embeddings(input_ids, **kwargs)
+        )
+        if pixel_values is not None:
+            vision_embeds = self.get_vision_embeddings(
+                pixel_values, input_ids=input_ids, image_grid_hws=image_grid_hws, **kwargs
+            )
+            if vision_embeds is not None:
+                inputs_embeds, attention_mask, position_ids = self.merge_vision_text_embeddings(
+                    vision_embeds,
+                    inputs_embeds,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    **kwargs,
+                )
+        return inputs_embeds, attention_mask, position_ids
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        image_sizes=None,
+        attention_mask=None,
+        image_grid_hws=None,
+        **kwargs,
+    ):
+        # MoonViT is native-resolution: image_grid_hws must reach the vision sub-graph.
+        # Declaring it here (and threading it into the model inputs) lets generate()
+        # accept it as a model kwarg and forwards it through every step.
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            image_sizes=image_sizes,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        model_inputs["image_grid_hws"] = image_grid_hws
+        return model_inputs
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required for LocateAnything.")
+        if video is not None or audio is not None:
+            raise ValueError("Video/audio inputs are not supported for LocateAnything.")
+        messages = [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": text}]}]
+        prompt = processor.py_apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        images, videos = processor.process_vision_info(messages)
+        return processor(text=[prompt], images=images, videos=videos, return_tensors="pt")
+
+
 class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
     additional_parts = ["resampler"]
 
@@ -5942,6 +6046,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "maira2": _OVMaira2ForCausalLM,
     "phi3_v": _OVPhi3VisionForCausalLM,
     "internvl_chat": _OVInternVLForCausalLM,
+    "locateanything": _OVLocateAnythingForCausalLM,
     "qwen2_vl": _OVQwen2VLForCausalLM,
     "qwen2_vl_text": _OVQwen2VLForCausalLM,
     "qwen2_5_vl": _OVQwen2_5_VLForCausalLM,
