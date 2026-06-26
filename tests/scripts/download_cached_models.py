@@ -90,6 +90,9 @@ def main() -> None:
     print(f"Skipped (cache full): {len(skipped_cache_full)}  ({', '.join(skipped_cache_full)})")
     print(f"Loading failed      : {len(failed)}  ({', '.join(failed)})")
 
+    actual_size = scan_cache_dir().size_on_disk / 10**9
+    print(f"Actual cache        : {actual_size:.2f} GB, sum_repo_size {sum_repo_size / 10**9:.0f} GB")
+
 
 if __name__ == "__main__":
     main()
