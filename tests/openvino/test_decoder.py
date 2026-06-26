@@ -435,6 +435,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "llama4",
             "exaone4",
             "phimoe",
+            "mixtral",
         ]:
             transformers_model.to(torch.float32)
 
