@@ -1096,7 +1096,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
             if model_arch in self.SUPPORTS_IMAGE:
                 ov_outputs = ov_model(**inputs)
             else:
-                tokens = tokenizer(inputs, return_tensors=input_type)
+                tokens = tokenizer(prompt, return_tensors=input_type)
                 ov_outputs = ov_model(**tokens)
             self.assertIn("last_hidden_state", ov_outputs)
             self.assertIsInstance(ov_outputs.last_hidden_state, TENSOR_ALIAS_TO_TYPE[input_type])
