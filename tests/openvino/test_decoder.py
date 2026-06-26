@@ -147,6 +147,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.54.0") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("exaone4",)
 
+    # Ouro relies on remote modeling code that is incompatible with transformers v5
+    if is_transformers_version(">=", "4.53.0") and is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES += ("ouro",)
+
     if is_transformers_version("<", "4.54.0"):
         SUPPORTED_ARCHITECTURES += ("minicpm", "minicpm3", "arctic")
 
@@ -259,6 +263,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "falcon_mamba": 0,
         "arcee": 2,
         "smollm3": 2,
+        "ouro": 8,
         "gpt_oss": 2,
         "gpt_oss_mxfp4": 2,
         "zamba2": 1,
@@ -502,6 +507,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "internlm2",
             "jais",
             "orion",
+            "ouro",
             "xverse",
         }:
             additional_inputs = {"use_cache": False}
@@ -877,6 +883,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "internlm2",
                 "jais",
                 "orion",
+                "ouro",
                 "xverse",
             }:
                 additional_inputs["use_cache"] = False

@@ -480,6 +480,33 @@ class SmolLM3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     _MODEL_PATCHER = OVDecoderModelPatcher
 
 
+class NormalizedOuroConfig(NormalizedTextConfig):
+    """Ouro is a Universal Transformer: the same ``num_hidden_layers`` decoder layers are looped
+    ``total_ut_steps`` times, and every iteration stores its own key/value entry. The exported model
+    therefore exposes ``num_hidden_layers * total_ut_steps`` past-key-value pairs."""
+
+    @property
+    def num_layers(self):
+        return self.config.num_hidden_layers * getattr(self.config, "total_ut_steps", 1)
+
+
+@register_in_tasks_manager(
+    "ouro",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class OuroOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedOuroConfig
+    MIN_TRANSFORMERS_VERSION = "4.53.0"
+    MAX_TRANSFORMERS_VERSION = "4.57.99" 
+    _MODEL_PATCHER = OVDecoderModelPatcher
+
+
 @register_in_tasks_manager("stablelm", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class StableLMOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)

@@ -1077,6 +1077,10 @@ class OVWeightCompressionTest(unittest.TestCase):
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "smollm3", False))
 
+    # Ouro relies on remote modeling code that is incompatible with transformers v5
+    if is_transformers_version(">=", "4.53.0") and is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "ouro", True))
+
     if is_transformers_version(">=", "4.54.0") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "exaone4", True))
 

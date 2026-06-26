@@ -108,6 +108,10 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.update({"exaone4": OVModelForCausalLM, "lfm2": OVModelForCausalLM})
 
+    # Ouro relies on remote modeling code that is incompatible with transformers v5
+    if is_transformers_version(">=", "4.53.0") and is_transformers_version("<", "5"):
+        SUPPORTED_ARCHITECTURES.update({"ouro": OVModelForCausalLM})
+
     if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "4.58.0"):
         SUPPORTED_ARCHITECTURES.update({"afmoe": OVModelForCausalLM})
 
