@@ -43,8 +43,6 @@ jobs:
 
     runs-on: ubuntu-22.04
 
-    if: ${{ matrix.transformers-version != '4.45.0' || env.HF_TOKEN != '' }}
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v6.0.2
