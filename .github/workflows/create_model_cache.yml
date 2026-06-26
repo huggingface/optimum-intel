@@ -1,8 +1,6 @@
 name: Create Model Cache
 
 on:
-  schedule:
-    - cron: "0 0 * * 1"  # every monday at midnight UTC
   workflow_dispatch:
     inputs:
       force_update:
@@ -20,7 +18,7 @@ env:
 
 jobs:
   create-cache:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
 
     steps:
@@ -38,6 +36,7 @@ jobs:
           uv pip install .[tests]
 
       - name: Restore existing cache
+        if: ${{ !inputs.force_update }}
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/huggingface/hub
