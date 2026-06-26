@@ -320,6 +320,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "internvl_chat",
     "maira2",
     "minicpmv",
+    "youtu_vl",
     "phi3_v",
     "qwen2_vl",
     "qwen2_5_vl",
@@ -336,8 +337,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "phi4_multimodal",
     "llama4",
     "minicpmo",
-    "videochat_flash_qwen",
-]
+    "videochat_flash_qwen",]
 
 SSM_MODELS = [
     "mamba",

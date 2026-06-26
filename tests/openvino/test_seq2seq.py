@@ -675,25 +675,12 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     if is_transformers_version(">=", "4.49.0"):
         SUPPORTED_ARCHITECTURES += ["qwen2_5_vl"]
         SUPPORT_VIDEO.append("qwen2_5_vl")
-
-        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-        if is_transformers_version("<", "5"):
-            SUPPORTED_ARCHITECTURES += ["got_ocr2"]
-
-        if is_transformers_version("<", "4.54.0"):
-            # remote code models differs after transformers v4.54
-            SUPPORTED_ARCHITECTURES += ["phi4mm"]
-            SUPPORT_AUDIO.append("phi4mm")
-
-    if is_transformers_version(">=", "4.50"):
-        SUPPORTED_ARCHITECTURES += ["gemma3"]
-        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-        if is_transformers_version("<", "5"):
-            SUPPORTED_ARCHITECTURES += ["smolvlm"]
-
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version(">=", "4.51") and is_transformers_version("<", "5"):
-        # SUPPORTED_ARCHITECTURES += ["llama4", "phi4_multimodal"]
+        SUPPORT_AUDIO.append("phi4mm")
+    if is_transformers_version(">=", "4.57.0"):
+        SUPPORTED_ARCHITECTURES += ["youtu_vl"]
+    if is_transformers_version(">", "4.49"):
+        SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
+    if is_transformers_version(">=", "4.51"):
         SUPPORTED_ARCHITECTURES += ["llama4"]
 
     if is_transformers_version("<", "4.52"):
@@ -711,12 +698,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         # remote code models differs after transformers v4.54
         SUPPORTED_ARCHITECTURES += ["llava-qwen2", "phi3_v"]
 
-    if is_transformers_version("<", "5"):
-        # remote code models incompatible after transformers v5
-        SUPPORTED_ARCHITECTURES += ["internvl_chat", "minicpmv"]
-
-    if is_transformers_version(">=", "5.5"):
-        SUPPORTED_ARCHITECTURES += ["gemma4", "gemma4_moe"]
+    TASK = "image-text-to-text"
+    REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "minicpmo", "llava-qwen2", "phi3_v", "maira2", "phi4mm", "youtu_vl"]
 
     if is_transformers_version(">=", "5.10"):
         SUPPORTED_ARCHITECTURES += ["gemma4_unified"]
