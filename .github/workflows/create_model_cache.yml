@@ -41,7 +41,7 @@ jobs:
           uv pip install .[tests]
 
       - name: Restore existing cache
-        if: ${{ !inputs.force_update }}
+        if: github.event_name != 'push' && !inputs.force_update
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/huggingface/hub
@@ -50,7 +50,7 @@ jobs:
       - name: Download models for cache
         run: python tests/scripts/download_cached_models.py
         env:
-          FORCE_DOWNLOAD: ${{ inputs.force_update }}
+          FORCE_DOWNLOAD: ${{ github.event_name == 'push' || inputs.force_update }}
 
       - name: Delete existing cache entry
         run: gh cache delete hf-models --repo ${{ github.repository }} || true
