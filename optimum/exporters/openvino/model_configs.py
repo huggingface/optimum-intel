@@ -3516,6 +3516,7 @@ class Qwen3ASROpenVINOConfig(AudioToTextOpenVINOConfig):
             config.num_mel_bins = audio_config.num_mel_bins
             # Use output_dim (post-projection) as d_model since that's the actual encoder output size
             config.d_model = getattr(audio_config, "output_dim", audio_config.d_model)
+            config.n_window = getattr(audio_config, "n_window", None)
 
         if text_config is not None:
             config.num_hidden_layers = text_config.num_hidden_layers
