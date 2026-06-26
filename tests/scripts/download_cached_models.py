@@ -39,9 +39,9 @@ def hub_size(api: HfApi, repo_id: str) -> int:
 
 
 def main() -> None:
+
     api = HfApi()
     candidates = {}
-
     for name, repo_id in MODEL_NAMES.items():
         if not isinstance(repo_id, str) or not repo_id or repo_id.startswith("/"):
             continue
@@ -60,7 +60,6 @@ def main() -> None:
     skipped_cache_full = []
     failed = []
     force_update = os.environ.get("FORCE_DOWNLOAD", "").lower() in ("1", "true", "yes")
-    force_update = True
     for repo_id, name in candidates.items():
         if not force_update and repo_id in cached_repos:
             continue

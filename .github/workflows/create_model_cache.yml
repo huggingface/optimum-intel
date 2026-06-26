@@ -3,15 +3,12 @@ name: Create Model Cache
 on:
   schedule:
     - cron: "0 0 * * 1"  # every monday at midnight UTC
-  push:
-    branches:
-      - ov-ci-fix
   workflow_dispatch:
     inputs:
       force_update:
         description: "Force the (re-)download, overriding the cached versions if exist"
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
@@ -23,7 +20,7 @@ env:
 
 jobs:
   create-cache:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event_name == 'push'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-22.04
 
     steps:
@@ -41,6 +38,7 @@ jobs:
           uv pip install .[tests]
 
       - name: Restore existing cache
+        if: ${{ !inputs.force_update }}
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/huggingface/hub
