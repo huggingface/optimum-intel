@@ -57,6 +57,14 @@ jobs:
           pip install --upgrade pip uv
           uv pip install .[tests] librosa diffusers
 
+      - name: Restore HF models cache
+        id: hf-cache-restore
+        if: env.HF_TOKEN == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-models
+
       - if: ${{ matrix.test-pattern == '*modeling*' || matrix.test-pattern == '*quantization*' || matrix.test-pattern == '*transformation*' }}
         name: Install OpenVINO
         run: |
