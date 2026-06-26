@@ -96,7 +96,7 @@ jobs:
           python tests/scripts/login_with_ci_token.py
 
       - name: Set HF_HUB_OFFLINE=1 to avoid hf hub rate limit
-        if: ${{ env.HF_TOKEN == '' && (matrix.test-pattern == '*seq2seq*' || matrix.test-pattern == '*diffusion*' || matrix.test-pattern == '*transformation*' || matrix.test-pattern == '*quantization*' || matrix.test-pattern == '*export*') }}
+        if: ${{ env.HF_TOKEN == '' && (matrix.test-pattern == '*diffusion*' || matrix.test-pattern == '*transformation*') }}
         run: echo "HF_HUB_OFFLINE=1" >> $GITHUB_ENV
 
       - name: Test with Pytest
