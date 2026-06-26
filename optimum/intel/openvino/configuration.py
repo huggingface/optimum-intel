@@ -40,7 +40,6 @@ from .utils import (
     PREDEFINED_VISUAL_LM_DATASETS,
 )
 
-
 if is_nncf_available():
     import nncf
 
@@ -55,6 +54,20 @@ class OVQuantizationMethod(str, Enum):
 
 # Default configs for 4-bit weight quantization
 _DEFAULT_4BIT_WQ_CONFIGS = {
+    # cohere2_moe sparse MoE (128 experts, top-8 sigmoid router, tied embeddings).
+    # The tied embed_tokens/lm_head and the per-layer MoE routers are numerically
+    # sensitive; quantizing them collapses greedy generation quality, so they are
+    # kept in higher precision via ignored_scope. Note: 4-bit weight compression of
+    # the experts still perturbs the top-8 routing enough to noticeably degrade
+    # greedy similarity for this model; int8 is recommended when accuracy is critical.
+    "CohereLabs/North-Mini-Code-1.0": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "backup_precision": "int8_asym",
+        "ignored_scope": {"patterns": [".*embed_tokens.*", ".*mlp\\.gate/aten::linear.*"]},
+    },
     "databricks/dolly-v2-3b": {
         "bits": 4,
         "sym": False,
@@ -505,6 +518,14 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
 
 _DEFAULT_8BIT_WQ_CONFIGS = {
     "Qwen/Qwen2.5-Coder-3B-Instruct": {"bits": 8, "sym": False, "dq_group_size": 128},
+    # cohere2_moe: keep the tied embed_tokens/lm_head and MoE routers out of weight
+    # compression (ignored_scope). With this protection int8 weight compression
+    # recovers near-baseline greedy similarity for this sparse-MoE model.
+    "CohereLabs/North-Mini-Code-1.0": {
+        "bits": 8,
+        "sym": False,
+        "ignored_scope": {"patterns": [".*embed_tokens.*", ".*mlp\\.gate/aten::linear.*"]},
+    },
 }
 
 # Add configs for model id aliases

@@ -63,7 +63,6 @@ from optimum.intel.utils.import_utils import (
     is_transformers_version,
 )
 
-
 if is_transformers_version(">=", "4.43") and is_transformers_version("<", "4.48"):
     from transformers.models.clip.modeling_clip import CLIPAttention, CLIPSdpaAttention
 
@@ -2589,7 +2588,7 @@ def _persimmon_self_attn_sdpa_forward(
     fused_qkv = self.query_key_value(hidden_states)
 
     # 3 x [batch_size, seq_length, num_heads, head_dim]
-    (query_states, key_states, value_states) = self._split_heads(fused_qkv)
+    query_states, key_states, value_states = self._split_heads(fused_qkv)
 
     if self.qk_layernorm:
         query_states = self.q_layernorm(query_states)
@@ -10029,6 +10028,35 @@ class Qwen3_5MoeModelPatcher(Qwen3_5ModelPatcher):
             if isinstance(decoder_layer.mlp, Qwen3_5MoeSparseMoeBlock):
                 sparse_moe_block = decoder_layer.mlp
                 sparse_moe_block.forward = sparse_moe_block._orig_forward
+
+
+class Cohere2MoePatcher(OVDecoderModelPatcher):
+    """
+    Model patcher for cohere2_moe (Cohere2MoeForCausalLM).
+
+    Patches Cohere2MoeExperts.forward with the vectorized lfm2_moe_experts_forward
+    that uses torch.bmm over the fused gate_up_proj [E, 2*I, H] weight,
+    split via chunk(2, dim=-2), to make the MoE expert dispatch traceable
+    for OpenVINO export.
+
+    Requires transformers >= 5.8.0 (PR #46115: cohere2_moe model).
+    """
+
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "5.8.0"):
+            from transformers.models.cohere2_moe.modeling_cohere2_moe import Cohere2MoeExperts
+
+            self._orig_cohere2moe_experts_forward = Cohere2MoeExperts.forward
+            Cohere2MoeExperts.forward = lfm2_moe_experts_forward
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if is_transformers_version(">=", "5.8.0"):
+            from transformers.models.cohere2_moe.modeling_cohere2_moe import Cohere2MoeExperts
+
+            Cohere2MoeExperts.forward = self._orig_cohere2moe_experts_forward
+        super().__exit__(exc_type, exc_value, traceback)
 
 
 class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):

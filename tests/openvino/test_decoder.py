@@ -24,6 +24,7 @@ from utils_tests import (
 
 from optimum.exporters.openvino.model_configs import (
     BitnetOpenVINOConfig,
+    Cohere2MoeOpenVINOConfig,
     DeepseekOpenVINOConfig,
     LFM2MoeOpenVINOConfig,
     LFM2OpenVINOConfig,
@@ -37,7 +38,6 @@ from optimum.intel import OVModelForCausalLM, OVModelForSequenceClassification
 from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
-
 
 if is_transformers_version(">=", "4.55"):
     from transformers import Mxfp4Config
@@ -110,6 +110,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.48.0"):
         SUPPORTED_ARCHITECTURES += ("cohere2",)
+
+    if is_transformers_version(">=", "5.8.0"):
+        SUPPORTED_ARCHITECTURES += ("cohere2_moe",)
 
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phimoe")
@@ -234,6 +237,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "dbrx": 2,
         "cohere": 2,
         "cohere2": 2,
+        "cohere2_moe": 2,
         "qwen2": 2,
         "qwen2_moe": 4,
         "arctic": 4,
@@ -321,6 +325,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             supported_architectures -= {"lfm2"}
         if is_transformers_version("<", str(LFM2MoeOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"lfm2_moe"}
+        if is_transformers_version("<", str(Cohere2MoeOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"cohere2_moe"}
         if is_transformers_version("<", str(Phi3OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"phi3"}
         # qwen3_vl_text a part of qwen3_vl architecture and is tested in seq2seq group
