@@ -4973,6 +4973,59 @@ class MiniCPMModelPatcher(OVDecoderModelPatcher):
         super().__init__(config, model, model_kwargs)
 
 
+def molmo2_vision_embed_forward(self, pixel_values, image_token_pooling):
+    vision_backbone = self.model.vision_backbone if hasattr(self, "model") else self.vision_backbone
+    batch_size = 1
+    num_crops = pixel_values.shape[0]
+    n_patches = pixel_values.shape[1]
+
+    images = pixel_values.unsqueeze(0)
+    image_features = vision_backbone.encode_image(images)
+
+    image_features = vision_backbone.image_feature_dropout(image_features)
+    dim = image_features.shape[-1]
+
+    valid = image_token_pooling >= 0
+    valid_token = torch.any(valid, -1)
+
+    batch_idx = torch.arange(image_token_pooling.shape[0], dtype=torch.long, device=image_token_pooling.device)
+    batch_idx = torch.tile(
+        batch_idx.view(batch_size, 1, 1), [1, image_token_pooling.shape[1], image_token_pooling.shape[2]]
+    )
+
+    to_pool = image_features.reshape(batch_size, -1, dim)[batch_idx, torch.clip(image_token_pooling, 0)]
+    to_pool = to_pool * valid.to(pixel_values.dtype)[:, :, :, None]
+    to_pool = to_pool.reshape([-1, image_token_pooling.shape[-1], dim])
+
+    attn_mask = valid.reshape([-1, 1, 1, valid.shape[-1]])
+    denom = valid.view(-1, to_pool.shape[-2]).float().sum(-1)
+    denom = torch.where(denom == 0, 1, denom)
+    query = to_pool.sum(-2, keepdim=True) / denom[:, None, None].to(to_pool.dtype)
+
+    pooled_features = vision_backbone.image_pooling_2d(query, to_pool, attn_mask=attn_mask)
+    pooled_features = pooled_features.reshape([batch_size, -1, pooled_features.shape[-1]])
+
+    pooled_features = vision_backbone.image_projector(pooled_features)
+    result = pooled_features.view(-1, pooled_features.shape[-1])[valid_token.flatten()]
+    return result
+
+
+class Molmo2ImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(molmo2_vision_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
 class CommonImageEmbeddingsModelPatcher(ModelPatcher):
     def __init__(
         self,

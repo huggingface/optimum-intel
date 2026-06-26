@@ -48,6 +48,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyKokoroInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMVImageInputGenerator,
+    DummyMolmo2VisionInputGenerator,
     DummyMiniCPMVResampleInputGenerator,
     DummyPhi3VisionProjectionInputGenerator,
     DummyQwen2VLLMInputGenerator,
@@ -134,6 +135,7 @@ from optimum.exporters.openvino.model_patcher import (
     MambaPatcher,
     MarianModelPatcher,
     MiniCPM3Patcher,
+    Molmo2ImageEmbeddingModelPatcher,
     MiniCPMModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
@@ -4222,6 +4224,97 @@ class SmolVLMOpenVINOConfig(Idefics3OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
     # TODO (@echarlaix): add v5 support
     MAX_TRANSFORMERS_VERSION = "4.57.6"
+
+
+@register_in_tasks_manager("molmo2", *["image-text-to-text"], library_name="transformers")
+class Molmo2OpenVINOConfig(BaseVLMOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyMolmo2VisionInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vit_config"):
+            self._config = config.vit_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if not self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {
+            "pixel_values": {0: "num_crops", 1: "num_patches"},
+            "image_token_pooling": {1: "num_pooled_tokens"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if not self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"last_hidden_state": {0: "num_visual_tokens"}}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VLMConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "qwen2", self._orig_config.text_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "qwen2", self._orig_config.text_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return Molmo2ImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return model
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.model.transformer.wte
+            text_embedding.config = model.config.text_config
+            return text_embedding
 
 
 @register_in_tasks_manager(
