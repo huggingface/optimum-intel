@@ -10079,6 +10079,7 @@ class Qwen3_5VisionEmbMergerPatcher(ModelPatcher):
 #   - is equivalent to avg_pool2d when input dims are evenly divisible by output dims
 #   - handles identity (no-op) when input dims == output dims
 # Adopted from timm.models.mobilenetv5.MobileNetV5MultiScaleFusionAdapter.forward
+# Original code: https://github.com/huggingface/pytorch-image-models/blob/v1.0.27/timm/models/mobilenetv5.py#L92
 def _gemma3n_msfa_forward(self, inputs: List[torch.Tensor]) -> torch.Tensor:
     high_resolution = inputs[0].shape[-2:]
     resized_inputs = []
