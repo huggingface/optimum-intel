@@ -804,24 +804,14 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             elif inputs.get_any_name() == "pooled_projections":
                 shapes[inputs] = [batch_size, self.transformer.config["pooled_projection_dim"]]
             elif inputs.get_any_name() == "img_ids":
-                ids_dim = inputs.get_partial_shape()[-1]
-                if hasattr(ids_dim, "is_dynamic") and ids_dim.is_dynamic:
-                    ids_dim = _get_flux_ids_dim(self.transformer.config)
-                else:
-                    ids_dim = int(ids_dim.get_length())
-
+                ids_dim = _get_flux_ids_dim(self.transformer.config)
                 shapes[inputs] = (
                     [batch_size, packed_height_width, ids_dim]
                     if is_diffusers_version("<", "0.31.0")
                     else [packed_height_width, ids_dim]
                 )
             elif inputs.get_any_name() == "txt_ids":
-                ids_dim = inputs.get_partial_shape()[-1]
-                if hasattr(ids_dim, "is_dynamic") and ids_dim.is_dynamic:
-                    ids_dim = _get_flux_ids_dim(self.transformer.config)
-                else:
-                    ids_dim = int(ids_dim.get_length())
-
+                ids_dim = _get_flux_ids_dim(self.transformer.config)
                 shapes[inputs] = [batch_size, -1, ids_dim] if is_diffusers_version("<", "0.31.0") else [-1, ids_dim]
 
             elif inputs.get_any_name() in ["height", "width", "num_frames", "rope_interpolation_scale"]:
