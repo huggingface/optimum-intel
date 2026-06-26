@@ -3,7 +3,7 @@ name: Create Model Cache
 on:
   schedule:
     - cron: "0 0 * * 1"  # every monday at midnight UTC
-  pull_request:
+  push:
     branches:
       - ov-ci-fix
   workflow_dispatch:
@@ -23,7 +23,7 @@ env:
 
 jobs:
   create-cache:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event_name == 'pull_request'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event_name == 'push'
     runs-on: ubuntu-22.04
 
     steps:
