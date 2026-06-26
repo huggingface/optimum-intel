@@ -1912,6 +1912,16 @@ class OVLTX2Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTX2Pip
         }
         return models_paths
 
+    @property
+    def _ov_model_names(self) -> List[str]:
+        """Return list of OV submodel names for quantization."""
+        return list(self._all_ov_model_paths.keys())
+
+    @property
+    def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
+        """Return dict mapping submodel names to their OV models for quantization."""
+        return {name: component.model for name, component in self.components.items()}
+
     def __init__(
         self,
         scheduler: SchedulerMixin,
@@ -2086,11 +2096,27 @@ class OVLTX2Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTX2Pip
         pass
 
     @property
+    def components(self) -> Dict[str, Any]:
+        """Return dict mapping component names to OV model wrappers for quantization."""
+        comp = {}
+        if self.transformer is not None:
+            comp["transformer"] = self.transformer
+        if self.vae_decoder is not None:
+            comp["vae_decoder"] = self.vae_decoder
+        if self.text_encoder is not None:
+            comp["text_encoder"] = self.text_encoder
+        if self.connectors is not None:
+            comp["connectors"] = self.connectors
+        if self.audio_vae_ov is not None:
+            comp["audio_vae_decoder"] = self.audio_vae_ov
+        if self.vocoder_ov is not None:
+            comp["vocoder"] = self.vocoder_ov
+        return comp
+
+    @property
     def _ov_components(self):
         """Return list of OVPipelinePart components that are loaded."""
-        parts = [self.transformer, self.vae_decoder, self.text_encoder, self.connectors]
-        parts.extend([self.audio_vae_ov, self.vocoder_ov])
-        return [p for p in parts if p is not None]
+        return [c for c in self.components.values() if c is not None]
 
     def clear_requests(self):
         for component in self._ov_components:
