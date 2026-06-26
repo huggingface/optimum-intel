@@ -39,7 +39,7 @@ jobs:
             "*quantization*",
             "*transformation*",
           ]
-        transformers-version: ["4.45.0", "4.57.6", "latest"]
+        transformers-version: ["4.57.6", "latest"]
 
     runs-on: ubuntu-22.04
 
