@@ -142,6 +142,47 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+def _create_tiny_gemma3_text_model():
+    """Create a tiny Gemma3TextModel with saved weights and return its local path.
+
+    The HF Hub checkpoint ``tiny-random-gemma3-text`` stores Gemma3ForCausalLM
+    weights (with a ``model.`` prefix) while ``model_type`` is ``gemma3_text``.
+    Loading it as ``Gemma3TextModel`` causes all weights to be randomly
+    re-initialised, so the OV-exported model and the PyTorch reference get
+    *different* random seeds and their outputs diverge.
+
+    This helper builds a tiny ``Gemma3TextModel`` from scratch, saves its
+    weights, and returns the path.  Subsequent calls are cheap (cached on disk).
+    """
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_gemma3_text"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+    if config_file.exists() and weights_file.exists():
+        return str(output_dir)
+
+    try:
+        from transformers import AutoConfig, AutoTokenizer
+
+        config = AutoConfig.from_pretrained("optimum-intel-internal-testing/tiny-random-gemma3-text")
+        # Force the architecture to Gemma3TextModel so save_pretrained stores
+        # weights without the ``model.`` prefix.
+        config.architectures = ["Gemma3TextModel"]
+
+        from transformers import Gemma3TextModel
+
+        model = Gemma3TextModel(config)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        model.save_pretrained(output_dir)
+
+        # Copy the tokenizer so callers that need AutoTokenizer can use the dir.
+        tokenizer = AutoTokenizer.from_pretrained("optimum-intel-internal-testing/tiny-random-gemma3-text")
+        tokenizer.save_pretrained(output_dir)
+        return str(output_dir)
+    except Exception:
+        # Fall back to the Hub model if creation fails (e.g. offline environment).
+        return "optimum-intel-internal-testing/tiny-random-gemma3-text"
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -202,7 +243,7 @@ MODEL_NAMES = {
     "gemma": "optimum-intel-internal-testing/tiny-random-GemmaForCausalLM",
     "gemma2": "optimum-intel-internal-testing/tiny-random-gemma2",
     "got_ocr2": "optimum-intel-internal-testing/tiny-random-got-ocr2-hf",
-    "gemma3_text": "optimum-intel-internal-testing/tiny-random-gemma3-text",
+    "gemma3_text": _create_tiny_gemma3_text_model(),
     "gemma3": "optimum-intel-internal-testing/tiny-random-gemma3",
     "gemma4": "optimum-intel-internal-testing/tiny-random-gemma4",
     "gemma4_moe": "optimum-intel-internal-testing/tiny-random-gemma4-moe",
