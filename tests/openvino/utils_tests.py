@@ -261,7 +261,7 @@ MODEL_NAMES = {
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
     "mistral-nemo": "optimum-intel-internal-testing/tiny-random-mistral-nemo",
-    "mixtral": "optimum-intel-internal-testing/tiny-mixtral",
+    "mixtral": "hf-internal-testing/tiny-random-MixtralForCausalLM",
     "mixtral_awq": "optimum-intel-internal-testing/tiny-mixtral-AWQ-4bit",
     "mobilebert": "optimum-intel-internal-testing/tiny-random-MobileBertModel",
     "mobilenet_v1": "optimum-intel-internal-testing/mobilenet_v1_0.75_192",
