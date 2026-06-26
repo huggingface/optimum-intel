@@ -171,6 +171,8 @@ from optimum.exporters.openvino.model_patcher import (
     SpeechT5ModelPatcher,
     VideoChatFlashQwenVisionEmbeddingModelPatcher,
     XverseModelPatcher,
+    YoutuVLLanguageModelPatcher,
+    YoutuVLVisionEmbMergerPatcher,
     Zamba2ModelPatcher,
     _get_model_attribute,
 )
@@ -324,6 +326,14 @@ def init_model_configs():
             "transformers",
             "AutoModel",
         )
+    TasksManager._CUSTOM_CLASSES[("pt", "llama4", "image-text-to-text")] = (
+        "transformers",
+        "AutoModelForImageTextToText",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "youtu_vl", "image-text-to-text")] = (
+        "transformers",
+        "AutoModelForCausalLM",
+    )
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
@@ -3800,6 +3810,199 @@ class GotOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+
+@register_in_tasks_manager(
+    "youtu_vl", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class YoutuVLTextOpenVINOConfig(MiniCPM3OpenVINOConfig):
+    # The Youtu language model is a DeepSeek-V2/V3 style decoder that uses multi-head
+    # latent attention (MLA). The key/value cache layout therefore matches MiniCPM3 /
+    # DeepSeek (k_head_dim = qk_nope_head_dim + qk_rope_head_dim, v_head_dim). The model
+    # is shipped as remote code, so unlike the in-library deepseek/minicpm3 configs we do
+    # not constrain the maximum transformers version.
+    MIN_TRANSFORMERS_VERSION = "4.49.0"
+    MAX_TRANSFORMERS_VERSION = "999.9.9"
+    _MODEL_PATCHER = YoutuVLLanguageModelPatcher
+
+
+class YoutuVLVisionEmbeddingsDummyInputGenerator(DummyVisionInputGenerator):
+    # The Youtu-VL vision tower follows the Qwen2.5-VL windowed-attention design, so the
+    # vision part is split into a patch-embedding model and a transformer/merger model.
+    # Data-dependent operations (window indices, cu_seqlens based masks) are computed at
+    # runtime and fed into the merger as explicit inputs.
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "hidden_states",
+        "attention_mask",
+        "window_attention_mask",
+        "window_index",
+        "rotary_pos_emb",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 1,
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        vision_config = normalized_config.config
+        self.batch_size = 1
+        self.patch_size = vision_config.patch_size
+        self.num_channels = vision_config.num_channels
+        self.hidden_size = vision_config.hidden_size
+        self.num_heads = vision_config.num_attention_heads
+        self.spatial_merge_size = 2
+        self.spatial_merge_unit = self.spatial_merge_size * self.spatial_merge_size
+        # square grid of patches used for tracing; the corresponding axes are dynamic
+        self.spatial_dim = 8
+        self.num_patches = self.spatial_dim * self.spatial_dim
+        # flattened patch dimension (num_channels * patch_size * patch_size)
+        self.embed_dim = self.num_channels * self.patch_size * self.patch_size
+        # rotary embedding dimension used by the vision transformer
+        self.rotary_dim = self.hidden_size // self.num_heads // 2
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            shape = [self.batch_size, self.num_patches, self.embed_dim]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "hidden_states":
+            shape = [self.num_patches, self.hidden_size]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name in ["attention_mask", "window_attention_mask"]:
+            return self.random_mask_tensor(
+                [1, self.num_patches, self.num_patches], framework=framework, dtype=float_dtype
+            )
+        if input_name == "rotary_pos_emb":
+            shape = [self.num_patches, self.rotary_dim]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "window_index":
+            length = self.num_patches // self.spatial_merge_unit
+            return self.random_int_tensor([length], max_value=length, framework=framework, dtype=int_dtype)
+        raise ValueError(f"Unsupported input name {input_name}")
+
+
+@register_in_tasks_manager("youtu_vl", *["image-text-to-text"], library_name="transformers")
+class YoutuVLOpenVINOConfig(BaseVLMOpenVINOConfig):
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen2VLConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (YoutuVLVisionEmbeddingsDummyInputGenerator,)
+    MIN_TRANSFORMERS_VERSION = "4.49.0"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: Qwen2VLConfigBehavior = Qwen2VLConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if (
+            self._behavior in [Qwen2VLConfigBehavior.VISION_EMBEDDINGS, Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER]
+            and hasattr(config, "vision_config")
+        ):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, Qwen2VLConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Qwen2VLConfigBehavior):
+            behavior = Qwen2VLConfigBehavior(behavior)
+
+        if behavior == Qwen2VLConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
+            # patch embedding (Siglip2VisionEmbeddingsWoPos)
+            vision_embeddings = model.siglip2.vision_model.embeddings
+            vision_embeddings.config = model.config.vision_config
+            return vision_embeddings
+
+        if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            # the encoder + post layernorm + merger are exported together; they are
+            # spread across several submodules of the top-level model, so we export the
+            # whole model and rely on the patcher to wire the right forward.
+            model.config.vision_config.fullatt_block_indexes = model.config.vision_config.fullatt_block_indexes
+            return model
+
+        if behavior == Qwen2VLConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.config
+            return text_embedding
+
+    def with_behavior(
+        self,
+        behavior: Union[str, Qwen2VLConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, Qwen2VLConfigBehavior):
+            behavior = Qwen2VLConfigBehavior(behavior)
+
+        if behavior == Qwen2VLConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config("youtu_vl", self._orig_config, self.int_dtype, self.float_dtype)
+
+        if behavior == Qwen2VLConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "youtu_vl",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=YoutuVLLanguageModelPatcher,
+            )
+
+        if behavior in [Qwen2VLConfigBehavior.VISION_EMBEDDINGS, Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER]:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            return YoutuVLVisionEmbMergerPatcher(self, model, model_kwargs)
+        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
+            return ModelPatcher(self, model, model_kwargs=model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
+            return {"pixel_values": {0: "batch_size", 1: "num_patches"}}
+        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            return {
+                "hidden_states": {0: "sequence_length"},
+                "attention_mask": {1: "sequence_length", 2: "sequence_length"},
+                "window_attention_mask": {1: "sequence_length", 2: "sequence_length"},
+                "window_index": {0: "unit_sequence_length"},
+                "rotary_pos_emb": {0: "sequence_length"},
+            }
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior in [
+            Qwen2VLConfigBehavior.VISION_EMBEDDINGS,
+            Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER,
+        ]:
+            return {"last_hidden_state": {0: "seq_len"}}
+        return {}
 
 
 @register_in_tasks_manager("gemma3", *["image-text-to-text"], library_name="transformers")
