@@ -5139,37 +5139,6 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
             del self._model.model._orig_update_causual_mask
 
 
-# Original code: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/gemma3n/modeling_gemma3n.py#L1758
-def _project_per_layer_inputs(
-    self,
-    inputs_embeds: torch.Tensor,
-    per_layer_inputs: Optional[torch.Tensor] = None,
-) -> torch.Tensor:
-    per_layer_projection: torch.Tensor = self.per_layer_model_projection(inputs_embeds)
-    per_layer_projection = (
-        self.per_layer_projection_scale.to(dtype=inputs_embeds.dtype, device=per_layer_projection.device)
-        * per_layer_projection
-    )
-
-    per_layer_projection = per_layer_projection.reshape(
-        *inputs_embeds.shape[:-1],
-        self.config.num_hidden_layers,
-        self.hidden_size_per_layer_input,
-    )
-    per_layer_projection = self.per_layer_projection_norm(per_layer_projection)
-
-    if per_layer_inputs is None:
-        return per_layer_projection
-
-    if per_layer_projection.shape != per_layer_inputs.shape:
-        # per-layer inputs are sometimes padded with zeros, slice the relevant embeddings.
-        per_layer_inputs = per_layer_inputs[..., : self.config.num_hidden_layers, :]
-
-    return (per_layer_projection + per_layer_inputs) * self.per_layer_input_scale.to(
-        dtype=inputs_embeds.dtype, device=per_layer_projection.device
-    )
-
-
 # Forward method of the language model of Gemma3n, needs to be patched to pass 'per_layer_inputs',
 # as original code fails to create per_layer_inputs without the providing of input_ids,
 # while OV language model expects only inputs_embeds without input_ids.
@@ -5585,19 +5554,8 @@ class Gemma3nLMModelPatcher(Gemma3LMModelPatcher):
         setattr(self._model, self.orig_forward_name, types.MethodType(gemma4_lm_forward, self._model))
         setattr(self._model.model, "forward", types.MethodType(gemma3n_language_model_forward, self._model))
 
-        self._model.model.language_model._orig_project_per_layer_inputs = (
-            self._model.model.language_model.project_per_layer_inputs
-        )
-        self._model.model.language_model.project_per_layer_inputs = types.MethodType(
-            _project_per_layer_inputs, self._model.model.language_model
-        )
-
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        self._model.model.language_model.project_per_layer_inputs = (
-            self._model.model.language_model._orig_project_per_layer_inputs
-        )
-
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
         setattr(self._model.model, "forward", self.model_orig_language_model_forward)
 
