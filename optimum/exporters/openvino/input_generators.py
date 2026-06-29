@@ -748,7 +748,8 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
         if getattr(normalized_config, "in_channels", None):
             self.num_channels = normalized_config.in_channels // 4
-        self.ids_dim = _get_flux_ids_dim(normalized_config.config)
+        self.config = normalized_config.config
+        self.is_flux2 = self.config.get("_class_name", "") == "Flux2Transformer2DModel"
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name in ["hidden_states", "sample"]:
@@ -757,12 +758,16 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
         if input_name == "img_ids":
             img_ids_height = self.height // 2
             img_ids_width = self.width // 2
+            img_ids_shape = [self.batch_size, img_ids_height * img_ids_width, 3]
+            img_ids_shape = (
+                [self.batch_size, img_ids_height * img_ids_width, 3]
+                if is_diffusers_version("<", "0.31.0")
+                else [img_ids_height * img_ids_width, 3]
+            )
+            if self.is_flux2:
+                img_ids_shape = [self.batch_size, img_ids_height * img_ids_width, 4]
             return self.random_int_tensor(
-                (
-                    [self.batch_size, img_ids_height * img_ids_width, self.ids_dim]
-                    if is_diffusers_version("<", "0.31.0")
-                    else [img_ids_height * img_ids_width, self.ids_dim]
-                ),
+                img_ids_shape,
                 min_value=0,
                 max_value=min(img_ids_height, img_ids_width),
                 framework=framework,
@@ -801,6 +806,7 @@ class DummyFluxTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
             **kwargs,
         )
         self.ids_dim = _get_flux_ids_dim(normalized_config.config)
+        self.is_flux2 = normalized_config.config.get("_class_name", "") == "Flux2Transformer2DModel"
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "txt_ids":
@@ -808,7 +814,7 @@ class DummyFluxTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
 
             shape = (
                 [self.batch_size, self.sequence_length, self.ids_dim]
-                if is_diffusers_version("<", "0.31.0")
+                if is_diffusers_version("<", "0.31.0") or self.is_flux2
                 else [self.sequence_length, self.ids_dim]
             )
             dtype = DTYPE_MAPPER.pt(float_dtype)

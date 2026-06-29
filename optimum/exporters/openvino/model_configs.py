@@ -2475,6 +2475,8 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
 
     @property
     def inputs(self):
+        self.is_flux2 = self._config.get("_class_name", "") == "Flux2Transformer2DModel"
+
         common_inputs = super().inputs
         common_inputs.pop("sample", None)
 

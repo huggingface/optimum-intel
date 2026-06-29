@@ -771,6 +771,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 batch_size *= 2
 
         is_ltx = self.__class__.__name__.startswith("OVLTX")
+        is_flux2 = self.__class__.__name__.startswith("OVFlux2")
         if is_ltx:
             height = height // self.vae_spatial_compression_ratio if height > 0 else -1
             width = width // self.vae_spatial_compression_ratio if width > 0 else -1
@@ -809,12 +810,16 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 ids_dim = _get_flux_ids_dim(self.transformer.config)
                 shapes[inputs] = (
                     [batch_size, packed_height_width, ids_dim]
-                    if is_diffusers_version("<", "0.31.0")
+                    if is_diffusers_version("<", "0.31.0") or is_flux2
                     else [packed_height_width, ids_dim]
                 )
             elif inputs.get_any_name() == "txt_ids":
                 ids_dim = _get_flux_ids_dim(self.transformer.config)
-                shapes[inputs] = [batch_size, -1, ids_dim] if is_diffusers_version("<", "0.31.0") else [-1, ids_dim]
+                shapes[inputs] = [batch_size, -1, ids_dim]
+                if is_diffusers_version("<", "0.31.0") or is_flux2:
+                    shapes[inputs] = [batch_size, -1, ids_dim]
+                else:
+                    shapes[inputs] = [-1, ids_dim]
 
             elif inputs.get_any_name() in ["height", "width", "num_frames", "rope_interpolation_scale"]:
                 shapes[inputs] = inputs.get_partial_shape()
@@ -1288,27 +1293,9 @@ class OVModelTransformer(OVPipelinePart):
         if pooled_projections is not None:
             model_inputs["pooled_projections"] = pooled_projections
         if img_ids is not None:
-            for inp in self.model.inputs:
-                if inp.get_any_name() == "img_ids":
-                    expected_rank = inp.get_partial_shape().rank.get_length()
-                    actual_rank = len(img_ids.shape)
-                    if expected_rank == 2 and actual_rank == 3:
-                        img_ids = img_ids[0]
-                    elif expected_rank == 3 and actual_rank == 2:
-                        img_ids = img_ids.unsqueeze(0)
-                    break
             model_inputs["img_ids"] = img_ids
 
         if txt_ids is not None:
-            for inp in self.model.inputs:
-                if inp.get_any_name() == "txt_ids":
-                    expected_rank = inp.get_partial_shape().rank.get_length()
-                    actual_rank = len(txt_ids.shape)
-                    if expected_rank == 2 and actual_rank == 3:
-                        txt_ids = txt_ids[0]
-                    elif expected_rank == 3 and actual_rank == 2:
-                        txt_ids = txt_ids.unsqueeze(0)
-                    break
             model_inputs["txt_ids"] = txt_ids
         if guidance is not None:
             model_inputs["guidance"] = guidance
