@@ -19,7 +19,7 @@ import textwrap
 import unittest
 
 from parameterized import parameterized
-from utils_tests import ARCH_TO_MODEL_CLASS, MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS
+from utils_tests import ARCH_TO_MODEL_CLASS, MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS, HUB_MODEL_NAMES
 
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 

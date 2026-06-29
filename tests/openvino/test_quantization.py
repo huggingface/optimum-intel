@@ -90,6 +90,7 @@ from utils_tests import (
     get_supported_model_for_library,
     TEST_NAME_TO_MODEL_TYPE,
     OPENVINO_DEVICE,
+    HUB_MODEL_NAMES,
 )
 
 _TASK_TO_DATASET = {
@@ -1494,11 +1495,11 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_default_ignored_scope(self, model_cls, model_type, expected_ignored_scope_per_model):
         with unittest.mock.patch.dict(
             "optimum.intel.openvino.configuration._DEFAULT_IGNORED_SCOPE_CONFIGS",
-            {MODEL_NAMES[model_type]: expected_ignored_scope_per_model},
+            {HUB_MODEL_NAMES[model_type]: expected_ignored_scope_per_model},
             clear=False,
         ):
             with TemporaryDirectory() as tmp_dir:
-                model_id = MODEL_NAMES[model_type]
+                model_id = HUB_MODEL_NAMES[model_type]
                 model = model_cls.from_pretrained(
                     model_id,
                     export=True,

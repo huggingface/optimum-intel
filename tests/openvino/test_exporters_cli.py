@@ -29,6 +29,7 @@ from transformers import (
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
+    HUB_MODEL_NAMES,
     OPENVINO_DEVICE,
     REMOTE_CODE_MODELS,
     TEST_NAME_TO_MODEL_TYPE,
@@ -1178,7 +1179,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     ):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --dataset laion/filtered-wit --weight-format int8 {tmpdir}",
+                f"optimum-cli export openvino --model {HUB_MODEL_NAMES[model_type]} --dataset laion/filtered-wit --weight-format int8 {tmpdir}",
                 shell=True,
                 check=True,
             )
