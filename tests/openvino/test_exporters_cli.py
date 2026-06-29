@@ -28,8 +28,8 @@ from transformers import (
 )
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
-    MODEL_NAMES,
     HUB_MODEL_NAMES,
+    MODEL_NAMES,
     OPENVINO_DEVICE,
     REMOTE_CODE_MODELS,
     TEST_NAME_TO_MODEL_TYPE,

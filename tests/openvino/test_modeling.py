@@ -56,7 +56,15 @@ from transformers import (
 )
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
-from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TENSOR_ALIAS_TO_TYPE, TEST_IMAGE_URL, HUB_MODEL_NAMES
+from utils_tests import (
+    F32_CONFIG,
+    HUB_MODEL_NAMES,
+    MODEL_NAMES,
+    OPENVINO_DEVICE,
+    SEED,
+    TENSOR_ALIAS_TO_TYPE,
+    TEST_IMAGE_URL,
+)
 
 from optimum.intel import (
     OVDiffusionPipeline,
