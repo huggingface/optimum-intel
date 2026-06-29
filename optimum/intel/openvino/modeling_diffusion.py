@@ -64,7 +64,6 @@ from optimum.utils import (
 )
 
 from ...exporters.openvino import main_export
-from ...exporters.openvino.input_generators import _get_flux_ids_dim
 from ..utils.import_utils import is_diffusers_version
 from .configuration import OVConfig, OVQuantizationConfigBase, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
@@ -807,20 +806,17 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             elif inputs.get_any_name() == "pooled_projections":
                 shapes[inputs] = [batch_size, self.transformer.config["pooled_projection_dim"]]
             elif inputs.get_any_name() == "img_ids":
-                ids_dim = _get_flux_ids_dim(self.transformer.config)
                 shapes[inputs] = (
-                    [batch_size, packed_height_width, ids_dim]
-                    if is_diffusers_version("<", "0.31.0") or is_flux2
-                    else [packed_height_width, ids_dim]
+                    [batch_size, packed_height_width, 3]
+                    if is_diffusers_version("<", "0.31.0")
+                    else [packed_height_width, 3]
                 )
+                if is_flux2:
+                    shapes[inputs] = [batch_size, packed_height_width, 4]
             elif inputs.get_any_name() == "txt_ids":
-                ids_dim = _get_flux_ids_dim(self.transformer.config)
-                shapes[inputs] = [batch_size, -1, ids_dim]
-                if is_diffusers_version("<", "0.31.0") or is_flux2:
-                    shapes[inputs] = [batch_size, -1, ids_dim]
-                else:
-                    shapes[inputs] = [-1, ids_dim]
-
+                shapes[inputs] = [batch_size, -1, 3] if is_diffusers_version("<", "0.31.0") else [-1, 3]
+                if is_flux2:
+                    shapes[inputs] = [batch_size, -1, 4]
             elif inputs.get_any_name() in ["height", "width", "num_frames", "rope_interpolation_scale"]:
                 shapes[inputs] = inputs.get_partial_shape()
             else:
