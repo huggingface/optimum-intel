@@ -1189,7 +1189,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         t = np.linspace(0, 5.0, int(5.0 * sampling_rate), endpoint=False)
         # generate pure sine wave at 220 Hz
         audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
-        return (audio_data, 16000)
+        return (audio_data, sampling_rate)
 
     @unittest.skipUnless(is_transformers_version(">=", "4.57.0"), "qwen3_omni_moe requires transformers >= 4.57.0")
     def test_qwen3_omni_moe_video_not_supported(self):

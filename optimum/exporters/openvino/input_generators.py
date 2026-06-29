@@ -1872,19 +1872,27 @@ class DummyQwen3OmniMoeCode2WavInputGenerator(DummyInputGenerator):
 class DummyQwen3OmniMoeProjectionInputGenerator(DummyInputGenerator):
     SUPPORTED_INPUT_NAMES = ("hidden_state",)
 
-    def __init__(self, task: str, normalized_config: NormalizedVisionConfig, batch_size: int = 1, **kwargs):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
         self.batch_size = batch_size
+        self.sequence_length = sequence_length
         config = normalized_config.config
         # The projection (Qwen3OmniMoeTalkerResizeMLP.linear_fc1) consumes thinker hidden states whose width is
         # talker_config.thinker_hidden_size; fall back to text_config.hidden_size only if it's absent.
         text_config = getattr(config, "text_config", config)
         self.hidden_size = getattr(config, "thinker_hidden_size", None) or text_config.hidden_size
-        # Arbitrary dummy sequence length; the projection is applied per-position so any value works for tracing.
-        self.seq_len = 10
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "hidden_state":
-            return self.random_float_tensor([self.batch_size, self.seq_len, self.hidden_size], framework=framework)
+            return self.random_float_tensor(
+                [self.batch_size, self.sequence_length, self.hidden_size], framework=framework
+            )
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 

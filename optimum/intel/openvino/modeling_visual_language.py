@@ -4253,7 +4253,7 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        if is_transformers_version("<", "4.56.0"):
+        if is_transformers_version("<", "4.57.0"):
             raise Exception("Qwen3-Omni-MoE is not supported in transformers versions earlier than 4.57.0.")
 
         # Extract per-component device / ov_config overrides before passing ov_config to the
@@ -4573,10 +4573,9 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
             raise ValueError("Video input is not supported")
         if isinstance(audio, (list, tuple)) and len(audio) == 1:
             audio = audio[0]
+        sampling_rate = None
         if isinstance(audio, tuple) and len(audio) == 2:
-            # Preserve sampling rate from (samples, rate) tuple format
-            audio_array, sampling_rate = audio
-            audio = {"array": audio_array, "sampling_rate": sampling_rate}
+            audio, sampling_rate = audio
 
         conversation = [{"role": "user", "content": [{"type": "text", "text": text}]}]
         if image is not None:
@@ -4585,7 +4584,10 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
             conversation[0]["content"].insert(0, {"type": "audio"})
 
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
-        inputs = processor(images=image, text=text_prompt, audio=audio, return_tensors="pt")
+        processor_kwargs = {}
+        if sampling_rate is not None:
+            processor_kwargs["sampling_rate"] = sampling_rate
+        inputs = processor(images=image, text=text_prompt, audio=audio, return_tensors="pt", **processor_kwargs)
         return inputs
 
     def forward(
