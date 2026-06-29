@@ -16,7 +16,6 @@ import math
 from typing import Optional, Tuple
 
 import torch
-from transformers import PretrainedConfig
 
 from optimum.intel.utils.import_utils import is_diffusers_version
 from optimum.utils import (

@@ -76,10 +76,10 @@ from optimum.intel.openvino.configuration import (
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
+    is_diffusers_version,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_transformers_version,
-    is_diffusers_version
 )
 from optimum.utils.save_utils import maybe_save_preprocessors
 
