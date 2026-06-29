@@ -786,37 +786,18 @@ class DummyFluxTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
         "txt_ids",
     )
 
-    def __init__(
-        self,
-        task: str,
-        normalized_config: NormalizedTextConfig,
-        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
-        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
-        random_batch_size_range: Optional[Tuple[int, int]] = None,
-        random_sequence_length_range: Optional[Tuple[int, int]] = None,
-        **kwargs,
-    ):
-        super().__init__(
-            task=task,
-            normalized_config=normalized_config,
-            batch_size=batch_size,
-            sequence_length=sequence_length,
-            random_batch_size_range=random_batch_size_range,
-            random_sequence_length_range=random_sequence_length_range,
-            **kwargs,
-        )
-        self.ids_dim = _get_flux_ids_dim(normalized_config.config)
-        self.is_flux2 = normalized_config.config.get("_class_name", "") == "Flux2Transformer2DModel"
-
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "txt_ids":
             import torch
 
+            is_flux2 = self.normalized_config.config.get("_class_name", "") == "Flux2Transformer2DModel"
             shape = (
-                [self.batch_size, self.sequence_length, self.ids_dim]
-                if is_diffusers_version("<", "0.31.0") or self.is_flux2
-                else [self.sequence_length, self.ids_dim]
+                [self.batch_size, self.sequence_length, 3]
+                if is_diffusers_version("<", "0.31.0")
+                else [self.sequence_length, 3]
             )
+            if is_flux2:
+                shape = [self.batch_size, self.sequence_length, 4]
             dtype = DTYPE_MAPPER.pt(float_dtype)
             return torch.full(shape, 0, dtype=dtype)
         return super().generate(input_name, framework, int_dtype, float_dtype)
