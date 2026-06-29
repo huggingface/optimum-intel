@@ -28,12 +28,11 @@ from utils_tests import (
 )
 
 from optimum.exporters.openvino import export_from_model, main_export
-from optimum.exporters.openvino.convert import _resolve_flux_text_encoder_model_type
-from optimum.exporters.openvino.input_generators import _get_flux_ids_dim
 from optimum.exporters.openvino.model_configs import BertOpenVINOConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVFluxPipeline,
+    OVFlux2KleinPipeline,
     OVLatentConsistencyModelPipeline,
     OVLTXPipeline,
     OVModelForAudioClassification,
@@ -60,7 +59,7 @@ from optimum.intel import (
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version
+from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version, is_diffusers_version
 from optimum.utils import logging
 from optimum.utils.save_utils import maybe_load_preprocessors
 
@@ -97,6 +96,9 @@ class ExportModelTest(unittest.TestCase):
         "ltx-video": OVLTXPipeline,
         "kokoro": OVModelForTextToSpeechSeq2Seq,
     }
+
+    if is_diffusers_version(">=", "0.37.0"):
+        SUPPORTED_ARCHITECTURES.update({"flux.2-klein": OVFlux2KleinPipeline})
 
     if is_transformers_version(">=", "4.48.0"):
         SUPPORTED_ARCHITECTURES.update({"cohere2": OVModelForCausalLM})
@@ -143,6 +145,7 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "stable-diffusion-3": {"text_encoder_3": "8.0"},
         "flux": {"text_encoder_2": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
+        "flux.2-klein": {"transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "stable-diffusion-xl-refiner": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "ltx-video": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
     }
@@ -370,62 +373,6 @@ class ExportModelTest(unittest.TestCase):
             only_onnx = onnx_architectures - openvino_architectures
             if len(only_onnx) > 0:
                 logger.warning(f"The following architectures export {only_onnx} is supported by ONNX but not OpenVINO")
-
-
-class Flux2KleinSupportUnitTest(unittest.TestCase):
-    def test_get_flux_ids_dim_from_object_axes_dims_rope_list(self):
-        class Cfg:
-            axes_dims_rope = [16, 56, 56, 8]
-
-        self.assertEqual(_get_flux_ids_dim(Cfg()), 4)
-
-    def test_get_flux_ids_dim_from_dict_axes_dims_rope_list(self):
-        cfg = {"axes_dims_rope": [16, 56, 56, 8]}
-        self.assertEqual(_get_flux_ids_dim(cfg), 4)
-
-    def test_get_flux_ids_dim_default_fallback(self):
-        class Cfg:
-            pass
-
-        self.assertEqual(_get_flux_ids_dim(Cfg()), 3)
-
-    def test_resolve_flux_text_encoder_model_type_from_model_type(self):
-        class EncCfg:
-            model_type = "gemma2"
-            architectures = ["Gemma2ForCausalLM"]
-
-        class Encoder:
-            config = EncCfg()
-
-        model_type = _resolve_flux_text_encoder_model_type(Encoder(), default_model_type="clip-text", tokenizer=None)
-        self.assertEqual(model_type, "gemma2-text-encoder")
-
-    def test_resolve_flux_text_encoder_model_type_from_tokenizer_name(self):
-        class EncCfg:
-            model_type = ""
-            architectures = []
-
-        class Encoder:
-            config = EncCfg()
-
-        GemmaTokenizerFast = type("GemmaTokenizerFast", (), {})
-        tokenizer = GemmaTokenizerFast()
-
-        model_type = _resolve_flux_text_encoder_model_type(
-            Encoder(), default_model_type="clip-text", tokenizer=tokenizer
-        )
-        self.assertEqual(model_type, "gemma2-text-encoder")
-
-    def test_resolve_flux_text_encoder_model_type_falls_back_to_default(self):
-        class EncCfg:
-            model_type = "clip_text_model"
-            architectures = ["CLIPTextModel"]
-
-        class Encoder:
-            config = EncCfg()
-
-        model_type = _resolve_flux_text_encoder_model_type(Encoder(), default_model_type="clip-text", tokenizer=None)
-        self.assertEqual(model_type, "clip-text")
 
 
 class CustomExportModelTest(unittest.TestCase):
