@@ -40,6 +40,7 @@ from utils_tests import (
 from optimum.exporters.openvino.__main__ import main_export
 from optimum.exporters.openvino.utils import COMPLEX_CHAT_TEMPLATES
 from optimum.intel import (  # noqa
+    OVFlux2KleinPipeline,
     OVFluxFillPipeline,
     OVFluxPipeline,
     OVLatentConsistencyModelPipeline,
@@ -78,6 +79,7 @@ from optimum.intel.utils.import_utils import (
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_transformers_version,
+    is_diffusers_version
 )
 from optimum.utils.save_utils import maybe_save_preprocessors
 
@@ -116,6 +118,13 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("zero-shot-image-classification", "clip"),
         ("text-to-audio", "kokoro"),
     ]
+
+    if is_diffusers_version(">=", "0.37.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-to-image", "flux.2-klein"),
+            ]
+        )
 
     if is_transformers_version(">=", "4.48.0"):
         SUPPORTED_ARCHITECTURES.extend(

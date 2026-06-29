@@ -428,6 +428,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder": 64,
         "text_encoder_2": 64,
     },
+    "flux.2-klein": {
+        "transformer": 74,
+        "vae_decoder": 60,
+        "vae_encoder": 44,
+        "text_encoder": 394,
+    },
     "flux-fill": {
         "transformer": 56,
         "vae_decoder": 28,
