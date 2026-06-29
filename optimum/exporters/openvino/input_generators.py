@@ -1784,3 +1784,132 @@ class DummyKokoroInputGenerator(DummyInputGenerator):
             return self.random_int_tensor(shape=[1], min_value=1, max_value=10, framework=framework, dtype=float_dtype)
         else:
             raise ValueError(f"Unsupported input {input_name} for DummyKokoroInputGenerator")
+
+
+class DummyQwen3OmniMoeAudioInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("padded_feature", "padded_mask_after_cnn", "aftercnn_lens", "cu_seqlens")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 3,
+        **kwargs,
+    ):
+        self.batch_size = batch_size
+        audio_config = normalized_config.config
+        self.num_mels = getattr(audio_config, "num_mel_bins", 128)
+        self.time_in = 200  # Mel spectrogram frames (~12.5s audio)
+        self.aftercnn_time = self.time_in // 8  # After 3 stride-2 conv layers
+        n_window = getattr(audio_config, "n_window")
+        n_window_infer = getattr(audio_config, "n_window_infer")
+        window_aftercnn = self.aftercnn_time * (n_window_infer // (n_window * 2))
+        num_full = self.aftercnn_time // window_aftercnn
+        single_batch_chunks = [window_aftercnn] * num_full
+        remainder = self.aftercnn_time % window_aftercnn
+        if remainder != 0:
+            single_batch_chunks.append(remainder)
+        cu_chunk_lens = single_batch_chunks * self.batch_size
+        cumsum = [0]
+        for length in cu_chunk_lens:
+            cumsum.append(cumsum[-1] + length)
+        self._cu_seqlens = cumsum
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "padded_feature":
+            return self.random_float_tensor([self.batch_size, self.num_mels, self.time_in], framework=framework)
+        if input_name == "padded_mask_after_cnn":
+            return self.constant_tensor(
+                [self.batch_size, self.aftercnn_time], framework=framework, value=1, dtype=DTYPE_MAPPER.pt("bool")
+            )
+        if input_name == "aftercnn_lens":
+            return self.constant_tensor(
+                [self.batch_size], framework=framework, value=self.aftercnn_time, dtype=DTYPE_MAPPER.pt(int_dtype)
+            )
+        if input_name == "cu_seqlens":
+            import torch
+
+            return torch.tensor(self._cu_seqlens, dtype=torch.int32)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyQwen3OmniMoeLMInputGenerator(DummyQwen3VLLMInputGenerator):
+    def generate(
+        self,
+        input_name: str,
+        framework: str = "pt",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        bool_dtype: str = "bool",
+    ):
+        if input_name == "position_ids":
+            base = DummyTextInputGenerator.generate(self, input_name, framework, int_dtype, float_dtype)
+            return base.unsqueeze(0).expand(4, -1, -1)
+        return super().generate(input_name, framework, int_dtype, float_dtype, bool_dtype)
+
+
+class DummyQwen3OmniMoeCode2WavInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("codes",)
+
+    def __init__(self, task: str, normalized_config: NormalizedVisionConfig, batch_size: int = 1, **kwargs):
+        self.batch_size = batch_size
+        code2wav_config = normalized_config.config
+        self.num_quantizers = getattr(code2wav_config, "num_quantizers", 16)
+        self.codebook_size = getattr(code2wav_config, "codebook_size", 2048)
+        self.seq_len = 10
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "codes":
+            return self.random_int_tensor(
+                [self.batch_size, self.num_quantizers, self.seq_len],
+                min_value=0,
+                max_value=self.codebook_size,
+                framework=framework,
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyQwen3OmniMoeProjectionInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("hidden_state",)
+
+    def __init__(self, task: str, normalized_config: NormalizedVisionConfig, batch_size: int = 1, **kwargs):
+        self.batch_size = batch_size
+        config = normalized_config.config
+        # The projection (Qwen3OmniMoeTalkerResizeMLP.linear_fc1) consumes thinker hidden states whose width is
+        # talker_config.thinker_hidden_size; fall back to text_config.hidden_size only if it's absent.
+        text_config = getattr(config, "text_config", config)
+        self.hidden_size = getattr(config, "thinker_hidden_size", None) or text_config.hidden_size
+        # Arbitrary dummy sequence length; the projection is applied per-position so any value works for tracing.
+        self.seq_len = 10
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "hidden_state":
+            return self.random_float_tensor([self.batch_size, self.seq_len, self.hidden_size], framework=framework)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyQwen3OmniMoeVisionInputGenerator(DummyQwen3VLVisionEmbedInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("hidden_states", "pos_embeds", "attention_mask", "rotary_pos_emb", "input")
+
+    def __init__(self, task, normalized_config, batch_size=1, **kwargs):
+        super().__init__(task, normalized_config, batch_size=batch_size, **kwargs)
+        self.patch_channels = (
+            normalized_config.config.in_channels
+            * normalized_config.config.temporal_patch_size
+            * normalized_config.config.patch_size
+            * normalized_config.config.patch_size
+        )
+
+    def generate(self, input_name, framework="pt", int_dtype="int64", float_dtype="fp32"):
+        grid_h, grid_w = self.height // self.patch_size, self.width // self.patch_size
+        seq_len = self.batch_size * grid_h * grid_w
+
+        if input_name == "hidden_states":
+            # hidden_states are raw patch data (patch_channels), not embeddings
+            # The vision model does patch embedding internally
+            return self.random_float_tensor([seq_len, self.patch_channels], framework=framework, dtype=float_dtype)
+
+        if input_name == "pos_embeds":
+            return self.random_float_tensor([seq_len, self.embed_dim], framework=framework, dtype=float_dtype)
+
+        return super().generate(input_name, framework, int_dtype, float_dtype)

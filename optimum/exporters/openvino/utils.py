@@ -15,10 +15,12 @@
 import inspect
 import logging
 import re
+import shutil
 from collections import namedtuple
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from huggingface_hub import try_to_load_from_cache
 from transformers import AutoImageProcessor, PretrainedConfig
 from transformers.utils import is_torch_available
 
@@ -30,13 +32,6 @@ from optimum.intel.utils.import_utils import is_safetensors_available
 from optimum.utils import is_diffusers_available
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
-
-logger = logging.getLogger(__name__)
-
-
-InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
-
-
 if is_torch_available():
     import torch
     import torch.nn as nn
@@ -44,6 +39,12 @@ if is_torch_available():
 
 if is_diffusers_available():
     from diffusers import ModelMixin
+
+
+logger = logging.getLogger(__name__)
+
+
+InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
 
 
 OV_XML_FILE_NAME = "openvino_model.xml"
@@ -337,6 +338,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llama4",
     "minicpmo",
     "videochat_flash_qwen",
+    "qwen3_omni_moe",
 ]
 
 SSM_MODELS = [
@@ -484,6 +486,39 @@ def save_preprocessors(
                 processor.save_pretrained(output)
             except Exception as ex:
                 logger.error(f"Saving {type(processor)} failed with {ex}")
+
+        # These models bundle several preprocessors (image processor, video processor, feature extractor)
+        # that all serialize into a single shared preprocessor_config.json. When saved sequentially in the
+        # loop above, the last processor's save_pretrained overwrites the file, dropping the other
+        # processors' fields (e.g. the feature extractor clobbers the image processor's patch_size/min_pixels).
+        # The original model's preprocessor_config.json holds the complete merged config, so we copy it back
+        # over our truncated one to restore the lost fields.
+        if model_type in ("qwen3_omni_moe", "qwen3_omni", "qwen2_vl"):
+            try:
+                dest_preprocessor = Path(output) / "preprocessor_config.json"
+                source_preprocessor = Path(model_name_or_path) / "preprocessor_config.json"
+
+                # model_name_or_path may be a local directory or a Hub id; check the local path first and
+                # fall back to the Hub download cache before giving up.
+                if source_preprocessor.exists():
+                    shutil.copy2(source_preprocessor, dest_preprocessor)
+                    logger.info("Copied preprocessor_config.json from local model")
+                else:
+                    cached_config = try_to_load_from_cache(model_name_or_path, "preprocessor_config.json")
+                    # try_to_load_from_cache returns the cached path (str) on a hit, None when the file
+                    # was never cached, or the _CACHED_NO_EXIST sentinel object when its absence is cached.
+                    # Only a str is a usable path, so test for that rather than against the sentinels.
+                    if isinstance(cached_config, str):
+                        shutil.copy2(cached_config, dest_preprocessor)
+                        logger.info("Copied preprocessor_config.json from Hub cache")
+                    else:
+                        logger.warning(
+                            f"preprocessor_config.json not found for {model_name_or_path}. "
+                            f"The exported model may not work correctly."
+                        )
+            except Exception as ex:
+                logger.warning(f"Failed to copy preprocessor_config.json: {ex}")
+
         # phi4mm does not allow loading chat template in processor, it uses chat_template from tokenizer
         if model_type == "phi4mm" and (Path(output) / "chat_template.json").exists():
             (Path(output) / "chat_template.json").unlink()
