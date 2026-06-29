@@ -870,6 +870,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             trust_remote_code=trust_remote_code,
             compile=False,
             device=OPENVINO_DEVICE,
+            ov_config=F32_CONFIG,
         )
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
 
