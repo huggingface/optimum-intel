@@ -20,7 +20,7 @@ from huggingface_hub import HfApi, constants, scan_cache_dir, snapshot_download
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "openvino"))
 
-from utils_tests import MODEL_NAMES
+from utils_tests import HUB_MODEL_NAMES
 
 
 # github actions repo cache limit is 10 GB so using 9 GB
@@ -41,7 +41,7 @@ def hub_size(api: HfApi, repo_id: str) -> int:
 def main() -> None:
     api = HfApi()
     candidates = {}
-    for name, repo_id in MODEL_NAMES.items():
+    for name, repo_id in HUB_MODEL_NAMES.items():
         if not isinstance(repo_id, str) or not repo_id or repo_id.startswith("/"):
             continue
         candidates[repo_id] = name
@@ -93,8 +93,8 @@ def main() -> None:
     print(f"Actual cache        : {actual_size:.2f} GB, sum_repo_size {sum_repo_size / 10**9:.0f} GB")
 
     final_cached_repos = {repo.repo_id for repo in final_cache_info.repos}
-    name_of = {repo_id: name for name, repo_id in MODEL_NAMES.items()}
-    downloaded_repo_ids = {repo_id for name, repo_id in MODEL_NAMES.items() if name in set(downloaded)}
+    name_of = {repo_id: name for name, repo_id in HUB_MODEL_NAMES.items()}
+    downloaded_repo_ids = {repo_id for name, repo_id in HUB_MODEL_NAMES.items() if name in set(downloaded)}
 
     in_cache_not_downloaded = final_cached_repos - downloaded_repo_ids
     in_downloaded_not_in_cache = downloaded_repo_ids - final_cached_repos
