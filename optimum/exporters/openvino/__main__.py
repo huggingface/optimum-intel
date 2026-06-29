@@ -772,6 +772,10 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
     from optimum.exporters.openvino.convert import export_tokenizer
 
     if is_openvino_tokenizers_available():
+        model_type = None
+        if model and hasattr(model, "config"):
+            model_type = getattr(model.config, "export_model_type", None) or getattr(model.config, "model_type", None)
+
         if library_name != "diffusers" and preprocessors:
             processor_chat_template = None
             tokenizer = next(filter(lambda it: isinstance(it, PreTrainedTokenizerBase), preprocessors), None)
@@ -781,7 +785,13 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
                         processor_chat_template = processor.chat_template
             if tokenizer:
                 try:
-                    export_tokenizer(tokenizer, output, task=task, processor_chat_template=processor_chat_template)
+                    export_tokenizer(
+                        tokenizer,
+                        output,
+                        task=task,
+                        processor_chat_template=processor_chat_template,
+                        model_type=model_type,
+                    )
                 except Exception as exception:
                     logger.warning(
                         "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer "
@@ -791,7 +801,7 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
             for tokenizer_name in ("tokenizer", "tokenizer_2", "tokenizer_3"):
                 tokenizer = getattr(model, tokenizer_name, None)
                 if tokenizer:
-                    export_tokenizer(tokenizer, output / tokenizer_name, task=task)
+                    export_tokenizer(tokenizer, output / tokenizer_name, task=task, model_type=model_type)
     else:
         logger.warning("Tokenizer won't be converted.")
 

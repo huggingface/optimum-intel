@@ -1185,7 +1185,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     def _generate_random_audio_data(self):
         np.random.seed(10)
-        t = np.linspace(0, 5.0, int(5.0 * 22050), endpoint=False)
+        sampling_rate = 16000
+        t = np.linspace(0, 5.0, int(5.0 * sampling_rate), endpoint=False)
         # generate pure sine wave at 220 Hz
         audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
         return (audio_data, 16000)
@@ -1378,9 +1379,10 @@ def _build_qwen3_omni_preprocessors():
 
 def _generate_random_audio_data():
     np.random.seed(10)
-    t = np.linspace(0, 5.0, int(5.0 * 22050), endpoint=False)
+    sampling_rate = 16000
+    t = np.linspace(0, 5.0, int(5.0 * sampling_rate), endpoint=False)
     audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
-    return (audio_data, 16000)
+    return (audio_data, sampling_rate)
 
 
 @unittest.skipUnless(

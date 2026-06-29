@@ -27,9 +27,9 @@ from optimum.intel.openvino import (
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
+    OVModelForOmni,
     OVModelForQuestionAnswering,
     OVModelForSeq2SeqLM,
-    OVModelForOmni,
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
     OVModelForTextToSpeechSeq2Seq,
@@ -89,10 +89,26 @@ def get_openvino_model_class(
             config = AutoConfig.from_pretrained(model_id, **hub_kwargs)
         if any(arch.endswith("ForCTC") for arch in config.architectures):
             ov_model_class = OV_TASKS_MAPPING[task][0]
+        elif getattr(config, "model_type", None) == "qwen3_omni":
+            ov_model_class = OV_TASKS_MAPPING[task][2]
         else:
             ov_model_class = OV_TASKS_MAPPING[task][1]
     else:
-        ov_model_class = OV_TASKS_MAPPING[task][0]
+        task_classes = OV_TASKS_MAPPING[task]
+        if len(task_classes) > 1 and OVModelForOmni in task_classes:
+            if config is None:
+                hub_kwargs = {
+                    "trust_remote_code": model_kwargs.pop("trust_remote_code", False),
+                    "revision": model_kwargs.pop("revision", None),
+                    "token": model_kwargs.pop("token", None),
+                }
+                config = AutoConfig.from_pretrained(model_id, **hub_kwargs)
+            if getattr(config, "model_type", None) == "qwen3_omni":
+                ov_model_class = OVModelForOmni
+            else:
+                ov_model_class = task_classes[0]
+        else:
+            ov_model_class = task_classes[0]
 
     return ov_model_class
 

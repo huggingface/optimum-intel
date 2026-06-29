@@ -1,5 +1,6 @@
 import copy
 import enum
+import hashlib
 import importlib
 import inspect
 import logging
@@ -10,6 +11,7 @@ import threading
 import types
 import warnings
 from abc import abstractmethod
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
@@ -198,9 +200,11 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
             if self.config.model_type in ["qwen3_5", "qwen3_5_moe"] and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 4, axis=0)
-            elif self.config.model_type in ["qwen2_vl", "qwen3_vl"] and position_ids.ndim != 3:
+            elif self.config.model_type in ["qwen2_vl", "qwen3_vl"] and position_ids.ndim == 2:
+                # Qwen2-VL and Qwen3-VL use 3D mrope (3 spatial dimensions)
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
-            elif self.config.model_type == "qwen3_omni" and position_ids.ndim != 3:
+            elif self.config.model_type == "qwen3_omni" and position_ids.ndim == 2:
+                # Qwen3-Omni uses 4D mrope (temporal + 3 spatial dimensions)
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 4, axis=0)
 
             inputs["position_ids"] = position_ids
@@ -415,14 +419,15 @@ class OVTalkerDecoder(OVModelPart):
         **kwargs,
     ):
         self.compile()
+        if self._infer_request is None:
+            raise ValueError("Talker model not loaded or compilation failed. Cannot generate audio.")
         batch_size = inputs_embeds.shape[0]
 
         inputs = {}
         if past_key_values is None:
-            if self._infer_request is not None:
-                self._infer_request.reset_state()
-                self.next_beam_idx = np.arange(batch_size, dtype=int)
-                self._past_length = 0
+            self._infer_request.reset_state()
+            self.next_beam_idx = np.arange(batch_size, dtype=int)
+            self._past_length = 0
 
         past_len = self._past_length
         inputs["inputs_embeds"] = inputs_embeds
@@ -471,15 +476,111 @@ class OVCodePredictorDecoder(OVTalkerDecoder):
 
 
 class OVCode2Wav(OVModelPart):
+    """Converts quantized audio codes to waveform output.
+
+    Supports async chunked inference along the time axis: when `chunk_size` is set and the
+    incoming codes are longer, the time axis is split into fixed-size windows submitted via
+    `start_async` against a pool of infer requests created from the same CompiledModel. When
+    `chunk_overlap > 0`, adjacent windows are crossfaded linearly over the overlap region.
+    """
+
     _model_name = "code2wav"
 
     def __init__(self, model: ov.Model, parent_model: OVBaseModel) -> None:
         super().__init__(model, parent_model, model_name=self._model_name)
+        # `chunk_size=None` disables chunking; forward() falls back to a single synchronous call.
+        self.chunk_size: Optional[int] = None
+        self.chunk_overlap: int = 0
+        self._async_infer_requests: List[Any] = []
+
+    def _ensure_infer_pool(self, size: int) -> None:
+        if not isinstance(self.request, ov.CompiledModel):
+            return
+        while len(self._async_infer_requests) < size:
+            self._async_infer_requests.append(self.request.create_infer_request())
+
+    @staticmethod
+    def _estimate_samples_per_step(codes_dim_t: int, waveform_samples: int) -> int:
+        if codes_dim_t <= 0:
+            return 0
+        return waveform_samples // codes_dim_t
+
+    def _run_single(self, codes_chunk) -> np.ndarray:
+        result = self.request({"codes": codes_chunk})
+        # Result may be indexed by name or position; the code2wav graph has a single output.
+        if isinstance(result, dict):
+            return next(iter(result.values()))
+        return result[0]
+
+    def _run_chunked(self, codes: torch.Tensor, chunk_size: int, chunk_overlap: int) -> torch.Tensor:
+        codes_np = codes.detach().cpu().numpy() if isinstance(codes, torch.Tensor) else np.asarray(codes)
+        if codes_np.ndim != 3:
+            raise ValueError(f"Expected codes shape (B, G, T); got {codes_np.shape}")
+        batch, groups, total_t = codes_np.shape
+        if batch != 1:
+            raise ValueError(f"Chunked code2wav only supports batch_size=1; got {batch}")
+        if chunk_overlap >= chunk_size:
+            raise ValueError(f"chunk_overlap ({chunk_overlap}) must be strictly less than chunk_size ({chunk_size})")
+
+        stride = chunk_size - chunk_overlap
+        starts = list(range(0, max(total_t - chunk_overlap, 1), stride))
+        if starts[-1] + chunk_size < total_t:
+            starts.append(total_t - chunk_size) if total_t >= chunk_size else None
+
+        # Cap concurrency to avoid creating many more infer requests than available inference
+        # compute; a small fan-out (<=4) covers typical CPU/GPU plugins without oversubscribing.
+        self._ensure_infer_pool(min(len(starts), 4))
+        pool = self._async_infer_requests or [self.request]
+
+        # Dispatch chunks round-robin onto the pool; each request does start_async then wait.
+        segments: List[np.ndarray] = []
+        for i, start in enumerate(starts):
+            end = min(start + chunk_size, total_t)
+            chunk = codes_np[:, :, start:end]
+            req = pool[i % len(pool)] if pool else None
+            if isinstance(req, ov.InferRequest):
+                req.start_async({"codes": chunk}, share_inputs=True)
+                req.wait()
+                seg = req.get_output_tensor(0).data
+            else:
+                seg = self._run_single(chunk)
+            segments.append(np.ascontiguousarray(seg))
+
+        if not segments:
+            return torch.zeros(1, 0, dtype=torch.float32)
+
+        # Stitch segments back with a linear crossfade over `chunk_overlap` codes worth of samples.
+        # Audio is assumed to be last-dim; we estimate samples-per-code step from the first segment.
+        samples_per_step = self._estimate_samples_per_step(chunk_size, segments[0].shape[-1])
+        overlap_samples = samples_per_step * chunk_overlap if samples_per_step > 0 else 0
+
+        if overlap_samples <= 0 or len(segments) == 1:
+            waveform = np.concatenate(segments, axis=-1)
+        else:
+            pieces = [segments[0]]
+            for seg in segments[1:]:
+                prev = pieces[-1]
+                if prev.shape[-1] < overlap_samples or seg.shape[-1] < overlap_samples:
+                    # Not enough samples to crossfade; fall back to a hard concat.
+                    pieces.append(seg)
+                    continue
+                fade_in = np.linspace(0.0, 1.0, overlap_samples, dtype=seg.dtype)
+                fade_out = 1.0 - fade_in
+                merged_overlap = prev[..., -overlap_samples:] * fade_out + seg[..., :overlap_samples] * fade_in
+                pieces[-1] = prev[..., :-overlap_samples]
+                pieces.append(merged_overlap)
+                pieces.append(seg[..., overlap_samples:])
+            waveform = np.concatenate(pieces, axis=-1)
+
+        return torch.from_numpy(waveform).clone()
 
     def forward(self, codes: torch.Tensor) -> torch.Tensor:
         self.compile()
-        result = self.request({"codes": codes})
-        return torch.from_numpy(result[0]).clone()
+        chunk_size = self.chunk_size
+        codes_len = codes.shape[-1] if isinstance(codes, torch.Tensor) else np.asarray(codes).shape[-1]
+        if chunk_size is None or chunk_size <= 0 or codes_len <= chunk_size:
+            return torch.from_numpy(self._run_single(codes)).clone()
+        return self._run_chunked(codes, chunk_size, max(0, int(self.chunk_overlap)))
 
 
 class OVTalkerProjections(OVModelPart):
@@ -4113,6 +4214,20 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
         if is_transformers_version("<", "4.57.0.dev0"):
             raise Exception("Qwen3Omni is not supported in transformers versions earlier than 4.57.0.")
 
+        # Extract per-component device / ov_config overrides before passing ov_config to the
+        # OpenVINO core. Keys of the form "<component>.device" (e.g. "audio_encoder.device") pin
+        # that single component to a specific plugin; "<component>.ov_config" merges extra
+        # config into that component only. The base ov_config keeps only global keys.
+        ov_config_in = {} if ov_config is None else {**ov_config}
+        component_device_overrides, component_ov_config_overrides, base_ov_config = self._split_component_overrides(
+            ov_config_in
+        )
+        self._component_device_overrides = component_device_overrides
+        self._component_ov_config_overrides = component_ov_config_overrides
+
+        # Defer compile so we can apply per-component overrides before the first compile runs.
+        enable_compilation = kwargs.pop("compile", True)
+
         super().__init__(
             language_model=language_model,
             text_embeddings=text_embeddings,
@@ -4120,13 +4235,19 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
             config=config,
             device=device,
             dynamic_shapes=dynamic_shapes,
-            ov_config=ov_config,
+            ov_config=base_ov_config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
+            compile=False,
             **kwargs,
         )
         # OVQwen3OmniVisionEmbeddings merges deepstack into the vision graph; swap in for the default wrapper.
         self.vision_embeddings = OVQwen3OmniVisionEmbeddings(self.vision_embeddings.model, self)
+
+        self._apply_component_device_overrides()
+        if enable_compilation and not self._compile_only:
+            self.compile()
+
         self.rope_deltas = None
         self._collecting_hidden_states = False
         self._collected_hidden_states = []
@@ -4134,6 +4255,15 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
         self.num_grid_per_side = None
         self.spatial_merge_size = None
         self.rotary_pos_emb = None
+
+        # Segment-level LRUs survive across generate() calls. Keys are blake2b fingerprints
+        # (see _projection_key / _audio_key). Default capacity trades memory for hit rate;
+        # a single projected segment can be several MB, so 32 is a safe starting point.
+        # Not thread-safe: assumes single-threaded inference per model instance.
+        self._projection_cache: OrderedDict = OrderedDict()
+        self._audio_cache: OrderedDict = OrderedDict()
+        self._projection_cache_capacity = 32
+        self._audio_cache_capacity = 8
 
         self._cp_codec_embedding = None
         if model_save_dir is not None and self.code_predictor is not None:
@@ -4451,6 +4581,12 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
         return output
 
     def _process_audio_inputs(self, input_features, feature_attention_mask):
+        cache_key = self._audio_key(input_features, feature_attention_mask)
+        cached = self._lru_get(self._audio_cache, cache_key)
+        if cached is not None:
+            cached_features, cached_lens = cached
+            return cached_features.clone(), cached_lens.clone()
+
         thinker_config = getattr(self.config, "thinker_config", self.config)
         audio_config = getattr(thinker_config, "audio_config", None)
         n_window = getattr(audio_config, "n_window", 100) if audio_config else 100
@@ -4506,14 +4642,145 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
             audio_features = torch.cat(valid_tokens, dim=0)
         else:
             audio_features = audio_out
+        self._lru_put(
+            self._audio_cache,
+            cache_key,
+            (audio_features.clone(), aftercnn_lens.clone()),
+            self._audio_cache_capacity,
+        )
         return audio_features, aftercnn_lens
 
     @property
     def has_talker(self) -> bool:
         return self.talker is not None and self.code2wav is not None
 
+    @staticmethod
+    def _tensor_bytes(t):
+        if isinstance(t, torch.Tensor):
+            return t.detach().cpu().contiguous().numpy().tobytes()
+        if isinstance(t, np.ndarray):
+            return np.ascontiguousarray(t).tobytes()
+        return bytes(t)
+
+    @staticmethod
+    def _lru_get(cache: OrderedDict, key):
+        if key in cache:
+            cache.move_to_end(key)
+            return cache[key]
+        return None
+
+    @staticmethod
+    def _lru_put(cache: OrderedDict, key, value, capacity: int):
+        cache[key] = value
+        cache.move_to_end(key)
+        while len(cache) > capacity:
+            cache.popitem(last=False)
+
+    def _projection_key(self, role: str, input_ids_slice, mm_mask_slice):
+        h = hashlib.blake2b(digest_size=16)
+        h.update(role.encode("utf-8"))
+        h.update(self._tensor_bytes(input_ids_slice))
+        h.update(self._tensor_bytes(mm_mask_slice))
+        return h.digest()
+
+    def _audio_key(self, input_features, feature_attention_mask):
+        h = hashlib.blake2b(digest_size=16)
+        shape_bytes = np.asarray(tuple(input_features.shape), dtype=np.int64).tobytes()
+        h.update(shape_bytes)
+        raw = self._tensor_bytes(input_features)
+        # Large feature tensors are expensive to hash whole; 8 KB prefix + 8 KB suffix keeps
+        # collisions negligible for realistic audio inputs at < 1 ms cost.
+        if len(raw) > 16 * 1024:
+            h.update(raw[:8192])
+            h.update(raw[-8192:])
+            h.update(np.int64(len(raw)).tobytes())
+        else:
+            h.update(raw)
+        h.update(self._tensor_bytes(feature_attention_mask))
+        return h.digest()
+
+    def clear_projection_cache(self) -> None:
+        self._projection_cache.clear()
+
+    def clear_audio_cache(self) -> None:
+        self._audio_cache.clear()
+
+    # Components accepting per-component device / ov_config overrides. Keys outside this set
+    # (with a "<name>.device" or "<name>.ov_config" shape) are left in the base ov_config, so
+    # OpenVINO will raise if they do not match a valid plugin property.
+    _PER_COMPONENT_OVERRIDE_NAMES = frozenset(
+        {
+            "language_model",
+            "vision_embeddings",
+            "vision_embeddings_pos",
+            "audio_encoder",
+            "talker",
+            "talker_text_embeddings",
+            "talker_projections",
+            "code_predictor",
+            "code2wav",
+        }
+    )
+
+    @classmethod
+    def _split_component_overrides(
+        cls, ov_config: Dict[str, Any]
+    ) -> Tuple[Dict[str, str], Dict[str, Dict[str, Any]], Dict[str, Any]]:
+        device_overrides: Dict[str, str] = {}
+        ov_config_overrides: Dict[str, Dict[str, Any]] = {}
+        base: Dict[str, Any] = {}
+        for key, value in ov_config.items():
+            if isinstance(key, str) and "." in key:
+                component, _, suffix = key.partition(".")
+                if component in cls._PER_COMPONENT_OVERRIDE_NAMES:
+                    if suffix == "device" and isinstance(value, str):
+                        device_overrides[component] = value.upper()
+                        continue
+                    if suffix == "ov_config" and isinstance(value, dict):
+                        ov_config_overrides[component] = {**value}
+                        continue
+            base[key] = value
+        return device_overrides, ov_config_overrides, base
+
+    def _component_parts(self) -> Dict[str, Any]:
+        parts: Dict[str, Any] = {}
+        if getattr(self, "language_model", None) is not None:
+            parts["language_model"] = self.language_model
+        if getattr(self, "vision_embeddings", None) is not None:
+            parts["vision_embeddings"] = self.vision_embeddings
+        for name in self.additional_parts:
+            value = getattr(self, name, None)
+            if value is not None and not isinstance(value, ov.Model):
+                parts[name] = value
+        return parts
+
+    def _apply_component_device_overrides(self) -> None:
+        if not self._component_device_overrides and not self._component_ov_config_overrides:
+            return
+        parts = self._component_parts()
+        for name, device in self._component_device_overrides.items():
+            part = parts.get(name)
+            if part is None:
+                logger.warning("Per-component device override '%s.device' has no matching part; ignoring.", name)
+                continue
+            if hasattr(part, "_device_override"):
+                # OVModelPart path: the override attribute is consulted by the _device property.
+                part._device_override = device
+                continue
+            # OVBaseModel-derived parts (e.g. language_model) expose _device as a plain attribute.
+            descriptor_cls = next((cls_ for cls_ in type(part).__mro__ if "_device" in cls_.__dict__), None)
+            if descriptor_cls is None or not isinstance(descriptor_cls.__dict__["_device"], property):
+                part._device = device
+        for name, extra in self._component_ov_config_overrides.items():
+            part = parts.get(name)
+            if part is None:
+                logger.warning("Per-component ov_config override '%s.ov_config' has no matching part; ignoring.", name)
+                continue
+            merged = {**getattr(part, "ov_config", {}), **extra}
+            part.ov_config = merged
+
     def _get_talker_user_parts(
-        self, im_start_index, segment_end_index, multimodal_mask, thinker_hidden, thinker_embed
+        self, im_start_index, segment_end_index, multimodal_mask, thinker_hidden, thinker_embed, input_ids=None
     ):
         talker_config = getattr(self.config, "talker_config", None)
         if talker_config is None:
@@ -4523,10 +4790,19 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
             raise ValueError("talker_config.text_config not found in model configuration.")
         hidden_size = text_config.hidden_size
         batch_size = thinker_embed.shape[0]
+        user_mm_mask = multimodal_mask[:, im_start_index:segment_end_index]
+
+        cache_key = None
+        if input_ids is not None:
+            id_slice = input_ids[:, im_start_index:segment_end_index]
+            cache_key = self._projection_key("user", id_slice, user_mm_mask)
+            cached = self._lru_get(self._projection_cache, cache_key)
+            if cached is not None:
+                return cached.clone()
+
         user_talker_part = torch.zeros(
             (batch_size, segment_end_index - im_start_index, hidden_size), dtype=torch.float32
         )
-        user_mm_mask = multimodal_mask[:, im_start_index:segment_end_index]
 
         if user_mm_mask.any():
             user_thinker_hidden_mm = thinker_hidden[:, im_start_index:segment_end_index][user_mm_mask]
@@ -4542,6 +4818,9 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
         user_text_hidden = self.talker_projections.text_projection(user_thinker_embed)
         user_text_hidden = user_text_hidden.squeeze(0) if user_text_hidden.ndim == 3 else user_text_hidden
         user_talker_part[~user_mm_mask] = user_text_hidden.float()
+
+        if cache_key is not None:
+            self._lru_put(self._projection_cache, cache_key, user_talker_part.clone(), self._projection_cache_capacity)
         return user_talker_part
 
     def _get_talker_assistant_parts(
@@ -4626,6 +4905,10 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
         tts_pad_embed,
         talker_kwargs,
     ):
+        batch_size = talker_input_embeds.shape[0]
+        if batch_size != 1:
+            raise ValueError(f"Talker generation only supports batch_size=1, got {batch_size}")
+
         talker_config = getattr(self.config, "talker_config", None)
         if talker_config is None:
             raise ValueError("talker_config is required for talker generation")
@@ -4859,7 +5142,12 @@ class _OVQwen3OmniForCausalLM(OVModelForVisualCausalLM):
                 continue
             elif role_token == user_token_id:
                 user_part = self._get_talker_user_parts(
-                    im_start_index, segment_end_index, multimodal_mask, thinker_hidden, thinker_embed
+                    im_start_index,
+                    segment_end_index,
+                    multimodal_mask,
+                    thinker_hidden,
+                    thinker_embed,
+                    input_ids=input_ids,
                 )
                 talker_input_embeds.append(user_part)
             elif role_token == assistant_token_id and i == len(im_start_indexes) - 2:
@@ -4908,6 +5196,7 @@ class OVModelForOmni(OVBaseModel, GenerationMixin):
         self.config = _inner.config
         self.model_save_dir = _inner.model_save_dir
         self._device = _inner._device
+        self.ov_config = _inner.ov_config
         self.generation_config = _inner.generation_config
         self.is_dynamic = _inner.is_dynamic
         self.use_cache = _inner.use_cache
@@ -4915,6 +5204,7 @@ class OVModelForOmni(OVBaseModel, GenerationMixin):
         self._compile_only = _inner._compile_only
         self._supports_cache_class = False
         self.main_input_name = "input_ids"
+        self._openvino_config = getattr(_inner, "_openvino_config", None)
 
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
@@ -5010,6 +5300,12 @@ class OVModelForOmni(OVBaseModel, GenerationMixin):
 
     def clear_requests(self):
         self._inner.clear_requests()
+
+    def clear_projection_cache(self) -> None:
+        self._inner.clear_projection_cache()
+
+    def clear_audio_cache(self) -> None:
+        self._inner.clear_audio_cache()
 
     def half(self):
         self._inner.half()

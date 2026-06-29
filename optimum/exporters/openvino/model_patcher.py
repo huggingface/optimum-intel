@@ -4903,7 +4903,10 @@ class Qwen3OmniLanguageModelPatcher(OVDecoderModelPatcher):
             deepstack_visual_embeds,
             use_cache=True,
         ):
-            pkv = DynamicCache.from_legacy_cache(past_key_values)
+            if is_transformers_version("<", "5"):
+                pkv = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                pkv = DynamicCache(past_key_values)
             outputs = self.thinker.model(
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
@@ -4916,10 +4919,11 @@ class Qwen3OmniLanguageModelPatcher(OVDecoderModelPatcher):
             )
             hidden_states = outputs[0]
             logits = self.thinker.lm_head(hidden_states)
+            pkv_tuple = postprocess_past_key_values(outputs.past_key_values)
             if accept_hidden_layer is not None:
                 intermediate_hidden_states = outputs.hidden_states[accept_hidden_layer]
-                return (logits, hidden_states, intermediate_hidden_states, outputs.past_key_values.to_legacy_cache())
-            return (logits, hidden_states, outputs.past_key_values.to_legacy_cache())
+                return (logits, hidden_states, intermediate_hidden_states, pkv_tuple)
+            return (logits, hidden_states, pkv_tuple)
 
         model.__orig_forward = model.forward
         model.forward = types.MethodType(lm_forward, model)
@@ -4945,7 +4949,10 @@ class Qwen3OmniTalkerLanguageModelPatcher(OVDecoderModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         def lm_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values, use_cache=True):
-            pkv = DynamicCache.from_legacy_cache(past_key_values)
+            if is_transformers_version("<", "5"):
+                pkv = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                pkv = DynamicCache(past_key_values)
             outputs = self.talker.model(
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
@@ -4955,7 +4962,7 @@ class Qwen3OmniTalkerLanguageModelPatcher(OVDecoderModelPatcher):
             )
             hidden_states = outputs[0]
             logits = self.talker.codec_head(hidden_states)
-            return (logits, hidden_states, outputs.past_key_values.to_legacy_cache())
+            return (logits, hidden_states, postprocess_past_key_values(outputs.past_key_values))
 
         model.__orig_forward = model.forward
         model.forward = types.MethodType(lm_forward, model)
