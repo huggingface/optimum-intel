@@ -8894,7 +8894,6 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         self.rotary_emb = Qwen3RotaryEmbedding(config)
         self.fc = nn.Linear(len(self.target_layer_ids) * config.hidden_size, config.hidden_size, bias=False)
         self.hidden_norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.block_size = config.block_size
         self.mask_token_id = dflash_config.get("mask_token_id", None)
         self.post_init()
 

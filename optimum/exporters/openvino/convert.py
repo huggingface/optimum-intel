@@ -1092,7 +1092,6 @@ def _add_dflash_mode_to_rt_info(model: Model, hf_config):
     """
     try:
         model.set_rt_info("True", ["dflash_mode"])
-        model.set_rt_info(str(getattr(hf_config, "block_size", "")), ["dflash", "block_size"])
         model.set_rt_info("committed_prefix", ["dflash", "cache_policy"])
         dflash_config = getattr(hf_config, "dflash_config", {})
         if "mask_token_id" in dflash_config:
