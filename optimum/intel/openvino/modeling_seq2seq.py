@@ -13,6 +13,7 @@
 #  limitations under the License.
 import logging
 import os
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -23,8 +24,11 @@ from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import CompiledModel, Core
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
+from torch import nn
+from torch.nn import functional as F
 from transformers import (
     AutoConfig,
+    AutoModelForImageTextToText,
     AutoModelForSeq2SeqLM,
     AutoModelForSpeechSeq2Seq,
     GenerationConfig,
@@ -53,21 +57,6 @@ from .utils import (
     TemporaryDirectory,
     classproperty,
 )
-
-
-# AutoModelForVision2Seq is deprecated since v4.54
-# https://github.com/huggingface/transformers/blob/v4.54.0/src/transformers/models/auto/modeling_auto.py#L2151
-if is_transformers_version(">=", "4.54.0"):
-    from transformers import AutoModelForImageTextToText
-
-    transformers_auto_class = AutoModelForImageTextToText
-else:
-    from transformers import AutoModelForVision2Seq
-
-    transformers_auto_class = AutoModelForVision2Seq
-
-from torch import nn
-from torch.nn import functional as F
 
 
 core = Core()
@@ -910,6 +899,8 @@ class OVEncoder(OVModelPart):
 
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names:
+            if attention_mask is None:
+                attention_mask = torch.ones_like(inputs[self.main_input_name])
             inputs["attention_mask"] = attention_mask
 
         # Qwen3-ASR requires input_features chunking before passing to encoder for processing of long audios.
@@ -1104,8 +1095,8 @@ class OVDecoder(OVModelPart):
     """,
     INPUTS_DOCSTRING,
 )
-class OVModelForVision2Seq(OVModelForSeq2SeqLM):
-    auto_model_class = transformers_auto_class
+class OVModelForImageTextToText(OVModelForSeq2SeqLM):
+    auto_model_class = AutoModelForImageTextToText
     main_input_name = "pixel_values"
     export_feature = "image-to-text"
 
@@ -1163,7 +1154,7 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
         + IMAGE_TO_TEXT_EXAMPLE.format(
             processor_class=_PROCESSOR_FOR_DOC,
             tokenizer_class=_TOKENIZER_FOR_DOC,
-            model_class="OVModelForVision2Seq",
+            model_class="OVModelForImageTextToText",
             checkpoint="microsoft/trocr-small-handwritten",
         )
     )
@@ -1209,15 +1200,15 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
     """,
     INPUTS_DOCSTRING,
 )
-class OVModelForPix2Struct(OVModelForVision2Seq):
+class OVModelForPix2Struct(OVModelForImageTextToText):
     auto_model_class = Pix2StructForConditionalGeneration
     main_input_name = "flattened_patches"
     export_feature = "image-to-text"
 
-    # this is needed to avoid circular calls when OVModelForVision2Seq is called to instantiate a OVModelForPix2Struct
+    # this is needed to avoid circular calls when OVModelForImageTextToText is called to instantiate a OVModelForPix2Struct
     @classmethod
     def _from_pretrained(cls, model_id: Union[str, Path], config: "PretrainedConfig", **kwargs):
-        return super(OVModelForVision2Seq, cls)._from_pretrained(model_id, config, **kwargs)
+        return super(OVModelForImageTextToText, cls)._from_pretrained(model_id, config, **kwargs)
 
     def prepare_inputs_for_generation(
         self,
@@ -1291,6 +1282,18 @@ class OVModelForPix2Struct(OVModelForVision2Seq):
                     shapes[inputs][1] = -1
         model.reshape(shapes)
         return model
+
+
+class OVModelForVision2Seq(OVModelForImageTextToText):
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        warnings.warn(
+            "OVModelForVision2Seq is deprecated and will be removed in a future release. "
+            "Use OVModelForImageTextToText instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        return super().from_pretrained(*args, **kwargs)
 
 
 @add_start_docstrings(
@@ -1571,18 +1574,3 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
             "decoder_position_ids": decoder_position_ids,
             "cache_position": cache_position,
         }
-
-    def _get_logits_processor(self, generation_config: GenerationConfig, *args, **kwargs):
-        # Whisper uses forced_decoder_ids for default task and language specification, while original _get_logits_processor does not allow it
-        # see for details https://github.com/huggingface/transformers/issues/37172
-        if not hasattr(generation_config, "forced_decoder_ids") or is_transformers_version(">=", "4.53.0"):
-            # since transformers 4.53.0, forced_decoder_ids is deprecated: https://github.com/huggingface/transformers/pull/38232
-            logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
-        else:
-            forced_decoder_ids = generation_config.forced_decoder_ids
-
-            if is_transformers_version(">=", "4.50.0"):
-                generation_config.forced_decoder_ids = None
-            logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
-            generation_config.forced_decoder_ids = forced_decoder_ids
-        return logits_processor

@@ -105,7 +105,7 @@ from optimum.intel.openvino.utils import (
     TemporaryDirectory,
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import _langchain_hf_available, is_transformers_version
+from optimum.intel.utils.import_utils import _langchain_hf_available, is_datasets_version, is_transformers_version
 from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
@@ -226,10 +226,6 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     def test_load_from_hub_and_save_visual_language_model(self):
         model_ids = [self.OV_VLM_MODEL_ID]
-        if is_transformers_version(">=", "4.51") and is_transformers_version("<", "4.57"):
-            # the phi4 auto-processor can't be loaded in offline mode
-            # anymore due to an internal bug in transformers
-            model_ids.append("katuni4ka/phi-4-multimodal-ov")
         for model_id in model_ids:
             processor = AutoProcessor.from_pretrained(model_id)
             prompt = "What is shown in this image?"
@@ -939,8 +935,8 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     @pytest.mark.skipif(
-        is_transformers_version(">=", "5.3"),
-        reason="requires transformers < v5.3 since question-answering pipeline is deprecated in v5.3",
+        is_transformers_version(">=", "5.3") or is_datasets_version("<", "4"),
+        reason="requires datasets >= 4 or transformers < v5.3 since question-answering pipeline is deprecated in v5.3",
     )
     def test_metric(self):
         model_id = "distilbert-base-cased-distilled-squad"
@@ -1043,13 +1039,9 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         "distilbert",
         "roberta",
         "sentence-transformers-bert",
+        "qwen3",
+        "qwen3_vl_embedding",
     )
-
-    if is_transformers_version(">=", "4.57"):
-        SUPPORTED_ARCHITECTURES += ("qwen3_vl_embedding",)
-
-    if is_transformers_version(">=", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("qwen3",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1133,7 +1125,6 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "albert",
         "bert",
         "camembert",
-        "convbert",
         "deberta",
         "deberta-v2",
         "distilbert",
@@ -1150,13 +1141,12 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "xlm-roberta",
     )
 
-    # accuracy issue, need additional investigation
-    if is_transformers_version("<", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("nystromformer",)
-
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("data2vec-text", "flaubert", "xlm")
+
+    if is_transformers_version("!=", "5.2"):
+        SUPPORTED_ARCHITECTURES += ("convbert",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):

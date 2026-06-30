@@ -393,11 +393,11 @@ EAGLE3_VLM_MODELS = {
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "afmoe": {"model": 16},
-    "bert": {"model": 68 if is_transformers_version("<", "5") else 70},
+    "bert": {"model": 68 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 70},
     "roberta": {"model": 68},
     "albert": {"model": 84},
     "vit": {"model": 64},
-    "blenderbot": {"model": 70 if is_transformers_version("<", "5") else 72},
+    "blenderbot": {"model": 70 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 72},
     "cohere2": {"model": 30},
     "gpt2": {"model": 44},
     "granitemoehybrid": {"model": 118},
@@ -405,8 +405,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "distilbert": {"model": 66},
     "t5": {
         "encoder": 64,
-        "decoder": 104 if is_transformers_version("<", "5") else 106,
-        "decoder_with_past": 84 if is_transformers_version("<", "5") else 86,
+        "decoder": 104 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 106,
+        "decoder_with_past": 84 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 86,
     },
     "stable-diffusion": {
         "unet": 242,

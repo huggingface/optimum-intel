@@ -30,7 +30,6 @@ from optimum.utils import (
     FalconDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
     NormalizedTextConfig,
-    is_transformers_version,
 )
 from optimum.utils.input_generators import DTYPE_MAPPER
 from optimum.utils.normalized_config import NormalizedConfig, NormalizedVisionConfig
@@ -42,46 +41,27 @@ class GPTBigCodeDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         self.multi_query = normalized_config.multi_query
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if is_transformers_version("<", "4.54"):
-            if self.multi_query:
-                shape = (
-                    self.batch_size,
-                    self.sequence_length,
-                    self.hidden_size // self.num_attention_heads * 2,
-                )
-            else:
-                shape = (
-                    self.batch_size,
-                    self.num_attention_heads,
-                    self.sequence_length,
-                    self.hidden_size // self.num_attention_heads * 2,
-                )
-            pkv = [
-                self.random_float_tensor(shape, framework=framework, dtype=float_dtype) for _ in range(self.num_layers)
-            ]
-
+        if self.multi_query:
+            shape = (
+                self.batch_size,
+                1,
+                self.sequence_length,
+                self.hidden_size // self.num_attention_heads,
+            )
         else:
-            if self.multi_query:
-                shape = (
-                    self.batch_size,
-                    1,
-                    self.sequence_length,
-                    self.hidden_size // self.num_attention_heads,
-                )
-            else:
-                shape = (
-                    self.batch_size,
-                    self.num_attention_heads,
-                    self.sequence_length,
-                    self.hidden_size // self.num_attention_heads,
-                )
-            pkv = [
-                (
-                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
-                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
-                )
-                for _ in range(self.num_layers)
-            ]
+            shape = (
+                self.batch_size,
+                self.num_attention_heads,
+                self.sequence_length,
+                self.hidden_size // self.num_attention_heads,
+            )
+        pkv = [
+            (
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+            )
+            for _ in range(self.num_layers)
+        ]
 
         return pkv
 
