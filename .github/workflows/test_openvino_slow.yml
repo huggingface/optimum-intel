@@ -61,6 +61,14 @@ jobs:
           python -m pip install --upgrade pip uv
           uv pip install .[tests] librosa diffusers
 
+      - name: Restore HF models cache
+        id: hf-cache-restore
+        if: env.HF_TOKEN == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-models
+
       - if: ${{ matrix.transformers-version != 'latest' && matrix.transformers-version != 'main' }}
         name: Install specific dependencies and versions required for older transformers
         run: |
