@@ -25,6 +25,7 @@ from utils_tests import (
 from optimum.exporters.openvino.model_configs import (
     BitnetOpenVINOConfig,
     DeepseekOpenVINOConfig,
+    Gemma3nTextOpenVINOConfig,
     LFM2MoeOpenVINOConfig,
     LFM2OpenVINOConfig,
     Phi3OpenVINOConfig,
@@ -325,6 +326,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             supported_architectures -= {"lfm2_moe"}
         if is_transformers_version("<", str(Phi3OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"phi3"}
+        if is_transformers_version("<", str(Gemma3nTextOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"gemma3n_text"}
         # qwen3_vl_text a part of qwen3_vl architecture and is tested in seq2seq group
         if is_transformers_version(">=", str(Qwen3VLOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"qwen3_vl_text"}
