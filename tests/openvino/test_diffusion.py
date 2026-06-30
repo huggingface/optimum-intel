@@ -81,7 +81,6 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         "stable-diffusion-xl",
         "latent-consistency",
         "flux",
-        "flux.2-klein",
         "sana",
     ]
     NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES = [
@@ -90,6 +89,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         "stable-diffusion-3",
         "latent-consistency",
     ]
+
+    if is_diffusers_version(">=", "0.37.0"):
+        SUPPORTED_ARCHITECTURES.extend(["flux.2-klein"])
 
     if is_diffusers_version(">=", "0.33.0"):
         SUPPORTED_ARCHITECTURES.extend(["sana-sprint"])
