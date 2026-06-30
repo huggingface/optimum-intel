@@ -72,6 +72,11 @@ from optimum.exporters.openvino.input_generators import (
     Gemma4DummyPastKeyValuesGenerator,
     GPTBigCodeDummyPastKeyValuesGenerator,
     Lfm2DummyPastKeyValuesGenerator,
+    LTX2AudioVaeDecoderDummyInputGenerator,
+    LTX2ConnectorsDummyInputGenerator,
+    LTX2TransformerDummyInputGenerator,
+    LTX2VaeDummyInputGenerator,
+    LTX2VocoderDummyInputGenerator,
     LTXTransformerDummyInputGenerator,
     LTXVaeDummyInputGenerator,
     MambaCacheDummyInputGenerator,
@@ -125,6 +130,8 @@ from optimum.exporters.openvino.model_patcher import (
     KokoroModelPatcher,
     Lfm2ModelPatcher,
     Lfm2MoeModelPatcher,
+    LTX2ConnectorsPatcher,
+    LTX2TransformerPatcher,
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
     LlavaImageEmbeddingModelPatcher,
@@ -336,6 +343,10 @@ def init_model_configs():
     if is_diffusers_available() and "text-to-video" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"] = {}
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx-video"] = "LTXPipeline"
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx2-video"] = "LTX2Pipeline"
+    if is_diffusers_available() and "text-to-audio-video" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS:
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-audio-video"] = {}
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-audio-video"]["ltx2-video"] = "LTX2Pipeline"
 
 
 init_model_configs()
@@ -2314,6 +2325,31 @@ class Gemma2TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
         }
 
 
+@register_in_tasks_manager("gemma3-text-encoder", *["feature-extraction"], library_name="diffusers")
+class Gemma3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        allow_new=True,
+        vocab_size="text_config.vocab_size",
+        sequence_length="text_config.max_position_embeddings",
+        num_layers="text_config.num_hidden_layers",
+    )
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        outputs = {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
+        num_layers = getattr(self._normalized_config, "num_hidden_layers", 48)
+        for i in range(num_layers + 1):
+            outputs[f"hidden_states.{i}"] = {0: "batch_size", 1: "sequence_length"}
+        return outputs
+
+
 @register_in_tasks_manager("sana-transformer", *["semantic-segmentation"], library_name="diffusers")
 class SanaTransformerOpenVINOConfig(UNetOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
@@ -2530,6 +2566,138 @@ class LTXVideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {
             "out_sample": {0: "batch_size", 1: "video_sequence_length"},
+        }
+
+
+@register_in_tasks_manager("ltx2-vae-encoder", *["semantic-segmentation"], library_name="diffusers")
+class LTX2VaeEncoderOpenVINOConfig(VaeEncoderOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTX2VaeDummyInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_parameters": {0: "batch_size", 2: "num_frames", 3: "height_latent", 4: "width_latent"},
+        }
+
+
+@register_in_tasks_manager("ltx2-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
+class LTX2VaeDecoderOpenVINOConfig(VaeDecoderOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTX2VaeDummyInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+        }
+
+
+@register_in_tasks_manager("ltx2-connectors", *["semantic-segmentation"], library_name="diffusers")
+class LTX2ConnectorsOpenVINOConfig(VaeEncoderOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTX2ConnectorsDummyInputGenerator,)
+    _MODEL_PATCHER = LTX2ConnectorsPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "text_encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "video_text_embedding": {0: "batch_size", 1: "connector_sequence_length"},
+            "audio_text_embedding": {0: "batch_size", 1: "connector_sequence_length"},
+            "connector_attention_mask": {0: "batch_size", 1: "connector_sequence_length"},
+        }
+
+
+@register_in_tasks_manager("ltx2-video-transformer", *["semantic-segmentation"], library_name="diffusers")
+class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
+    _MODEL_PATCHER = LTX2TransformerPatcher
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        image_size="sample_size",
+        num_channels="in_channels",
+        hidden_size="caption_channels",
+        vocab_size="attention_head_dim",
+        allow_new=True,
+    )
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        LTX2TransformerDummyInputGenerator,
+        DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator,
+        DummySanaTimestepInputGenerator,
+    )
+
+    @property
+    def inputs(self):
+        return {
+            "hidden_states": {0: "batch_size", 1: "video_sequence_length"},
+            "audio_hidden_states": {0: "batch_size", 1: "audio_sequence_length"},
+            "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+            "audio_encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+            "encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
+            "audio_encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
+            "width": {},
+            "height": {},
+            "num_frames": {},
+            "fps": {},
+            "audio_num_frames": {},
+            "timestep": {0: "batch_size"},
+            "video_coords": {0: "batch_size", 2: "video_sequence_length"},
+            "audio_coords": {0: "batch_size", 2: "audio_sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "out_sample": {0: "batch_size", 1: "video_sequence_length"},
+            "audio_out_sample": {0: "batch_size", 1: "audio_sequence_length"},
+        }
+
+
+@register_in_tasks_manager("ltx2-audio-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
+class LTX2AudioVaeDecoderOpenVINOConfig(VaeDecoderOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTX2AudioVaeDecoderDummyInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_mel_bins"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "mel_bins"},
+        }
+
+
+@register_in_tasks_manager("ltx2-vocoder", *["semantic-segmentation"], library_name="diffusers")
+class LTX2VocoderOpenVINOConfig(VaeDecoderOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTX2VocoderDummyInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "hidden_states": {0: "batch_size", 2: "num_frames", 3: "mel_bins"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "audio_length"},
         }
 
 
