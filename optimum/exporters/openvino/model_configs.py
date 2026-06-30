@@ -14,6 +14,7 @@
 
 import enum
 import logging
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Union
 
 import torch
@@ -158,6 +159,8 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen2VLVisionEmbMergerPatcher,
     Qwen3_5ModelPatcher,
     Qwen3_5MoeModelPatcher,
+    Qwen3_5MTPModelPatcher,
+    Qwen3_5MTPModule,
     Qwen3_5VisionEmbMergerPatcher,
     Qwen3ASRModelPatcher,
     Qwen3MoeModelPatcher,
@@ -181,6 +184,7 @@ from optimum.intel.utils.import_utils import (
     is_openvino_version,
     is_transformers_version,
 )
+from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
     ASTDummyAudioInputGenerator,
     BartDummyTextInputGenerator,
@@ -3047,6 +3051,7 @@ class QwenVLConfigBehavior(str, enum.Enum):
     VISION_EMBEDDINGS_MERGER = "vision_embeddings_merger"
     TEXT_EMBEDDINGS = "text_embeddings"
     VISION_EMBEDDINGS_POS = "vision_embeddings_pos"
+    MTP = "mtp"
 
 
 @register_in_tasks_manager("qwen2_vl", *["image-text-to-text"], library_name="transformers")
@@ -5784,6 +5789,15 @@ class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "5.2.99"
     _MODEL_PATCHER = Qwen3_5ModelPatcher
 
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        common_outputs = OrderedDict({"logits": {0: "batch_size", 1: "sequence_length"}})
+        if getattr(self._normalized_config, "mtp_num_hidden_layers", 0) > 0:
+            common_outputs["last_hidden_state"] = {0: "batch_size", 1: "sequence_length"}
+        if self.use_past:
+            self.add_past_key_values(common_outputs, direction="outputs")
+        return common_outputs
+
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
             raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
@@ -5851,7 +5865,7 @@ class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
     library_name="transformers",
 )
 class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
-    SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior]
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior if model_type != QwenVLConfigBehavior.MTP]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
     MIN_TRANSFORMERS_VERSION = "5.2.0"
     MAX_TRANSFORMERS_VERSION = "5.2.99"
@@ -5877,6 +5891,12 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self._normalized_config.use_embed_dim = True
+
+        # Conditionally add MTP behavior if model has MTP layers
+        text_config = getattr(config, "text_config", config)
+        if getattr(text_config, "mtp_num_hidden_layers", 0) > 0:
+            if QwenVLConfigBehavior.MTP.value not in self.SUPPORTED_BEHAVIORS:
+                self.SUPPORTED_BEHAVIORS = self.SUPPORTED_BEHAVIORS + [QwenVLConfigBehavior.MTP.value]
 
     def with_behavior(
         self,
@@ -5921,6 +5941,28 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
                 preprocessors=self._preprocessors,
             )
 
+        if behavior == QwenVLConfigBehavior.MTP:
+            return Qwen3_5MTPOpenVINOConfig(
+                self._orig_config,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, QwenVLConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
+
+        if behavior == QwenVLConfigBehavior.MTP:
+            return Qwen3_5MTPModule.from_pretrained_model(model)
+
+        if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
+            vision_emb_pos = _get_model_attribute(model, "visual").pos_embed
+            vision_emb_pos.config = model.config.vision_config
+            return vision_emb_pos
+
+        return Qwen2VLOpenVINOConfig.get_model_for_behavior(model, behavior)
+
     def patch_model_for_export(self, model: Union["PreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
@@ -5942,6 +5984,84 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
                 "qwen3_5_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
             ).outputs
         raise Exception("Unknown Qwen3.5 behavior type.")
+
+
+class Qwen3_5MTPOpenVINOConfig(OpenVINOConfig):
+    """Export configuration for the Qwen3.5 MTP (Multi-Token Prediction) head."""
+
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    SUPPORTS_PAST = True
+    _MODEL_PATCHER = Qwen3_5MTPModelPatcher
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+    ):
+        text_config = getattr(config, "text_config", config)
+        super().__init__(
+            text_config,
+            task="text-generation-with-past",
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+        )
+        self._orig_config = config
+        self.use_past = True
+        self.use_past_in_inputs = True
+        self._text_config = text_config
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = OrderedDict(
+            {
+                "hidden_states": {0: "batch_size", 1: "sequence_length"},
+                "inputs_embeds": {0: "batch_size", 1: "sequence_length"},
+                "attention_mask": {0: "batch_size", 1: "past_sequence_length + sequence_length"},
+                "position_ids": {0: "batch_size", 1: "sequence_length"},
+            }
+        )
+        if self.use_past_in_inputs:
+            common_inputs["past_key_values.0.key"] = {0: "batch_size", 2: "past_sequence_length"}
+            common_inputs["past_key_values.0.value"] = {0: "batch_size", 2: "past_sequence_length"}
+        return common_inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        common_outputs = OrderedDict({"last_hidden_state": {0: "batch_size", 1: "sequence_length"}})
+        if self.use_past:
+            common_outputs["present_key_values.0.key"] = {0: "batch_size", 2: "past_sequence_length + sequence_length"}
+            common_outputs["present_key_values.0.value"] = {0: "batch_size", 2: "past_sequence_length + sequence_length"}
+        return common_outputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        import torch
+
+        text_config = self._text_config
+        batch_size = kwargs.get("batch_size", DEFAULT_DUMMY_SHAPES["batch_size"])
+        sequence_length = kwargs.get("sequence_length", DEFAULT_DUMMY_SHAPES["sequence_length"])
+        past_sequence_length = kwargs.get("sequence_length", DEFAULT_DUMMY_SHAPES["sequence_length"])
+
+        hidden_size = text_config.hidden_size
+        num_kv_heads = text_config.num_key_value_heads
+        head_dim = text_config.head_dim
+
+        dummy_inputs = {
+            "hidden_states": torch.zeros(batch_size, sequence_length, hidden_size),
+            "inputs_embeds": torch.zeros(batch_size, sequence_length, hidden_size),
+            "attention_mask": torch.ones(batch_size, past_sequence_length + sequence_length, dtype=torch.int64),
+            "position_ids": torch.arange(sequence_length).unsqueeze(0).expand(batch_size, -1),
+        }
+        if self.use_past_in_inputs:
+            dummy_inputs["past_key_values"] = [
+                torch.zeros(batch_size, num_kv_heads, past_sequence_length, head_dim),
+                torch.zeros(batch_size, num_kv_heads, past_sequence_length, head_dim),
+            ]
+        return dummy_inputs
+
+    def patch_model_for_export(self, model, model_kwargs=None):
+        model_kwargs = model_kwargs or {}
+        return self._MODEL_PATCHER(self, model, model_kwargs)
 
 
 @register_in_tasks_manager(
