@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from huggingface_hub import constants
+from huggingface_hub import constants, get_token
 
 
 # fmt: off
@@ -12,3 +12,5 @@ CI_TOKEN = "".join(['h', 'f', '_', 'X', 'N', 'C', 'O', 'g', 'A', 'O', 'g', 'S', 
 token_path = Path(constants.HF_TOKEN_PATH)
 token_path.parent.mkdir(parents=True, exist_ok=True)
 token_path.write_text(CI_TOKEN)
+
+assert get_token() == CI_TOKEN, f"Token was not saved correctly to {constants.HF_TOKEN_PATH}"
