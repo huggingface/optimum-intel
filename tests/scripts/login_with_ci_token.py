@@ -14,3 +14,4 @@ token_path.parent.mkdir(parents=True, exist_ok=True)
 token_path.write_text(CI_TOKEN)
 
 assert get_token() == CI_TOKEN, f"Token was not saved correctly to {constants.HF_TOKEN_PATH}"
+print(get_token(), CI_TOKEN)
