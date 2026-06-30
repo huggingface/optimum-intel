@@ -102,9 +102,6 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
 
-    if is_transformers_version(">=", "4.50"):
-        SUPPORTED_ARCHITECTURES.update({"gemma3n": OVModelForVisualCausalLM})
-
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES.update({"granitemoehybrid": OVModelForCausalLM, "smollm3": OVModelForCausalLM})
 
@@ -139,6 +136,7 @@ class ExportModelTest(unittest.TestCase):
 
     if is_transformers_version(">=", "5.0"):
         SUPPORTED_ARCHITECTURES.update({"lfm2_moe": OVModelForCausalLM})
+        SUPPORTED_ARCHITECTURES.update({"gemma3n": OVModelForVisualCausalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},

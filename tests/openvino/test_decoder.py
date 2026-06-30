@@ -93,9 +93,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
         SUPPORTED_ARCHITECTURES += ("phi3-longrope",)
 
-    if is_transformers_version(">=", "4.50"):
-        SUPPORTED_ARCHITECTURES += ("gemma3n_text",)
-
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_SSM_ARCHITECTURES += ("granitemoehybrid",)
 
@@ -108,6 +105,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "5.0"):
         SUPPORTED_SSM_ARCHITECTURES += ("lfm2_moe",)
+        SUPPORTED_ARCHITECTURES += ("gemma3n_text",)
 
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 

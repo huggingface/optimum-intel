@@ -686,7 +686,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             SUPPORT_AUDIO.append("phi4mm")
 
     if is_transformers_version(">=", "4.50"):
-        SUPPORTED_ARCHITECTURES += ["gemma3", "gemma3n"]
+        SUPPORTED_ARCHITECTURES += ["gemma3"]
         # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
         if is_transformers_version("<", "5"):
             SUPPORTED_ARCHITECTURES += ["smolvlm"]
@@ -717,6 +717,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     if is_transformers_version(">=", "5.5"):
         SUPPORTED_ARCHITECTURES += ["gemma4", "gemma4_moe"]
+
+    if is_transformers_version(">=", "5.0"):
+        SUPPORTED_ARCHITECTURES += ["gemma3n"]
 
     if is_transformers_version(">=", "5.10"):
         SUPPORTED_ARCHITECTURES += ["gemma4_unified"]
