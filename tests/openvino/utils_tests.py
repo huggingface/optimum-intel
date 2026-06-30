@@ -23,6 +23,7 @@ from typing import Dict, Optional
 import numpy as np
 import openvino as ov
 import torch
+from huggingface_hub import constants, scan_cache_dir
 
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import is_transformers_version
@@ -150,7 +151,7 @@ TENSOR_ALIAS_TO_TYPE = {"pt": torch.Tensor, "np": np.ndarray}
 
 OPENVINO_DEVICE = os.getenv("OPENVINO_TEST_DEVICE", "CPU")
 
-MODEL_NAMES = {
+HUB_MODEL_NAMES = {
     "afmoe": "optimum-intel-internal-testing/tiny-random-trinity",
     "albert": "optimum-intel-internal-testing/tiny-random-albert",
     "aquila": "optimum-intel-internal-testing/tiny-random-aquilachat",
@@ -359,6 +360,24 @@ MODEL_NAMES = {
     "qwen3_vl_eagle3": "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
     "videochat_flash_qwen": "optimum-intel-internal-testing/tiny-videochat-flash-qwen",
 }
+
+
+def _resolve_cached_model_paths(model_names: dict) -> dict:
+    try:
+        if not os.path.exists(constants.HF_HUB_CACHE):
+            return model_names
+
+        repo_id_to_local_paths = {
+            repo.repo_id: str(next(iter(repo.revisions)).snapshot_path)
+            for repo in scan_cache_dir().repos
+            if repo.revisions
+        }
+        return {k: repo_id_to_local_paths.get(v, v) for k, v in model_names.items()}
+    except Exception:
+        return model_names
+
+
+MODEL_NAMES = _resolve_cached_model_paths(HUB_MODEL_NAMES)
 
 EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7B")}
 
