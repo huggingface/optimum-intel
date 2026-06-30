@@ -1347,7 +1347,7 @@ class Gemma4UnifiedTextOpenVINOConfig(Gemma4TextOpenVINOConfig):
     library_name="transformers",
 )
 class Gemma3nTextOpenVINOConfig(Gemma4TextOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = "5.0.0"
+    MIN_TRANSFORMERS_VERSION = "5.0"
 
 
 @register_in_tasks_manager("deci", *["text-generation", "text-generation-with-past"], library_name="transformers")
