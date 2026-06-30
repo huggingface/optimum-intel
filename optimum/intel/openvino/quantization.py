@@ -1641,7 +1641,15 @@ class OVQuantizer(OptimumQuantizer):
                 #
                 if isinstance(self.model, OVModelForVisualCausalLM):
                     quantization_configs["lm_model"] = quantization_config
-                    default_config = OVWeightQuantizationConfig(bits=8, sym=True)
+                    if getattr(self.model.config, "model_type", None) == "qwen3_omni":
+                        # For Qwen3-Omni only the language model is weight-compressed. The speech/vocoder
+                        # submodels (talker, code_predictor, code2wav, talker_text_embeddings, audio/vision/text
+                        # embeddings, ...) are highly sensitive to INT8 weight compression and produce corrupted
+                        # audio. They are therefore kept in their original precision (FP16), matching the
+                        # validated INT4 recipe. default_config=None means non-listed submodels are not quantized.
+                        default_config = None
+                    else:
+                        default_config = OVWeightQuantizationConfig(bits=8, sym=True)
                 else:
                     default_config = quantization_config
             elif not isinstance(quantization_config, OVPipelineQuantizationConfig):

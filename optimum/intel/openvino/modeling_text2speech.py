@@ -199,6 +199,13 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
             return _OVModelForKokoroTextToSpeech._from_pretrained(model_id, config, **kwargs)
         elif getattr(config, "architectures", None) and "SpeechT5ForTextToSpeech" in config.architectures:
             return _OVModelForSpeechT5ForTextToSpeech._from_pretrained(model_id, config, **kwargs)
+        elif getattr(config, "model_type", None) == "qwen3_omni":
+            # Qwen3-Omni is exported as a multi-submodel image-text-to-text pipeline, so reloading
+            # (e.g. for INT4 weight compression) must go through OVModelForVisualCausalLM, which knows
+            # how to load/quantize/save every submodel. This mirrors the working INT8 path.
+            from .modeling_visual_language import OVModelForVisualCausalLM
+
+            return OVModelForVisualCausalLM._from_pretrained(model_id, config, **kwargs)
         else:
             raise ValueError(f"{getattr(config, 'model_type')} are not supported text-to-audio model using OpenVINO")
 

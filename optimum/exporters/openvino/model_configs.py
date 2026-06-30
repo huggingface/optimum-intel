@@ -14,6 +14,7 @@
 
 import enum
 import logging
+import os
 from typing import Any, Dict, List, Optional, Union
 
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
@@ -3475,6 +3476,49 @@ class Qwen3OmniCodePredictorLMConfigHelper(LMInputEmbedsConfigHelper):
         }
 
 
+class Qwen3OmniCodePredictorStepLMConfigHelper(LMInputEmbedsConfigHelper):
+    # PoC: single-step CodePredictor. C++ loops, feeding the full embed sequence each step,
+    # so the graph holds one decoder block instead of num_code_groups-1 unrolled copies
+    # (~1/N fp32 intermediate). Stateless across calls (use_past=False), like the unrolled
+    # helper, so patch_stateful is skipped and no KV ports are exported.
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.use_past = False
+        self.use_past_in_inputs = False
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "inputs_embeds": {0: "batch_size", 1: "sequence_length"},
+            "temperature": {},
+            "top_k": {},
+            "seed": {},
+            "step_idx": {},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "token": {0: "batch_size"},
+            "codec_embed": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        import torch
+
+        talker_config = getattr(self._config, "talker_config", self._config)
+        cp_config = getattr(talker_config, "code_predictor_config", talker_config)
+        hidden_size = getattr(cp_config, "hidden_size", getattr(self._normalized_config, "hidden_size", 64))
+        return {
+            "inputs_embeds": torch.randn(1, 2, hidden_size, dtype=torch.float32),
+            "temperature": torch.tensor(0.9, dtype=torch.float32),
+            "top_k": torch.tensor(50, dtype=torch.int64),
+            "seed": torch.tensor(0, dtype=torch.int64),
+            "step_idx": torch.tensor(0, dtype=torch.int64),
+        }
+
+
 class DummyQwen3OmniAudioInputGenerator(DummyInputGenerator):
     SUPPORTED_INPUT_NAMES = ("padded_feature", "padded_mask_after_cnn", "aftercnn_lens", "cu_seqlens")
 
@@ -3775,17 +3819,27 @@ class Qwen3OmniOpenVINOConfig(BaseVLMOpenVINOConfig):
             return config
 
         if behavior == Qwen3OmniConfigBehavior.CODE_PREDICTOR:
-            from .model_patcher import Qwen3OmniCodePredictorPatcher
-
             talker_config = getattr(self._orig_config, "talker_config", self._orig_config)
             cp_config = getattr(talker_config, "code_predictor_config", talker_config)
             internal_config = get_vlm_internal_text_generation_config(
                 "qwen3_omni_talker_text", cp_config, self.int_dtype, self.float_dtype
             )
-            config = Qwen3OmniCodePredictorLMConfigHelper(
-                internal_config,
-                patcher_cls=Qwen3OmniCodePredictorPatcher,
-            )
+            # PoC: QWEN3_OMNI_CP_STEP=1 exports a single-step + stateful KV CodePredictor
+            # (C++ loops) instead of the default unrolled graph, cutting fp32 intermediate memory.
+            if os.environ.get("QWEN3_OMNI_CP_STEP", "0") not in ("0", "", "false", "False"):
+                from .model_patcher import Qwen3OmniCodePredictorStepPatcher
+
+                config = Qwen3OmniCodePredictorStepLMConfigHelper(
+                    internal_config,
+                    patcher_cls=Qwen3OmniCodePredictorStepPatcher,
+                )
+            else:
+                from .model_patcher import Qwen3OmniCodePredictorPatcher
+
+                config = Qwen3OmniCodePredictorLMConfigHelper(
+                    internal_config,
+                    patcher_cls=Qwen3OmniCodePredictorPatcher,
+                )
             config._normalized_config = internal_config._normalized_config
             return config
 

@@ -5076,6 +5076,85 @@ class Qwen3OmniCodePredictorPatcher(OVDecoderModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
+class Qwen3OmniCodePredictorStepPatcher(OVDecoderModelPatcher):
+    # PoC: single inner-step CodePredictor. Instead of unrolling all num_code_groups-1
+    # steps into one graph (huge fp32 intermediate pool), this exports ONE decoder pass.
+    # No KV cache is exported: the GenAI speech_pipeline.cpp feeds the full embed sequence
+    # so far ([prefix, first_code, code_1, ...]) each step and the model recomputes attention
+    # over it (cheap: <=num_code_groups tokens, tiny model). The compiled graph holds a single
+    # decoder block (~1/N intermediate memory) regardless of group count. Gumbel-max sampling
+    # stays in-graph for bit-exact reproducibility; step_idx selects the per-step lm_head / codec
+    # embedding so body weights are shared across steps.
+    # I/O: (inputs_embeds, temperature, top_k, seed, step_idx) -> token, codec_embed.
+
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        code_predictor = model.talker.code_predictor
+        code_predictor.float()
+
+        stacked_heads = torch.stack([head.weight for head in code_predictor.lm_head])
+        stacked_codec_embeds = torch.stack([emb.weight for emb in code_predictor.model.codec_embedding])
+
+        def _seeded_uniform(seed, shape, dtype, device):
+            idx = torch.arange(shape[-1], device=device, dtype=torch.float32)
+            seed_f = seed.to(torch.float32)
+            raw = torch.sin(seed_f * 12.9898 + idx * 78.233) * 43758.5453
+            u = raw - torch.floor(raw)
+            return u.clamp(min=1e-20, max=1.0 - 1e-20).to(dtype).expand(shape)
+
+        def _gumbel_sample(logits, top_k, seed):
+            sorted_logits, _ = torch.sort(logits, dim=-1, descending=True)
+            top_k_idx = torch.clamp(top_k.reshape(1) - 1, min=0)
+            threshold = torch.index_select(sorted_logits, -1, top_k_idx)
+            logits = torch.where(logits < threshold, torch.full_like(logits, float("-inf")), logits)
+            u = _seeded_uniform(seed, logits.shape, logits.dtype, logits.device)
+            gumbel = -torch.log(-torch.log(u))
+            return (logits + gumbel).argmax(dim=-1)
+
+        def cp_step_forward(
+            self,
+            inputs_embeds,
+            temperature,
+            top_k,
+            seed,
+            step_idx,
+            **kwargs,
+        ):
+            # inputs_embeds: [B, T, hidden] = full sequence so far (prefix + codes emitted).
+            # Stateless: a fresh cache is built each call, recomputing attention over T tokens.
+            if is_transformers_version("<", "5"):
+                pkv = DynamicCache.from_legacy_cache(None)
+            else:
+                pkv = DynamicCache(None)
+            outputs = self.talker.code_predictor.model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=None,
+                position_ids=None,
+                use_cache=False,
+                past_key_values=pkv,
+            )
+            hidden_states = outputs.last_hidden_state
+            head_w = torch.index_select(stacked_heads, 0, step_idx.reshape(1)).squeeze(0)
+            emb_w = torch.index_select(stacked_codec_embeds, 0, step_idx.reshape(1)).squeeze(0)
+            temperature_safe = torch.clamp(temperature, min=1e-6)
+            step_logits = torch.nn.functional.linear(hidden_states[:, -1, :], head_w) / temperature_safe
+            token = _gumbel_sample(step_logits, top_k, seed)  # [B]
+            token_embed = torch.nn.functional.embedding(token, emb_w).unsqueeze(1)  # [B, 1, hidden]
+            return token.unsqueeze(-1), token_embed
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(cp_step_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
 class Qwen3OmniCode2WavPatcher(ModelPatcher):
     def __init__(
         self,
