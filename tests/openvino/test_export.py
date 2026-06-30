@@ -31,6 +31,7 @@ from optimum.exporters.openvino import export_from_model, main_export
 from optimum.exporters.openvino.model_configs import BertOpenVINOConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
+    OVFlux2KleinPipeline,
     OVFluxPipeline,
     OVLatentConsistencyModelPipeline,
     OVLTXPipeline,
@@ -58,7 +59,7 @@ from optimum.intel import (
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version
+from optimum.intel.utils.import_utils import _transformers_version, is_diffusers_version, is_transformers_version
 from optimum.utils import logging
 from optimum.utils.save_utils import maybe_load_preprocessors
 
@@ -95,6 +96,9 @@ class ExportModelTest(unittest.TestCase):
         "ltx-video": OVLTXPipeline,
         "kokoro": OVModelForTextToSpeechSeq2Seq,
     }
+
+    if is_diffusers_version(">=", "0.37.0"):
+        SUPPORTED_ARCHITECTURES.update({"flux.2-klein": OVFlux2KleinPipeline})
 
     if is_transformers_version(">=", "4.48.0"):
         SUPPORTED_ARCHITECTURES.update({"cohere2": OVModelForCausalLM})
@@ -141,6 +145,7 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "stable-diffusion-3": {"text_encoder_3": "8.0"},
         "flux": {"text_encoder_2": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
+        "flux.2-klein": {"transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "stable-diffusion-xl-refiner": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "ltx-video": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
     }
