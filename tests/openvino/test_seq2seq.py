@@ -16,6 +16,7 @@ import copy
 import gc
 import os
 import unittest
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
@@ -455,7 +456,8 @@ class Qwen3ASRTest(unittest.TestCase):
     def _generate_audio_data(self):
         np.random.seed(SEED)
         sample_rate = 16000
-        t = np.linspace(0, 1.0, sample_rate, endpoint=False)
+        duration = 120
+        t = np.linspace(0, 1.0, sample_rate * duration, endpoint=False)
         audio_data = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
         return audio_data, sample_rate
 
@@ -716,6 +718,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     if is_transformers_version(">=", "5.5"):
         SUPPORTED_ARCHITECTURES += ["gemma4", "gemma4_moe"]
 
+    if is_transformers_version(">=", "5.10"):
+        SUPPORTED_ARCHITECTURES += ["gemma4_unified"]
+
     if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
         SUPPORTED_ARCHITECTURES += ["qwen3_5", "qwen3_5_moe"]
 
@@ -756,6 +761,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "qwen3_vl",
             "qwen3_5",
             "qwen3_5_moe",
+            "gemma4_unified",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -1280,6 +1286,19 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
         with TemporaryDirectory() as tmpdir:
             export_from_model(model=ref_model, output=tmpdir, task="text-to-audio", stateful=True)
+
+            # Verify that local voice .pt files were converted to .bin (regression for local export bug)
+            source_voices = sorted(Path(model_id).glob("voices/*.pt"))
+            self.assertGreater(len(source_voices), 0, "Test fixture has no source voice .pt files")
+            exported_voices = sorted(Path(tmpdir).glob("voices/*.bin"))
+            self.assertEqual(
+                len(exported_voices),
+                len(source_voices),
+                f"Expected {len(source_voices)} voice .bin files, found {len(exported_voices)}",
+            )
+            for bin_path in exported_voices:
+                self.assertGreater(bin_path.stat().st_size, 0, f"{bin_path.name} is empty")
+
             ov_model = self.OVMODEL_CLASS.from_pretrained(tmpdir, device=OPENVINO_DEVICE)
 
             self.assertIsInstance(ov_model, _OVModelForKokoroTextToSpeech)

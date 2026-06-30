@@ -16,6 +16,7 @@ import enum
 import logging
 from typing import Any, Dict, List, Optional, Union
 
+import torch
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
 from optimum.exporters.openvino.base import (
@@ -42,6 +43,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyAudioPhi4MMInputGenerator,
     DummyFluxTextInputGenerator,
     DummyFluxTransformerInputGenerator,
+    DummyGemma4UnifiedVisionInputGenerator,
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
@@ -104,6 +106,8 @@ from optimum.exporters.openvino.model_patcher import (
     Gemma3LMModelPatcher,
     Gemma4ImageEmbeddingsModelPatcher,
     Gemma4LMModelPatcher,
+    Gemma4UnifiedImageEmbeddingsModelPatcher,
+    Gemma4UnifiedLMModelPatcher,
     GptJModelPatcher,
     GptNeoModelPatcher,
     GptNeoxModelPatcher,
@@ -1319,6 +1323,25 @@ class Gemma4TextOpenVINOConfig(Gemma3TextOpenVINOConfig):
         for i, layer_type in enumerate(layer_types):
             inputs_or_outputs[f"{name}.{i}.key"] = {0: "batch_size", 2: decoder_sequence_name}
             inputs_or_outputs[f"{name}.{i}.value"] = {0: "batch_size", 2: decoder_sequence_name}
+
+
+@register_in_tasks_manager(
+    "gemma4_unified_text",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class Gemma4UnifiedTextOpenVINOConfig(Gemma4TextOpenVINOConfig):
+    # The gemma4_unified text model shares gemma4's KV-cache layout (mixed sliding/full
+    # attention, optional global KV heads / head dim), so add_past_key_values is inherited.
+    # It has no per-layer embeddings (PLE), so no extra inputs are required.
+    MIN_TRANSFORMERS_VERSION = "5.10"
+    MAX_TRANSFORMERS_VERSION = "5.10.99"
 
 
 @register_in_tasks_manager("deci", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -3487,6 +3510,7 @@ class Qwen3ASROpenVINOConfig(AudioToTextOpenVINOConfig):
             config.num_mel_bins = audio_config.num_mel_bins
             # Use output_dim (post-projection) as d_model since that's the actual encoder output size
             config.d_model = getattr(audio_config, "output_dim", audio_config.d_model)
+            config.n_window = getattr(audio_config, "n_window", None)
 
         if text_config is not None:
             config.num_hidden_layers = text_config.num_hidden_layers
@@ -4034,6 +4058,113 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
         if self._behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
             return {"text_embeds_per_layer": {}}
         return super().outputs
+
+
+@register_in_tasks_manager("gemma4_unified", *["image-text-to-text"], library_name="transformers")
+class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
+    # gemma4_unified (e.g. google/gemma-4-12B) reuses the gemma3 VLM scaffolding but has an
+    # encoder-free vision embedder and no per-layer text embeddings. We only support text and
+    # vision (audio is not exported).
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in VLMConfigBehavior]
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyTextInputGenerator)
+    MIN_TRANSFORMERS_VERSION = "5.10"
+    MAX_TRANSFORMERS_VERSION = "5.10.99"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+            behavior=behavior,
+        )
+        self._behavior = behavior
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4UnifiedVisionInputGenerator,)
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+            # The encoder-free vision embedder pads patches to image_seq_length (max_soft_tokens)
+            # merged patches. The dummy input must match the traced inference shapes.
+            image_seq_length = None
+            if preprocessors is not None:
+                for p in preprocessors:
+                    image_processor = getattr(p, "image_processor", p)
+                    image_seq_length = getattr(image_processor, "image_seq_length", None) or getattr(
+                        image_processor, "max_soft_tokens", None
+                    )
+                    if image_seq_length is not None:
+                        break
+            if image_seq_length is not None:
+                self._normalized_config.image_seq_length = image_seq_length
+        elif self._behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator,)
+            self._config = config.text_config
+            self._normalized_config = NormalizedTextConfig(self._config)
+
+    def with_behavior(self, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            inputs_update = {}
+            if getattr(self._orig_config.get_text_config(), "use_bidirectional_attention", None) == "vision":
+                inputs_update["token_type_ids"] = {0: "batch_size", 1: "sequence_length"}
+            return get_vlm_text_generation_config(
+                "gemma4_unified_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Gemma4UnifiedLMModelPatcher,
+                inputs_update=inputs_update,
+            )
+        return super().with_behavior(behavior)
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return model
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+
+            class TextEmbeddingsModule(torch.nn.Module):
+                def __init__(self, model):
+                    super().__init__()
+                    self.model = model
+
+                def forward(self, input_ids: torch.Tensor):
+                    return self.model.get_input_embeddings()(input_ids)
+
+            text_embedding = TextEmbeddingsModule(model)
+            text_embedding.config = model.model.language_model.config
+            return text_embedding
+
+        return super().get_model_for_behavior(model, behavior)
+
+    def patch_model_for_export(self, model, model_kwargs=None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return Gemma4UnifiedImageEmbeddingsModelPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {0: "batch_size", 1: "num_patches"},
+                "image_position_ids": {0: "batch_size", 1: "num_patches"},
+            }
+        return super().inputs
 
 
 @register_in_tasks_manager("idefics3", *["image-text-to-text"], library_name="transformers")

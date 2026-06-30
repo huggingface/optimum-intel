@@ -90,6 +90,7 @@ from utils_tests import (
     get_supported_model_for_library,
     TEST_NAME_TO_MODEL_TYPE,
     OPENVINO_DEVICE,
+    HUB_MODEL_NAMES,
 )
 
 _TASK_TO_DATASET = {
@@ -1176,7 +1177,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             {"bits": 4, "group_size": 8, "ratio": 0.5},
             {
                 "decoder": {"int8": 40, "int4": 4},
-                "encoder": {"int8": 24, "int4": 4},
+                "encoder": {"int8": 46, "int4": 6},
             },
         ),
     ]
@@ -1494,11 +1495,11 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_default_ignored_scope(self, model_cls, model_type, expected_ignored_scope_per_model):
         with unittest.mock.patch.dict(
             "optimum.intel.openvino.configuration._DEFAULT_IGNORED_SCOPE_CONFIGS",
-            {MODEL_NAMES[model_type]: expected_ignored_scope_per_model},
+            {HUB_MODEL_NAMES[model_type]: expected_ignored_scope_per_model},
             clear=False,
         ):
             with TemporaryDirectory() as tmp_dir:
-                model_id = MODEL_NAMES[model_type]
+                model_id = HUB_MODEL_NAMES[model_type]
                 model = model_cls.from_pretrained(
                     model_id,
                     export=True,
@@ -1867,8 +1868,8 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 num_samples=1,
                 processor=MODEL_NAMES["whisper"],
             ),
-            {"encoder": 14, "decoder": 22},
-            {"encoder": {"int8": 14}, "decoder": {"int8": 22}},
+            {"encoder": 26, "decoder": 22},
+            {"encoder": {"int8": 26}, "decoder": {"int8": 22}},
         ),
     ]
 
