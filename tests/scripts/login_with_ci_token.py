@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from huggingface_hub import constants
-from huggingface_hub.utils._auth import _write_secret
 
 
 # fmt: off
@@ -10,4 +9,6 @@ CI_TOKEN = "".join(['h', 'f', '_', 'X', 'N', 'C', 'O', 'g', 'A', 'O', 'g', 'S', 
 # fmt: on
 
 # save token directly to avoid whoami api call that causes rate limiting when many CI jobs run in parallel
-_write_secret(Path(constants.HF_TOKEN_PATH), CI_TOKEN)
+token_path = Path(constants.HF_TOKEN_PATH)
+token_path.parent.mkdir(parents=True, exist_ok=True)
+token_path.write_text(CI_TOKEN)
