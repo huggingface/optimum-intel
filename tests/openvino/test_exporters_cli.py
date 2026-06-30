@@ -226,6 +226,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "stable-diffusion-xl": 4,
         "stable-diffusion-3": 6,
         "flux": 4,
+        "flux.2-klein": 2,
         "flux-fill": 4,
         "lfm2": 2
         if is_openvino_version(">=", "2026.0")
