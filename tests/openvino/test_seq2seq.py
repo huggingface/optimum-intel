@@ -876,7 +876,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
         image = self.IMAGE.resize((600, 600))
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=image)
-        if model_arch == "gemma3":
+        if model_arch in ["gemma3", "gemma3n"]:
             # validate that preprocessed input ids contain exactly one bos token
             bos_token = preprocessors["processor"].tokenizer.vocab["<bos>"]
             input_ids = inputs["input_ids"]
