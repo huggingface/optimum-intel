@@ -347,7 +347,6 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             model_loading_kwargs["torch_dtype"] = torch_dtype
 
         variant = kwargs.pop("variant", None)
-        dflash_target_model = kwargs.pop("dflash_target_model", None)
 
         main_export(
             model_name_or_path=model_id,
@@ -365,7 +364,6 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             model_loading_kwargs=model_loading_kwargs,
             library_name=cls._library_name,
             variant=variant,
-            dflash_target_model=dflash_target_model,
         )
 
         if config.model_type == "phi3" and config.max_position_embeddings != getattr(

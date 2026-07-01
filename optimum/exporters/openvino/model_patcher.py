@@ -8684,78 +8684,6 @@ def _dflash_apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
     return q_embed, k_embed
 
 
-def _dflash_resolve_tensor_file(config: PretrainedConfig, tensor_name: str) -> str:
-    target_model = getattr(config, "dflash_target_model", None)
-    if target_model is None:
-        raise ValueError("DFlash logits export requires `dflash_target_model` to load target weights.")
-
-    target_path = Path(target_model)
-    if target_path.is_dir():
-        index_path = target_path / "model.safetensors.index.json"
-        if index_path.exists():
-            with index_path.open() as f:
-                weight_map = json.load(f)["weight_map"]
-            return str(target_path / weight_map[tensor_name])
-        single_file = target_path / "model.safetensors"
-        if single_file.exists():
-            return str(single_file)
-        raise FileNotFoundError(f"Could not find safetensors weights in {target_path}.")
-
-    from huggingface_hub import hf_hub_download
-
-    cache_dir = getattr(config, "dflash_target_cache_dir", None)
-    revision = getattr(config, "dflash_target_revision", "main")
-    token = getattr(config, "dflash_target_token", None)
-    local_files_only = getattr(config, "dflash_target_local_files_only", False)
-
-    try:
-        index_path = hf_hub_download(
-            target_model,
-            "model.safetensors.index.json",
-            cache_dir=cache_dir,
-            revision=revision,
-            token=token,
-            local_files_only=local_files_only,
-        )
-    except Exception:
-        filename = "model.safetensors"
-    else:
-        with open(index_path) as f:
-            weight_map = json.load(f)["weight_map"]
-        filename = weight_map[tensor_name]
-
-    return hf_hub_download(
-        target_model,
-        filename,
-        cache_dir=cache_dir,
-        revision=revision,
-        token=token,
-        local_files_only=local_files_only,
-    )
-
-
-def _dflash_load_target_tensor(config: PretrainedConfig, tensor_names: Tuple[str, ...]) -> torch.Tensor:
-    from safetensors import safe_open
-
-    last_error = None
-    for tensor_name in tensor_names:
-        try:
-            tensor_file = _dflash_resolve_tensor_file(config, tensor_name)
-            with safe_open(tensor_file, framework="pt", device="cpu") as f:
-                if tensor_name in f.keys():
-                    return f.get_tensor(tensor_name)
-        except Exception as error:
-            last_error = error
-    raise ValueError(f"Could not load any of {tensor_names} from DFlash target model.") from last_error
-
-
-_DFLASH_EMBED_TENSOR_NAMES = (
-    "model.language_model.embed_tokens.weight",
-    "model.embed_tokens.weight",
-    "embed_tokens.weight",
-)
-
-
 class Qwen3DFlashAttention(nn.Module):
     """Qwen3 attention variant used by DFlash, where draft tokens attend over target context and noise tokens."""
 
@@ -8947,44 +8875,17 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
 
 
 class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
-    _tied_weights_keys = ["lm_head.weight"]
-    _keys_to_ignore_on_load_missing = [r"embed_tokens.weight", r"lm_head.weight"]
+    """DFlash draft head exported as embeddings-in / hidden-states-out.
 
-    def __init__(self, config):
-        super().__init__(config)
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, config.pad_token_id)
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-
-    def _load_target_weights(self, config):
-        embed_weight = _dflash_load_target_tensor(config, _DFLASH_EMBED_TENSOR_NAMES)
-        try:
-            lm_head_weight = _dflash_load_target_tensor(config, ("lm_head.weight",))
-        except ValueError:
-            lm_head_weight = embed_weight
-
-        target_dtype = self.fc.weight.dtype
-        embed_weight = embed_weight.to(target_dtype)
-        lm_head_weight = lm_head_weight.to(target_dtype)
-
-        self.embed_tokens.weight = nn.Parameter(embed_weight, requires_grad=False)
-        self.lm_head.weight = nn.Parameter(lm_head_weight, requires_grad=False)
-
-    @classmethod
-    def from_pretrained(cls, *model_args, **kwargs):
-        output_loading_info = kwargs.get("output_loading_info", False)
-        result = super().from_pretrained(*model_args, **kwargs)
-
-        if output_loading_info:
-            model, loading_info = result
-            model._load_target_weights(model.config)
-            return model, loading_info
-
-        result._load_target_weights(result.config)
-        return result
+    The token embedding and lm_head are intentionally absent: the draft consumes
+    ``inputs_embeds`` (produced from the target embedding) and emits the post-norm
+    ``last_hidden_state``. OpenVINO GenAI grafts the target lm_head onto this output
+    at load time, so the export bundles neither the embedding nor the projection.
+    """
 
     def forward(
         self,
-        input_ids: torch.LongTensor,
+        inputs_embeds: torch.FloatTensor,
         hidden_states: torch.Tensor,
         position_ids: torch.LongTensor,
         attention_mask: Optional[torch.Tensor] = None,
@@ -8992,23 +8893,26 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
         use_cache: Optional[bool] = None,
         logits_to_keep: Optional[int] = None,
         **kwargs,
-    ) -> CausalLMOutputWithPast:
-        noise_embedding = self.embed_tokens(input_ids)
+    ) -> BaseModelOutputWithPast:
         outputs = super().forward(
             hidden_states=hidden_states,
-            noise_embedding=noise_embedding,
+            noise_embedding=inputs_embeds,
             position_ids=position_ids,
             attention_mask=attention_mask,
             past_key_values=past_key_values,
             use_cache=use_cache,
             **kwargs,
         )
+        # Drop the seed position so emitted hidden states align 1:1 with the draft
+        # candidate tokens that the grafted lm_head will score.
         if logits_to_keep is None:
-            hidden_states = outputs.last_hidden_state[:, 1:, :]
+            last_hidden_state = outputs.last_hidden_state[:, 1:, :]
         else:
-            hidden_states = outputs.last_hidden_state[:, -logits_to_keep:, :]
-        logits = self.lm_head(hidden_states)
-        return CausalLMOutputWithPast(logits=logits, past_key_values=outputs.past_key_values)
+            last_hidden_state = outputs.last_hidden_state[:, -logits_to_keep:, :]
+        return BaseModelOutputWithPast(
+            last_hidden_state=last_hidden_state,
+            past_key_values=outputs.past_key_values,
+        )
 
 
 # Patched implementation of the gated delta rule in recurrent form.

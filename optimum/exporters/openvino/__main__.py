@@ -189,17 +189,7 @@ def update_config_for_eagle3(config):
     return config
 
 
-def update_config_for_dflash(
-    config,
-    dflash_target_model: Optional[str],
-    cache_dir: str = HUGGINGFACE_HUB_CACHE,
-    revision: str = "main",
-    token: Optional[Union[bool, str]] = None,
-    local_files_only: bool = False,
-):
-    if dflash_target_model is None:
-        raise ValueError("Exporting DFlash draft models requires `dflash_target_model` / `--dflash-target-model`.")
-
+def update_config_for_dflash(config):
     moduler_name = "optimum.exporters.openvino.model_patcher"
     spec = importlib.util.find_spec(moduler_name)
     if spec and spec.origin:
@@ -209,11 +199,6 @@ def update_config_for_dflash(
             "AutoModelForCausalLM": moduler_path + "--model_patcher.Qwen3DFlashForCausalLM",
         }
 
-    config.dflash_target_model = dflash_target_model
-    config.dflash_target_cache_dir = cache_dir
-    config.dflash_target_revision = revision
-    config.dflash_target_token = token
-    config.dflash_target_local_files_only = local_files_only
     config.tie_word_embeddings = False
     return config
 
@@ -264,7 +249,6 @@ def main_export(
     library_name: Optional[str] = None,
     model_loading_kwargs: Optional[Dict[str, Any]] = None,
     variant: Optional[str] = None,
-    dflash_target_model: Optional[str] = None,
     **kwargs_shapes,
 ):
     """
@@ -389,14 +373,7 @@ def main_export(
         if isinstance(archs, list) and len(archs) > 0 and archs[0] in _eagle3_archs:
             loading_kwargs["config"] = update_config_for_eagle3(config)
         elif isinstance(archs, list) and len(archs) > 0 and archs[0] == "DFlashDraftModel":
-            loading_kwargs["config"] = update_config_for_dflash(
-                config,
-                dflash_target_model=dflash_target_model,
-                cache_dir=cache_dir,
-                revision=revision,
-                token=token,
-                local_files_only=local_files_only,
-            )
+            loading_kwargs["config"] = update_config_for_dflash(config)
 
         # mxfp4 quantized model will be dequantized to bf16
         if quant_method == "mxfp4" and is_transformers_version(">=", "4.55"):

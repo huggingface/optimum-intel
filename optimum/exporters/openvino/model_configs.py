@@ -422,7 +422,7 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 class DFlashDummyInputGenerator(DummyInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("input_ids", "hidden_states", "position_ids")
+    SUPPORTED_INPUT_NAMES = ("inputs_embeds", "hidden_states", "position_ids")
 
     def __init__(
         self,
@@ -442,12 +442,11 @@ class DFlashDummyInputGenerator(DummyInputGenerator):
         self.vocab_size = getattr(config, "vocab_size", normalized_config.vocab_size)
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name == "input_ids":
-            return self.random_int_tensor(
-                [self.batch_size, self.block_size],
-                max_value=self.vocab_size,
+        if input_name == "inputs_embeds":
+            return self.random_float_tensor(
+                [self.batch_size, self.block_size, self.hidden_size],
                 framework=framework,
-                dtype=int_dtype,
+                dtype=float_dtype,
             )
         if input_name == "hidden_states":
             return self.random_float_tensor(
@@ -518,7 +517,8 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         if self.dflash:
             common_inputs = super().inputs
             common_inputs.pop("attention_mask", None)
-            common_inputs["input_ids"] = {0: "batch_size", 1: "block_size"}
+            common_inputs.pop("input_ids", None)
+            common_inputs["inputs_embeds"] = {0: "batch_size", 1: "block_size", 2: "hidden_size"}
             common_inputs["hidden_states"] = {0: "batch_size", 1: "context_length", 2: "target_hidden_size"}
             common_inputs["position_ids"] = {0: "batch_size", 1: "position_sequence_length"}
             return common_inputs
@@ -535,8 +535,11 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     def outputs(self) -> Dict[str, Dict[int, str]]:
         if self.dflash:
             common_outputs = super().outputs
-            common_outputs["logits"] = {0: "batch_size", 1: "draft_sequence_length"}
-            return common_outputs
+            common_outputs.pop("logits", None)
+            return {
+                "last_hidden_state": {0: "batch_size", 1: "draft_sequence_length", 2: "hidden_size"},
+                **common_outputs,
+            }
         return super().outputs
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
