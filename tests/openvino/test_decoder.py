@@ -104,7 +104,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_SSM_ARCHITECTURES += ("qwen3_next",)
 
     if is_transformers_version(">=", "5.0"):
-        SUPPORTED_SSM_ARCHITECTURES += ("lfm2_moe",)
+        SUPPORTED_SSM_ARCHITECTURES += ("lfm2_moe", "nemotron_h")
 
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
@@ -265,6 +265,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "bitnet": 6,
         "hunyuan_v1_dense": 2,
         "qwen3_next": 1,
+        "nemotron_h": 2,
     }
     TASK = "text-generation"
 

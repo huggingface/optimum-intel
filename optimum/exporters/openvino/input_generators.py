@@ -1703,6 +1703,77 @@ class Qwen3NextDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         return cache_params
 
 
+
+class NemotronHDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    """
+    Generates dummy cache_params inputs for NemotronH (hybrid Mamba2 + Attention + MoE) architectures.
+
+    The cache is a flat list of tensors ordered as:
+      * for each mamba layer: conv_state, recurrent_state
+      * for each attention layer: key cache, value cache
+    """
+
+    SUPPORTED_INPUT_NAMES = ("cache_params",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+
+        config = normalized_config.config
+        self.layers_block_type = config.layers_block_type
+        self.num_mamba_layers = config.layers_block_type.count("mamba")
+        self.num_attn_layers = config.layers_block_type.count("attention")
+
+        self.conv_kernel_size = config.conv_kernel
+        self.ssm_state_size = config.ssm_state_size
+        self.n_groups = config.n_groups
+        self.mamba_num_heads = config.mamba_num_heads
+        self.mamba_head_dim = config.mamba_head_dim
+        self.intermediate_size = config.mamba_num_heads * config.mamba_head_dim
+        self.conv_dim = self.intermediate_size + 2 * self.n_groups * self.ssm_state_size
+
+        self.num_key_value_heads = config.num_key_value_heads
+        self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        cache_params = []
+
+        for _ in range(self.num_mamba_layers):
+            conv_state_shape = (self.batch_size, self.conv_dim, self.conv_kernel_size)
+            conv_state = self.random_float_tensor(conv_state_shape, framework=framework, dtype=float_dtype)
+            cache_params.append(conv_state)
+            recurrent_state_shape = (
+                self.batch_size,
+                self.mamba_num_heads,
+                self.mamba_head_dim,
+                self.ssm_state_size,
+            )
+            recurrent_state = self.random_float_tensor(recurrent_state_shape, framework=framework, dtype=float_dtype)
+            cache_params.append(recurrent_state)
+
+        for _ in range(self.num_attn_layers):
+            kv_shape = (self.batch_size, self.num_key_value_heads, self.sequence_length, self.head_dim)
+            k = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            v = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            cache_params.append(k)
+            cache_params.append(v)
+
+        return cache_params
+
+
+
 class Qwen3_5DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     """
     Generates dummy cache_params inputs for Qwen3.5 architectures.

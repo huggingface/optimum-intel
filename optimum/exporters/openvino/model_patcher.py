@@ -47,7 +47,7 @@ from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSp
 from transformers.processing_utils import Unpack
 from transformers.utils import ModelOutput
 
-from optimum.exporters.openvino._ov_ops import convert_recurrent_attention_cell
+from optimum.exporters.openvino._ov_ops import convert_recurrent_attention_cell, convert_recurrent_mamba2_cell
 from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.openvino.patching_utils import (
     ModelPatcher,
@@ -10317,3 +10317,376 @@ class KokoroModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model._orig_forward
+
+
+# This torch.nn.Module represents the Mamba2 selective-scan recurrence in its recurrent form.
+# It is required for converting the Mamba2 mixer with OpenVINO using the ModuleExtension mechanism.
+#
+# The discretized quantities `dA` (decay), `dBx` (input contribution) and `C` (output projection)
+# are precomputed and vectorized over the sequence dimension in the patched mixer forward
+# (`nemotron_h_mamba_mixer_forward`). The recurrence over the SSM state is:
+#       state_t = state_{t-1} * dA_t + dBx_t
+#       y_t     = reduce_sum(state_t * C_t, axis=N)
+# This loop has no known vectorized form that can be correctly traced by torch.jit.trace,
+# so it is replaced with an `ov::Loop` operation via `convert_recurrent_mamba2_cell`.
+class Mamba2RecurrentCell(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(
+        self,
+        dA,  # (B, H, T, 1, 1)
+        dBx,  # (B, H, T, P, N)
+        C,  # (B, H, T, N)
+        last_state,  # (B, H, P, N)
+    ):
+        sequence_length = dBx.shape[2]
+        core_out = torch.zeros(dBx.shape[:4], dtype=dBx.dtype)  # (B, H, T, P)
+
+        for i in range(sequence_length):
+            last_state = last_state * dA[:, :, i] + dBx[:, :, i]
+            core_out[:, :, i] = (last_state * C[:, :, i].unsqueeze(-2)).sum(dim=-1)
+
+        # This is a workaround to ensure a single output from the torch.nn.Module.
+        # The OpenVINO ModuleExtension mechanism has a limitation and expects
+        # the module to produce only one output.
+        output_cell = torch.cat([core_out.flatten(), last_state.flatten()], dim=0)
+        return output_cell
+
+
+# Recurrent form of the NemotronH Mamba2 mixer (`NemotronHMamba2Mixer`).
+# Adapted from `torch_forward` of:
+# https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16/blob/main/modeling_nemotron_h.py
+#
+# Compared with the original implementation this patch:
+#  * replaces the `CausalConv1d` with the generic, cache-aware `ov_causal_conv1d()` helper;
+#  * expresses the selective scan in recurrent form (precompute dA/dBx/C, then run
+#    `Mamba2RecurrentCell`), which is replaced by an `ov::Loop` during conversion.
+# It runs a single unified code path for both the prefill and the decoding stages.
+def nemotron_h_mamba_mixer_forward(
+    self,
+    hidden_states: torch.Tensor,
+    cache_params=None,
+    conv_state: Optional[torch.Tensor] = None,
+    recurrent_state: Optional[torch.Tensor] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+):
+    batch_size, seq_len, _ = hidden_states.shape
+
+    def apply_mask_to_padding_states(hidden_states, attention_mask):
+        # Tunes out the hidden states for padding tokens, see https://github.com/state-spaces/mamba/issues/66.
+        # The mask is sliced to the current `seq_len` so that it broadcasts correctly both during
+        # the prefill stage (seq_len > 1) and the decoding stage (seq_len == 1, the slice selects the
+        # current — always valid — token), keeping a single traceable code path.
+        if attention_mask is not None and attention_mask.shape[0] > 1:
+            dtype = hidden_states.dtype
+            attention_mask = attention_mask[:, -seq_len:]
+            hidden_states = (hidden_states * attention_mask[:, :, None]).to(dtype)
+        return hidden_states
+
+    # 1. Gated MLP's linear projection
+    hidden_states = apply_mask_to_padding_states(hidden_states, attention_mask)
+    projected_states = self.in_proj(hidden_states)
+    gate, hidden_states_B_C, dt = projected_states.split(
+        [self.intermediate_size, self.conv_dim, self.num_heads], dim=-1
+    )
+
+    # 2. Convolution sequence transformation with cached state
+    hidden_states_B_C = hidden_states_B_C.transpose(1, 2)
+    if conv_state is None:
+        conv_state = torch.zeros(batch_size, self.conv_dim, self.conv_kernel_size, dtype=hidden_states_B_C.dtype)
+    new_hidden_states_B_C, new_conv_state = ov_causal_conv1d(
+        conv_state, hidden_states_B_C, self.conv1d.weight, self.conv1d.bias
+    )
+    hidden_states_B_C = self.act(new_hidden_states_B_C).transpose(1, 2)
+    hidden_states_B_C = apply_mask_to_padding_states(hidden_states_B_C, attention_mask)
+
+    hidden_states_ssm, B, C = torch.split(
+        hidden_states_B_C,
+        [self.intermediate_size, self.n_groups * self.ssm_state_size, self.n_groups * self.ssm_state_size],
+        dim=-1,
+    )
+
+    # 3. State Space Model transformation in recurrent form
+    A = -torch.exp(self.A_log.float())  # (num_heads,)
+    dt = torch.nn.functional.softplus(dt + self.dt_bias)  # (B, seq, num_heads)
+    dt = torch.clamp(dt, self.time_step_min)
+
+    x = hidden_states_ssm.reshape(batch_size, seq_len, self.num_heads, self.head_dim).float()
+    B = B.reshape(batch_size, seq_len, self.n_groups, self.ssm_state_size).float()
+    C = C.reshape(batch_size, seq_len, self.n_groups, self.ssm_state_size).float()
+    B = B.repeat_interleave(self.num_heads // self.n_groups, dim=2)
+    C = C.repeat_interleave(self.num_heads // self.n_groups, dim=2)
+
+    # rearrange to head-major layout: (B, H, T, ...)
+    dt = dt.transpose(1, 2).float()  # (B, H, T)
+    x = x.permute(0, 2, 1, 3)  # (B, H, T, P)
+    B = B.permute(0, 2, 1, 3)  # (B, H, T, N)
+    C = C.permute(0, 2, 1, 3)  # (B, H, T, N)
+
+    # discretize: dA (decay), dBx (input contribution)
+    dA = torch.exp(dt * A.view(1, -1, 1))  # (B, H, T)
+    dA = dA[..., None, None]  # (B, H, T, 1, 1)
+    dBx = dt[..., None, None] * B[..., None, :] * x[..., :, None]  # (B, H, T, P, N)
+
+    if recurrent_state is None:
+        recurrent_state = torch.zeros(
+            batch_size, self.num_heads, self.head_dim, self.ssm_state_size, dtype=torch.float32
+        )
+    recurrent_state = recurrent_state.float()
+
+    output_cell = self.mamba2_recurrent_cell(dA, dBx, C, recurrent_state)
+
+    num_elems = batch_size * self.num_heads * seq_len * self.head_dim
+    y = output_cell[:num_elems].reshape(batch_size, self.num_heads, seq_len, self.head_dim)
+    new_recurrent_state = output_cell[num_elems:].reshape(recurrent_state.shape)
+
+    # D skip connection (independent of the recurrent state)
+    y = y + x * self.D.view(1, -1, 1, 1)
+
+    # (B, H, T, P) -> (B, T, intermediate_size)
+    y = y.permute(0, 2, 1, 3).reshape(batch_size, seq_len, -1)
+
+    scan_output = self.norm(y, gate)
+
+    # 4. Final linear projection
+    contextualized_states = self.out_proj(scan_output.to(hidden_states.dtype))
+
+    return contextualized_states, new_conv_state, new_recurrent_state
+
+
+# Vectorized implementation of the NemotronH MoE block (`NemotronHMoE`).
+# The vectorized form is required to ensure correct torch.jit tracing.
+# The token routing (sigmoid scoring + grouped top-k) is kept identical to the
+# original `route_tokens_to_experts`; only the per-expert MLP loop is replaced
+# with batched matrix multiplications over the 3D expert weight tensors.
+def patched_nemotron_h_moe_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    residuals = hidden_states
+    orig_shape = hidden_states.shape
+    num_experts = self.n_routed_experts
+
+    router_logits = self.gate(hidden_states)
+    topk_indices, topk_weights = self.route_tokens_to_experts(router_logits)
+    topk_weights = topk_weights.to(hidden_states.dtype)
+
+    hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+    num_tokens = hidden_states.shape[0]
+
+    # scatter the top-k weights into a dense (num_tokens, num_experts) tensor
+    routing_weights = torch.zeros(num_tokens, num_experts, dtype=topk_weights.dtype)
+    routing_weights.scatter_(1, topk_indices, topk_weights)
+
+    # NemotronH-specific latent projection (Identity when moe_latent_size is None)
+    h = self.fc1_latent_proj(hidden_states)
+
+    # compute all experts in a vectorized form: experts are non-gated MLPs
+    h = h.repeat(num_experts, 1).view(num_experts, num_tokens, -1)
+    up = torch.bmm(h, self.up_projs.transpose(1, 2))
+    up = self.experts.act_fn(up)
+    next_states = torch.bmm(up, self.down_projs.transpose(1, 2))  # (num_experts, num_tokens, in_dim)
+    next_states = next_states * routing_weights.transpose(0, 1)[..., None]
+    next_states = next_states.sum(dim=0)
+
+    next_states = self.fc2_latent_proj(next_states)
+    next_states = next_states.view(*orig_shape)
+
+    output = next_states + self.shared_experts(residuals)
+    return output
+
+
+class NemotronHModelPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
+
+        super().__init__(config, model, model_kwargs)
+
+        layers_block_type = self.real_config._config.layers_block_type
+
+        # Lightweight cache wrapper. Unlike the upstream hybrid cache, it stores the
+        # convolution/recurrent states for mamba layers and the key/value caches for
+        # attention layers in plain lists, mapping the global layer index to the
+        # corresponding per-type cache index. The patched mixer reads conv/recurrent
+        # states directly, while the (unmodified) attention block uses `update()`.
+        class NemotronHCacheWrap:
+            def __init__(self, config, conv_states, recurrent_states, key_cache, value_cache, attention_mask=None):
+                self.config = config
+                self.conv_states = conv_states
+                self.recurrent_states = recurrent_states
+                self.key_cache = key_cache
+                self.value_cache = value_cache
+                # The raw 2D attention mask is stored here so that the patched mamba mixer can
+                # always zero out padding positions. We cannot rely on the model's internal
+                # `_update_mamba_mask`, since it returns `None` whenever the mask is all ones —
+                # which is the case for the all-ones dummy input used during tracing, baking
+                # "no padding masking" into the exported graph.
+                self.raw_attention_mask = attention_mask
+                self.mamba_mapping = {}
+                self.attn_mapping = {}
+                mamba_idx = 0
+                attn_idx = 0
+                for i, block_type in enumerate(config.layers_block_type):
+                    if block_type == "mamba":
+                        self.mamba_mapping[i] = mamba_idx
+                        mamba_idx += 1
+                    elif block_type == "attention":
+                        self.attn_mapping[i] = attn_idx
+                        attn_idx += 1
+                self.num_attn_layers = attn_idx
+
+            def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
+                idx = self.attn_mapping[layer_idx]
+                if self.key_cache[idx] is None or self.key_cache[idx].shape[-2] == 0:
+                    self.key_cache[idx] = key_states
+                    self.value_cache[idx] = value_states
+                else:
+                    self.key_cache[idx] = torch.cat([self.key_cache[idx], key_states], dim=2)
+                    self.value_cache[idx] = torch.cat([self.value_cache[idx], value_states], dim=2)
+                return self.key_cache[idx], self.value_cache[idx]
+
+            def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+                if self.num_attn_layers == 0 or self.key_cache[0] is None:
+                    return 0
+                return self.key_cache[0].shape[-2]
+
+            def get_mask_sizes(self, query_length: int, layer_idx: int):
+                kv_length = self.get_seq_length() + query_length
+                return kv_length, 0
+
+            @property
+            def is_sliding(self):
+                return [False]
+
+            is_compileable = False
+
+            def has_previous_state(self, layer_idx: Optional[int] = None) -> bool:
+                # The recurrent forward always runs with valid conv/recurrent states.
+                return True
+
+        # The patch is needed to include conv, recurrent, key and value states in the
+        # model inputs and outputs as a flat list of tensors (`cache_params`).
+        def patched_forward(
+            input_ids,
+            attention_mask=None,
+            cache_params=None,
+        ):
+            num_mamba_layers = layers_block_type.count("mamba")
+            num_attn_layers = layers_block_type.count("attention")
+
+            use_cache = False
+            wrapped_cache_params = None
+            if cache_params is not None:
+                use_cache = True
+                conv_states = []
+                recurrent_states = []
+                key_cache = []
+                value_cache = []
+
+                for idx in range(num_mamba_layers):
+                    conv_states.append(cache_params[2 * idx])
+                    recurrent_states.append(cache_params[2 * idx + 1])
+
+                for idx in range(num_attn_layers):
+                    key_cache.append(cache_params[2 * num_mamba_layers + 2 * idx])
+                    value_cache.append(cache_params[2 * num_mamba_layers + 2 * idx + 1])
+
+                wrapped_cache_params = NemotronHCacheWrap(
+                    self.real_config._config, conv_states, recurrent_states, key_cache, value_cache, attention_mask
+                )
+
+            causal_lm_output = self.model_orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                past_key_values=wrapped_cache_params,
+                use_cache=use_cache,
+            )
+            outputs = {
+                "logits": causal_lm_output.logits,
+            }
+
+            if use_cache:
+                present = wrapped_cache_params
+                present_key_values = []
+                for idx in range(num_mamba_layers):
+                    present_key_values.append(present.conv_states[idx])
+                    present_key_values.append(present.recurrent_states[idx])
+
+                for idx in range(num_attn_layers):
+                    present_key_values.append(present.key_cache[idx])
+                    present_key_values.append(present.value_cache[idx])
+
+                outputs["present_key_values"] = present_key_values
+
+            return outputs
+
+        self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+        self.module_extensions = {
+            Mamba2RecurrentCell: ModuleExtension(Mamba2RecurrentCell, "Mamba2RecurrentCellOp"),
+        }
+        self.conversion_extensions = [
+            ConversionExtension("Mamba2RecurrentCellOp", convert_recurrent_mamba2_cell),
+        ]
+
+    def __enter__(self):
+        from transformers.models.nemotron_h.modeling_nemotron_h import NemotronHMamba2Mixer, NemotronHMoE
+
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
+        # Patch the mamba mixer to read/write conv and recurrent states from the wrapped cache.
+        def make_mamba_forward(mixer):
+            def _forward(hidden_states, cache_params=None, attention_mask=None, **kwargs):
+                conv_state = None
+                recurrent_state = None
+                raw_attention_mask = None
+                if cache_params is not None:
+                    mamba_idx = cache_params.mamba_mapping[mixer.layer_idx]
+                    conv_state = cache_params.conv_states[mamba_idx]
+                    recurrent_state = cache_params.recurrent_states[mamba_idx]
+                    # Use the raw 2D mask rather than the (possibly `None`) mamba mask the model
+                    # computes internally, to keep padding handling correct in the traced graph.
+                    raw_attention_mask = cache_params.raw_attention_mask
+                out, new_conv_state, new_recurrent_state = nemotron_h_mamba_mixer_forward(
+                    mixer, hidden_states, cache_params, conv_state, recurrent_state, raw_attention_mask
+                )
+                if cache_params is not None:
+                    mamba_idx = cache_params.mamba_mapping[mixer.layer_idx]
+                    cache_params.conv_states[mamba_idx] = new_conv_state
+                    cache_params.recurrent_states[mamba_idx] = new_recurrent_state
+                return out
+
+            return _forward
+
+        for decoder_layer in self._model.model.layers:
+            mixer = decoder_layer.mixer
+            if isinstance(mixer, NemotronHMamba2Mixer):
+                mixer._orig_forward = mixer.forward
+                mixer.mamba2_recurrent_cell = Mamba2RecurrentCell()
+                mixer.forward = make_mamba_forward(mixer)
+            elif isinstance(mixer, NemotronHMoE):
+                mixer._orig_forward = mixer.forward
+                mixer.forward = types.MethodType(patched_nemotron_h_moe_forward, mixer)
+                # TODO: remove `float()` casting when CVS-181449 is fixed;
+                # it is currently needed for MoE optimizations to be applied.
+                mixer.up_projs = mixer.experts.up_proj.float()
+                mixer.down_projs = mixer.experts.down_proj.float()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        from transformers.models.nemotron_h.modeling_nemotron_h import NemotronHMamba2Mixer, NemotronHMoE
+
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+        for decoder_layer in self._model.model.layers:
+            mixer = decoder_layer.mixer
+            if isinstance(mixer, (NemotronHMamba2Mixer, NemotronHMoE)):
+                mixer.forward = mixer._orig_forward
+            if isinstance(mixer, NemotronHMoE):
+                del mixer.up_projs, mixer.down_projs
+
