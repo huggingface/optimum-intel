@@ -41,6 +41,7 @@ from optimum.intel import (
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
+    OVModelForObjectDetection,
     OVModelForPix2Struct,
     OVModelForQuestionAnswering,
     OVModelForSeq2SeqLM,
@@ -140,6 +141,9 @@ class ExportModelTest(unittest.TestCase):
 
     if is_transformers_version(">=", "5.0"):
         SUPPORTED_ARCHITECTURES.update({"lfm2_moe": OVModelForCausalLM})
+
+    if is_transformers_version(">=", "5.8.0"):
+        SUPPORTED_ARCHITECTURES.update({"rf_detr": OVModelForObjectDetection})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
