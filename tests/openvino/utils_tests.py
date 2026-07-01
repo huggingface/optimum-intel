@@ -585,6 +585,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "lm_model": 56,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 3,
+        "audio_embeddings_model": 1,
     },
     "qwen3_asr": {
         "encoder": 36,
