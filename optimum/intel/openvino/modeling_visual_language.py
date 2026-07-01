@@ -800,7 +800,14 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             additional_kwargs["visual_pos_masks"] = extra_outputs[0]
             additional_kwargs["deepstack_visual_embeds"] = extra_outputs[1]
 
-        if self.config.model_type in ("gemma4",) and extra_outputs:
+        if (
+            self.config.model_type
+            in (
+                "gemma3n",
+                "gemma4",
+            )
+            and extra_outputs
+        ):
             additional_kwargs["per_layer_inputs"] = extra_outputs[0]
 
         return self.language_model.forward(
@@ -5948,6 +5955,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen2_5_vl_text": _OVQwen2_5_VLForCausalLM,
     "got_ocr2": _OVGotOCR2ForCausalLM,
     "gemma3": _OVGemma3ForCausalLM,
+    "gemma3n": _OVGemma4ForCausalLM,
     "gemma4": _OVGemma4ForCausalLM,
     "gemma4_unified": _OVGemma4UnifiedForCausalLM,
     "idefics3": _OVIdefics3ForCausalLM,
