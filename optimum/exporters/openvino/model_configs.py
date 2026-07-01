@@ -4043,6 +4043,8 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
 
 @register_in_tasks_manager("gemma3n", *["image-text-to-text"], library_name="transformers")
 class Gemma3nOpenVINOConfig(Gemma4OpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "5.0"
+
     def __init__(
         self,
         config: "PretrainedConfig",
