@@ -328,6 +328,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "qwen3_5_moe",
     "got_ocr2",
     "gemma3",
+    "gemma3n",
     "gemma4",
     "gemma4_unified",
     "idefics3",

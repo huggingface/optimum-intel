@@ -90,6 +90,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "afmoe",
         "hunyuan_v1_dense",
         "smollm3",
+        "gemma3n_text",
         ## not supporter after v5
         "llama4",
         "bitnet",
@@ -205,6 +206,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "opt_gptq": 12,
         "mixtral_awq": 2,
         "gemma3_text": 2,
+        "gemma3n_text": 2,
         "glm4": 2,
         "qwen3": 2,
         "qwen3_moe": 2,
@@ -394,7 +396,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
-        atol = 3e-3 if model_arch in ["minicpm", "qwen2-moe"] else 1e-4
+        atol = 3e-3 if model_arch in ["minicpm", "qwen2-moe", "gemma3n_text"] else 1e-4
         # quantized models have different logits value range
         if "awq" not in model_arch and "gptq" not in model_arch:
             self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))

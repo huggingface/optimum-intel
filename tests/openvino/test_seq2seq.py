@@ -117,7 +117,6 @@ class OVSeq2SeqTestMixin(unittest.TestCase):
         }
         supported_architectures = ov_architectures & transformers_architectures
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
-
         untested_architectures = supported_architectures - tested_architectures
 
         if len(untested_architectures - self.UNSUPPORTED_ARCHITECTURES) > 0:
@@ -688,6 +687,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5": is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"),
         "qwen3_5_moe": is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"),
         "gemma4_unified": is_transformers_version(">=", "5.10"),
+        "gemma3n": is_transformers_version(">=", "5.0"),
     }
     SUPPORTED_ARCHITECTURES += [arch for arch, supported in _is_model_supported.items() if supported]
     UNSUPPORTED_ARCHITECTURES.update(arch for arch, supported in _is_model_supported.items() if not supported)
@@ -701,6 +701,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "maira2",
         "phi4mm",
         "videochat_flash_qwen",
+        "gemma3n",
     ]
     IMAGE = Image.open(
         requests.get(
@@ -832,12 +833,13 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             trust_remote_code=trust_remote_code,
             compile=False,
             device=OPENVINO_DEVICE,
+            ov_config=F32_CONFIG,
         )
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
 
         image = self.IMAGE.resize((600, 600))
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=image)
-        if model_arch == "gemma3":
+        if model_arch in ["gemma3", "gemma3n"]:
             # validate that preprocessed input ids contain exactly one bos token
             bos_token = preprocessors["processor"].tokenizer.vocab["<bos>"]
             input_ids = inputs["input_ids"]
