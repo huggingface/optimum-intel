@@ -366,6 +366,7 @@ MODEL_PARTS_CLS_MAPPING = {
     "vision_resampler": OVVisionResampler,
     "multi_modal_projector": OVMultiModalProjector,
     "vision_embeddings_merger": OVVisionEmbedding,
+    "vision_embeddings_tiles": OVVisionEmbedding,
     "vision_embeddings_pos": OVVisionProjection,
     "audio_embeddings": OVAudioEmbeddings,
     "audio_forward_embeddings": OVAudioEmbeddings,
@@ -4258,6 +4259,279 @@ class _OVGotOCR2ForCausalLM(OVModelForVisualCausalLM):
         return processed_inputs
 
 
+# Image token placeholder id used by DeepSeek-OCR-2 (hardcoded in the reference modeling code).
+_DEEPSEEK_OCR2_IMAGE_TOKEN_ID = 128815
+
+
+def _deepseek_ocr2_find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_size):
+    # Adopted from deepseek-ai/DeepSeek-OCR-2 modeling_deepseekocr2.py:find_closest_aspect_ratio
+    best_ratio_diff = float("inf")
+    best_ratio = (1, 1)
+    area = width * height
+    for ratio in target_ratios:
+        target_aspect_ratio = ratio[0] / ratio[1]
+        ratio_diff = abs(aspect_ratio - target_aspect_ratio)
+        if ratio_diff < best_ratio_diff:
+            best_ratio_diff = ratio_diff
+            best_ratio = ratio
+        elif ratio_diff == best_ratio_diff:
+            if area > 0.5 * image_size * image_size * ratio[0] * ratio[1]:
+                best_ratio = ratio
+    return best_ratio
+
+
+def _deepseek_ocr2_dynamic_preprocess(image, min_num=2, max_num=6, image_size=768):
+    # Adopted from deepseek-ai/DeepSeek-OCR-2 modeling_deepseekocr2.py:dynamic_preprocess
+    orig_width, orig_height = image.size
+    aspect_ratio = orig_width / orig_height
+    target_ratios = sorted(
+        {
+            (i, j)
+            for n in range(min_num, max_num + 1)
+            for i in range(1, n + 1)
+            for j in range(1, n + 1)
+            if min_num <= i * j <= max_num
+        },
+        key=lambda x: x[0] * x[1],
+    )
+    target_aspect_ratio = _deepseek_ocr2_find_closest_aspect_ratio(
+        aspect_ratio, target_ratios, orig_width, orig_height, image_size
+    )
+    target_width = image_size * target_aspect_ratio[0]
+    target_height = image_size * target_aspect_ratio[1]
+    blocks = target_aspect_ratio[0] * target_aspect_ratio[1]
+    resized_img = image.resize((target_width, target_height))
+    processed_images = []
+    for i in range(blocks):
+        box = (
+            (i % (target_width // image_size)) * image_size,
+            (i // (target_width // image_size)) * image_size,
+            ((i % (target_width // image_size)) + 1) * image_size,
+            ((i // (target_width // image_size)) + 1) * image_size,
+        )
+        processed_images.append(resized_img.crop(box))
+    return processed_images, target_aspect_ratio
+
+
+class _OVDeepSeekVLV2ForCausalLM(OVModelForVisualCausalLM):
+    """OpenVINO inference for DeepSeek-OCR-2 (``model_type == "deepseek_vl_v2"``).
+
+    The vision encoder is exported as two static-shape submodels: ``vision_embeddings`` for the
+    1024x1024 global view (256 image tokens) and ``vision_embeddings_tiles`` for the 768x768 crop
+    tiles (144 image tokens). The per-image visual feature is
+    ``cat([tile_features, global_features, view_separator])`` which is scattered into the text
+    embeddings at the image placeholder positions.
+    """
+
+    additional_parts = ["vision_embeddings_tiles"]
+
+    @property
+    def view_separator(self):
+        if getattr(self, "_view_separator", None) is None:
+            self._view_separator = torch.tensor(self.config.view_separator, dtype=torch.float32)
+        return self._view_separator
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        # Skip vision on cached decode steps.
+        if input_ids is not None and input_ids.shape[1] == 1 and kwargs.get("past_key_values") is not None:
+            return None
+
+        # ``pixel_values`` carries ``images`` in the native DeepSeek-OCR-2 format: a list with one
+        # (images_crop, images_ori) tuple per sample (matching the reference modeling code).
+        if isinstance(pixel_values, (list, tuple)) and len(pixel_values) > 0 and isinstance(pixel_values[0], (list, tuple)):
+            images_crop, images_ori = pixel_values[0]
+        else:
+            images_crop, images_ori = pixel_values
+        images_crop = torch.as_tensor(images_crop) if not isinstance(images_crop, torch.Tensor) else images_crop
+        images_ori = torch.as_tensor(images_ori) if not isinstance(images_ori, torch.Tensor) else images_ori
+        spatial_crop = kwargs.get("images_spatial_crop")
+
+        has_crops = bool(images_crop.abs().sum().item() != 0)
+        view_sep = self.view_separator[None, :]
+
+        features = []
+        crop_offset = 0
+        for idx in range(images_ori.shape[0]):
+            global_feat = self.vision_embeddings(images_ori[idx : idx + 1].to(torch.float32)).last_hidden_state
+            global_feat = torch.from_numpy(global_feat).to(torch.float32).view(-1, global_feat.shape[-1])
+            if has_crops:
+                if spatial_crop is not None:
+                    w, h = int(spatial_crop[idx][0]), int(spatial_crop[idx][1])
+                    num_tiles = w * h if (w > 1 or h > 1) else 0
+                else:
+                    num_tiles = images_crop.shape[0]
+                if num_tiles > 0:
+                    crop_slice = images_crop[crop_offset : crop_offset + num_tiles].to(torch.float32)
+                    crop_offset += num_tiles
+                    local_feat = self.vision_embeddings_tiles(crop_slice).last_hidden_state
+                    local_feat = torch.from_numpy(local_feat).to(torch.float32).view(-1, local_feat.shape[-1])
+                    features.append(torch.cat([local_feat, global_feat, view_sep], dim=0))
+                    continue
+            features.append(torch.cat([global_feat, view_sep], dim=0))
+        return torch.cat(features, dim=0)
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        vision_embeds = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        images_seq_mask = kwargs.get("images_seq_mask")
+        if images_seq_mask is not None:
+            mask = torch.as_tensor(images_seq_mask).to(torch.bool)
+        else:
+            mask = input_ids == _DEEPSEEK_OCR2_IMAGE_TOKEN_ID
+        mask = mask.reshape(inputs_embeds.shape[:2]).unsqueeze(-1).expand_as(inputs_embeds)
+        inputs_embeds = inputs_embeds.masked_scatter(mask, vision_embeds.to(inputs_embeds.dtype))
+        return inputs_embeds, attention_mask, position_ids
+
+    def get_multimodal_embeddings(
+        self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        # Thread images_seq_mask through to merge_vision_text_embeddings.
+        return super().get_multimodal_embeddings(
+            input_ids, pixel_values, attention_mask=attention_mask, position_ids=position_ids, **kwargs
+        )
+
+    def forward(
+        self,
+        input_ids,
+        pixel_values=None,
+        images=None,
+        images_seq_mask=None,
+        images_spatial_crop=None,
+        **kwargs,
+    ):
+        if pixel_values is None:
+            pixel_values = images
+        return super().forward(
+            input_ids,
+            pixel_values=pixel_values,
+            images_seq_mask=images_seq_mask,
+            images_spatial_crop=images_spatial_crop,
+            **kwargs,
+        )
+
+    def prepare_inputs_for_generation(
+        self, input_ids, past_key_values=None, inputs_embeds=None, pixel_values=None, attention_mask=None, **kwargs
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        # Carry the extra DeepSeek-OCR-2 image inputs on the prefill step only.
+        if past_key_values is None:
+            model_inputs["images_seq_mask"] = kwargs.get("images_seq_mask")
+            model_inputs["images_spatial_crop"] = kwargs.get("images_spatial_crop")
+        else:
+            model_inputs["pixel_values"] = None
+            model_inputs["images_seq_mask"] = None
+            model_inputs["images_spatial_crop"] = None
+        return model_inputs
+
+    @staticmethod
+    def preprocess_inputs(
+        text: Optional[str] = None,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+        base_size: int = 1024,
+        image_size: int = 768,
+        crop_mode: bool = True,
+    ):
+        # Reproduces deepseek-ai/DeepSeek-OCR-2 infer() preprocessing (crop_mode path).
+        from PIL import ImageOps
+        from torchvision import transforms
+
+        if tokenizer is None:
+            raise ValueError("tokenizer is required")
+        if video is not None or audio is not None:
+            raise ValueError("Video/audio inputs are not supported")
+        if text is None:
+            raise ValueError("text is required")
+
+        prompt = text
+        image_transform = transforms.Compose(
+            [transforms.ToTensor(), transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))]
+        )
+        patch_size = 16
+        downsample_ratio = 4
+        image_token_id = _DEEPSEEK_OCR2_IMAGE_TOKEN_ID
+
+        text_splits = prompt.split("<image>")
+        images = [image.convert("RGB")] if image is not None else []
+
+        tokenized_str = []
+        images_seq_mask = []
+        images_list, images_crop_list, images_spatial_crop = [], [], []
+
+        for i, text_sep in enumerate(text_splits):
+            sep_ids = tokenizer.encode(text_sep, add_special_tokens=False)
+            tokenized_str += sep_ids
+            images_seq_mask += [False] * len(sep_ids)
+            if i >= len(images):
+                continue
+            img = images[i]
+
+            if img.size[0] <= 768 and img.size[1] <= 768:
+                crop_ratio = [1, 1]
+                crop_raw = []
+            else:
+                crop_raw, crop_ratio = _deepseek_ocr2_dynamic_preprocess(img, image_size=image_size)
+
+            global_view = ImageOps.pad(img, (base_size, base_size), color=tuple(int(x * 255) for x in (0.5, 0.5, 0.5)))
+            images_list.append(image_transform(global_view))
+            width_crop_num, height_crop_num = crop_ratio
+            images_spatial_crop.append([width_crop_num, height_crop_num])
+            if width_crop_num > 1 or height_crop_num > 1:
+                for crop in crop_raw:
+                    images_crop_list.append(image_transform(crop))
+
+            num_queries = math.ceil((image_size // patch_size) / downsample_ratio)
+            num_queries_base = math.ceil((base_size // patch_size) / downsample_ratio)
+            tokenized_image = ([image_token_id] * num_queries_base) * num_queries_base
+            tokenized_image += [image_token_id]
+            if width_crop_num > 1 or height_crop_num > 1:
+                tokenized_image += ([image_token_id] * (num_queries * width_crop_num)) * (num_queries * height_crop_num)
+            tokenized_str += tokenized_image
+            images_seq_mask += [True] * len(tokenized_image)
+
+        # Prepend BOS.
+        tokenized_str = [0] + tokenized_str
+        images_seq_mask = [False] + images_seq_mask
+
+        input_ids = torch.LongTensor(tokenized_str).unsqueeze(0)
+        images_seq_mask = torch.tensor(images_seq_mask, dtype=torch.bool).unsqueeze(0)
+        attention_mask = torch.ones_like(input_ids)
+
+        if len(images_list) == 0:
+            images_ori = torch.zeros((1, 3, base_size, base_size))
+            images_crop = torch.zeros((1, 3, image_size, image_size))
+            images_spatial_crop = torch.zeros((1, 2), dtype=torch.long)
+        else:
+            images_ori = torch.stack(images_list, dim=0)
+            images_spatial_crop = torch.tensor(images_spatial_crop, dtype=torch.long)
+            if images_crop_list:
+                images_crop = torch.stack(images_crop_list, dim=0)
+            else:
+                images_crop = torch.zeros((1, 3, image_size, image_size))
+
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            # Native DeepSeek-OCR-2 layout: a list with one (images_crop, images_ori) tuple per sample.
+            "images": [(images_crop, images_ori)],
+            "images_seq_mask": images_seq_mask,
+            "images_spatial_crop": images_spatial_crop,
+        }
+
+
 class _OVIdefics3ForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids, **kwargs):
         # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-SmolVLM-2/src/transformers/models/smolvlm/modeling_smolvlm.py#L899-L942
@@ -5962,4 +6236,8 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_5_moe_text": _OVQwen3_5ForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
+    "deepseek_vl_v2": _OVDeepSeekVLV2ForCausalLM,
+    # The remote DeepseekOCR2Config class sets model_type="DeepseekOCR2", which is what ends up in the
+    # re-saved config after export; alias it so the exported model can be reloaded.
+    "DeepseekOCR2": _OVDeepSeekVLV2ForCausalLM,
 }

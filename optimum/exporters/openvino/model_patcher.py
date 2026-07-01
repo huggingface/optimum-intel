@@ -5007,6 +5007,216 @@ class CommonImageEmbeddingsModelPatcher(ModelPatcher):
         self.patched_forward = patched_forward
 
 
+class DeepseekOCR2LMPatcher(OVDecoderModelPatcher):
+    """Language-model patcher for DeepSeek-OCR-2 (model_type ``deepseek_vl_v2``).
+
+    The language model is ``DeepseekOCR2ForCausalLM`` whose ``forward`` runs the vision
+    branch and merges image features. For export of the text-generation part we drive only
+    the underlying ``DeepseekV2Model`` (a standard MHA decoder, ``use_mla=False``) from
+    ``inputs_embeds`` and apply ``lm_head``, bypassing the vision code entirely.
+
+    The MoE blocks use a data-dependent ``moe_infer`` that is not directly traceable; we swap
+    it for the traceable :func:`deepseek_moe_infer` (reused from the Deepseek text patcher).
+    No attention patch is required because ``use_mla=False`` selects ``LlamaAttention``.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        # ``model.model`` is ``DeepseekOCR2Model`` whose forward runs the vision branch (and would
+        # crash with ``input_ids=None``); call the parent ``DeepseekV2Model.forward`` directly so we
+        # trace only the text decoder driven by ``inputs_embeds``.
+        base_model = model.model
+        base_model_forward = type(base_model).__mro__[1].forward
+
+        def lm_forward(
+            self,
+            attention_mask,
+            position_ids=None,
+            past_key_values=None,
+            inputs_embeds=None,
+            input_ids=None,
+            use_cache=True,
+        ):
+            if is_transformers_version("<", "5"):
+                pkv = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                pkv = DynamicCache(past_key_values)
+
+            outputs = base_model_forward(
+                self.model,
+                input_ids=None,
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=pkv,
+                use_cache=use_cache,
+            )
+            hidden_states = outputs[0]
+            logits = self.lm_head(hidden_states)
+            return (logits, postprocess_past_key_values(outputs.past_key_values))
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(lm_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+        # Swap the data-dependent MoE dispatch for the traceable implementation.
+        for block in self._model.model.layers:
+            if hasattr(block.mlp, "moe_infer"):
+                block.mlp._org_moe_infer = block.mlp.moe_infer
+                block.mlp.moe_infer = types.MethodType(deepseek_moe_infer, block.mlp)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        for block in self._model.model.layers:
+            if hasattr(block.mlp, "_org_moe_infer"):
+                block.mlp.moe_infer = block.mlp._org_moe_infer
+
+
+def _deepseek_ocr2_vision_static_mask(n_query, dtype):
+    """Precompute the static additive attention mask used by the Qwen2 decoder-as-encoder.
+
+    Reproduces ``CustomQwen2ModelInner._create_custom_4d_mask`` for the fixed token layout
+    ``[0] * n_query + [1] * n_query`` (first ``n_query`` = SAM image tokens, bidirectional;
+    last ``n_query`` = query tokens, causal and attending to all image tokens). The original
+    builds this with Python loops over positions; for a fixed ``n_query`` it is constant, so
+    we materialize it once as a traceable buffer.
+    """
+    seq = 2 * n_query
+    min_dtype = torch.finfo(dtype).min
+    mask = torch.full((seq, seq), fill_value=min_dtype, dtype=dtype)
+    # image tokens (0..n_query-1) attend to each other (non-causal)
+    mask[:n_query, :n_query] = 0.0
+    # query tokens (n_query..2n_query-1) attend to all image tokens + causally to themselves
+    for i in range(n_query):
+        text_pos = n_query + i
+        mask[text_pos, :n_query] = 0.0
+        mask[text_pos, n_query : text_pos + 1] = 0.0
+    return mask.unsqueeze(0).unsqueeze(0)
+
+
+class DeepseekOCR2VisionEmbeddingsPatcher(ModelPatcher):
+    """Vision-encoder patcher for DeepSeek-OCR-2.
+
+    Exposes the composed ``projector(qwen2_model(sam_model(pixel_values)))`` pipeline as the
+    traced forward, returning ``{"last_hidden_state": embeds}``. Two streams exist with
+    different (static) query lengths: the 1024x1024 global view (``n_query=256``) and the
+    768x768 crop tiles (``n_query=144``). The data-dependent query-table selection and the
+    Python-loop attention-mask construction inside the Qwen2 encoder are replaced with static
+    equivalents bound to ``n_query`` so the graph traces.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+        n_query: int = 256,
+    ):
+        self._n_query = n_query
+        vision_root = model.model if hasattr(model, "model") else model
+        self._vision_root = vision_root
+        output_name = list(config.outputs.keys())[0]
+
+        def vision_forward(self, pixel_values):
+            sam_features = vision_root.sam_model(pixel_values)
+            encoded = vision_root.qwen2_model(sam_features)
+            embeds = vision_root.projector(encoded)
+            return {output_name: embeds}
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(vision_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+        n_query = self._n_query
+        qwen2_model = self._vision_root.qwen2_model
+
+        # 1) Static query-table selection (drop the data-dependent ``if n_query == ...``).
+        query_weight = (
+            qwen2_model.query_768.weight if n_query == 144 else qwen2_model.query_1024.weight
+        )
+
+        def qwen2_forward(self, x):
+            x = x.flatten(2).transpose(1, 2)
+            bs = x.shape[0]
+            batch_query_imgs = query_weight.unsqueeze(0).expand(bs, -1, -1)
+            x_combined = torch.cat([x, batch_query_imgs], dim=1)
+            token_type_ids = torch.cat(
+                [
+                    torch.zeros(bs, n_query, dtype=torch.long),
+                    torch.ones(bs, n_query, dtype=torch.long),
+                ],
+                dim=1,
+            )
+            y = self.model(x_combined, token_type_ids)[0]
+            return y[:, n_query:, :]
+
+        self._orig_qwen2_forward = qwen2_model.forward
+        qwen2_model.forward = types.MethodType(qwen2_forward, qwen2_model)
+
+        # 2) Static precomputed 4D attention mask (replace per-position Python loops).
+        inner = qwen2_model.model.model
+        param_dtype = next(inner.parameters()).dtype
+        static_mask = _deepseek_ocr2_vision_static_mask(n_query, param_dtype)
+
+        def update_causal_mask(self, attention_mask, input_tensor, cache_position, past_key_values, output_attentions):
+            return static_mask.to(dtype=input_tensor.dtype)
+
+        self._orig_update_causal_mask = inner._update_causal_mask
+        inner._update_causal_mask = types.MethodType(update_causal_mask, inner)
+
+        # 3) Pre-interpolate the SAM absolute position embedding for the fixed input grid.
+        #    The reference resizes pos_embed (64x64) to the patch grid (48x48 for 768 input) with a
+        #    bicubic+antialias F.interpolate; OpenVINO does not reproduce that interpolation exactly,
+        #    so we bake the torch-computed embedding as a constant and skip the interpolate op.
+        sam_model = self._vision_root.sam_model
+        self._orig_sam_forward = sam_model.forward
+        if sam_model.pos_embed is not None:
+            # patch grid size = input_size / patch_size; 1024 -> 64, 768 -> 48
+            grid_size = 64 if n_query == 256 else 48
+            with torch.no_grad():
+                src = sam_model.pos_embed
+                if src.size(1) == grid_size:
+                    baked_pos = src.clone()
+                else:
+                    p = src.permute(0, 3, 1, 2).to(torch.float32)
+                    p = torch.nn.functional.interpolate(
+                        p, size=(grid_size, grid_size), mode="bicubic", antialias=True, align_corners=False
+                    )
+                    baked_pos = p.permute(0, 2, 3, 1).to(src.dtype)
+
+            def sam_forward(self, x):
+                x = self.patch_embed(x)
+                if self.pos_embed is not None:
+                    x = x + baked_pos.to(x.dtype)
+                for blk in self.blocks:
+                    x = blk(x)
+                x = self.neck(x.permute(0, 3, 1, 2))
+                x2 = self.net_2(x)
+                x3 = self.net_3(x2.clone())
+                return x3
+
+            sam_model.forward = types.MethodType(sam_forward, sam_model)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        qwen2_model = self._vision_root.qwen2_model
+        qwen2_model.forward = self._orig_qwen2_forward
+        qwen2_model.model.model._update_causal_mask = self._orig_update_causal_mask
+        self._vision_root.sam_model.forward = self._orig_sam_forward
+
+
 # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-Gemma-3/src/transformers/models/gemma3/modeling_gemma3.py#L1147
 def _gemma3_mm_update_causal_mask(
     self, attention_mask, token_type_ids, past_key_values, cache_position, input_tensor, is_training: bool = False
