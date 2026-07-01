@@ -23,6 +23,7 @@ from typing import Dict, Optional
 import numpy as np
 import openvino as ov
 import torch
+from huggingface_hub import constants, scan_cache_dir
 
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import is_transformers_version
@@ -150,7 +151,7 @@ TENSOR_ALIAS_TO_TYPE = {"pt": torch.Tensor, "np": np.ndarray}
 
 OPENVINO_DEVICE = os.getenv("OPENVINO_TEST_DEVICE", "CPU")
 
-MODEL_NAMES = {
+HUB_MODEL_NAMES = {
     "afmoe": "optimum-intel-internal-testing/tiny-random-trinity",
     "albert": "optimum-intel-internal-testing/tiny-random-albert",
     "aquila": "optimum-intel-internal-testing/tiny-random-aquilachat",
@@ -204,6 +205,8 @@ MODEL_NAMES = {
     "got_ocr2": "optimum-intel-internal-testing/tiny-random-got-ocr2-hf",
     "gemma3_text": "optimum-intel-internal-testing/tiny-random-gemma3-text",
     "gemma3": "optimum-intel-internal-testing/tiny-random-gemma3",
+    "gemma3n": "optimum-intel-internal-testing/tiny-random-gemma3n",
+    "gemma3n_text": "optimum-intel-internal-testing/tiny-random-gemma3n-text",
     "gemma4": "optimum-intel-internal-testing/tiny-random-gemma4",
     "gemma4_moe": "optimum-intel-internal-testing/tiny-random-gemma4-moe",
     "gemma4_unified": "optimum-intel-internal-testing/tiny-random-gemma4-unified",
@@ -356,9 +359,28 @@ MODEL_NAMES = {
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
+    "flux.2-klein": "optimum-intel-internal-testing/tiny-random-flux.2-klein",
     "qwen3_vl_eagle3": "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
     "videochat_flash_qwen": "optimum-intel-internal-testing/tiny-videochat-flash-qwen",
 }
+
+
+def _resolve_cached_model_paths(model_names: dict) -> dict:
+    try:
+        if not os.path.exists(constants.HF_HUB_CACHE):
+            return model_names
+
+        repo_id_to_local_paths = {
+            repo.repo_id: str(next(iter(repo.revisions)).snapshot_path)
+            for repo in scan_cache_dir().repos
+            if repo.revisions
+        }
+        return {k: repo_id_to_local_paths.get(v, v) for k, v in model_names.items()}
+    except Exception:
+        return model_names
+
+
+MODEL_NAMES = _resolve_cached_model_paths(HUB_MODEL_NAMES)
 
 EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7B")}
 
@@ -426,6 +448,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vae_encoder": 24,
         "text_encoder": 64,
         "text_encoder_2": 64,
+    },
+    "flux.2-klein": {
+        "transformer": 74,
+        "vae_decoder": 60,
+        "vae_encoder": 44,
+        "text_encoder": 394,
     },
     "flux-fill": {
         "transformer": 56,
@@ -542,6 +570,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "qwen3_eagle3": {"model": 20},
     "qwen3_vl_eagle3": {"model": 18},
     "qwen3_next": {"model": 100},
+    "gemma3n": {
+        "lm_model": 72,
+        "text_embeddings_model": 3,
+        "vision_embeddings_model": 53,
+        "text_embeddings_per_layer_model": 1,
+    },
     "gemma4": {
         "lm_model": 54,
         "text_embeddings_model": 1,

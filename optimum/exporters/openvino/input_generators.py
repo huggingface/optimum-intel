@@ -430,6 +430,7 @@ class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         self.num_global_key_value_heads = (
             getattr(normalized_config.config, "num_global_key_value_heads", None) or self.num_key_value_heads
         )
+        self.model_type = normalized_config.config.model_type
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         # some layers do not produce their own KV-cache, they use the shared KV-cache
@@ -443,7 +444,7 @@ class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
                 shape = (
                     self.batch_size,
                     self.num_key_value_heads,
-                    self.sliding_window,
+                    self.sequence_length if self.model_type == "gemma3n_text" else self.sliding_window,
                     self.head_dim,
                 )
             else:
@@ -592,7 +593,13 @@ class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
     ):
         self.task = task
         self.batch_size = batch_size
-        self.pooled_projection_dim = normalized_config.config.pooled_projection_dim
+        config = normalized_config.config
+        pooled_projection_dim = getattr(config, "pooled_projection_dim", None)
+        # FrozenDict / dict requires get() method for attribute access
+        # getattr() will just return None
+        if pooled_projection_dim is None and hasattr(config, "get"):
+            pooled_projection_dim = config.get("pooled_projection_dim", None)
+        self.pooled_projection_dim = pooled_projection_dim
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         shape = [self.batch_size, self.pooled_projection_dim]
@@ -728,6 +735,8 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
         if getattr(normalized_config, "in_channels", None):
             self.num_channels = normalized_config.in_channels // 4
+        self.config = normalized_config.config
+        self.is_flux2 = self.config.get("_class_name", "") == "Flux2Transformer2DModel"
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name in ["hidden_states", "sample"]:
@@ -736,12 +745,16 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
         if input_name == "img_ids":
             img_ids_height = self.height // 2
             img_ids_width = self.width // 2
+            img_ids_shape = [self.batch_size, img_ids_height * img_ids_width, 3]
+            img_ids_shape = (
+                [self.batch_size, img_ids_height * img_ids_width, 3]
+                if is_diffusers_version("<", "0.31.0")
+                else [img_ids_height * img_ids_width, 3]
+            )
+            if self.is_flux2:
+                img_ids_shape = [self.batch_size, img_ids_height * img_ids_width, 4]
             return self.random_int_tensor(
-                (
-                    [self.batch_size, img_ids_height * img_ids_width, 3]
-                    if is_diffusers_version("<", "0.31.0")
-                    else [img_ids_height * img_ids_width, 3]
-                ),
+                img_ids_shape,
                 min_value=0,
                 max_value=min(img_ids_height, img_ids_width),
                 framework=framework,
@@ -764,11 +777,14 @@ class DummyFluxTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
         if input_name == "txt_ids":
             import torch
 
+            is_flux2 = self.normalized_config.config.get("_class_name", "") == "Flux2Transformer2DModel"
             shape = (
                 [self.batch_size, self.sequence_length, 3]
                 if is_diffusers_version("<", "0.31.0")
                 else [self.sequence_length, 3]
             )
+            if is_flux2:
+                shape = [self.batch_size, self.sequence_length, 4]
             dtype = DTYPE_MAPPER.pt(float_dtype)
             return torch.full(shape, 0, dtype=dtype)
         return super().generate(input_name, framework, int_dtype, float_dtype)

@@ -46,6 +46,7 @@ from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
 from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TEST_IMAGE_URL, Timer
 
+from optimum.exporters.openvino.model_configs import Gemma3nTextOpenVINOConfig
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.stateful import model_has_state
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
@@ -128,6 +129,9 @@ class OVSeq2SeqTestMixin(unittest.TestCase):
         }
         supported_architectures = ov_architectures & transformers_architectures
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
+
+        if is_transformers_version("<", str(Gemma3nTextOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"gemma3n"}
 
         untested_architectures = supported_architectures - tested_architectures
 
@@ -718,6 +722,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     if is_transformers_version(">=", "5.5"):
         SUPPORTED_ARCHITECTURES += ["gemma4", "gemma4_moe"]
 
+    if is_transformers_version(">=", "5.0"):
+        SUPPORTED_ARCHITECTURES += ["gemma3n"]
+
     if is_transformers_version(">=", "5.10"):
         SUPPORTED_ARCHITECTURES += ["gemma4_unified"]
 
@@ -738,6 +745,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "maira2",
         "phi4mm",
         "videochat_flash_qwen",
+        "gemma3n",
     ]
     IMAGE = Image.open(
         requests.get(
@@ -869,12 +877,13 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             trust_remote_code=trust_remote_code,
             compile=False,
             device=OPENVINO_DEVICE,
+            ov_config=F32_CONFIG,
         )
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
 
         image = self.IMAGE.resize((600, 600))
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=image)
-        if model_arch == "gemma3":
+        if model_arch in ["gemma3", "gemma3n"]:
             # validate that preprocessed input ids contain exactly one bos token
             bos_token = preprocessors["processor"].tokenizer.vocab["<bos>"]
             input_ids = inputs["input_ids"]
