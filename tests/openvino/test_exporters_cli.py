@@ -52,6 +52,7 @@ from optimum.intel import (  # noqa
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
+    OVModelForObjectDetection,
     OVModelForQuestionAnswering,
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
@@ -143,6 +144,13 @@ class OVCLIExportTestCase(unittest.TestCase):
         in get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
     ]
 
+    if is_transformers_version(">=", "5.8.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("object-detection", "rf_detr"),
+            ]
+        )
+
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
         "t5": 2,
@@ -150,6 +158,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "distilbert": 2,
         "roberta": 2,
         "vit": 0,  # no tokenizer for image model
+        "rf_detr": 0,  # no tokenizer for object-detection model
         "wav2vec2": 0,  # no tokenizer
         "bert": 2,
         "blenderbot": 2,
