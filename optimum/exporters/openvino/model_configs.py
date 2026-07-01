@@ -2507,11 +2507,11 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
 
         common_inputs["hidden_states"] = {0: "batch_size", 1: "packed_height_width"}
         common_inputs["txt_ids"] = (
-            {0: "batch_size", 1: "sequence_length"} if is_diffusers_version("<", "0.31.0") else {0: "sequence_length"}
+            {0: "batch_size", 1: "sequence_length"} if is_diffusers_version("<", "0.31.0") or self.is_flux2 else {0: "sequence_length"}
         )
         common_inputs["img_ids"] = (
             {0: "batch_size", 1: "packed_height_width"}
-            if is_diffusers_version("<", "0.31.0")
+            if is_diffusers_version("<", "0.31.0") or self.is_flux2
             else {0: "packed_height_width"}
         )
         if getattr(self._normalized_config, "guidance_embeds", False):
