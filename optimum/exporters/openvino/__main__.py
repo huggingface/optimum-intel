@@ -38,6 +38,7 @@ from optimum.intel.utils.import_utils import (
     is_transformers_version,
 )
 from optimum.intel.utils.modeling_utils import (
+    _ChatterboxForTextToSpeech,
     _infer_library_from_model_name_or_path,
     _KokoroForTextToSpeech,
     _OpenClipForZeroShotImageClassification,
@@ -87,7 +88,7 @@ def infer_task(
     if task == "auto":
         if library_name == "open_clip":
             task = "zero-shot-image-classification"
-        elif library_name == "kokoro":
+        elif library_name in ("kokoro", "chatterbox"):
             task = "text-to-audio"
         else:
             try:
@@ -518,6 +519,10 @@ def main_export(
             model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
         elif library_name == "kokoro":
             model = _KokoroForTextToSpeech.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+        elif library_name == "chatterbox":
+            model = _ChatterboxForTextToSpeech.from_pretrained(
+                model_name_or_path, cache_dir=cache_dir, token=token, **loading_kwargs
+            )
         else:
             # remote code models like phi3_v internvl2, minicpmv, internvl2, nanollava, maira2 should be loaded using AutoModelForCausalLM and not AutoModelForImageTextToText
             # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)

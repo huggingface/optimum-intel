@@ -548,7 +548,9 @@ SKIP_CHECK_TRACE_MODELS = (
 
 
 def allow_skip_tracing_check(library_name, model_type):
-    if library_name in ["diffusers", "sentence_transformers"]:
+    # Chatterbox submodels (S3Gen flow / HiFiGAN) draw random noise internally, so the
+    # TorchScript trace-check comparison is expected to differ and is not meaningful.
+    if library_name in ["diffusers", "sentence_transformers", "chatterbox"]:
         return True
     return model_type in SKIP_CHECK_TRACE_MODELS
 

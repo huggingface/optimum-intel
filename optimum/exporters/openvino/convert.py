@@ -597,7 +597,7 @@ def export_from_model(
         )
 
     library_name = _infer_library_from_model_or_model_class(model)
-    if library_name not in ("open_clip", "kokoro"):
+    if library_name not in ("open_clip", "kokoro", "chatterbox"):
         TasksManager.standardize_model_attributes(model, library_name=library_name)
 
     if hasattr(model.config, "export_model_type") and model.config.export_model_type is not None:
@@ -612,7 +612,9 @@ def export_from_model(
 
     custom_architecture = library_name == "transformers" and model_type not in TasksManager._SUPPORTED_MODEL_TYPE
 
-    if task is not None and task != "auto":
+    if library_name == "chatterbox":
+        task = "text-to-audio"
+    elif task is not None and task != "auto":
         task = TasksManager.map_from_synonym(task)
     else:
         if library_name == "kokoro":
@@ -701,7 +703,15 @@ def export_from_model(
             model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
         )
 
-    if library_name == "diffusers":
+    if library_name == "chatterbox":
+        from .chatterbox import get_chatterbox_models_for_export
+
+        n_cfm_timesteps = getattr(model.config, "n_cfm_timesteps", 10)
+        export_config = None
+        models_and_export_configs, stateful_submodels = get_chatterbox_models_for_export(
+            model, n_cfm_timesteps=n_cfm_timesteps
+        )
+    elif library_name == "diffusers":
         export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
         stateful_submodels = False
     elif stateful and is_encoder_decoder and not custom_architecture:
@@ -727,7 +737,12 @@ def export_from_model(
         )
         logging.disable(logging.NOTSET)
 
-    if library_name == "open_clip":
+    if library_name == "chatterbox":
+        from .chatterbox import save_chatterbox_assets
+
+        save_chatterbox_assets(model, output, n_cfm_timesteps=getattr(model.config, "n_cfm_timesteps", 10))
+        files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
+    elif library_name == "open_clip":
         if hasattr(model.config, "save_pretrained"):
             model.config.save_pretrained(output)
 

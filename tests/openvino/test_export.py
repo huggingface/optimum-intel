@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import importlib.util
 import unittest
 from pathlib import Path
 
@@ -433,3 +434,39 @@ class CustomExportModelTest(unittest.TestCase):
         ov_outputs = ov_model(**tokens)
         self.assertTrue(torch.allclose(ov_outputs.token_embeddings, model_outputs.token_embeddings, atol=1e-4))
         self.assertTrue(torch.allclose(ov_outputs.sentence_embedding, model_outputs.sentence_embedding, atol=1e-4))
+
+
+@unittest.skipUnless(
+    importlib.util.find_spec("chatterbox") is not None,
+    "chatterbox-tts package is not installed",
+)
+class ChatterboxExportModelTest(unittest.TestCase):
+    def _check_chatterbox_export(self, output_path: Path):
+        # Three OpenVINO submodels are produced: the T3 token-to-token model, the S3Gen
+        # flow (token -> mel) and the HiFiGAN vocoder (mel -> waveform).
+        for name in ("t3", "flow", "hifigan"):
+            self.assertTrue((output_path / f"openvino_{name}.xml").exists(), f"missing openvino_{name}.xml")
+            self.assertTrue((output_path / f"openvino_{name}.bin").exists(), f"missing openvino_{name}.bin")
+        # Assets (embedding tables, built-in voice conditioning) and metadata.
+        self.assertTrue((output_path / "chatterbox_assets.safetensors").exists())
+        self.assertTrue((output_path / "chatterbox_config.json").exists())
+
+    def test_chatterbox_export(self):
+        from chatterbox_test_utils import build_tiny_chatterbox
+
+        with TemporaryDirectory() as tmpdirname:
+            model = build_tiny_chatterbox(tmpdirname, multilingual=False)
+            output_path = Path(tmpdirname) / "ov"
+            export_from_model(model=model, output=output_path, task="text-to-audio")
+            self._check_chatterbox_export(output_path)
+            self.assertTrue((output_path / "tokenizer.json").exists())
+
+    def test_chatterbox_multilingual_export(self):
+        from chatterbox_test_utils import build_tiny_chatterbox
+
+        with TemporaryDirectory() as tmpdirname:
+            model = build_tiny_chatterbox(tmpdirname, multilingual=True)
+            output_path = Path(tmpdirname) / "ov"
+            export_from_model(model=model, output=output_path, task="text-to-audio")
+            self._check_chatterbox_export(output_path)
+            self.assertTrue((output_path / "grapheme_mtl_merged_expanded_v1.json").exists())
