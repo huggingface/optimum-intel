@@ -337,6 +337,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "phi4_multimodal",
     "llama4",
     "minicpmo",
+    "minicpmv4_6",
     "videochat_flash_qwen",
 ]
 
@@ -485,6 +486,11 @@ def save_preprocessors(
                 processor.save_pretrained(output)
             except Exception as ex:
                 logger.error(f"Saving {type(processor)} failed with {ex}")
+            if hasattr(processor, "image_processor") and not (Path(output) / "preprocessor_config.json").exists():
+                try:
+                    processor.image_processor.save_pretrained(output)
+                except Exception:
+                    pass
         # phi4mm does not allow loading chat template in processor, it uses chat_template from tokenizer
         if model_type == "phi4mm" and (Path(output) / "chat_template.json").exists():
             (Path(output) / "chat_template.json").unlink()

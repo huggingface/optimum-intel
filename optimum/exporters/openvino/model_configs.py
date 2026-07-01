@@ -47,6 +47,8 @@ from optimum.exporters.openvino.input_generators import (
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
+    DummyMiniCPMV46MergerInputGenerator,
+    DummyMiniCPMV46VisionInputGenerator,
     DummyMiniCPMVImageInputGenerator,
     DummyMiniCPMVResampleInputGenerator,
     DummyPhi3VisionProjectionInputGenerator,
@@ -137,6 +139,9 @@ from optimum.exporters.openvino.model_patcher import (
     MarianModelPatcher,
     MiniCPM3Patcher,
     MiniCPMModelPatcher,
+    MiniCPMV46LMModelPatcher,
+    MiniCPMV46MergerModelPatcher,
+    MiniCPMV46VisionEmbeddingsModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
     MistralModelPatcher,
@@ -2730,6 +2735,145 @@ class MiniCPMOOpenVINOConfig(MiniCPMVOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.43.0"
     MAX_TRANSFORMERS_VERSION = "4.51.3"
     MODEL_TYPE = "minicpmo"
+
+
+class MiniCPMV46ConfigBehavior(str, enum.Enum):
+    MERGER = "merger"
+    LANGUAGE = "language"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    TEXT_EMBEDDINGS = "text_embeddings"
+
+
+@register_in_tasks_manager("minicpmv4_6", *["image-text-to-text"], library_name="transformers")
+class MiniCPMV46OpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "5.7.0"
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in MiniCPMV46ConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = ()
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: MiniCPMV46ConfigBehavior = MiniCPMV46ConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == MiniCPMV46ConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMV46VisionInputGenerator,)
+        if self._behavior == MiniCPMV46ConfigBehavior.MERGER and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMV46MergerInputGenerator,)
+        self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == MiniCPMV46ConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {0: "batch_size", 2: "height", 3: "width"},
+                "target_sizes": {0: "num_images"},
+            }
+        if self._behavior == MiniCPMV46ConfigBehavior.MERGER:
+            return {
+                "image_feature": {0: "batch_size", 1: "num_patches"},
+                "target_sizes": {0: "num_images"},
+            }
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == MiniCPMV46ConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "batch_size", 1: "num_patches"}}
+        if self._behavior == MiniCPMV46ConfigBehavior.MERGER:
+            return {"last_hidden_state": {0: "batch_size", 1: "num_patches"}}
+        return {}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, MiniCPMV46ConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, MiniCPMV46ConfigBehavior):
+            behavior = MiniCPMV46ConfigBehavior(behavior)
+
+        if behavior == MiniCPMV46ConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "qwen3_5_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == MiniCPMV46ConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "qwen3_5_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=MiniCPMV46LMModelPatcher,
+                dummy_input_generator=DummyQwen3_5LMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+            )
+
+        if behavior == MiniCPMV46ConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+        if behavior == MiniCPMV46ConfigBehavior.MERGER:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, MiniCPMV46ConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, MiniCPMV46ConfigBehavior):
+            behavior = MiniCPMV46ConfigBehavior(behavior)
+
+        if behavior == MiniCPMV46ConfigBehavior.LANGUAGE:
+            lm = model.model.language_model if hasattr(model, "model") else model.language_model
+            lm_head = model.lm_head if hasattr(model, "lm_head") else None
+            if lm_head is not None:
+                lm.lm_head = lm_head
+            return lm
+
+        if behavior == MiniCPMV46ConfigBehavior.VISION_EMBEDDINGS:
+            return model.model.vision_tower if hasattr(model, "model") else model.vision_tower
+
+        if behavior == MiniCPMV46ConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.model.language_model.get_input_embeddings() if hasattr(model, "model") else model.language_model.get_input_embeddings()
+            text_embedding.config = model.config.text_config
+            return text_embedding
+
+        if behavior == MiniCPMV46ConfigBehavior.MERGER:
+            merger = model.model.merger if hasattr(model, "model") else model.merger
+            merger.config = model.config.vision_config
+            return merger
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == MiniCPMV46ConfigBehavior.VISION_EMBEDDINGS:
+            return MiniCPMV46VisionEmbeddingsModelPatcher(self, model, model_kwargs)
+        if self._behavior == MiniCPMV46ConfigBehavior.MERGER:
+            return MiniCPMV46MergerModelPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
 
 
 class Phi3VisionConfigBehavior(str, enum.Enum):

@@ -1800,3 +1800,83 @@ class DummyKokoroInputGenerator(DummyInputGenerator):
             return self.random_int_tensor(shape=[1], min_value=1, max_value=10, framework=framework, dtype=float_dtype)
         else:
             raise ValueError(f"Unsupported input {input_name} for DummyKokoroInputGenerator")
+
+
+class DummyMiniCPMV46VisionInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "target_sizes")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height)
+        self.patch_size = normalized_config.config.patch_size
+        alignment = self.patch_size * 4
+        self.height = (self.height // alignment) * alignment
+        self.width = (self.width // alignment) * alignment
+        if self.height == 0:
+            self.height = alignment
+        if self.width == 0:
+            self.width = alignment
+        self.num_patches_h = self.height // self.patch_size
+        self.num_patches_w = self.width // self.patch_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        import torch
+
+        if input_name == "pixel_values":
+            return self.random_float_tensor(
+                shape=[1, self.num_channels, self.height, self.width],
+                framework=framework,
+                dtype=float_dtype,
+            )
+
+        if input_name == "target_sizes":
+            return torch.tensor([[self.num_patches_h, self.num_patches_w]], dtype=torch.int32)
+
+
+class DummyMiniCPMV46MergerInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("image_feature", "target_sizes")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height)
+        self.patch_size = normalized_config.config.patch_size
+        self.hidden_size = normalized_config.config.hidden_size
+        alignment = self.patch_size * 4
+        self.height = (self.height // alignment) * alignment
+        self.width = (self.width // alignment) * alignment
+        if self.height == 0:
+            self.height = alignment
+        if self.width == 0:
+            self.width = alignment
+        self.num_patches_h = (self.height // self.patch_size) // 2
+        self.num_patches_w = (self.width // self.patch_size) // 2
+        self.num_patches = self.num_patches_h * self.num_patches_w
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        import torch
+
+        if input_name == "image_feature":
+            return self.random_float_tensor(
+                shape=[1, self.num_patches, self.hidden_size],
+                framework=framework,
+                dtype=float_dtype,
+            )
+
+        if input_name == "target_sizes":
+            return torch.tensor([[self.num_patches_h, self.num_patches_w]], dtype=torch.int32)
