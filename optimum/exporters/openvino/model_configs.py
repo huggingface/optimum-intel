@@ -75,6 +75,7 @@ from optimum.exporters.openvino.input_generators import (
     LTXTransformerDummyInputGenerator,
     LTXVaeDummyInputGenerator,
     MambaCacheDummyInputGenerator,
+    NemotronHDummyPastKeyValuesGenerator,
     OVFalconDummyPastKeyValuesGenerator,
     OVMiniCPM3DummyPastKeyValuesGenerator,
     PooledProjectionsDummyInputGenerator,
@@ -141,6 +142,7 @@ from optimum.exporters.openvino.model_patcher import (
     MixtralModelPatcher,
     ModelPatcher,
     MPTModelPatcher,
+    NemotronHModelPatcher,
     OVDecoderModelPatcher,
     OVSeq2SeqModelPatcher,
     PegasusModelPatcher,
@@ -5771,6 +5773,84 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         # need to override `generate_dummy_inputs` since mamba model has other states: ssm_states and conv_states
         # which we separate and call them as past_ssm_states and past_conv_states
+        dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
+
+        dummy_inputs = {}
+        input_names = [key for key in self.inputs.keys() if not key.startswith("cache_params")]
+        if self.use_past_in_inputs:
+            input_names.extend(["cache_params"])
+
+        for input_name in input_names:
+            input_was_inserted = False
+            for dummy_input_gen in dummy_inputs_generators:
+                if dummy_input_gen.supports_input(input_name):
+                    dummy_inputs[input_name] = self.overwrite_shape_and_generate_input(
+                        dummy_input_gen,
+                        input_name,
+                        framework,
+                        input_shapes=kwargs,
+                    )
+                    input_was_inserted = True
+                    break
+            if not input_was_inserted:
+                raise RuntimeError(
+                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model OpenVINO config.'
+                )
+
+        return dummy_inputs
+
+
+@register_in_tasks_manager(
+    "nemotron_h",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class NemotronHOpenVINOConfig(TextDecoderOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, NemotronHDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = NemotronHDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    MIN_TRANSFORMERS_VERSION = "5.0.0"
+    _MODEL_PATCHER = NemotronHModelPatcher
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            cache_name_prefix = "cache_params.past"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            cache_name_prefix = "cache_params.present"
+
+        layers_block_type = self._normalized_config.layers_block_type
+        self.num_mamba_layers = layers_block_type.count("mamba")
+        self.num_attn_layers = layers_block_type.count("attention")
+
+        for i in range(self.num_mamba_layers):
+            # [batch_size, conv_dim, conv_kernel_size]
+            inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
+            # [batch_size, mamba_num_heads, mamba_head_dim, ssm_state_size]
+            inputs_or_outputs[f"{cache_name_prefix}.ssm.{i}"] = {0: "batch_size"}
+
+        for i in range(self.num_attn_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        # need to override `generate_dummy_inputs` since the hybrid Mamba2 model exposes
+        # conv/recurrent states (for mamba layers) and key/value caches (for attention layers)
+        # bundled together under a single flat `cache_params` input.
         dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
 
         dummy_inputs = {}

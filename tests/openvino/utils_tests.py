@@ -270,6 +270,7 @@ HUB_MODEL_NAMES = {
     "mobilevit": "optimum-intel-internal-testing/tiny-random-mobilevit",
     "mpt": "optimum-intel-internal-testing/tiny-random-MptForCausalLM",
     "mpnet": "optimum-intel-internal-testing/tiny-random-MPNetModel",
+    "nemotron_h": "optimum-intel-internal-testing/tiny-random-nemotron-h",
     "mt5": "optimum-intel-internal-testing/mt5-tiny-random",
     "llava-qwen2": "optimum-intel-internal-testing/tiny-random-nanollava",
     "nanollava_vision_tower": "optimum-intel-internal-testing/tiny-random-siglip",
@@ -568,6 +569,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "qwen3_eagle3": {"model": 20},
     "qwen3_vl_eagle3": {"model": 18},
     "qwen3_next": {"model": 100},
+    "nemotron_h": {"model": 46},
     "gemma4": {
         "lm_model": 54,
         "text_embeddings_model": 1,
