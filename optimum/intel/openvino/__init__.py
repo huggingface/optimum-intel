@@ -75,6 +75,7 @@ from .modeling import (
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
+    OVModelForObjectDetection,
     OVModelForQuestionAnswering,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
