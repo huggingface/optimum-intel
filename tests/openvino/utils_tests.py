@@ -204,7 +204,7 @@ HUB_MODEL_NAMES = {
     "gemma": "optimum-intel-internal-testing/tiny-random-GemmaForCausalLM",
     "gemma2": "optimum-intel-internal-testing/tiny-random-gemma2",
     "got_ocr2": "optimum-intel-internal-testing/tiny-random-got-ocr2-hf",
-    "gemma3_text":  "optimum-intel-internal-testing/tiny-random-gemma3-text",
+    "gemma3_text": "optimum-intel-internal-testing/tiny-random-gemma3-text",
     "gemma3": "optimum-intel-internal-testing/tiny-random-gemma3",
     "gemma3n": "optimum-intel-internal-testing/tiny-random-gemma3n",
     "gemma3n_text": "optimum-intel-internal-testing/tiny-random-gemma3n-text",
