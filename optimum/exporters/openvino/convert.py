@@ -38,6 +38,7 @@ from optimum.exporters.openvino.utils import (
     _get_kokoro_submodels_fn_and_export_configs,
     _get_model_dtype,
     _get_open_clip_submodels_fn_and_export_configs,
+    _get_qwen3_tts_submodels_fn_and_export_configs,
     _normalize_dummy_inputs,
     allow_skip_tracing_check,
     clear_class_registry,
@@ -574,6 +575,47 @@ def _save_kokoro_config_and_assets(model, output: Path):
         logger.info(f"Exported voice {voice_name} -> {voice_bin}")
 
 
+def _save_qwen3_tts_config_and_assets(model, output: Path):
+    """Materialize the original Qwen3-TTS repository files alongside the talker IR.
+
+    The OpenVINO runtime (:class:`optimum.intel.openvino.modeling_text2speech._OVModelForQwen3TTS`)
+    rebuilds the full ``qwen_tts`` pipeline from these files and loads the exported
+    ``openvino_talker_model.xml`` for the offloaded decoder stack, so every original file
+    (configs, tokenizer, weights, processor assets) must be present in ``output``. OpenVINO
+    IR files that already live in the source directory are skipped to avoid clobbering the
+    freshly exported graph.
+    """
+    import shutil
+
+    repo_id = getattr(model, "_qwen3_tts_repo_id", None)
+    if repo_id is None:
+        return
+
+    output = Path(output)
+    src = Path(repo_id)
+    skip_names = {".git", ".cache", "openvino_talker_model.xml", "openvino_talker_model.bin"}
+
+    if src.is_dir():
+        for item in src.iterdir():
+            if item.name in skip_names:
+                continue
+            dest = output / item.name
+            if item.is_dir():
+                shutil.copytree(item, dest, dirs_exist_ok=True)
+            else:
+                if dest.resolve() == item.resolve():
+                    continue
+                shutil.copy2(item, dest)
+    else:
+        from huggingface_hub import snapshot_download
+
+        snapshot_download(
+            repo_id=str(repo_id),
+            local_dir=str(output),
+            ignore_patterns=["openvino_talker_model.xml", "openvino_talker_model.bin"],
+        )
+
+
 def export_from_model(
     model: Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"],
     output: Union[str, Path],
@@ -597,7 +639,7 @@ def export_from_model(
         )
 
     library_name = _infer_library_from_model_or_model_class(model)
-    if library_name not in ("open_clip", "kokoro"):
+    if library_name not in ("open_clip", "kokoro", "qwen3_tts"):
         TasksManager.standardize_model_attributes(model, library_name=library_name)
 
     if hasattr(model.config, "export_model_type") and model.config.export_model_type is not None:
@@ -615,7 +657,7 @@ def export_from_model(
     if task is not None and task != "auto":
         task = TasksManager.map_from_synonym(task)
     else:
-        if library_name == "kokoro":
+        if library_name in ("kokoro", "qwen3_tts"):
             task = "text-to-audio"
         else:
             try:
@@ -701,6 +743,12 @@ def export_from_model(
             model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
         )
 
+    if library_name == "qwen3_tts":
+        custom_architecture = True
+        custom_export_configs, fn_get_submodels = _get_qwen3_tts_submodels_fn_and_export_configs(
+            model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
+        )
+
     if library_name == "diffusers":
         export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
         stateful_submodels = False
@@ -738,6 +786,9 @@ def export_from_model(
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
     elif library_name == "kokoro":
         _save_kokoro_config_and_assets(model, output)
+        files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
+    elif library_name == "qwen3_tts":
+        _save_qwen3_tts_config_and_assets(model, output)
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
     elif library_name != "diffusers":
         if is_transformers_version("<", "5"):
