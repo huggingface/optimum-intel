@@ -138,6 +138,7 @@ _HEAD_TO_AUTOMODELS = {
     "sam": "OVSamModel",
     "sana": "OVSanaPipeline",
     "flux": "OVFluxPipeline",
+    "flux.2-klein": "OVFlux2KleinPipeline",
     "flux-fill": "OVFluxFillPipeline",
     "pix2struct": "OVModelForPix2Struct",
     "latent-consistency": "OVLatentConsistencyModelPipeline",

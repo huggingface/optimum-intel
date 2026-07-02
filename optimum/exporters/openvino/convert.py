@@ -1339,12 +1339,17 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     # Text encoder
     text_encoder = getattr(pipeline, "text_encoder", None)
     if text_encoder is not None:
+        text_encoder.config.model_type
+        model_type = "clip-text"
+        if text_encoder.config.model_type in ["qwen3"]:
+            model_type = "qwen3-text-encoder"
+
         text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
             model=text_encoder,
             exporter=exporter,
             library_name="diffusers",
             task="feature-extraction",
-            model_type="clip-text",
+            model_type=model_type,
         )
         text_encoder_export_config = text_encoder_config_constructor(
             pipeline.text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
@@ -1355,6 +1360,10 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     transformer.config.text_encoder_projection_dim = transformer.config.joint_attention_dim
     transformer.config.requires_aesthetics_score = getattr(pipeline.config, "requires_aesthetics_score", False)
     transformer.config.time_cond_proj_dim = None
+
+    if not hasattr(transformer.config, "pooled_projection_dim") and hasattr(transformer.config, "joint_attention_dim"):
+        transformer.config.pooled_projection_dim = transformer.config.joint_attention_dim
+
     export_config_constructor = TasksManager.get_exporter_config_constructor(
         model=transformer,
         exporter=exporter,
@@ -1370,6 +1379,12 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
 
     # VAE Encoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L565
     vae_encoder = copy.deepcopy(pipeline.vae)
+    # vae_scaling_factor is used at inference to scale latents
+    vae_scaling_factor = None
+    if hasattr(vae_encoder, "config") and getattr(vae_encoder.config, "scaling_factor", None) is not None:
+        vae_scaling_factor = float(vae_encoder.config.scaling_factor)
+        vae_encoder.register_to_config(scaling_factor=vae_scaling_factor)
+
     vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
     vae_config_constructor = TasksManager.get_exporter_config_constructor(
         model=vae_encoder,
@@ -1386,6 +1401,22 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
 
     # VAE Decoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L600
     vae_decoder = copy.deepcopy(pipeline.vae)
+    if vae_scaling_factor is not None:
+        vae_decoder.register_to_config(scaling_factor=float(vae_scaling_factor))
+    # The transformer operates on normalized latents
+    # Before the VAE decoder can reconstruct pixels, the latents must be denormalized back
+    if (
+        hasattr(vae_decoder, "bn")
+        and hasattr(vae_decoder.bn, "running_mean")
+        and hasattr(vae_decoder.bn, "running_var")
+    ):
+        vae_decoder.register_to_config(
+            **{
+                "bn_running_mean_data": vae_decoder.bn.running_mean.detach().cpu().tolist(),
+                "bn_running_var_data": vae_decoder.bn.running_var.detach().cpu().tolist(),
+                "bn_eps": float(getattr(vae_decoder.bn, "eps", 1e-5)),
+            }
+        )
     vae_decoder.forward = lambda latent_sample: vae_decoder.decode(z=latent_sample)
     vae_config_constructor = TasksManager.get_exporter_config_constructor(
         model=vae_decoder,

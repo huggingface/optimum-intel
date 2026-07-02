@@ -1,8 +1,6 @@
 name: Create Model Cache
 
 on:
-  pull_request:
-    types: [labeled]
   workflow_dispatch:
     inputs:
       force_update:
@@ -20,10 +18,7 @@ env:
 
 jobs:
   create-cache:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.label.name == 'update-hf-cache' ||
-      github.event.label.name == 'update-hf-cache-force'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
 
     steps:
@@ -35,19 +30,13 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Check HF token is available
-        run: |
-          if [ -z "$HF_TOKEN" ]; then
-            echo "HF_TOKEN secret not available — cannot run on fork PRs"
-            exit 1
-          fi
-
       - name: Install dependencies
         run: |
           pip install --upgrade pip uv
           uv pip install .[tests]
 
       - name: Restore existing cache
+        if: ${{ !inputs.force_update }}
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/huggingface/hub
@@ -56,7 +45,7 @@ jobs:
       - name: Download models for cache
         run: python tests/scripts/download_cached_models.py
         env:
-          FORCE_DOWNLOAD: ${{ inputs.force_update || github.event.label.name == 'update-hf-cache-force' }}
+          FORCE_DOWNLOAD: ${{ inputs.force_update }}
 
       - name: Delete existing cache entry
         run: gh cache delete hf-models --repo ${{ github.repository }} || true
