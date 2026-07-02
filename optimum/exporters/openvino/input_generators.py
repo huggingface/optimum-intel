@@ -745,7 +745,6 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
         if input_name == "img_ids":
             img_ids_height = self.height // 2
             img_ids_width = self.width // 2
-            img_ids_shape = [self.batch_size, img_ids_height * img_ids_width, 3]
             img_ids_shape = (
                 [self.batch_size, img_ids_height * img_ids_width, 3]
                 if is_diffusers_version("<", "0.31.0")
