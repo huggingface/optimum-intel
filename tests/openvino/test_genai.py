@@ -148,46 +148,28 @@ class LLMPipelineTestCase(unittest.TestCase):
         "gemma2",
         "granite",
         "granitemoe",
+        "glm",
+        "mistral-nemo",
+        "opt",
+        "cohere2",
+        "gemma3_text",
+        "qwen3",
+        "qwen3_moe",
+        "glm4",
+        "arcee",
+        "gpt_oss",
+        "smollm3",
+        "phi3",
     )
 
     # to be expanded, other architectures work on NPU too
     # qwen2, phi and phi3 tests are flaky on NPU, not including for now
     NPU_SUPPORTED_ARCHITECTURES = ("gpt2", "glm", "opt", "qwen3_moe", "gpt_oss")
 
-    # min versions
-    if is_transformers_version(">=", "4.46.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "opt")
-        if is_transformers_version("<", "5"):
-            ALL_SUPPORTED_ARCHITECTURES += ("phimoe",)
-        if is_transformers_version("<", "4.54.0"):
-            ALL_SUPPORTED_ARCHITECTURES += ("deepseek",)
-    if is_transformers_version(">=", "4.47.0") and is_transformers_version("<", "4.56.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("qwen",)
-    if is_transformers_version(">=", "4.48.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("cohere2",)
-    if is_transformers_version(">=", "4.49"):
-        ALL_SUPPORTED_ARCHITECTURES += ("phi3",)
-    if is_transformers_version(">=", "4.50"):
-        ALL_SUPPORTED_ARCHITECTURES += ("gemma3_text",)
-    if is_transformers_version(">=", "4.51.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe")
-    if is_transformers_version(">=", "4.51.3"):
-        ALL_SUPPORTED_ARCHITECTURES += ("glm4",)
-    if is_transformers_version(">=", "4.53.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("arcee", "smollm3")
-    if is_transformers_version(">=", "4.54.0") and is_transformers_version("<", "5"):
-        ALL_SUPPORTED_ARCHITECTURES += ("exaone4",)
-    if is_transformers_version(">=", "4.55.1"):
-        ALL_SUPPORTED_ARCHITECTURES += ("gpt_oss",)
-
-    # max versions
-    if is_transformers_version("<", "4.54.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("minicpm", "minicpm3", "arctic")
-    if is_transformers_version("<", "4.56.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("chatglm4",)
-
     if is_transformers_version("<", "5"):
         ALL_SUPPORTED_ARCHITECTURES += (
+            "phimoe",
+            "exaone4",
             # remote modeling incompatible with v5
             "codegen2",
             "exaone",
@@ -315,19 +297,10 @@ class VLMPipelineTestCase(unittest.TestCase):
         "llava_next",
         # "minicpmv", # output is truncated for some reason
         "qwen2_vl",
+        "llava_next_mistral",
+        "qwen2_5_vl",
+        "gemma3",
     )
-    if is_transformers_version(">=", "4.46.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("llava_next_mistral",)
-        if is_transformers_version("<", "4.52.0"):
-            ALL_SUPPORTED_ARCHITECTURES += ("minicpmo",)
-        if is_transformers_version("<", "4.54.0"):
-            ALL_SUPPORTED_ARCHITECTURES += ("llava-qwen2", "phi3_v")
-    if is_transformers_version(">=", "4.49.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("qwen2_5_vl",)
-        if is_transformers_version("<", "4.54.0"):
-            ALL_SUPPORTED_ARCHITECTURES += ("phi4mm",)
-    if is_transformers_version(">=", "4.50"):
-        ALL_SUPPORTED_ARCHITECTURES += ("gemma3",)
     if is_transformers_version("<", "5"):
         ALL_SUPPORTED_ARCHITECTURES += ("llava", "llava_next_video")
 
@@ -354,7 +327,7 @@ class VLMPipelineTestCase(unittest.TestCase):
     IMAGE = Image.open(requests.get(TEST_IMAGE_URL, stream=True).raw).convert("RGB")
 
     def _get_model_class(self, model_arch):
-        if is_transformers_version(">=", "4.46") and model_arch in {
+        if model_arch in {
             "llava",
             "llava_next",
             "llava_next_mistral",
@@ -599,8 +572,6 @@ class LLMPipelineWithEagle3TestCase(unittest.TestCase):
 
     @parameterized.expand(EAGLE3_MODELS.items())
     def test_compare_outputs(self, model_arch, model_pair):
-        if is_transformers_version("<", "4.54"):
-            self.skipTest("Eagle3 requires transformers >= 4.54")
         if is_openvino_version("<", "2026.0"):
             self.skipTest("Eagle3 requires openvino-genai >= 2026.0")
 
@@ -653,7 +624,7 @@ class LLMPipelineWithEagle3TestCase(unittest.TestCase):
 
     @parameterized.expand(EAGLE3_VLM_MODELS.items())
     def test_compare_outputs_vlm(self, model_arch, model_pair):
-        if is_transformers_version("<", "4.57") or is_transformers_version(">=", "5.0.0"):
+        if is_transformers_version(">=", "5.0.0"):
             self.skipTest("Eagle3 VLM requires transformers >= 4.57 and < 5.0.0")
         if is_openvino_version("<", "2026.999"):
             self.skipTest(
