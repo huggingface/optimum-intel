@@ -905,7 +905,11 @@ class OVCLIExportTestCase(unittest.TestCase):
         elif is_transformers_version("<", "4.52"):
             expected = {"qwen3_vl"}
         else:
-            expected = {"llava-qwen2", "phi3_v", "phi4mm", "minicpmo"}
+            # minicpmo MAX_TRANSFORMERS_VERSION was bumped to 4.57.6; it is now
+            # supported on 4.52–4.57.6 and excluded only on > 4.57.6.
+            expected = {"llava-qwen2", "phi3_v", "phi4mm"}
+            if is_transformers_version(">", "4.57.6"):
+                expected.add("minicpmo")
         if is_transformers_version("<", "4.49") or is_transformers_version(">", "4.57.6"):
             expected.add("videochat_flash_qwen")
         if is_transformers_version(">=", "5"):
