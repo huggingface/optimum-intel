@@ -6254,3 +6254,50 @@ class TrOCROpenVINOConfig(TextSeq2SeqOpenVINOConfig):
         decoder_num_attention_heads="decoder_attention_heads",
         hidden_size="hidden_size",
     )
+
+
+class RfDetrDummyVisionInputGenerator(DummyVisionInputGenerator):
+    """Dummy vision input generator for RF-DETR.
+
+    RF-DETR's deformable-attention decoder selects the top-``num_queries`` (default 300)
+    proposals out of the flattened multi-scale feature map produced by the DINOv2 backbone.
+    The generic default dummy image size (64x64) yields too few spatial positions, which makes
+    tracing fail with ``selected index k out of range``. It is also not necessarily a multiple
+    of ``patch_size * num_windows`` (commonly 14 * 4 = 56), a hard requirement of the windowed
+    backbone attention. 560x560 matches the resolution the reference checkpoints are trained
+    and evaluated at and is a safe default across all RF-DETR configurations (divisible by any
+    ``patch_size * num_windows`` combination used in practice).
+    """
+
+    def __init__(self, task: str, normalized_config: NormalizedVisionConfig, **kwargs):
+        kwargs.setdefault("width", 560)
+        kwargs.setdefault("height", 560)
+        super().__init__(task, normalized_config, **kwargs)
+
+
+@register_in_tasks_manager("rf_detr", *["object-detection"], library_name="transformers")
+class RfDetrOpenVINOConfig(VisionOpenVINOConfig):
+    """OpenVINO export configuration for RF-DETR (Roboflow Real-time Detection Transformer).
+
+    RF-DETR uses a DINOv2 backbone + deformable DETR decoder.
+    Inputs: pixel_values (B, C, H, W), pixel_mask (B, H, W).
+    Outputs: logits (B, num_queries, num_classes+1), pred_boxes (B, num_queries, 4).
+    """
+
+    MIN_TRANSFORMERS_VERSION = "5.8.0"
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (RfDetrDummyVisionInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "pixel_values": {0: "batch_size", 2: "height", 3: "width"},
+            "pixel_mask": {0: "batch_size", 1: "height", 2: "width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "logits": {0: "batch_size"},
+            "pred_boxes": {0: "batch_size"},
+        }

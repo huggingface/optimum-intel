@@ -43,6 +43,7 @@ from transformers import (
     AutoModelForCTC,
     AutoModelForImageClassification,
     AutoModelForMaskedLM,
+    AutoModelForObjectDetection,
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
@@ -78,6 +79,7 @@ from optimum.intel import (
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
+    OVModelForObjectDetection,
     OVModelForQuestionAnswering,
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
@@ -1308,6 +1310,70 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
             ov_model.save_pretrained(model_save_path)
             model = OVModelForImageClassification.from_pretrained(model_save_path, device=OPENVINO_DEVICE)
             model(pixel_values=torch.zeros((5, 3, model.config.image_size, model.config.image_size)))
+        gc.collect()
+
+
+class OVModelForObjectDetectionIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ()
+
+    if is_transformers_version(">=", "5.8.0"):
+        SUPPORTED_ARCHITECTURES += ("rf_detr",)
+
+    # RF-DETR backbone requires the spatial resolution to be a multiple of
+    # patch_size * num_windows (14 * 4 = 56 for the real checkpoints).
+    IMAGE_SIZE = 56
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForObjectDetection.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        set_seed(SEED)
+        transformers_model = AutoModelForObjectDetection.from_pretrained(model_id)
+        transformers_model.eval()
+
+        pixel_values = torch.rand(1, 3, self.IMAGE_SIZE, self.IMAGE_SIZE)
+        pixel_mask = torch.ones(1, self.IMAGE_SIZE, self.IMAGE_SIZE, dtype=torch.int64)
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model(pixel_values=pixel_values, pixel_mask=pixel_mask)
+        ov_outputs = ov_model(pixel_values=pixel_values, pixel_mask=pixel_mask)
+
+        self.assertIn("logits", ov_outputs)
+        self.assertIn("pred_boxes", ov_outputs)
+        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+        self.assertIsInstance(ov_outputs.pred_boxes, torch.Tensor)
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.pred_boxes, transformers_outputs.pred_boxes, atol=1e-4))
+
+        # numpy inputs should also work and return numpy outputs
+        np_outputs = ov_model(pixel_values=pixel_values.numpy(), pixel_mask=pixel_mask.numpy())
+        self.assertIsInstance(np_outputs.logits, np.ndarray)
+        self.assertTrue(np.allclose(np_outputs.logits, transformers_outputs.logits.numpy(), atol=1e-4))
+
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_pipeline(self, model_arch):
+        set_seed(SEED)
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForObjectDetection.from_pretrained(model_id, device=OPENVINO_DEVICE)
+        model.eval()
+        preprocessor = AutoImageProcessor.from_pretrained(model_id, size={"height": self.IMAGE_SIZE, "width": self.IMAGE_SIZE})
+        pipe = pipeline("object-detection", model=model, feature_extractor=preprocessor, threshold=0.0)
+        outputs = pipe(TEST_IMAGE_URL)
+        self.assertEqual(pipe.device, model.device)
+        self.assertGreater(len(outputs), 0)
+        self.assertTrue(isinstance(outputs[0]["label"], str))
+        self.assertIn("score", outputs[0])
+        self.assertIn("box", outputs[0])
+        del model
+        del pipe
         gc.collect()
 
 
