@@ -314,6 +314,7 @@ def no_compression_parameter_provided(args):
                 args.lora_correction,
                 args.sensitivity_metric,
                 args.backup_precision,
+                args.group_size_fallback,
             )
         )
     )
