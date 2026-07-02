@@ -97,6 +97,13 @@ if TYPE_CHECKING:
     from optimum.intel.openvino.configuration import OVConfig
 
 
+_VLM_LANGUAGE_MODEL_TASKS = ("image-text-to-text", "text-to-audio", "automatic-speech-recognition")
+
+
+def _is_vlm_language_model(task: str, model_name: str) -> bool:
+    return model_name == "language_model" and any(t in task for t in _VLM_LANGUAGE_MODEL_TASKS)
+
+
 def _set_runtime_options(
     models_and_export_configs: Dict[
         str,
@@ -112,13 +119,13 @@ def _set_runtime_options(
             sub_export_config.runtime_options = {}
         if (
             "text-generation" in task
-            or ("image-text-to-text" in task and model_name == "language_model")
+            or _is_vlm_language_model(task, model_name)
             or getattr(sub_export_config, "stateful", False)
         ):
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
         if not quantized_model and (
             "text-generation" in task
-            or ("image-text-to-text" in task and model_name == "language_model")
+            or _is_vlm_language_model(task, model_name)
             or getattr(sub_export_config, "stateful", False)
         ):
             sub_export_config.runtime_options["KV_CACHE_PRECISION"] = "f16"
@@ -574,6 +581,31 @@ def _save_kokoro_config_and_assets(model, output: Path):
         logger.info(f"Exported voice {voice_name} -> {voice_bin}")
 
 
+def _save_auxiliary_weights(model, model_type: str, output_dir: Path):
+    if model_type != "qwen3_omni":
+        return
+    # CodePredictor is traced with inputs_embeds, so the per-step codec_embedding
+    # tables aren't part of the IR and must be dumped separately for runtime lookup.
+    import numpy as np
+    import torch
+
+    talker = getattr(model, "talker", None)
+    if talker is None:
+        return
+    code_predictor = getattr(talker, "code_predictor", None)
+    if code_predictor is None:
+        return
+    cp_model = getattr(code_predictor, "model", None)
+    if cp_model is None:
+        return
+    codec_embedding = getattr(cp_model, "codec_embedding", None)
+    if codec_embedding is None or len(codec_embedding) == 0:
+        return
+    stacked = torch.stack([emb.weight.data for emb in codec_embedding])
+    np.save(output_dir / "code_predictor_codec_embedding.npy", stacked.cpu().float().numpy())
+    logger.info(f"Saved CodePredictor codec_embedding weights ({stacked.shape}) to {output_dir}")
+
+
 def export_from_model(
     model: Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"],
     output: Union[str, Path],
@@ -826,6 +858,8 @@ def export_from_model(
         library_name=library_name,
     )
 
+    _save_auxiliary_weights(model, model_type, output)
+
     return files_subpaths
 
 
@@ -835,6 +869,7 @@ def export_tokenizer(
     suffix: Optional[str] = "",
     task: Optional[str] = None,
     processor_chat_template: Optional[str] = None,
+    model_type: Optional[str] = None,
 ):
     # avoid circular imports
     from optimum.intel.openvino import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME
@@ -851,11 +886,16 @@ def export_tokenizer(
     if output.exists():
         tokenizer = maybe_convert_tokenizer_to_fast(tokenizer, output)
 
-    if (
-        task is not None
-        and (task.startswith("text-generation") or task == "image-text-to-text")
-        and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0")
-    ):
+    # Left-padding is required for decoder-only generation (text-generation and VLMs). For audio tasks
+    # it is only correct for the multimodal models that route audio through a decoder-only language model,
+    # so gate it by model_type instead of enabling it for every audio model.
+    left_padding_audio_model_types = ("qwen3_omni_moe", "qwen3_omni", "qwen2_vl")
+    needs_left_padding = task is not None and (
+        task.startswith("text-generation")
+        or task == "image-text-to-text"
+        or (task in ("text-to-audio", "automatic-speech-recognition") and model_type in left_padding_audio_model_types)
+    )
+    if needs_left_padding and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0"):
         logger.info(f"Set tokenizer padding side to left for `{task}` task.")
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"
