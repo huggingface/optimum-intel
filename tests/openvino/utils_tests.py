@@ -205,6 +205,8 @@ HUB_MODEL_NAMES = {
     "got_ocr2": "optimum-intel-internal-testing/tiny-random-got-ocr2-hf",
     "gemma3_text": "optimum-intel-internal-testing/tiny-random-gemma3-text",
     "gemma3": "optimum-intel-internal-testing/tiny-random-gemma3",
+    "gemma3n": "optimum-intel-internal-testing/tiny-random-gemma3n",
+    "gemma3n_text": "optimum-intel-internal-testing/tiny-random-gemma3n-text",
     "gemma4": "optimum-intel-internal-testing/tiny-random-gemma4",
     "gemma4_moe": "optimum-intel-internal-testing/tiny-random-gemma4-moe",
     "gemma4_unified": "optimum-intel-internal-testing/tiny-random-gemma4-unified",
@@ -568,6 +570,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "qwen3_eagle3": {"model": 20},
     "qwen3_vl_eagle3": {"model": 18},
     "qwen3_next": {"model": 100},
+    "gemma3n": {
+        "lm_model": 72,
+        "text_embeddings_model": 3,
+        "vision_embeddings_model": 53,
+        "text_embeddings_per_layer_model": 1,
+    },
     "gemma4": {
         "lm_model": 54,
         "text_embeddings_model": 1,

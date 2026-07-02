@@ -430,6 +430,7 @@ class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         self.num_global_key_value_heads = (
             getattr(normalized_config.config, "num_global_key_value_heads", None) or self.num_key_value_heads
         )
+        self.model_type = normalized_config.config.model_type
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         # some layers do not produce their own KV-cache, they use the shared KV-cache
@@ -443,7 +444,7 @@ class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
                 shape = (
                     self.batch_size,
                     self.num_key_value_heads,
-                    self.sliding_window,
+                    self.sequence_length if self.model_type == "gemma3n_text" else self.sliding_window,
                     self.head_dim,
                 )
             else:
@@ -744,7 +745,6 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
         if input_name == "img_ids":
             img_ids_height = self.height // 2
             img_ids_width = self.width // 2
-            img_ids_shape = [self.batch_size, img_ids_height * img_ids_width, 3]
             img_ids_shape = (
                 [self.batch_size, img_ids_height * img_ids_width, 3]
                 if is_diffusers_version("<", "0.31.0")
