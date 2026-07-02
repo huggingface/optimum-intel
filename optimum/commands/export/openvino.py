@@ -65,6 +65,16 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--transformers-version",
+        type=str,
+        default=None,
+        help=(
+            "Export the model using a different Transformers version, installed on the fly in an isolated `uv` "
+            'environment. Pass "auto" to infer the required version from the model, or an explicit version such as '
+            '"4.57.0". Requires `uv` to be installed.'
+        ),
+    )
+    optional_group.add_argument(
         "--weight-format",
         type=str,
         choices=["fp32", "fp16", "int8", "int4", "mxfp4", "nf4", "cb4"],
@@ -341,6 +351,10 @@ class OVExportCommand(BaseOptimumCLICommand):
         return parse_args_openvino(parser)
 
     def run(self):
+        from .transformers_version import maybe_switch_transformers_version
+
+        maybe_switch_transformers_version(self.args.model, self.args.transformers_version, self.args.cache_dir)
+
         from ...exporters.openvino.__main__ import _main_quantize, _merge_move, main_export
         from ...intel.openvino.configuration import (
             _DEFAULT_4BIT_WQ_CONFIG,

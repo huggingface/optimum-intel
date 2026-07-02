@@ -41,6 +41,7 @@ usage: optimum-cli export openvino [-h] -m MODEL [--task TASK] [--framework {pt}
                                    [--quantization-statistics-path QUANTIZATION_STATISTICS_PATH]
                                    [--num-samples NUM_SAMPLES] [--disable-stateful] [--disable-convert-tokenizer]
                                    [--smooth-quant-alpha SMOOTH_QUANT_ALPHA]
+                                   [--transformers-version TRANSFORMERS_VERSION]
                                    output
 
 optional arguments:
@@ -167,6 +168,10 @@ Optional arguments:
   --smooth-quant-alpha SMOOTH_QUANT_ALPHA
                         SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers
                         and reduces quantization error. Valid only when activations quantization is enabled.
+  --transformers-version TRANSFORMERS_VERSION
+                        Export the model using a different Transformers version, installed on the fly in an isolated
+                        `uv` environment. Pass "auto" to infer the required version from the model, or an explicit
+                        version such as "5.2.0". Requires `uv` to be installed.
 ```
 
 You can also apply fp16, 8-bit or 4-bit weight-only quantization on the Linear, Convolutional and Embedding layers when exporting your model by setting `--weight-format` to respectively `fp16`, `int8` or `int4`.
@@ -193,6 +198,21 @@ optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B \
 ```
 
 For more information on the quantization parameters checkout the [documentation](inference#weight-only-quantization)
+
+
+### Exporting with a different Transformers version
+
+Some models require a Transformers version different from the one installed in your environment (for example, a newer architecture not yet supported by your current version). Instead of changing your environment manually, you can let the export run in an isolated `uv` environment with the required version, installed on the fly:
+
+```bash
+# Infer the required version from the model
+optimum-cli export openvino --model <model_id> --transformers-version auto ov_model/
+
+# Or pin an explicit version
+optimum-cli export openvino --model <model_id> --transformers-version 4.57.0 ov_model/
+```
+
+With `auto`, the required version is inferred from optimum-intel's export configuration, falling back to the `transformers_version` recorded in the model's `config.json`. Your environment is left untouched; only the export subprocess uses the requested version. This requires `uv`, which you can install with `pip install optimum-intel[transformers-switch]`.
 
 
 <Tip warning={true}>
