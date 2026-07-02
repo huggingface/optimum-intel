@@ -33,6 +33,7 @@ from parameterized import parameterized
 from PIL import Image
 from sentence_transformers import SentenceTransformer
 from transformers import (
+    AutoConfig,
     AutoFeatureExtractor,
     AutoImageProcessor,
     AutoModel,
@@ -1051,6 +1052,24 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.51.0"):
         SUPPORTED_ARCHITECTURES += ("qwen3",)
 
+    SUPPORTS_IMAGE = ("qwen3_vl_embedding",)
+
+    IMAGE = Image.open(
+        requests.get(
+            TEST_IMAGE_URL,
+            stream=True,
+        ).raw
+    )
+
+    def get_preprocessors(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        config = AutoConfig.from_pretrained(model_id)
+
+        processor = AutoProcessor.from_pretrained(model_id)
+        preprocessors = {"processor": processor, "tokenizer": None, "config": config}
+
+        return preprocessors
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
@@ -1061,18 +1080,32 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModel.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        inputs = "This is a sample input"
-        tokens = tokenizer(inputs, return_tensors="pt")
-        with torch.no_grad():
-            transformers_outputs = transformers_model(**tokens)
+
+        if model_arch in self.SUPPORTS_IMAGE:
+            image = self.IMAGE.resize((600, 600))
+            preprocessors = self.get_preprocessors(model_arch)
+            prompt = "What is shown in this image?"
+            inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=image)
+
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**inputs)
+        else:
+            prompt = "This is a sample input"
+            tokens = tokenizer(prompt, return_tensors="pt")
+
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**tokens)
 
         input_types = ["pt", "np"]
         # Original PyTorch Qwen3-VL-Embedding model fails to infer with numpy inputs
         if model_arch in ["qwen3_vl_embedding"]:
             input_types = ["pt"]
         for input_type in input_types:
-            tokens = tokenizer(inputs, return_tensors=input_type)
-            ov_outputs = ov_model(**tokens)
+            if model_arch in self.SUPPORTS_IMAGE:
+                ov_outputs = ov_model(**inputs)
+            else:
+                tokens = tokenizer(prompt, return_tensors=input_type)
+                ov_outputs = ov_model(**tokens)
             self.assertIn("last_hidden_state", ov_outputs)
             self.assertIsInstance(ov_outputs.last_hidden_state, TENSOR_ALIAS_TO_TYPE[input_type])
             # Compare tensor outputs
