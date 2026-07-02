@@ -154,6 +154,9 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.51"):
         SUPPORTED_ARCHITECTURES.update({"qwen3": OVModelForFeatureExtraction})
 
+    if is_transformers_version(">=", "4.50.0"):
+        SUPPORTED_ARCHITECTURES.update({"gemma3_text": OVModelForFeatureExtraction})
+
     GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
 
     def _openvino_export(

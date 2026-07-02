@@ -1276,6 +1276,17 @@ class Gemma2OpenVINOConfig(GemmaOpenVINOConfig):
 class Gemma3TextOpenVINOConfig(Gemma2OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
 
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self.task in ["feature-extraction"]:
+            common_inputs = {
+                "input_ids": {0: "batch_size", 1: "sequence_length"},
+                "attention_mask": {0: "batch_size", 1: "sequence_length"},
+            }
+        else:
+            common_inputs = super().inputs
+        return common_inputs
+
 
 @register_in_tasks_manager(
     "gemma4_text",
