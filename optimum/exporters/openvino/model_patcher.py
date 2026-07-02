@@ -10512,3 +10512,126 @@ class KokoroModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model._orig_forward
+
+def _youtu_vl_vision_rotate_half(x):
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+def _youtu_vl_apply_rotary_pos_emb_vision(q, k, cos, sin):
+    orig_q_dtype = q.dtype
+    orig_k_dtype = k.dtype
+    q, k = q.float(), k.float()
+    cos, sin = cos.unsqueeze(-2).float(), sin.unsqueeze(-2).float()
+    q_embed = (q * cos) + (_youtu_vl_vision_rotate_half(q) * sin)
+    k_embed = (k * cos) + (_youtu_vl_vision_rotate_half(k) * sin)
+    return q_embed.to(orig_q_dtype), k_embed.to(orig_k_dtype)
+
+def _youtu_vl_vision_sdpa_attn_forward(self, hidden_states, attention_mask, position_embeddings):
+    seq_length = hidden_states.shape[0]
+    q = self.q_proj(hidden_states).view(seq_length, self.num_heads, self.head_dim)
+    k = self.k_proj(hidden_states).view(seq_length, self.num_heads, self.head_dim)
+    v = self.v_proj(hidden_states).view(seq_length, self.num_heads, self.head_dim)
+    cos, sin = position_embeddings
+    q, k = _youtu_vl_apply_rotary_pos_emb_vision(q, k, cos, sin)
+    q = q.transpose(0, 1).unsqueeze(0)
+    k = k.transpose(0, 1).unsqueeze(0)
+    v = v.transpose(0, 1).unsqueeze(0)
+    attn_output = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attention_mask)
+    attn_output = attn_output.squeeze(0).transpose(0, 1).reshape(seq_length, -1).to(hidden_states.dtype)
+    return self.out_proj(attn_output), None
+
+def _youtu_vl_vision_block_forward(self, hidden_states, attention_mask, position_embeddings):
+    residual = hidden_states
+    hidden_states = self.layer_norm1(hidden_states)
+    hidden_states, _ = self.self_attn(
+        hidden_states=hidden_states, attention_mask=attention_mask, position_embeddings=position_embeddings
+    )
+    hidden_states = residual + hidden_states
+
+    residual = hidden_states
+    hidden_states = self.layer_norm2(hidden_states)
+    hidden_states = self.mlp(hidden_states)
+    hidden_states = residual + hidden_states
+    return (hidden_states,)
+
+class YoutuVLVisionEmbMergerPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        # Modified from the Youtu-VL Siglip2 windowed vision encoder. The data-dependent
+        # window indices / cu_seqlens-based attention masks are computed at runtime and fed
+        # as explicit inputs (attention_mask, window_attention_mask, window_index,
+        # rotary_pos_emb), mirroring the Qwen2.5-VL OpenVINO export.
+        def image_embed_forward(
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: torch.Tensor,
+            window_attention_mask: torch.Tensor,
+            window_index: torch.Tensor,
+            rotary_pos_emb: torch.Tensor,
+        ) -> torch.Tensor:
+            encoder = self.siglip2.vision_model.encoder
+            post_layernorm = self.siglip2.vision_model.post_layernorm
+            spatial_merge_unit = encoder.spatial_merge_unit
+            fullatt_block_indexes = self.config.vision_config.fullatt_block_indexes
+            num_layers = len(encoder.layers)
+
+            seq_len = hidden_states.shape[0]
+            hidden_states = hidden_states.reshape(seq_len // spatial_merge_unit, spatial_merge_unit, -1)
+            hidden_states = hidden_states[window_index, :, :]
+            hidden_states = hidden_states.reshape(seq_len, -1)
+            rotary_pos_emb = rotary_pos_emb.reshape(seq_len // spatial_merge_unit, spatial_merge_unit, -1)
+            rotary_pos_emb = rotary_pos_emb[window_index, :, :]
+            rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
+            emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+            position_embeddings = (emb.cos(), emb.sin())
+
+            for layer_num, blk in enumerate(encoder.layers):
+                if (1 + layer_num) % 8 == 0 or layer_num == num_layers - 1 or layer_num in fullatt_block_indexes:
+                    attention_mask_now = attention_mask
+                else:
+                    attention_mask_now = window_attention_mask
+                hidden_states = blk(
+                    hidden_states, attention_mask=attention_mask_now, position_embeddings=position_embeddings
+                )[0]
+
+            # restore the original (non-windowed) ordering before the patch merger
+            hidden_states = hidden_states.reshape(seq_len // spatial_merge_unit, spatial_merge_unit, -1)
+            reverse_indices = torch.argsort(window_index)
+            hidden_states = hidden_states[reverse_indices, :, :]
+            hidden_states = hidden_states.reshape(seq_len, -1)
+
+            hidden_states = post_layernorm(hidden_states)
+            hidden_states = self.merger(hidden_states, None)
+            return hidden_states
+
+        model.forward = types.MethodType(image_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+        for block in self._model.siglip2.vision_model.encoder.layers:
+            block._orig_forward = block.forward
+            block.forward = types.MethodType(_youtu_vl_vision_block_forward, block)
+            block.self_attn._orig_forward = block.self_attn.forward
+            block.self_attn.forward = types.MethodType(_youtu_vl_vision_sdpa_attn_forward, block.self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        for block in self._model.siglip2.vision_model.encoder.layers:
+            block.forward = block._orig_forward
+            block.self_attn.forward = block.self_attn._orig_forward
+
+class YoutuVLLanguageModelPatcher(OVDecoderModelPatcher):
+    # The Youtu language model uses DeepSeek-style multi-head latent attention (MLA)
+    # with rotary embeddings computed inside the base model and SDPA in the attention
+    # block. These patterns are already torchscript/OpenVINO friendly, so no extra
+    # attention patching is required on top of the generic decoder patcher.
+    pass

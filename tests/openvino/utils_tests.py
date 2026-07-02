@@ -362,6 +362,7 @@ HUB_MODEL_NAMES = {
     "flux.2-klein": "optimum-intel-internal-testing/tiny-random-flux.2-klein",
     "qwen3_vl_eagle3": "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
     "videochat_flash_qwen": "optimum-intel-internal-testing/tiny-videochat-flash-qwen",
+    "youtu_vl": "optimum-intel-internal-testing/tiny-random-youtu-vl",
 }
 
 
@@ -598,6 +599,13 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "encoder": 36,
         "decoder": 30,
         "decoder_with_past": 30,
+    },
+    "youtu_vl": {
+        "lm_model": 34,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 32,
+        "vision_embeddings_pos_model": 1,
     },
 }
 
