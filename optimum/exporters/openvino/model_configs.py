@@ -2569,7 +2569,6 @@ class LTXVideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (
         LTXTransformerDummyInputGenerator,
         DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator,
-        DummySanaTimestepInputGenerator,
     )
 
     @property
@@ -2581,7 +2580,7 @@ class LTXVideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
             "width": {},
             "height": {},
             "num_frames": {},
-            "timestep": {0: "batch_size"},
+            "timestep": {0: "batch_size", 1: "video_sequence_length"},
             "rope_interpolation_scale": {},
         }
 
