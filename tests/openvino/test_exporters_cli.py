@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Dict
 from unittest.mock import Mock
 
+import torch
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
@@ -1580,3 +1581,29 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = eval(_HEAD_TO_AUTOMODELS["stable-diffusion"]).from_pretrained(tmpdir, compile=False)
             for component in ["text_encoder", "tokenizer", "unet", "vae_encoder", "vae_decoder"]:
                 self.assertIsNotNone(getattr(model, component))
+
+    def test_export_openvino_with_compressed_tensors_model(self):
+        model_id = MODEL_NAMES["llama_compressed_tensors"]
+
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {model_id} --task text-generation-with-past {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = OVModelForCausalLM.from_pretrained(tmpdir)
+
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertGreater(
+                num_weight_nodes["int4"],
+                0,
+                "Expected compressed-tensors pack-quantized weights to be exported "
+                "as OpenVINO int4 constants",
+            )
+
+            # The model is tiny-random, so its outputs are meaningless; a few arbitrary
+            # token ids within the vocabulary are enough to exercise the generation loop.
+            input_ids = torch.tensor([[1, 2, 3, 4, 5]])
+            outputs = model.generate(input_ids=input_ids, max_new_tokens=5, do_sample=False)
+            self.assertEqual(outputs.shape[0], input_ids.shape[0])
+            self.assertGreater(outputs.shape[1], input_ids.shape[1])
