@@ -28,6 +28,7 @@ from transformers import (
 )
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
+    HUB_MODEL_NAMES,
     MODEL_NAMES,
     OPENVINO_DEVICE,
     REMOTE_CODE_MODELS,
@@ -40,6 +41,7 @@ from utils_tests import (
 from optimum.exporters.openvino.__main__ import main_export
 from optimum.exporters.openvino.utils import COMPLEX_CHAT_TEMPLATES
 from optimum.intel import (  # noqa
+    OVFlux2KleinPipeline,
     OVFluxFillPipeline,
     OVFluxPipeline,
     OVLatentConsistencyModelPipeline,
@@ -75,6 +77,7 @@ from optimum.intel.openvino.configuration import (
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
+    is_diffusers_version,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_transformers_version,
@@ -116,6 +119,13 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("zero-shot-image-classification", "clip"),
         ("text-to-audio", "kokoro"),
     ]
+
+    if is_diffusers_version(">=", "0.37.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-to-image", "flux.2-klein"),
+            ]
+        )
 
     if is_transformers_version(">=", "4.48.0"):
         SUPPORTED_ARCHITECTURES.extend(
@@ -224,6 +234,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "stable-diffusion-xl": 4,
         "stable-diffusion-3": 6,
         "flux": 4,
+        "flux.2-klein": 2,
         "flux-fill": 4,
         "lfm2": 2
         if is_openvino_version(">=", "2026.0")
@@ -335,13 +346,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 14, "decoder": 22, "decoder_with_past": 22}
+            {"encoder": 26, "decoder": 22, "decoder_with_past": 22}
             if is_transformers_version("<=", "4.45")
-            else {"encoder": 14, "decoder": 22, "decoder_with_past": 25},
+            else {"encoder": 26, "decoder": 22, "decoder_with_past": 25},
             (
-                {"encoder": {"int8": 14}, "decoder": {"int8": 22}, "decoder_with_past": {"int8": 17}}
+                {"encoder": {"int8": 26}, "decoder": {"int8": 22}, "decoder_with_past": {"int8": 17}}
                 if is_transformers_version("<=", "4.45")
-                else {"encoder": {"int8": 14}, "decoder": {"int8": 22}, "decoder_with_past": {"int8": 18}}
+                else {"encoder": {"int8": 26}, "decoder": {"int8": 22}, "decoder_with_past": {"int8": 18}}
             ),
         ),
         (
@@ -349,13 +360,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 16, "decoder": 26, "decoder_with_past": 23}
+            {"encoder": 30, "decoder": 26, "decoder_with_past": 23}
             if is_transformers_version("<=", "4.45")
-            else {"encoder": 16, "decoder": 26, "decoder_with_past": 25},
+            else {"encoder": 30, "decoder": 26, "decoder_with_past": 25},
             (
-                {"encoder": {"f8e4m3": 14}, "decoder": {"f8e4m3": 22}, "decoder_with_past": {"f8e4m3": 17}}
+                {"encoder": {"f8e4m3": 26}, "decoder": {"f8e4m3": 22}, "decoder_with_past": {"f8e4m3": 17}}
                 if is_transformers_version("<=", "4.45")
-                else {"encoder": {"f8e4m3": 14}, "decoder": {"f8e4m3": 22}, "decoder_with_past": {"f8e4m3": 18}}
+                else {"encoder": {"f8e4m3": 26}, "decoder": {"f8e4m3": 22}, "decoder_with_past": {"f8e4m3": 18}}
             ),
         ),
         (
@@ -1186,7 +1197,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     ):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --dataset laion/filtered-wit --weight-format int8 {tmpdir}",
+                f"optimum-cli export openvino --model {HUB_MODEL_NAMES[model_type]} --dataset laion/filtered-wit --weight-format int8 {tmpdir}",
                 shell=True,
                 check=True,
             )

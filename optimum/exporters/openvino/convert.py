@@ -19,7 +19,7 @@ import inspect
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 from packaging.version import Version
 from transformers.generation import GenerationMixin
@@ -478,16 +478,46 @@ def export_models(
     return outputs
 
 
+def _iter_kokoro_voice_pt_files(repo_id_or_path: str) -> Iterator[Tuple[str, Path]]:
+    """Yield (voice_name, local_pt_path) for each Kokoro voice .pt file.
+
+    A local directory is globbed directly. A remote Hub repo id is resolved by downloading
+    each voice into a temporary directory that is removed once iteration completes.
+    """
+    import tempfile
+
+    from huggingface_hub import hf_hub_download, list_repo_files
+
+    if Path(repo_id_or_path).is_dir():
+        local_paths = sorted(Path(repo_id_or_path).glob("voices/*.pt"))
+        logger.info(f"Found {len(local_paths)} voice files in {repo_id_or_path}.")
+        for pt_path in local_paths:
+            yield pt_path.stem, pt_path
+        return
+
+    try:
+        repo_files = list_repo_files(repo_id=repo_id_or_path)
+    except Exception as e:
+        logger.warning(f"Could not list files for {repo_id_or_path}: {e}. Skipping voice export.")
+        return
+
+    remote_paths = sorted(path for path in repo_files if path.startswith("voices/") and path.endswith(".pt"))
+    logger.info(f"Found {len(remote_paths)} voice files in {repo_id_or_path}.")
+    with tempfile.TemporaryDirectory(prefix="kokoro_voice_pt_") as tmp_dir:
+        for remote_path in remote_paths:
+            local_pt = Path(hf_hub_download(repo_id=repo_id_or_path, filename=remote_path, local_dir=tmp_dir))
+            yield Path(remote_path).stem, local_pt
+
+
 def _save_kokoro_config_and_assets(model, output: Path):
     """Save Kokoro model config.json and export voice embeddings."""
     import json
-    import tempfile
     import urllib.request
 
     import numpy as np
-    from huggingface_hub import hf_hub_download, list_repo_files
+    import torch
 
-    repo_id = getattr(model, "_kokoro_repo_id", None)
+    repo_id_or_path = getattr(model, "_kokoro_repo_id", None)
 
     # Save config.json
     config_dict = {}
@@ -524,44 +554,24 @@ def _save_kokoro_config_and_assets(model, output: Path):
     except Exception as e:
         logger.warning(f"Could not download misaki data files: {e}")
 
-    if repo_id is None:
+    if repo_id_or_path is None:
         return
 
     # Export voice embeddings to .bin format
     voices_dir = output / "voices"
     voices_dir.mkdir(parents=True, exist_ok=True)
+    for voice_name, pt_path in _iter_kokoro_voice_pt_files(repo_id_or_path):
+        voice_obj = torch.load(pt_path, map_location="cpu", weights_only=True)
+        if isinstance(voice_obj, dict):
+            voice_obj = next((v for v in voice_obj.values() if torch.is_tensor(v)), None)
+        if not torch.is_tensor(voice_obj):
+            logger.warning(f"Unsupported voice format in {pt_path}, skipping.")
+            continue
 
-    try:
-        repo_files = list_repo_files(repo_id=repo_id)
-    except Exception:
-        logger.warning(f"Could not list files for {repo_id}. Skipping voice export.")
-        return
-
-    voice_pt_files = sorted(path for path in repo_files if path.startswith("voices/") and path.endswith(".pt"))
-    if not voice_pt_files:
-        return
-
-    logger.info(f"Found {len(voice_pt_files)} voice files. Exporting to {voices_dir} ...")
-    with tempfile.TemporaryDirectory(prefix="kokoro_voice_pt_") as tmp_dir:
-        for remote_path in voice_pt_files:
-            local_pt = hf_hub_download(repo_id=repo_id, filename=remote_path, local_dir=tmp_dir)
-            voice_name = Path(remote_path).stem
-            out_bin = voices_dir / f"{voice_name}.bin"
-
-            import torch
-
-            voice_obj = torch.load(local_pt, map_location="cpu")
-            if torch.is_tensor(voice_obj):
-                voice_tensor = voice_obj
-            elif isinstance(voice_obj, dict):
-                voice_tensor = next(v for v in voice_obj.values() if torch.is_tensor(v))
-            else:
-                logger.warning(f"Unsupported voice format in {remote_path}, skipping.")
-                continue
-
-            voice_tensor = voice_tensor.detach().cpu().to(torch.float32).contiguous()
-            np.asarray(voice_tensor.numpy(), dtype=np.float32).tofile(out_bin)
-            logger.info(f"Exported {remote_path} -> {out_bin}")
+        voice_tensor = voice_obj.detach().cpu().to(torch.float32).contiguous()
+        voice_bin = voices_dir / f"{voice_name}.bin"
+        np.asarray(voice_tensor.numpy(), dtype=np.float32).tofile(voice_bin)
+        logger.info(f"Exported voice {voice_name} -> {voice_bin}")
 
 
 def export_from_model(
@@ -1329,12 +1339,17 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     # Text encoder
     text_encoder = getattr(pipeline, "text_encoder", None)
     if text_encoder is not None:
+        text_encoder.config.model_type
+        model_type = "clip-text"
+        if text_encoder.config.model_type in ["qwen3"]:
+            model_type = "qwen3-text-encoder"
+
         text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
             model=text_encoder,
             exporter=exporter,
             library_name="diffusers",
             task="feature-extraction",
-            model_type="clip-text",
+            model_type=model_type,
         )
         text_encoder_export_config = text_encoder_config_constructor(
             pipeline.text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
@@ -1345,6 +1360,10 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     transformer.config.text_encoder_projection_dim = transformer.config.joint_attention_dim
     transformer.config.requires_aesthetics_score = getattr(pipeline.config, "requires_aesthetics_score", False)
     transformer.config.time_cond_proj_dim = None
+
+    if not hasattr(transformer.config, "pooled_projection_dim") and hasattr(transformer.config, "joint_attention_dim"):
+        transformer.config.pooled_projection_dim = transformer.config.joint_attention_dim
+
     export_config_constructor = TasksManager.get_exporter_config_constructor(
         model=transformer,
         exporter=exporter,
@@ -1360,6 +1379,12 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
 
     # VAE Encoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L565
     vae_encoder = copy.deepcopy(pipeline.vae)
+    # vae_scaling_factor is used at inference to scale latents
+    vae_scaling_factor = None
+    if hasattr(vae_encoder, "config") and getattr(vae_encoder.config, "scaling_factor", None) is not None:
+        vae_scaling_factor = float(vae_encoder.config.scaling_factor)
+        vae_encoder.register_to_config(scaling_factor=vae_scaling_factor)
+
     vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
     vae_config_constructor = TasksManager.get_exporter_config_constructor(
         model=vae_encoder,
@@ -1376,6 +1401,22 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
 
     # VAE Decoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L600
     vae_decoder = copy.deepcopy(pipeline.vae)
+    if vae_scaling_factor is not None:
+        vae_decoder.register_to_config(scaling_factor=float(vae_scaling_factor))
+    # The transformer operates on normalized latents
+    # Before the VAE decoder can reconstruct pixels, the latents must be denormalized back
+    if (
+        hasattr(vae_decoder, "bn")
+        and hasattr(vae_decoder.bn, "running_mean")
+        and hasattr(vae_decoder.bn, "running_var")
+    ):
+        vae_decoder.register_to_config(
+            **{
+                "bn_running_mean_data": vae_decoder.bn.running_mean.detach().cpu().tolist(),
+                "bn_running_var_data": vae_decoder.bn.running_var.detach().cpu().tolist(),
+                "bn_eps": float(getattr(vae_decoder.bn, "eps", 1e-5)),
+            }
+        )
     vae_decoder.forward = lambda latent_sample: vae_decoder.decode(z=latent_sample)
     vae_config_constructor = TasksManager.get_exporter_config_constructor(
         model=vae_decoder,

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from typing import Optional, Tuple
 
 import torch
@@ -429,6 +430,7 @@ class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         self.num_global_key_value_heads = (
             getattr(normalized_config.config, "num_global_key_value_heads", None) or self.num_key_value_heads
         )
+        self.model_type = normalized_config.config.model_type
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         # some layers do not produce their own KV-cache, they use the shared KV-cache
@@ -442,7 +444,7 @@ class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
                 shape = (
                     self.batch_size,
                     self.num_key_value_heads,
-                    self.sliding_window,
+                    self.sequence_length if self.model_type == "gemma3n_text" else self.sliding_window,
                     self.head_dim,
                 )
             else:
@@ -459,6 +461,54 @@ class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             past_kv_values.append(past_kv_value)
 
         return past_kv_values
+
+
+class DummyGemma4UnifiedVisionInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "image_position_ids")
+
+    def __init__(self, task, normalized_config, batch_size=DEFAULT_DUMMY_SHAPES["batch_size"], **kwargs):
+        super().__init__(task, normalized_config, batch_size, **kwargs)
+        self.patch_size = getattr(normalized_config, "patch_size", 16)
+        self.pooling_kernel_size = getattr(normalized_config, "pooling_kernel_size", 3)
+        self.mm_posemb_size = getattr(normalized_config, "mm_posemb_size", 1120)
+        # The gemma4_unified vision embedder is encoder-free and consumes pre-merged patches:
+        # each merged patch has model_patch_size = patch_size * pooling_kernel_size pixels per side.
+        # The processor pads to max_soft_tokens merged patches, so num_patches == max_soft_tokens.
+        max_soft_tokens = getattr(normalized_config, "image_seq_length", None)
+        if max_soft_tokens is None:
+            max_soft_tokens = getattr(normalized_config, "max_soft_tokens", 280)
+        self.num_patches = max_soft_tokens
+        self.model_patch_size = self.patch_size * self.pooling_kernel_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            # Pre-merged pixel patches: [batch, num_patches, 3 * model_patch_size^2]
+            return self.random_float_tensor(
+                shape=[self.batch_size, self.num_patches, 3 * self.model_patch_size**2],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "image_position_ids":
+            # 2D (x, y) patch coordinates. Build a roughly square grid of valid positions
+            # bounded by the factorized position embedding table size.
+            side = int(math.sqrt(self.num_patches))
+            side = max(1, min(side, self.mm_posemb_size - 1))
+            dtype = DTYPE_MAPPER.pt(int_dtype)
+            grid = torch.stack(
+                torch.meshgrid(
+                    torch.arange(side, dtype=dtype),
+                    torch.arange(side, dtype=dtype),
+                    indexing="ij",
+                ),
+                dim=-1,
+            ).reshape(1, -1, 2)
+            if grid.shape[1] < self.num_patches:
+                pad = torch.full((1, self.num_patches - grid.shape[1], 2), -1, dtype=grid.dtype)
+                grid = torch.cat([grid, pad], dim=1)
+            else:
+                grid = grid[:, : self.num_patches, :]
+            return grid.expand(self.batch_size, -1, -1).clone()
+        return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
 class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
@@ -570,7 +620,13 @@ class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
     ):
         self.task = task
         self.batch_size = batch_size
-        self.pooled_projection_dim = normalized_config.config.pooled_projection_dim
+        config = normalized_config.config
+        pooled_projection_dim = getattr(config, "pooled_projection_dim", None)
+        # FrozenDict / dict requires get() method for attribute access
+        # getattr() will just return None
+        if pooled_projection_dim is None and hasattr(config, "get"):
+            pooled_projection_dim = config.get("pooled_projection_dim", None)
+        self.pooled_projection_dim = pooled_projection_dim
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         shape = [self.batch_size, self.pooled_projection_dim]
@@ -706,6 +762,8 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
         if getattr(normalized_config, "in_channels", None):
             self.num_channels = normalized_config.in_channels // 4
+        self.config = normalized_config.config
+        self.is_flux2 = self.config.get("_class_name", "") == "Flux2Transformer2DModel"
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name in ["hidden_states", "sample"]:
@@ -714,12 +772,16 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
         if input_name == "img_ids":
             img_ids_height = self.height // 2
             img_ids_width = self.width // 2
+            img_ids_shape = [self.batch_size, img_ids_height * img_ids_width, 3]
+            img_ids_shape = (
+                [self.batch_size, img_ids_height * img_ids_width, 3]
+                if is_diffusers_version("<", "0.31.0")
+                else [img_ids_height * img_ids_width, 3]
+            )
+            if self.is_flux2:
+                img_ids_shape = [self.batch_size, img_ids_height * img_ids_width, 4]
             return self.random_int_tensor(
-                (
-                    [self.batch_size, img_ids_height * img_ids_width, 3]
-                    if is_diffusers_version("<", "0.31.0")
-                    else [img_ids_height * img_ids_width, 3]
-                ),
+                img_ids_shape,
                 min_value=0,
                 max_value=min(img_ids_height, img_ids_width),
                 framework=framework,
@@ -742,11 +804,14 @@ class DummyFluxTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
         if input_name == "txt_ids":
             import torch
 
+            is_flux2 = self.normalized_config.config.get("_class_name", "") == "Flux2Transformer2DModel"
             shape = (
                 [self.batch_size, self.sequence_length, 3]
                 if is_diffusers_version("<", "0.31.0")
                 else [self.sequence_length, 3]
             )
+            if is_flux2:
+                shape = [self.batch_size, self.sequence_length, 4]
             dtype = DTYPE_MAPPER.pt(float_dtype)
             return torch.full(shape, 0, dtype=dtype)
         return super().generate(input_name, framework, int_dtype, float_dtype)
