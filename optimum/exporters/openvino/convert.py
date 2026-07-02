@@ -376,6 +376,11 @@ def export_pytorch(
                     extension=conversion_extensions,
                 )
 
+                if patch_16bit_model:
+                    from openvino.frontend.pytorch.patch_model import unpatch_model
+
+                    unpatch_model(model, "_openvino_module_extension_patch_orig_forward")
+
         ov_model.validate_nodes_and_infer_types()  # TODO: remove as unnecessary validation?
 
         output_names = list(config.outputs.keys())
