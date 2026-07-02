@@ -32,6 +32,11 @@ missing required input before proceeding.
 4. Finish only after export, real generation, targeted repository tests, and
    the supported-model documentation pass.
 
+Do not report support as complete when required tests fail, are deselected, or
+are blocked by an invalid/inaccessible tiny fixture. Repair the implementation
+or fixture and rerun the exact tests; a successful ad-hoc export or WWB score
+from a different artifact does not replace repository-test validation.
+
 ## Final Report
 
 Report:

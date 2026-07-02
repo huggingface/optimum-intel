@@ -12,6 +12,11 @@ Create a tiny random model for the requested architecture without loading the
 original model weights. The artifact must preserve the real architecture and
 execute the requested generation path.
 
+If repairing a tiny model after a validation or benchmark failure, start from
+the exact failing local artifact, creation script, traceback, and generation
+reproducer. Repair that artifact and rerun the same command; do not generate a
+different model and use its success as evidence for the failed one.
+
 ## Step 1 — Inspect the original model
 
 Download or load configuration and lightweight code/processor assets only.
@@ -23,6 +28,10 @@ Record:
   token invariants;
 - tokenizer, processor, chat-template, and remote-code files required to load;
 - the correct AutoModel class and generation interface for the task.
+
+Inspect precision fields under every relevant configuration level. Remote
+models may use `dtype`, `torch_dtype`, or both, including separate values in
+vision, text, audio, or projector sub-configs.
 
 ## Step 2 — Write a reusable constructor
 
@@ -39,6 +48,12 @@ Create `create_tiny_model.py` in the designated working directory. It must:
    config, and remote-code asset.
 6. Reuse a completed cached output directory on repeated calls.
 
+Do not reuse a cache merely because `config.json` and a weight file exist.
+Before returning it, validate a cache-format/version marker and all critical
+configuration invariants, including architecture identity, dimensions,
+special tokens, processor assets, and nested precision fields. Rebuild the
+cache when the generator logic or required invariants change.
+
 Keep construction logic easy to adapt into
 `_create_tiny_<model_type>_model()` in `tests/openvino/utils_tests.py`.
 
@@ -51,6 +66,11 @@ Compare the original and tiny configurations. Preserve:
 - cache/stateful and position-ID contracts;
 - VLM processor classes, placeholder/image tokens, and merge contracts;
 - MoE/expert topology, even when expert counts are reduced.
+
+When deliberately forcing a test model to float32, update and verify every
+effective precision field used by the remote configuration (`dtype` and/or
+`torch_dtype`, including nested sub-configs). Reload the saved model and check
+its actual parameter dtypes; editing an ignored config key is not sufficient.
 
 Never rename the model type, substitute a nearby architecture, or remove a
 component merely to make export pass.

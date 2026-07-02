@@ -27,6 +27,13 @@ package versions, first actionable traceback, and exact failing class or
 function. Distinguish model-support defects from environment, dependency, Hub,
 and benchmark-tool failures.
 
+When the failure is an environment, dependency, Transformers/Optimum API, or
+benchmark-tool mismatch, diagnose that concrete mismatch before changing model
+support code. Prefer the smallest targeted dependency or source compatibility
+fix, then rerun the exact failing command. Do not repeatedly change package
+versions until a traceback disappears, and never patch a similarly named class
+when the traceback identifies a different one.
+
 ## Step 2 — Analyze the real architecture
 
 Inspect the original model configuration and implementation. Record:
@@ -41,6 +48,11 @@ For remote-code models, derive `MIN_TRANSFORMERS_VERSION` and
 `MAX_TRANSFORMERS_VERSION` from verified upstream configuration and
 compatibility evidence. Never use placeholder bounds such as `0`, `999`, or
 `999.9.9`.
+
+Record the exact compatibility fields found in the original configuration,
+including `transformers_version` and explicit minimum or maximum fields. When
+possible, verify the selected version range at its boundaries. Do not infer a
+range solely from a nearby in-library architecture.
 
 Do not map a model to a nearby architecture unless its inputs, outputs, cache,
 position IDs, tracing behavior, and runtime behavior are compatible.
@@ -61,6 +73,16 @@ Patch the exact class identified by the traceback. Replace data-dependent
 Python control flow with traceable tensor operations where necessary without
 changing unrelated architectures. After every source edit, rerun the original
 reproducer and verify it passes the previous failure point.
+
+For multi-behavior exporters, verify every value in `SUPPORTED_BEHAVIORS`:
+
+- `get_model_for_behavior()` returns the intended real submodel;
+- `with_behavior()` returns a non-`None` export configuration;
+- its inputs and outputs match that submodel;
+- unsupported enum values are excluded instead of being advertised.
+
+Do not consider successful conversion sufficient when a behavior silently
+maps to the wrong component or produces a `None` configuration.
 
 ## Step 4 — Add repository tests
 
@@ -91,6 +113,43 @@ For VLMs, cover all exported submodels and update relevant architecture,
 remote-code, video, compression, and preprocessing matrices. Run targeted
 tests from every modified test file. A `-k` command selecting zero tests is not
 evidence.
+
+Specifically verify:
+
+- every applicable `REMOTE_CODE_MODELS` collection contains the architecture
+  when `trust_remote_code=True` is required;
+- a later class-level assignment does not overwrite an earlier registration;
+- `_ARCHITECTURES_TO_EXPECTED_INT8` contains measured expected node counts for
+  every exported VLM submodel;
+- CLI export, tokenizer export, save/reload, deterministic generation, and
+  HF-vs-OpenVINO comparison are covered where applicable.
+
+Run pytest with collection output or explicit node IDs and confirm that each
+command selected at least one test.
+
+Use the same tiny-model artifact for repository tests and the evidence claimed
+for that fixture. A WWB score or generation result from a separately generated
+tiny model does not validate `_create_tiny_<model_type>_model()`. Run HF-vs-OV
+comparison, generation, and save/reload against the exact helper output.
+
+When a repository test exposes a fixture defect, repair the helper rather than
+weakening tolerances or skipping the architecture. Typical checks include
+effective nested precision, cache invalidation, remote-code registration,
+processor assets, supported exporter behaviors, and architectural dimension
+invariants.
+
+## Local installation safety
+
+When validation requires installing this checkout, use an editable no-deps
+installation:
+
+```bash
+python -m pip install -e . --no-deps
+```
+
+Record the Transformers version before and after installation and verify that
+it did not change. Never use a plain editable installation that may silently
+downgrade or replace the model-compatible Transformers version.
 
 ## Step 5 — Validate end to end
 
