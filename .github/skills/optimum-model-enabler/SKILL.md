@@ -1,0 +1,119 @@
+---
+name: optimum-model-enabler
+description: "Add and validate support for a Hugging Face model architecture in the Optimum Intel OpenVINO backend, including exporter configuration, patching, repository tests, and documentation."
+disable-model-invocation: false
+user-invocable: true
+argument-hint: "<model_id> <task>"
+---
+
+# Optimum Intel Model Enabler
+
+Use this skill to diagnose an OpenVINO export or inference failure and add the
+smallest complete model-support implementation.
+
+## Step 1 — Reproduce the failure
+
+Run the requested export before editing anything:
+
+```bash
+optimum-cli export openvino \
+  --model <model_id> \
+  --task <task> \
+  <output_dir>
+```
+
+Add `--trust-remote-code` only when required. Record the command, installed
+package versions, first actionable traceback, and exact failing class or
+function. Distinguish model-support defects from environment, dependency, Hub,
+and benchmark-tool failures.
+
+## Step 2 — Analyze the real architecture
+
+Inspect the original model configuration and implementation. Record:
+
+- `model_type`, `architectures`, `auto_map`, task, and modality;
+- text, vision, audio, projector, cache, position-ID, and MoE components;
+- required processor/tokenizer assets and special tokens;
+- forward input/output contracts and custom dummy-input requirements;
+- the closest supported Optimum Intel architecture and material differences.
+
+For remote-code models, derive `MIN_TRANSFORMERS_VERSION` and
+`MAX_TRANSFORMERS_VERSION` from verified upstream configuration and
+compatibility evidence. Never use placeholder bounds such as `0`, `999`, or
+`999.9.9`.
+
+Do not map a model to a nearby architecture unless its inputs, outputs, cache,
+position IDs, tracing behavior, and runtime behavior are compatible.
+
+## Step 3 — Implement targeted support
+
+Depending on the reproduced failure, update only the required integration
+points:
+
+- `optimum/exporters/openvino/model_configs.py` for registration, behaviors,
+  inputs/outputs, dummy generators, and version constraints;
+- `optimum/exporters/openvino/input_generators.py` for model-specific inputs;
+- `optimum/exporters/openvino/model_patcher.py` for tracing-incompatible code;
+- `optimum/intel/openvino/` for runtime loading, preprocessing, generation, or
+  cache/stateful handling.
+
+Patch the exact class identified by the traceback. Replace data-dependent
+Python control flow with traceable tensor operations where necessary without
+changing unrelated architectures. After every source edit, rerun the original
+reproducer and verify it passes the previous failure point.
+
+## Step 4 — Add repository tests
+
+Source support without tests is incomplete. Update the applicable files:
+
+- `tests/openvino/test_decoder.py` for decoder-only generation;
+- `tests/openvino/test_seq2seq.py` for seq2seq and VLM integration;
+- `tests/openvino/test_export.py` for model/API export coverage;
+- `tests/openvino/test_exporters_cli.py` for CLI export coverage;
+- `tests/openvino/test_quantization.py` for compression and quantization;
+- `tests/openvino/utils_tests.py` for fixtures and expected IR details.
+
+For a new architecture, invoke the **tiny-model-creator** agent and follow the
+Kokoro pattern in `tests/openvino/utils_tests.py`:
+
+1. Add `_create_tiny_<model_type>_model()`.
+2. Construct a reduced, architecture-identical random model without loading
+   original weights.
+3. Save required model, config, tokenizer, processor, and remote-code assets
+   into a cached temporary directory.
+4. Reuse the completed directory on repeated calls.
+5. Map `"<model_type>"` to the helper instead of adding a new Hub model ID.
+
+Do not upload new tiny models to the Hub. Reuse a Hub fixture only when it
+predates the support and is already the established repository fixture.
+
+For VLMs, cover all exported submodels and update relevant architecture,
+remote-code, video, compression, and preprocessing matrices. Run targeted
+tests from every modified test file. A `-k` command selecting zero tests is not
+evidence.
+
+## Step 5 — Validate end to end
+
+Run all applicable checks:
+
+1. Export the local tiny model and, when resources allow, the real model.
+2. Load the export through the appropriate Optimum Intel OpenVINO API.
+3. Execute deterministic `model.generate()` through the requested task.
+4. For image-text tasks, use a real image and text prompt together.
+5. Compare with the Hugging Face reference using identical preprocessing,
+   prompt, image, generation settings, and decoded-token boundary.
+6. Run targeted repository tests and formatting or lint checks.
+
+Loading, saving, conversion alone, or a forward-only call does not prove
+generative support. If quality differs, compare preprocessing tensors,
+submodel outputs, embedding insertion, logits, and generated token IDs to find
+the first divergence.
+
+## Step 6 — Documentation and cleanup
+
+Add the supported model type to `docs/source/openvino/models.mdx` using the
+existing format.
+
+Inspect `git diff --name-only` before reporting success. Remove scratch files,
+debug prints, absolute local paths, and unrelated edits. Do not commit, push,
+or open a pull request unless explicitly requested.
