@@ -142,6 +142,100 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+def _create_tiny_youtu_vl_model():
+    """Generate and cache a tiny random Youtu-VL model for tests."""
+    import shutil
+
+    from huggingface_hub import snapshot_download
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    model_id = "tencent/Youtu-VL-4B-Instruct"
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_youtu_vl"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+    if config_file.exists() and weights_file.exists():
+        with open(config_file, encoding="utf-8") as f:
+            cached_config = json.load(f)
+        if (
+            cached_config.get("dtype") == "float32"
+            and cached_config.get("vision_config", {}).get("dtype") == "float32"
+        ):
+            return str(output_dir)
+
+    repo_path = Path(
+        snapshot_download(
+            model_id,
+            token=os.environ.get("HF_TOKEN"),
+            ignore_patterns=["*.safetensors", "*.bin", "*.pt", "*.gguf", "model.safetensors.index.json"],
+        )
+    )
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    shutil.copytree(repo_path, output_dir)
+
+    # Segmentation dependencies are optional for model export and are not
+    # available in every test environment.
+    modeling_file = output_dir / "modeling_youtu_vl.py"
+    modeling_source = modeling_file.read_text(encoding="utf-8")
+    modeling_source = modeling_source.replace(
+        "import pydensecrf.densecrf as dcrf\nfrom pydensecrf.utils import unary_from_softmax",
+        "try:\n"
+        "    import pydensecrf.densecrf as dcrf\n"
+        "    from pydensecrf.utils import unary_from_softmax\n"
+        "except ImportError:\n"
+        "    dcrf = None\n"
+        "    unary_from_softmax = None",
+    )
+    modeling_file.write_text(modeling_source, encoding="utf-8")
+
+    with open(repo_path / "config.json", encoding="utf-8") as f:
+        config_dict = json.load(f)
+
+    config_dict.update(
+        {
+            "hidden_size": 64,
+            "intermediate_size": 128,
+            "kv_lora_rank": 16,
+            "max_position_embeddings": 4096,
+            "n_group": 1,
+            "n_routed_experts": 4,
+            "n_shared_experts": 1,
+            "num_attention_heads": 1,
+            "num_experts_per_tok": 2,
+            "num_hidden_layers": 2,
+            "num_key_value_heads": 1,
+            "q_lora_rank": 32,
+            "tie_word_embeddings": True,
+            "topk_group": 1,
+            "dtype": "float32",
+            "torch_dtype": "float32",
+            "use_cache": False,
+        }
+    )
+    config_dict["vision_config"].update(
+        {
+            "fullatt_block_indexes": [1],
+            "hidden_size": 32,
+            "intermediate_size": 64,
+            "num_attention_heads": 1,
+            "num_hidden_layers": 2,
+            "num_patches": 256,
+            "out_hidden_size": 64,
+            "window_size": 16,
+            "dtype": "float32",
+        }
+    )
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(config_dict, f, indent=2)
+
+    config = AutoConfig.from_pretrained(output_dir, trust_remote_code=True)
+    model = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
+    model.eval()
+    model.save_pretrained(output_dir)
+
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -358,7 +452,7 @@ MODEL_NAMES = {
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
     "qwen3_vl_eagle3": "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
     "videochat_flash_qwen": "optimum-intel-internal-testing/tiny-videochat-flash-qwen",
-    "youtu_vl": "optimum-intel-internal-testing/tiny-random-youtu-vl",
+    "youtu_vl": _create_tiny_youtu_vl_model(),
 }
 
 EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7B")}
@@ -602,6 +696,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_vl_eagle3",
     "qwen3_asr",
     "videochat_flash_qwen",
+    "youtu_vl",
 )
 
 if is_transformers_version("<", "5"):

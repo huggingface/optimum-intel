@@ -3887,7 +3887,9 @@ class YoutuVLVisionEmbeddingsDummyInputGenerator(DummyVisionInputGenerator):
 
 @register_in_tasks_manager("youtu_vl", *["image-text-to-text"], library_name="transformers")
 class YoutuVLOpenVINOConfig(BaseVLMOpenVINOConfig):
-    SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen2VLConfigBehavior]
+    SUPPORTED_BEHAVIORS = [
+        model_type.value for model_type in QwenVLConfigBehavior if model_type != QwenVLConfigBehavior.VISION_EMBEDDINGS_POS
+    ]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (YoutuVLVisionEmbeddingsDummyInputGenerator,)
     MIN_TRANSFORMERS_VERSION = "4.49.0"
@@ -3898,7 +3900,7 @@ class YoutuVLOpenVINOConfig(BaseVLMOpenVINOConfig):
         task: str = "feature-extraction",
         int_dtype: str = "int64",
         float_dtype: str = "fp32",
-        behavior: Qwen2VLConfigBehavior = Qwen2VLConfigBehavior.VISION_EMBEDDINGS,
+        behavior: QwenVLConfigBehavior = QwenVLConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
         **kwargs,
     ):
@@ -3912,49 +3914,49 @@ class YoutuVLOpenVINOConfig(BaseVLMOpenVINOConfig):
         self._behavior = behavior
         self._orig_config = config
         if (
-            self._behavior in [Qwen2VLConfigBehavior.VISION_EMBEDDINGS, Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER]
+            self._behavior in [QwenVLConfigBehavior.VISION_EMBEDDINGS, QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER]
             and hasattr(config, "vision_config")
         ):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
     @staticmethod
-    def get_model_for_behavior(model, behavior: Union[str, Qwen2VLConfigBehavior]):
-        if isinstance(behavior, str) and not isinstance(behavior, Qwen2VLConfigBehavior):
-            behavior = Qwen2VLConfigBehavior(behavior)
+    def get_model_for_behavior(model, behavior: Union[str, QwenVLConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
 
-        if behavior == Qwen2VLConfigBehavior.LANGUAGE:
+        if behavior == QwenVLConfigBehavior.LANGUAGE:
             return model
 
-        if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
+        if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
             # patch embedding (Siglip2VisionEmbeddingsWoPos)
             vision_embeddings = model.siglip2.vision_model.embeddings
             vision_embeddings.config = model.config.vision_config
             return vision_embeddings
 
-        if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+        if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             # the encoder + post layernorm + merger are exported together; they are
             # spread across several submodules of the top-level model, so we export the
             # whole model and rely on the patcher to wire the right forward.
             model.config.vision_config.fullatt_block_indexes = model.config.vision_config.fullatt_block_indexes
             return model
 
-        if behavior == Qwen2VLConfigBehavior.TEXT_EMBEDDINGS:
+        if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = model.get_input_embeddings()
             text_embedding.config = model.config
             return text_embedding
 
     def with_behavior(
         self,
-        behavior: Union[str, Qwen2VLConfigBehavior],
+        behavior: Union[str, QwenVLConfigBehavior],
     ):
-        if isinstance(behavior, str) and not isinstance(behavior, Qwen2VLConfigBehavior):
-            behavior = Qwen2VLConfigBehavior(behavior)
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
 
-        if behavior == Qwen2VLConfigBehavior.TEXT_EMBEDDINGS:
+        if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
             return get_vlm_text_embeddings_config("youtu_vl", self._orig_config, self.int_dtype, self.float_dtype)
 
-        if behavior == Qwen2VLConfigBehavior.LANGUAGE:
+        if behavior == QwenVLConfigBehavior.LANGUAGE:
             return get_vlm_text_generation_config(
                 "youtu_vl",
                 self._orig_config,
@@ -3963,7 +3965,7 @@ class YoutuVLOpenVINOConfig(BaseVLMOpenVINOConfig):
                 model_patcher=YoutuVLLanguageModelPatcher,
             )
 
-        if behavior in [Qwen2VLConfigBehavior.VISION_EMBEDDINGS, Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER]:
+        if behavior in [QwenVLConfigBehavior.VISION_EMBEDDINGS, QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER]:
             return self.__class__(
                 self._orig_config,
                 task=self.task,
@@ -3975,17 +3977,17 @@ class YoutuVLOpenVINOConfig(BaseVLMOpenVINOConfig):
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
-        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return YoutuVLVisionEmbMergerPatcher(self, model, model_kwargs)
-        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
             return ModelPatcher(self, model, model_kwargs=model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
             return {"pixel_values": {0: "batch_size", 1: "num_patches"}}
-        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return {
                 "hidden_states": {0: "sequence_length"},
                 "attention_mask": {1: "sequence_length", 2: "sequence_length"},
@@ -3998,8 +4000,8 @@ class YoutuVLOpenVINOConfig(BaseVLMOpenVINOConfig):
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         if self._behavior in [
-            Qwen2VLConfigBehavior.VISION_EMBEDDINGS,
-            Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER,
         ]:
             return {"last_hidden_state": {0: "seq_len"}}
         return {}
