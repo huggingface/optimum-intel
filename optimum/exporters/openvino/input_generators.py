@@ -580,6 +580,33 @@ class DummyLLavaMultiModalProjectorInputGenerator(DummyInputGenerator):
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
 
+class DummyMistral3MultiModalProjectorInputGenerator(DummyLLavaMultiModalProjectorInputGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, random_batch_size_range, **kwargs)
+        self.spatial_merge_size = getattr(
+            normalized_config.config, "spatial_merge_size", getattr(normalized_config, "spatial_merge_size", 2)
+        )
+        self.num_merged_patches = self.num_patches // (self.spatial_merge_size**2)
+
+    def generate(
+        self,
+        input_name: str,
+        framework: str = "pt",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+    ):
+        input_dim = self.hidden_size * self.spatial_merge_size**2
+        shape = [self.num_merged_patches, input_dim]
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
 class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
     SUPPORTED_INPUT_NAMES = ["pooled_projections"]
 

@@ -1075,6 +1075,9 @@ class OVWeightCompressionTest(unittest.TestCase):
     if is_transformers_version(">=", "4.48.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "cohere2", False))
 
+    if is_transformers_version(">=", "4.50.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "mistral3", False))
+
     # gemma3n openvino>=2026.2.0 bequse it needs erfinv operation,
     # quantization tests will be moved to openvino==2026.2.0 in CVS-189051
     if is_transformers_version(">=", "5.0") and is_openvino_version(">=", "2026.2.0"):
