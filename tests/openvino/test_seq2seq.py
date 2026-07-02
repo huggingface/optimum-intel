@@ -14,6 +14,7 @@
 
 import copy
 import gc
+import importlib.util
 import os
 import unittest
 from pathlib import Path
@@ -542,6 +543,95 @@ class Qwen3ASRTest(unittest.TestCase):
         self.assertEqual(pt_text, ov_text)
 
         del transformers_model
+        del ov_model
+        gc.collect()
+
+
+class FunASRTest(unittest.TestCase):
+    """
+    Test FunASR model type (e.g. Fun-ASR-Nano).
+    Compares OpenVINO model output to the original funasr PyTorch model output.
+    """
+
+    SUPPORTED_ARCHITECTURES = ("fun_asr",)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.skipif(
+        importlib.util.find_spec("funasr") is None,
+        reason="requires the funasr package.",
+    )
+    def test_compare_to_transformers(self, model_arch):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+
+        from funasr import AutoModel as FunASRAutoModel
+
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+
+        # Load the original funasr model (verbose loading is silenced).
+        buf = io.StringIO()
+        with redirect_stdout(buf), redirect_stderr(buf):
+            funasr_model = FunASRAutoModel(
+                model=model_id, hub="hf", trust_remote_code=True, device="cpu", disable_update=True
+            )
+        core = funasr_model.model
+        kwargs = dict(funasr_model.kwargs)
+        tokenizer = kwargs["tokenizer"]
+        wav_path = f"{kwargs['model_path']}/example/zh.mp3"
+
+        # Capture the prepared inputs (fbank features + decoder prompt with audio placeholders).
+        captured = {}
+        orig_prepare = core.inference_prepare
+
+        def _capture(*args, **kw):
+            inputs_embeds, contents, batch, source_ids, meta = orig_prepare(*args, **kw)
+            captured["speech"] = batch["speech"]
+            captured["source_ids"] = source_ids
+            return inputs_embeds, contents, batch, source_ids, meta
+
+        core.inference_prepare = _capture
+        with redirect_stdout(buf), redirect_stderr(buf):
+            pt_result = funasr_model.generate(input=[wav_path], cache={}, batch_size=1, language="中文", itn=True)
+        core.inference_prepare = orig_prepare
+        pt_text = pt_result[0]["text"]
+
+        input_features = captured["speech"].float()
+        decoder_input_ids = captured["source_ids"]
+
+        gen_kwargs = {"max_new_tokens": 64}
+
+        # Load and infer with OpenVINO model.
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+
+        # The standalone preprocess_input (no funasr dependency, OV tokenizer IR) must reproduce the
+        # prompt token ids and feature shape that funasr builds internally. Feature values are not
+        # compared exactly because funasr's frontend applies random dithering by default.
+        import soundfile as sf
+
+        waveform, sampling_rate = sf.read(wav_path, dtype="float32")
+        ov_inputs = ov_model.preprocess_input(waveform, sampling_rate, language="中文")
+        self.assertEqual(ov_inputs["input_features"].shape, input_features.shape)
+        self.assertTrue(torch.equal(ov_inputs["decoder_input_ids"], decoder_input_ids))
+
+        # Compare transcriptions using the exact inputs funasr produced (so both sides see the same
+        # dithered features), which keeps the text equality check deterministic.
+        ov_generated_ids = ov_model.generate(
+            input_features=input_features,
+            decoder_input_ids=decoder_input_ids,
+            **gen_kwargs,
+        )
+        if hasattr(ov_generated_ids, "sequences"):
+            ov_generated_ids = ov_generated_ids.sequences
+
+        prompt_len = decoder_input_ids.shape[1]
+        ov_text = tokenizer.decode(ov_generated_ids[0][prompt_len:].tolist(), skip_special_tokens=True)
+
+        self.assertEqual(pt_text.strip(), ov_text.strip())
+
+        del funasr_model
         del ov_model
         gc.collect()
 

@@ -38,6 +38,7 @@ from optimum.intel.utils.import_utils import (
     is_transformers_version,
 )
 from optimum.intel.utils.modeling_utils import (
+    _FunASRForSpeechSeq2Seq,
     _infer_library_from_model_name_or_path,
     _KokoroForTextToSpeech,
     _OpenClipForZeroShotImageClassification,
@@ -89,6 +90,11 @@ def infer_task(
             task = "zero-shot-image-classification"
         elif library_name == "kokoro":
             task = "text-to-audio"
+        elif library_name == "funasr":
+            # Use the with-past task so the encoder-decoder export is stateful (KV cache hidden in
+            # OpenVINO state). Without the `-with-past` suffix the decoder is exported stateless and
+            # incremental generation breaks (only the first token is correct).
+            task = "automatic-speech-recognition-with-past"
         else:
             try:
                 task = TasksManager._infer_task_from_model_name_or_path(
@@ -518,6 +524,8 @@ def main_export(
             model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
         elif library_name == "kokoro":
             model = _KokoroForTextToSpeech.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+        elif library_name == "funasr":
+            model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         else:
             # remote code models like phi3_v internvl2, minicpmv, internvl2, nanollava, maira2 should be loaded using AutoModelForCausalLM and not AutoModelForImageTextToText
             # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)

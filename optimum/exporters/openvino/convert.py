@@ -597,7 +597,7 @@ def export_from_model(
         )
 
     library_name = _infer_library_from_model_or_model_class(model)
-    if library_name not in ("open_clip", "kokoro"):
+    if library_name not in ("open_clip", "kokoro", "funasr"):
         TasksManager.standardize_model_attributes(model, library_name=library_name)
 
     if hasattr(model.config, "export_model_type") and model.config.export_model_type is not None:

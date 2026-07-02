@@ -20,6 +20,7 @@ import torch
 from optimum.intel.utils.import_utils import is_diffusers_version
 from optimum.utils import (
     DEFAULT_DUMMY_SHAPES,
+    DummyAudioInputGenerator,
     DummyInputGenerator,
     DummyPastKeyValuesGenerator,
     DummySeq2SeqDecoderTextInputGenerator,
@@ -1256,6 +1257,25 @@ class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummySeq2SeqPastKeyValuesGenera
                 )
                 for _ in range(self.decoder_num_layers)
             ]
+        return super().generate(input_name, framework=framework, int_dtype=int_dtype, float_dtype=float_dtype)
+
+
+class FunASRDummyAudioInputGenerator(DummyAudioInputGenerator):
+    """Dummy audio feature generator for FunASR.
+
+    FunASR's encoder consumes fbank features laid out as (batch, num_frames, feature_size),
+    unlike the default (batch, feature_size, num_frames) layout used by the base generator.
+    """
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "input_features":
+            return self.random_float_tensor(
+                shape=[self.batch_size, self.nb_max_frames, self.feature_size],
+                min_value=-1,
+                max_value=1,
+                framework=framework,
+                dtype=float_dtype,
+            )
         return super().generate(input_name, framework=framework, int_dtype=int_dtype, float_dtype=float_dtype)
 
 
