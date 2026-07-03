@@ -6682,8 +6682,6 @@ class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         common_outputs = OrderedDict({"logits": {0: "batch_size", 1: "sequence_length"}})
-        if getattr(self._normalized_config, "mtp_num_hidden_layers", 0) > 0:
-            common_outputs["last_hidden_state"] = {0: "batch_size", 1: "sequence_length"}
         if self.use_past:
             self.add_past_key_values(common_outputs, direction="outputs")
         return common_outputs

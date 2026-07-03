@@ -9497,7 +9497,6 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
             self._text_model = self._model.model
             self._text_config = self._model.model.config
 
-        self._output_hidden_states = getattr(self._text_config, "mtp_num_hidden_layers", 0) > 0
 
         class Qwen3_5DynamicCacheWrap(Qwen3_5DynamicCache):
             def __init__(self, config, conv_states, recurrent_states, key_cache, value_cache):
@@ -9595,31 +9594,22 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
                     position_ids=position_ids,
                     past_key_values=wrapped_cache_params,
                     use_cache=use_cache,
-                    output_hidden_states=self._output_hidden_states,
                 )
                 hidden_states = outputs_lm[0]
                 logits = self._model.lm_head(hidden_states)
                 past_kv = outputs_lm.past_key_values
-                last_hidden_states = outputs_lm.hidden_states[-1] if self._output_hidden_states else None
             else:
                 causal_lm_output = self.model_orig_forward(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     past_key_values=wrapped_cache_params,
                     use_cache=use_cache,
-                    output_hidden_states=self._output_hidden_states,
                 )
                 logits = causal_lm_output.logits
                 past_kv = causal_lm_output.past_key_values
-                last_hidden_states = (
-                    causal_lm_output.hidden_states[-1] if self._output_hidden_states else None
-                )
             outputs = {
                 "logits": logits,
             }
-
-            if self._output_hidden_states:
-                outputs["last_hidden_state"] = last_hidden_states
 
             if use_cache:
                 present_key_values = []
