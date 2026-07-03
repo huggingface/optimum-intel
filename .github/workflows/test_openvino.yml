@@ -39,7 +39,7 @@ jobs:
             "*quantization*",
             "*transformation*",
           ]
-        transformers-version: ["4.57.6", "5.3.0", "latest"]
+        transformers-version: ["5.8.0", "latest"]
 
     runs-on: ubuntu-22.04
 
@@ -70,17 +70,7 @@ jobs:
         run: |
           uv pip install transformers==${{ matrix.transformers-version }}
 
-      - if: ${{ matrix.transformers-version == '4.57.6' }}
-        name: Install qwen-asr package
-        run: |
-          uv pip install qwen-asr
-
-      - if: ${{ matrix.transformers-version == '4.45.0' }}
-        name: Install specific dependencies and versions required for older transformers
-        run: |
-          uv pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.32.* transformers_stream_generator
-
-      - if: ${{ matrix.transformers-version != '4.45.0' && matrix.test-pattern == '*decoder*'}}
+      - if: ${{ matrix.test-pattern == '*decoder*'}}
         name: Install auto-gptq, autoawq
         run: |
           uv pip install auto-gptq "autoawq<0.2.8"
