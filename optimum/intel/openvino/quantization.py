@@ -292,7 +292,14 @@ class OVCalibrationDatasetBuilder:
                 )
 
             if isinstance(self.model, OVModelForVisualCausalLM):
-                dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[config.dataset]
+                dataset_name = config.dataset
+                if dataset_name == "contextual":
+                    logger.warning(
+                        "The `contextual` calibration dataset is deprecated because its images are no longer "
+                        "reachable, and will be removed in a future release. Using `textvqa` instead."
+                    )
+                    dataset_name = "textvqa"
+                dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[dataset_name]
                 return self.build_from_dataset_name(
                     config,
                     dataset_metadata["id"],
