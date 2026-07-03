@@ -563,8 +563,11 @@ def load_preprocessors(
     if model_type == "fun_asr":
         # FunASR has no root tokenizer; it lives in the bundled Qwen3 LLM subfolder. Load it so that
         # the OpenVINO tokenizer/detokenizer IR gets exported alongside the model.
-        from transformers import AutoTokenizer
+        from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
+        # Drop any spurious tokenizer picked up from the root (e.g. a default empty BertTokenizer),
+        # otherwise maybe_convert_tokenizers would export that broken tokenizer instead of the Qwen3 one.
+        preprocessors = [p for p in preprocessors if not isinstance(p, PreTrainedTokenizerBase)]
         try:
             preprocessors.append(
                 AutoTokenizer.from_pretrained(

@@ -584,16 +584,25 @@ class FunASRTest(unittest.TestCase):
             captured["source_ids"] = source_ids
             return inputs_embeds, contents, batch, source_ids, meta
 
+        gen_kwargs = {"max_new_tokens": 64}
+
         core.inference_prepare = _capture
         with redirect_stdout(buf), redirect_stderr(buf):
-            pt_result = funasr_model.generate(input=[wav_path], cache={}, batch_size=1, language="中文", itn=True)
+            # `max_length` caps the number of new tokens funasr generates (greedy), matching the OV
+            # `max_new_tokens` below so both decode the same number of tokens for a fair comparison.
+            pt_result = funasr_model.generate(
+                input=[wav_path],
+                cache={},
+                batch_size=1,
+                language="中文",
+                itn=True,
+                max_length=gen_kwargs["max_new_tokens"],
+            )
         core.inference_prepare = orig_prepare
         pt_text = pt_result[0]["text"]
 
         input_features = captured["speech"].float()
         decoder_input_ids = captured["source_ids"]
-
-        gen_kwargs = {"max_new_tokens": 64}
 
         # Load and infer with OpenVINO model.
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(

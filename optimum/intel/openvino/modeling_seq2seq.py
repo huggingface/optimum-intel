@@ -1318,8 +1318,9 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
 
     @staticmethod
     def _is_funasr_source(model_id, **kwargs) -> bool:
-        from ...intel.utils.modeling_utils import _is_funasr_model
         from optimum.exporters.tasks import TasksManager
+
+        from ...intel.utils.modeling_utils import _is_funasr_model
 
         cache_dir = kwargs.get("cache_dir", HUGGINGFACE_HUB_CACHE)
         token = kwargs.get("token")
@@ -1397,8 +1398,7 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
         if getattr(self.config, "model_type", None) == "fun_asr":
             return self._preprocess_input_funasr(*args, **kwargs)
         raise NotImplementedError(
-            f"`preprocess_input` is not implemented for model type "
-            f"`{getattr(self.config, 'model_type', None)}`."
+            f"`preprocess_input` is not implemented for model type " f"`{getattr(self.config, 'model_type', None)}`."
         )
 
     def _preprocess_input_funasr(

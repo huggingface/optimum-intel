@@ -10331,9 +10331,7 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
         adaptor = encoder_wrap.audio_adaptor
 
         # Patch SANM encoder self-attention layers to drop the (all-ones) attention/fsmn mask.
-        sanm_layers = (
-            list(sense_voice.encoders0) + list(sense_voice.encoders) + list(sense_voice.tp_encoders)
-        )
+        sanm_layers = list(sense_voice.encoders0) + list(sense_voice.encoders) + list(sense_voice.tp_encoders)
         for layer in sanm_layers:
             attn = layer.self_attn
             attn._orig_forward = attn.forward
@@ -10383,9 +10381,7 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
 
         def patched_encoder_forward(input_features):
             # input_features: (batch, num_frames, feature_size)
-            speech_lengths = torch.tensor(
-                [input_features.shape[1]] * input_features.shape[0], dtype=torch.int32
-            )
+            speech_lengths = torch.tensor([input_features.shape[1]] * input_features.shape[0], dtype=torch.int32)
             encoder_out, encoder_out_lens = sense_voice(input_features, speech_lengths)
             adaptor_out, _ = adaptor(encoder_out, encoder_out_lens)
             return BaseModelOutput(last_hidden_state=adaptor_out)
