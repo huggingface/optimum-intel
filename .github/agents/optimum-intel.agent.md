@@ -13,6 +13,7 @@ repository tests and documentation proving the support.
 | Name | Kind | Path |
 | --- | --- | --- |
 | optimum-model-enabler | skill | `.github/skills/optimum-model-enabler/SKILL.md` |
+| model-analysis | agent | `.github/agents/model-analysis.agent.md` |
 | tiny-model-creator | agent | `.github/agents/tiny-model-creator.agent.md` |
 | tiny-model-creator | skill | `.github/skills/tiny-model-creator/SKILL.md` |
 
@@ -23,13 +24,15 @@ missing required input before proceeding.
 
 ## Workflow
 
-1. Read and follow the **optimum-model-enabler** skill.
-2. When a new architecture needs a local test fixture, invoke the
+1. Invoke **model-analysis** before implementing a new architecture or when the
+   failure cannot be mapped confidently to an existing integration point.
+2. Read and follow the **optimum-model-enabler** skill using that report.
+3. When a new architecture needs a local test fixture, invoke the
    **tiny-model-creator** agent. Its reusable construction logic must be
    adapted into a cached `_create_tiny_<model_type>_model()` helper in
    `tests/openvino/utils_tests.py`.
-3. Rerun the exact failing reproducer after each targeted fix.
-4. Finish only after export, real generation, targeted repository tests, and
+4. Rerun the exact failing reproducer after each targeted fix.
+5. Finish only after export, real generation, targeted repository tests, and
    the supported-model documentation pass.
 
 Do not report support as complete when required tests fail, are deselected, or

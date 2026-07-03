@@ -100,6 +100,47 @@ deterministic `model.generate()` with at least one new token.
 If generation fails, repair the violated configuration invariant, recreate the
 model, and rerun it. Loading, saving, or a forward pass alone is not success.
 
+### Prevent collapsed or invalid tiny-model outputs
+
+Before accepting the fixture, verify that its outputs are numerically valid and
+informative enough for HF-vs-OpenVINO comparison:
+
+1. Run a forward pass on representative task inputs and assert that logits and
+   relevant intermediate outputs contain no NaN or Inf values.
+2. Check that logits have non-zero finite variance and are not uniformly zero.
+3. Generate multiple new tokens for at least two distinct prompts or inputs.
+   Reject a fixture when all generated continuations collapse to zeros, one
+   repeated token, or the same constant sequence across every input.
+4. Record the finite-value check, logits variance, and generated token IDs in
+   the validation evidence.
+
+Example numerical checks:
+
+```python
+with torch.no_grad():
+    outputs = model(**inputs)
+logits = outputs.logits.float()
+assert torch.isfinite(logits).all(), "Tiny model produced NaN/Inf logits"
+assert logits.std().item() > 0, "Tiny model logits collapsed to a constant"
+```
+
+If outputs collapse, do not weaken the comparison test. Experiment with a less
+aggressive reduction, retain more layers/hidden dimensions or vocabulary
+structure, and verify all normalization/scaling invariants. When appropriate
+for the architecture, reinitialize the output head with greater variance, for
+example:
+
+```python
+with torch.no_grad():
+    model.lm_head.weight.normal_(mean=0.0, std=0.2)
+```
+
+Respect tied embeddings and architecture-specific initialization: if the
+output head is tied to input embeddings, reinitialize through the model's
+actual shared parameter and confirm tying remains intact after saving and
+reloading. Re-run finite-logit, diversity, generation, and save/reload checks
+after every initialization change.
+
 The final generation evidence must load the exact output directory returned by
 the creator, execute the requested task, generate at least one new token, and
 include the command and output. Do not validate one directory and return a

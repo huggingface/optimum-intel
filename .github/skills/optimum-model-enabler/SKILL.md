@@ -11,6 +11,17 @@ argument-hint: "<model_id> <task>"
 Use this skill to diagnose an OpenVINO export or inference failure and add the
 smallest complete model-support implementation.
 
+## Technical references
+
+- [model-patching-patterns.md](model-patching-patterns.md) — tracing failures,
+  data-dependent control flow, and vectorized MoE reference.
+- [inference-validation.md](inference-validation.md) — executable validation
+  templates for text, image-text, and video tasks.
+
+Use `.model_analysis/<model_type>_analysis.md` from the model-analysis agent as
+the architecture source of truth. Do not replace real-model evidence with
+assumptions from a nearby family or tiny fixture.
+
 ## Step 1 — Reproduce the failure
 
 Run the requested export before editing anything:
@@ -73,6 +84,9 @@ Patch the exact class identified by the traceback. Replace data-dependent
 Python control flow with traceable tensor operations where necessary without
 changing unrelated architectures. After every source edit, rerun the original
 reproducer and verify it passes the previous failure point.
+
+Read [model-patching-patterns.md](model-patching-patterns.md) when tracing,
+dynamic routing, or MoE behavior is involved.
 
 For multi-behavior exporters, verify every value in `SUPPORTED_BEHAVIORS`:
 
@@ -169,6 +183,11 @@ effective nested precision, cache invalidation, remote-code registration,
 processor assets, supported exporter behaviors, and architectural dimension
 invariants.
 
+Also reject tiny fixtures whose logits contain NaN/Inf or whose generated
+outputs collapse to zeros or constant repeated tokens. Follow the
+tiny-model-creator skill's finite-logit, variance, diversity, and
+initialization checks before using the fixture for accuracy comparison.
+
 ## Local installation safety
 
 When validation requires installing this checkout, use an editable no-deps
@@ -193,6 +212,10 @@ Run all applicable checks:
 5. Compare with the Hugging Face reference using identical preprocessing,
    prompt, image, generation settings, and decoded-token boundary.
 6. Run targeted repository tests and formatting or lint checks.
+
+Use the task-specific executable templates in
+[inference-validation.md](inference-validation.md), adapting model classes and
+inputs from the analysis report rather than blindly copying a nearby model.
 
 Loading, saving, conversion alone, or a forward-only call does not prove
 generative support. If quality differs, compare preprocessing tensors,
