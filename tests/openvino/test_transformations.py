@@ -27,6 +27,8 @@ from utils_tests import (
     get_supported_model_for_library,
 )
 
+from optimum.intel.utils.import_utils import is_transformers_version
+
 
 # Expected transformations per architecture, separated by stage:
 #   "convert" — MoC (Model Optimizer Common) transformations applied during model conversion
@@ -40,8 +42,6 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "SDPAFusion",
             "MakeStateful",
             "CommonFusions",
-            "TransposeMatMul",
-            "ReshapeAMatMul",
         ],
         "compile": [
             "StatefulSDPAFusion",
@@ -240,6 +240,14 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
         ],
     },
 }
+
+if is_transformers_version(">=", "5.0.0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["convert"].extend(
+        [
+            "TransposeMatMul",
+            "ReshapeAMatMul",
+        ]
+    )
 
 
 # filter architectures depending on min/max transformers supported versions
