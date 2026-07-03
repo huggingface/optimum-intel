@@ -51,6 +51,7 @@ Report:
 
 - Work only in this repository and designated temporary/output directories.
 - Never edit installed packages or files inside a virtual environment.
+- Never modify system files or system-wide package installations.
 - Do not upload newly created tiny models to the Hugging Face Hub.
 - Preserve existing behavior and keep changes scoped to the requested model.
 - Do not commit, push, or create a pull request unless explicitly requested.

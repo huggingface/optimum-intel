@@ -29,6 +29,12 @@ Record:
 - tokenizer, processor, chat-template, and remote-code files required to load;
 - the correct AutoModel class and generation interface for the task.
 
+Determine and record the Transformers version or version range supported by
+the original model, especially for trust-remote-code architectures. Create and
+validate the tiny model using a compatible version; do not silently substitute
+another model implementation because the active Transformers version lacks the
+architecture.
+
 Inspect precision fields under every relevant configuration level. Remote
 models may use `dtype`, `torch_dtype`, or both, including separate values in
 vision, text, audio, or projector sub-configs.
@@ -75,6 +81,11 @@ its actual parameter dtypes; editing an ignored config key is not sufficient.
 Never rename the model type, substitute a nearby architecture, or remove a
 component merely to make export pass.
 
+If the tiny model's `model_type`, `architectures`, or task-relevant component
+identity differs from the original model, stop and report the mismatch. A tiny
+model that generates successfully through another architecture is not a valid
+fixture.
+
 ## Step 4 — Validate real generation
 
 Reload the saved directory through its documented Transformers API and run
@@ -89,10 +100,16 @@ deterministic `model.generate()` with at least one new token.
 If generation fails, repair the violated configuration invariant, recreate the
 model, and rerun it. Loading, saving, or a forward pass alone is not success.
 
+The final generation evidence must load the exact output directory returned by
+the creator, execute the requested task, generate at least one new token, and
+include the command and output. Do not validate one directory and return a
+different cached or previously generated artifact.
+
 ## Rules
 
 - Do not upload the tiny model to Hugging Face.
 - Do not edit installed packages or the virtual environment.
+- Do not modify system files or system-wide package installations.
 - Use a deterministic seed where supported.
 - Avoid original weight downloads and large generated artifacts.
 - Never commit machine-specific absolute paths.

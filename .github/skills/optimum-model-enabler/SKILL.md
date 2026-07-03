@@ -114,6 +114,23 @@ remote-code, video, compression, and preprocessing matrices. Run targeted
 tests from every modified test file. A `-k` command selecting zero tests is not
 evidence.
 
+For `image-text-to-text` architectures, inspect and update every applicable
+VLM test matrix explicitly:
+
+- `tests/openvino/test_export.py`: register the architecture with
+  `OVModelForVisualCausalLM` where full VLM export is supported;
+- `tests/openvino/test_seq2seq.py`: update
+  `OVModelForVisualCausalLMIntegrationTest.SUPPORTED_ARCHITECTURES`,
+  `SUPPORT_VIDEO`, every applicable `REMOTE_CODE_MODELS` collection,
+  skip/unsupported sets, and model-specific preprocessing branches;
+- `tests/openvino/test_exporters_cli.py`: cover the model/task pair, tokenizer
+  export expectations, compression, and 4-bit cases when supported;
+- `tests/openvino/test_quantization.py`: update auto-compression coverage and
+  expected quantized submodel counts when applicable;
+- `tests/openvino/utils_tests.py`: provide the model fixture and expected IR
+  details for language, text embedding, vision embedding, projector, merger,
+  resampler, and position submodels that the architecture actually exports.
+
 Specifically verify:
 
 - every applicable `REMOTE_CODE_MODELS` collection contains the architecture
@@ -126,6 +143,20 @@ Specifically verify:
 
 Run pytest with collection output or explicit node IDs and confirm that each
 command selected at least one test.
+
+At minimum for VLM source changes, run the relevant selections from:
+
+```bash
+python -m pytest -v tests/openvino/test_export.py -k <model_type>
+python -m pytest -v tests/openvino/test_seq2seq.py -k <model_type>
+python -m pytest -v tests/openvino/test_exporters_cli.py -k <model_type>
+python -m pytest -v tests/openvino/test_quantization.py -k <model_type>
+```
+
+Run the quantization selection when quantization tables or behavior changed.
+If a required test cannot run because of hardware, time, credentials, or an
+unavailable fixture, report the exact blocker and leave support incomplete.
+Do not substitute an ad-hoc script for required repository coverage.
 
 Use the same tiny-model artifact for repository tests and the evidence claimed
 for that fixture. A WWB score or generation result from a separately generated
