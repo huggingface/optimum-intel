@@ -847,8 +847,11 @@ class OVCalibrationDatasetBuilder:
                     break
 
                 instruction = item[dataset_metadata["inputs"]["instruction"]]
-                image_url = item[dataset_metadata["inputs"]["image_url"]]
-                image = Image.open(requests.get(image_url, stream=True).raw).convert("RGB")
+                if "image_url" in dataset_metadata["inputs"]:
+                    image_url = item[dataset_metadata["inputs"]["image_url"]]
+                    image = Image.open(requests.get(image_url, stream=True).raw).convert("RGB")
+                else:
+                    image = item[dataset_metadata["inputs"]["image"]].convert("RGB")
                 if max_image_size is not None:
                     # To avoid large images, resize them keeping the aspect ratio
                     scale_factor = max(image.size[0] / max_image_size, image.size[1] / max_image_size)
