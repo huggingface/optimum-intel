@@ -10042,6 +10042,154 @@ class Qwen3_5MoeModelPatcher(Qwen3_5ModelPatcher):
                 sparse_moe_block.forward = sparse_moe_block._orig_forward
 
 
+class Qwen3_5MoeMTPModule(nn.Module):
+    """
+    Standalone PyTorch module wrapping the MTP head weights from Qwen3.5-MoE
+    (e.g. Qwen3.6-35B-A3B) for independent OpenVINO export.
+
+    Unlike the dense Qwen3.5 MTP, this variant uses a MoE decoder layer with
+    sparse experts in the MLP.
+    """
+
+    __module__ = "transformers.models.qwen3_5_moe"
+
+    def __init__(self, text_config):
+        super().__init__()
+        from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
+            Qwen3_5MoeDecoderLayer,
+            Qwen3_5MoeRMSNorm,
+            Qwen3_5MoeTextConfig,
+            Qwen3_5MoeTextRotaryEmbedding,
+        )
+
+        self.config = text_config
+        hidden_size = text_config.hidden_size
+
+        # MTP-specific layers
+        self.pre_fc_norm_embedding = Qwen3_5MoeRMSNorm(hidden_size, eps=text_config.rms_norm_eps)
+        self.pre_fc_norm_hidden = Qwen3_5MoeRMSNorm(hidden_size, eps=text_config.rms_norm_eps)
+        self.fc = nn.Linear(hidden_size * 2, hidden_size, bias=False)
+
+        # Single decoder layer (full attention + MoE MLP)
+        mtp_config = Qwen3_5MoeTextConfig(
+            vocab_size=text_config.vocab_size,
+            hidden_size=text_config.hidden_size,
+            moe_intermediate_size=text_config.moe_intermediate_size,
+            shared_expert_intermediate_size=text_config.shared_expert_intermediate_size,
+            num_hidden_layers=1,
+            num_attention_heads=text_config.num_attention_heads,
+            num_key_value_heads=text_config.num_key_value_heads,
+            hidden_act=text_config.hidden_act,
+            max_position_embeddings=text_config.max_position_embeddings,
+            rms_norm_eps=text_config.rms_norm_eps,
+            attention_bias=getattr(text_config, "attention_bias", False),
+            head_dim=text_config.head_dim,
+            rope_parameters=text_config.rope_parameters,
+            layer_types=["full_attention"],
+            num_experts=text_config.num_experts,
+            num_experts_per_tok=text_config.num_experts_per_tok,
+        )
+        self.layers = nn.ModuleList([Qwen3_5MoeDecoderLayer(mtp_config, layer_idx=0)])
+        self.rotary_emb = Qwen3_5MoeTextRotaryEmbedding(mtp_config)
+
+        # Final norm
+        self.norm = Qwen3_5MoeRMSNorm(hidden_size, eps=text_config.rms_norm_eps)
+
+    @classmethod
+    def from_pretrained_model(cls, model):
+        """Create MoE MTP module and load weights from the full model checkpoint."""
+        from huggingface_hub import hf_hub_download
+        from safetensors import safe_open
+
+        config = model.config
+        text_config = getattr(config, "text_config", config)
+        mtp_module = cls(text_config)
+
+        model_name = getattr(config, "_name_or_path", None)
+        if model_name:
+            try:
+                index_path = hf_hub_download(model_name, "model.safetensors.index.json")
+                import json
+
+                with open(index_path) as f:
+                    index = json.load(f)
+                mtp_keys = [k for k in index["weight_map"].keys() if k.startswith("mtp.")]
+                shard_files = set(index["weight_map"][k] for k in mtp_keys)
+                for shard_file in shard_files:
+                    shard_path = hf_hub_download(model_name, shard_file)
+                    with safe_open(shard_path, framework="pt") as f:
+                        for key in f.keys():
+                            if key.startswith("mtp."):
+                                param_name = key[4:]  # strip "mtp." prefix
+                                tensor = f.get_tensor(key)
+                                _set_nested_attr(mtp_module, param_name, tensor)
+            except Exception:
+                try:
+                    model_path = hf_hub_download(model_name, "model.safetensors")
+                    with safe_open(model_path, framework="pt") as f:
+                        for key in f.keys():
+                            if key.startswith("mtp."):
+                                param_name = key[4:]
+                                tensor = f.get_tensor(key)
+                                _set_nested_attr(mtp_module, param_name, tensor)
+                except Exception:
+                    pass
+
+        # Override model_type so patch_stateful uses standard decoder path
+        mtp_module.config = copy.deepcopy(text_config)
+        mtp_module.config.model_type = "qwen3_5_mtp"
+        return mtp_module
+
+    def forward(self, hidden_states, inputs_embeds, attention_mask=None, position_ids=None, past_key_values=None):
+        h_norm = self.pre_fc_norm_hidden(hidden_states)
+        e_norm = self.pre_fc_norm_embedding(inputs_embeds)
+        combined = torch.cat([e_norm, h_norm], dim=-1)
+        x = self.fc(combined)
+
+        layer = self.layers[0]
+        x = layer(
+            x,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+        )[0]
+
+        x = self.norm(x)
+
+        return x
+
+
+class Qwen3_5MoeMTPModelPatcher(Qwen3_5MTPModelPatcher):
+    """MTP model patcher for MoE variant — patches the MoE sparse block in the MTP decoder layer."""
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import Qwen3_5MoeSparseMoeBlock
+
+        super().__enter__()
+        for decoder_layer in self._model.layers:
+            if isinstance(decoder_layer.mlp, Qwen3_5MoeSparseMoeBlock):
+                sparse_moe_block = decoder_layer.mlp
+                sparse_moe_block._orig_forward = sparse_moe_block.forward
+                sparse_moe_block.forward = types.MethodType(patched_qwen3_5_moe_sparse_moe_block, sparse_moe_block)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import Qwen3_5MoeSparseMoeBlock
+
+        super().__exit__(exc_type, exc_value, traceback)
+        for decoder_layer in self._model.layers:
+            if isinstance(decoder_layer.mlp, Qwen3_5MoeSparseMoeBlock):
+                sparse_moe_block = decoder_layer.mlp
+                sparse_moe_block.forward = sparse_moe_block._orig_forward
+
+
 class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
     """
     Model patcher for Qwen3-ASR encoder-decoder export.

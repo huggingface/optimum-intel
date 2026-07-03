@@ -169,6 +169,8 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen2VLVisionEmbMergerPatcher,
     Qwen3_5ModelPatcher,
     Qwen3_5MoeModelPatcher,
+    Qwen3_5MoeMTPModelPatcher,
+    Qwen3_5MoeMTPModule,
     Qwen3_5MTPModelPatcher,
     Qwen3_5MTPModule,
     Qwen3_5VisionEmbMergerPatcher,
@@ -6952,6 +6954,12 @@ class Qwen3_5MTPOpenVINOConfig(OpenVINOConfig):
         return self._MODEL_PATCHER(self, model, model_kwargs)
 
 
+class Qwen3_5MoeMTPOpenVINOConfig(Qwen3_5MTPOpenVINOConfig):
+    """Export configuration for the Qwen3.5-MoE MTP head (e.g. Qwen3.6-35B-A3B)."""
+
+    _MODEL_PATCHER = Qwen3_5MoeMTPModelPatcher
+
+
 @register_in_tasks_manager(
     "qwen3_5_moe_text",
     *["text-generation", "text-generation-with-past"],
@@ -7003,6 +7011,23 @@ class Qwen3_5MoeOpenVINOConfig(Qwen3_5OpenVINOConfig):
                 behavior=behavior,
                 preprocessors=self._preprocessors,
             )
+
+        if behavior == QwenVLConfigBehavior.MTP:
+            return Qwen3_5MoeMTPOpenVINOConfig(
+                self._orig_config,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, QwenVLConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
+
+        if behavior == QwenVLConfigBehavior.MTP:
+            return Qwen3_5MoeMTPModule.from_pretrained_model(model)
+
+        return Qwen3_5OpenVINOConfig.get_model_for_behavior(model, behavior)
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
