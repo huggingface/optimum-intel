@@ -566,6 +566,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "decoder": 30,
         "decoder_with_past": 30,
     },
+    "fun_asr": {
+        "encoder": 46,
+        "decoder": 30,
+        "decoder_with_past": 30,
+    },
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -594,6 +599,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_eagle3",
     "qwen3_vl_eagle3",
     "qwen3_asr",
+    "fun_asr",
     "videochat_flash_qwen",
 )
 
