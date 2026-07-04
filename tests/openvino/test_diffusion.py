@@ -28,7 +28,7 @@ from diffusers import (
 from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.utils import load_image
 from parameterized import parameterized
-from utils_tests import MODEL_NAMES, OPENVINO_DEVICE, SEED
+from utils_tests import HUB_MODEL_NAMES, MODEL_NAMES, OPENVINO_DEVICE, SEED
 
 from optimum.intel.openvino import (
     OVDiffusionPipeline,
@@ -90,6 +90,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         "latent-consistency",
     ]
 
+    if is_diffusers_version(">=", "0.37.0"):
+        SUPPORTED_ARCHITECTURES.extend(["flux.2-klein"])
+
     if is_diffusers_version(">=", "0.33.0"):
         SUPPORTED_ARCHITECTURES.extend(["sana-sprint"])
 
@@ -117,7 +120,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_load_vanilla_model_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
-            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
+            _ = self.OVMODEL_CLASS.from_pretrained(HUB_MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
 
         self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 
@@ -163,6 +166,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             else {}
         )
         diffusers_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch], **model_kwargs)
+        atol = 1.5e-2 if model_arch == "flux.2-klein" else 6e-3
 
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
@@ -172,7 +176,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
-            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=atol, rtol=1e-2)
 
         # test on inputs nondivisible on 64
         height, width, batch_size = 96, 96, 1
@@ -186,7 +190,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=atol, rtol=1e-2)
 
     @parameterized.expand(CALLBACK_SUPPORT_ARCHITECTURES)
     @require_diffusers
@@ -238,12 +242,19 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             elif output_type == "pt":
                 self.assertEqual(outputs.shape, (batch_size, 3, height, width))
             else:
-                if model_arch != "flux":
+                if model_arch == "flux":
+                    packed_height = height // pipeline.vae_scale_factor // 2
+                    packed_width = width // pipeline.vae_scale_factor // 2
+                    channels = pipeline.transformer.config.in_channels
+                    self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
+                else:
                     out_channels = (
                         pipeline.unet.config.out_channels
                         if pipeline.unet is not None
                         else pipeline.transformer.config.out_channels
                     )
+                    if out_channels is None:
+                        out_channels = pipeline.vae.config.latent_channels
                     self.assertEqual(
                         outputs.shape,
                         (
@@ -253,11 +264,6 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
                             width // pipeline.vae_scale_factor,
                         ),
                     )
-                else:
-                    packed_height = height // pipeline.vae_scale_factor // 2
-                    packed_width = width // pipeline.vae_scale_factor // 2
-                    channels = pipeline.transformer.config.in_channels
-                    self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -534,7 +540,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_load_vanilla_model_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
-            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
+            _ = self.OVMODEL_CLASS.from_pretrained(HUB_MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
 
         self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 
@@ -798,7 +804,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     @require_diffusers
     def test_load_vanilla_model_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
-            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
+            _ = self.OVMODEL_CLASS.from_pretrained(HUB_MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
 
         self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 
@@ -1071,7 +1077,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
     @require_diffusers
     def test_load_vanilla_model_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
-            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
+            _ = self.OVMODEL_CLASS.from_pretrained(HUB_MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
 
         self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 

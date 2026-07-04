@@ -21,7 +21,7 @@ import unittest
 from parameterized import parameterized
 from utils_tests import ARCH_TO_MODEL_CLASS, MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS
 
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import is_transformers_version
 
 
 # Expected transformations per architecture, separated by stage:
@@ -37,26 +37,33 @@ if is_transformers_version(">=", "4.51.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"] = {
         "convert": [
             "SDPAFusion",
+            "MakeStateful",
+            "CommonFusions",
+        ],
+        "compile": [
             "StatefulSDPAFusion",
             "SDPASubgraphFusion",
-            "MakeStateful",
             "RoPEFusionGPTNEOX",
             "RoPEFusionPreprocess",
             "RoPEFusion",
             "CausalMaskPreprocessFusion",
-            "DecompressionHandling",
-            "CommonFusions",
-        ],
-        "compile": [
+            "CommonDecompositions",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
+            "ConvertBroadcast3",
+            "ConvertTiledMoeBlockToGatherMatmuls",
             "ConvertMatMulToFC",
-            "ConvertToCPUSpecificOpset",
             "ConvertToPowerStatic",
             "ConvertToSwishCPU",
-            "Snippets",
-            "Tokenization",
-            "ConvertSoftMax8ToSoftMax1",
         ],
     }
+    if is_transformers_version(">=", "5.0.0"):
+        ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["convert"].extend(
+            [
+                "TransposeMatMul",
+                "ReshapeAMatMul",
+            ]
+        )
 
 
 if is_transformers_version(">=", "4.51.0") and is_transformers_version("<", "5"):
@@ -116,77 +123,84 @@ if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
     }
 
 
-if is_transformers_version(">=", "4.55.0"):
+if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "5.5.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["afmoe"] = {
-        "convert": [],
-        "compile": [],
-    }
-
-if is_transformers_version(">=", "5.0"):
-    ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2_moe"] = {
         "convert": [
             "SDPAFusion",
+            "MakeStateful",
+            "TransposeMatMul",
+        ],
+        "compile": [
             "StatefulSDPAFusion",
             "SDPASubgraphFusion",
-            "MakeStateful",
             "RoPEFusionGPTNEOX",
             "RoPEFusionPreprocess",
             "RoPEFusion",
             "CausalMaskPreprocessFusion",
-            "DecompressionHandling",
-            "TransposeMatMul",
-            "TSShapeOfForward",
-        ],
-        "compile": [
+            "CommonDecompositions",
+            "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
+            "ConvertBroadcast3",
+            "ConvertTiledMoeBlockToGatherMatmuls",
             "ConvertMatMulToFC",
-            "ConvertToCPUSpecificOpset",
             "ConvertToPowerStatic",
             "ConvertToSwishCPU",
-            "Snippets",
-            "Tokenization",
-            "MoveReadValueInputsToSubgraph",
         ],
     }
-    # Transforms applied only in OV >= 2026.1.0
-    if is_openvino_version(">=", "2026.1.0"):
-        ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2_moe"]["convert"].append("LinOpSequenceFusion")
-        ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2_moe"]["compile"].extend(
-            [
-                "MulAddToFMA",
-                "SnippetsDataFlowManager",
-            ]
-        )
+
+if is_transformers_version(">=", "5.0") and is_transformers_version("<", "5.4.0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2_moe"] = {
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "TransposeMatMul",
+        ],
+        "compile": [
+            "TSShapeOfForward",
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "LinOpSequenceFusion",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "ConvertTiledMoeBlockToGatherMatmuls",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "MoveReadValueInputsToSubgraph",
+            "MulAddToFMA",
+        ],
+    }
 
 if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_5_moe"] = {
         "convert": [
             "SDPAFusion",
-            "StatefulSDPAFusion",
-            "SDPASubgraphFusion",
             "MakeStateful",
-            "RoPEFusionGPTNEOX",
-            "RoPEFusionPreprocess",
-            "RoPEFusion",
-            "RoPEFusionIOSlicing",
-            "CausalMaskPreprocessFusion",
-            "DecompressionHandling",
             "TransposeMatMul",
+            "TransposeConvert",
             "CommonFusions",
             "ReshapeAMatMul",
-            "SoftmaxDecomposition",
             "EliminateScatterUpdate",
-            "TransposeConvert",
-            "TransposeSinking",
         ],
         "compile": [
-            "ConvertMatMulToFC",
-            "Snippets",
-            "SnippetsDataFlowManager",
-            "Tokenization",
-            "TokenizeMHASnippets",
-            "MatMulToBrgemm",
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "TSShapeOfForward",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionIOSlicing",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "CommonDecompositions",
             "ConvertSoftMax8ToSoftMax1",
             "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
+            "ConvertBroadcast3",
+            "ConvertTiledMoeBlockToGatherMatmuls",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
         ],
     }
 
@@ -195,36 +209,29 @@ if is_transformers_version(">=", "5.5.0"):
         "convert": [
             "SDPAFusion",
             "SDPAFusionMatcher",
-            "StatefulSDPAFusion",
-            "SDPASubgraphFusion",
             "MakeStateful",
-            "DecompressionHandling",
             "TransposeMatMul",
+            "TransposeConvert",
             "CommonFusions",
             "LinOpSequenceFusion",
-            "CommonDecompositions",
-            "CommonOptimizations",
             "BroadcastTransition",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "LinOpSequenceFusion",
             "MultiplyFusions",
             "ConvertSoftMax8ToSoftMax1",
             "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
-        ],
-        "compile": [
+            "ConvertBroadcast3",
             "RoPEFusionGPTNEOX",
             "RoPEFusion",
             "CausalMaskPreprocessFusion",
+            "RMSFusion",
+            "ConvertTiledMoeBlockToGatherMatmuls",
             "ConvertMatMulToFC",
-            "ConvertToCPUSpecificOpset",
             "ConvertToPowerStatic",
-            "Snippets",
-            "SnippetsDataFlowManager",
-            "Tokenization",
-            "TokenizeMHASnippets",
-            "MatMulToBrgemm",
-            "FuseTransposeBrgemm",
-            "SoftmaxDecomposition",
-            "MulAddToFMA",
-            "ConvertBroadcast3",
         ],
     }
 
@@ -233,28 +240,23 @@ if is_transformers_version(">=", "5.10"):
         "convert": [
             "SDPAFusion",
             "SDPAFusionMatcher",
-            "StatefulSDPAFusion",
-            "SDPASubgraphFusion",
             "MakeStateful",
-            "DecompressionHandling",
             "TransposeMatMul",
             "CommonFusions",
-            "LinOpSequenceFusion",
-            "CommonDecompositions",
-            "CommonOptimizations",
             "BroadcastTransition",
-            "MultiplyFusions",
         ],
         "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "LinOpSequenceFusion",
+            "MultiplyFusions",
+            "ConvertBroadcast3",
             "RoPEFusionGPTNEOX",
             "RoPEFusion",
             "CausalMaskPreprocessFusion",
             "ConvertMatMulToFC",
-            "ConvertToCPUSpecificOpset",
             "ConvertToPowerStatic",
-            "Snippets",
-            "Tokenization",
-            "ConvertBroadcast3",
         ],
     }
 

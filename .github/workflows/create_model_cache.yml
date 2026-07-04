@@ -1,0 +1,59 @@
+name: Create Model Cache
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_update:
+        description: "Force the (re-)download, overriding the cached versions if exist"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: write  # needed to delete the stale cache entry
+
+env:
+  HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
+  UV_SYSTEM_PYTHON: true
+
+jobs:
+  create-cache:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.2
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip uv
+          uv pip install .[tests]
+
+      - name: Restore existing cache
+        if: ${{ !inputs.force_update }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-models
+
+      - name: Download models for cache
+        run: python tests/scripts/download_cached_models.py
+        env:
+          FORCE_DOWNLOAD: ${{ inputs.force_update }}
+
+      - name: Delete existing cache entry
+        run: gh cache delete hf-models --repo ${{ github.repository }} || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Save HF models cache
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-models

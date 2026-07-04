@@ -25,6 +25,7 @@ from utils_tests import (
 from optimum.exporters.openvino.model_configs import (
     BitnetOpenVINOConfig,
     DeepseekOpenVINOConfig,
+    Gemma3nTextOpenVINOConfig,
     LFM2MoeOpenVINOConfig,
     LFM2OpenVINOConfig,
     Phi3OpenVINOConfig,
@@ -105,6 +106,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "5.0"):
         SUPPORTED_SSM_ARCHITECTURES += ("lfm2_moe",)
+        SUPPORTED_ARCHITECTURES += ("gemma3n_text",)
 
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
@@ -252,6 +254,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "opt_gptq": 12,
         "mixtral_awq": 2,
         "gemma3_text": 2,
+        "gemma3n_text": 2,
         "glm4": 2,
         "qwen3": 2,
         "qwen3_moe": 2,
@@ -323,6 +326,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             supported_architectures -= {"lfm2_moe"}
         if is_transformers_version("<", str(Phi3OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"phi3"}
+        if is_transformers_version("<", str(Gemma3nTextOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"gemma3n_text"}
         # qwen3_vl_text a part of qwen3_vl architecture and is tested in seq2seq group
         if is_transformers_version(">=", str(Qwen3VLOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"qwen3_vl_text"}
@@ -450,7 +455,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
-        atol = 3e-3 if model_arch in ["minicpm", "qwen2-moe"] else 1e-4
+        atol = 3e-3 if model_arch in ["minicpm", "qwen2-moe", "gemma3n_text"] else 1e-4
         # quantized models have different logits value range
         if "awq" not in model_arch and "gptq" not in model_arch:
             self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
