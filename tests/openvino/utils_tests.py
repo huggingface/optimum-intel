@@ -261,7 +261,7 @@ HUB_MODEL_NAMES = {
     "minicpm": "optimum-intel-internal-testing/tiny-random-minicpm",
     "minicpm3": "optimum-intel-internal-testing/tiny-random-minicpm3",
     "minicpmv": "optimum-intel-internal-testing/tiny-random-minicpmv-2_6",
-    "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
+    "minicpmo": "zak2004/tiny-random-MiniCPM-o-2_6-minimal",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
     "mistral-nemo": "optimum-intel-internal-testing/tiny-random-mistral-nemo",
     "mixtral": "optimum-intel-internal-testing/tiny-mixtral",
@@ -832,3 +832,4 @@ class Timer(object):
 
     def __exit__(self, type, value, traceback):
         self.elapsed = (time.perf_counter() - self.elapsed) * 1e3
+
