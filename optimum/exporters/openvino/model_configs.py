@@ -4590,10 +4590,6 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.53.0"
     _MODEL_PATCHER = GraniteMoeHybridModelPatcher
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _warn_potential_accuracy_issue_ov_2026_1("granitemoehybrid")
-
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
             raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')

@@ -1203,6 +1203,14 @@ class OVCacheWithMambaStates(MambaCache):
                 conv_state_shape = (self.max_batch_size, conv_dim, self.conv_kernel_size)
                 conv_state: torch.Tensor = torch.zeros(conv_state_shape, device=self.device, dtype=dtype)
                 self.conv_states.append(conv_state)
+        elif self.conv_states is None and config.model_type == "granitemoehybrid":
+            self.conv_states = []
+            intermediate_size = int(self.mamba_expand * self.hidden_size)
+            conv_dim = intermediate_size + 2 * self.mamba_ngroups * self.ssm_state_size
+            for _ in range(self.num_mamba_layers):
+                conv_state_shape = (self.max_batch_size, conv_dim, self.conv_kernel_size)
+                conv_state: torch.Tensor = torch.zeros(conv_state_shape, device=self.device, dtype=dtype)
+                self.conv_states.append(conv_state)
         elif self.conv_states is None:
             self.conv_states = []
             for _ in range(self.num_mamba_layers):
@@ -1227,7 +1235,7 @@ class OVCacheWithMambaStates(MambaCache):
                 self.conv_states.append(conv_state)
 
         self.ssm_states = ssm_states
-        if self.ssm_states is None and config.model_type == "nemotron_h":
+        if self.ssm_states is None and config.model_type in ("nemotron_h", "granitemoehybrid"):
             self.ssm_states = []
             for _ in range(self.num_mamba_layers):
                 ssm_state_shape = (
