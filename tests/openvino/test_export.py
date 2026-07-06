@@ -117,6 +117,7 @@ class ExportModelTest(unittest.TestCase):
 
     if is_transformers_version("==", "4.57.6"):
         SUPPORTED_ARCHITECTURES.update({"qwen3_asr": OVModelForSpeechSeq2Seq})
+        SUPPORTED_ARCHITECTURES.update({"fun_asr": OVModelForSpeechSeq2Seq})
 
     if is_transformers_version(">=", "5.5.0"):
         SUPPORTED_ARCHITECTURES.update({"gemma4": OVModelForVisualCausalLM})
@@ -166,7 +167,10 @@ class ExportModelTest(unittest.TestCase):
         auto_model = self.SUPPORTED_ARCHITECTURES[model_type]
         task = auto_model.export_feature
         model_name = MODEL_NAMES[model_type]
-        library_name = TasksManager.infer_library_from_model(model_name)
+        if model_type == "fun_asr":
+            library_name = "funasr"
+        else:
+            library_name = TasksManager.infer_library_from_model(model_name)
         loading_kwargs = {"attn_implementation": "eager"} if model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED else {}
 
         if model_type in REMOTE_CODE_MODELS:
@@ -184,6 +188,10 @@ class ExportModelTest(unittest.TestCase):
             from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
 
             model = Qwen3ASRForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
+        elif model_type == "fun_asr":
+            from optimum.intel.utils.modeling_utils import _FunASRForSpeechSeq2Seq
+
+            model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name, **loading_kwargs)
         elif model_type == "kokoro":
             model = TasksManager.get_model_from_task(
                 task=task,
