@@ -38,7 +38,8 @@ jobs:
         run: |
           pip install --upgrade pip uv
           uv pip install git+https://github.com/huggingface/doc-builder
-          uv pip install .[quality] diffusers accelerate datasets
+          uv pip install . --no-deps
+          doc-builder light-install optimum.intel
 
       - name: Make documentation
         shell: bash
