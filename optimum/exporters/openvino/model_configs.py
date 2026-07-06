@@ -3646,7 +3646,8 @@ class FunASROpenVINOConfig(AudioToTextOpenVINOConfig):
         allow_new=True,
     )
     _MODEL_PATCHER = FunASRModelPatcher
-    MIN_TRANSFORMERS_VERSION = "4.51.3"
+    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    MIN_TRANSFORMERS_VERSION = "4.57.6"
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
