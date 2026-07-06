@@ -194,7 +194,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             if past_len:
                 position_ids = position_ids[..., -inputs_embeds.shape[1] :]
 
-            if self.config.model_type in ["qwen3_5", "qwen3_5_moe"] and position_ids.ndim != 3:
+            if self.config.model_type in ["qwen3_5", "qwen3_5_moe", "minicpmv4_6"] and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 4, axis=0)
             elif self.config.model_type in ["qwen2_vl", "qwen3_vl"] and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
@@ -325,6 +325,18 @@ class OVResampler(OVModelPart):
         return result
 
 
+class OVMiniCPMV46Merger(OVModelPart):
+    _model_name = "merger"
+
+    def __init__(self, model: ov.Model, parent_model: OVBaseModel) -> None:
+        super().__init__(model, parent_model, model_name=self._model_name)
+
+    def forward(self, image_feature, target_sizes):
+        self.compile()
+        result = self.request({"image_feature": image_feature, "target_sizes": target_sizes})
+        return result[0]
+
+
 class OVVisionProjection(OVModelPart):
     _model_name = "vision_projection"
 
@@ -359,6 +371,7 @@ class OVAudioEncoder(OVModelPart):
 
 MODEL_PARTS_CLS_MAPPING = {
     "resampler": OVResampler,
+    "merger": OVMiniCPMV46Merger,
     "language_model": OVModelWithEmbedForCausalLM,
     "text_embeddings_per_layer": OVVisionProjection,
     "vision_embeddings": OVVisionEmbedding,
@@ -749,6 +762,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         position_ids=None,
         image_bound=None,
         tgt_sizes=None,
+        target_sizes=None,
         pixel_values_videos=None,
         image_grid_thw=None,
         video_grid_thw=None,
@@ -767,6 +781,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         input_mode=None,
         **kwargs,
     ):
+        if tgt_sizes is None and target_sizes is not None:
+            tgt_sizes = target_sizes
         if pixel_values is None:
             pixel_values = images if images is not None else image_pixel_values
         inputs_embeds, attention_mask, position_ids, *extra_outputs = self.get_multimodal_embeddings(
@@ -914,7 +930,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "pixel_values": pixel_values,
                 "image_sizes": image_sizes,
                 "image_bound": kwargs.get("image_bound"),
-                "tgt_sizes": kwargs.get("tgt_sizes"),
+                "tgt_sizes": kwargs.get("tgt_sizes", kwargs.get("target_sizes")),
                 "pixel_values_videos": kwargs.get("pixel_values_videos"),
                 "image_grid_thw": kwargs.get("image_grid_thw"),
                 "video_grid_thw": kwargs.get("video_grid_thw"),
@@ -2213,6 +2229,82 @@ class _OVMiniCPMOForCausalLM(_OVMiniCPMVForCausalLM):
         prompt = processor.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = processor([prompt], [image], return_tensors="pt")
         inputs.pop("image_sizes", None)
+        return inputs
+
+
+class _OVMiniCPMV46ForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = ["merger"]
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        target_sizes = kwargs.get("tgt_sizes", kwargs.get("target_sizes"))
+        if target_sizes is None:
+            patch_size = self.config.vision_config.patch_size
+            h_patches = pixel_values.shape[2] // patch_size
+            w_patches = pixel_values.shape[3] // patch_size
+            target_sizes = torch.tensor([[h_patches, w_patches]], dtype=torch.int32)
+
+        patch_size = self.config.vision_config.patch_size
+        window_kernel_size = getattr(self.config.vision_config, "window_kernel_size", [2, 2])
+        all_merged = []
+        offset = 0
+        for i in range(target_sizes.shape[0]):
+            h, w = target_sizes[i, 0].item(), target_sizes[i, 1].item()
+            seg_width = h * w * patch_size
+            seg = pixel_values[:, :, :, offset : offset + seg_width]
+            offset += seg_width
+
+            ts = target_sizes[i : i + 1]
+            vision_output = self.vision_embeddings(seg, target_sizes=ts)
+            image_features = vision_output.last_hidden_state
+
+            merger_ts = ts // torch.tensor(window_kernel_size, dtype=ts.dtype)
+            merged = self.merger(image_features, merger_ts)
+            if isinstance(merged, np.ndarray):
+                merged = torch.from_numpy(merged)
+            all_merged.append(merged)
+
+        return torch.cat(all_merged, dim=1)
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        if isinstance(inputs_embeds, np.ndarray):
+            inputs_embeds = torch.from_numpy(inputs_embeds)
+        if isinstance(vision_embeds, np.ndarray):
+            vision_embeds = torch.from_numpy(vision_embeds)
+
+        image_features = vision_embeds.to(inputs_embeds.dtype)
+        special_image_mask = (input_ids == self.config.image_token_id).unsqueeze(-1)
+        special_image_mask = special_image_mask.expand_as(inputs_embeds)
+        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        messages = [{"role": "user", "content": []}]
+        if image is not None:
+            messages[0]["content"].append({"type": "image", "image": image})
+        messages[0]["content"].append({"type": "text", "text": text})
+        prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = processor(images=image, text=prompt, return_tensors="pt")
+        if "target_sizes" in inputs:
+            inputs["tgt_sizes"] = inputs.pop("target_sizes")
         return inputs
 
 
@@ -5969,5 +6061,6 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_5_moe": _OVQwen3_5ForCausalLM,
     "qwen3_5_moe_text": _OVQwen3_5ForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
+    "minicpmv4_6": _OVMiniCPMV46ForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
 }
