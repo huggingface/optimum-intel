@@ -60,7 +60,6 @@ TESTS_REQUIRE = [
     "peft",
     "datasets>=1.4.0,<4.0.0",
     "tbb",
-    "langchain-huggingface",
     "hf_xet",
     "num2words",
     "vocos",
