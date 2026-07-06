@@ -575,8 +575,11 @@ def load_preprocessors(
                     src_name_or_path, subfolder="Qwen3-0.6B", trust_remote_code=trust_remote_code
                 )
             )
-        except Exception:
-            pass
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to load FunASR Qwen3 tokenizer from subfolder 'Qwen3-0.6B'. "
+                "This tokenizer is required to export OpenVINO tokenizer/detokenizer IR for FunASR."
+            ) from e
     if model_type == "phi4mm":
         # audio feature extractor config overrides image processor config during saving, need to save it explicitly
         try:
