@@ -41,7 +41,6 @@ from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
 from .. import OVConfig
 from ..utils import is_transformers_version
-from ..utils.modeling_utils import _find_files_matching_pattern
 from .configuration import OVQuantizationConfigBase, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .utils import (
@@ -51,7 +50,6 @@ from .utils import (
     OV_DECODER_NAME,
     OV_DECODER_WITH_PAST_NAME,
     OV_ENCODER_NAME,
-    OV_TOKENIZER_NAME,
     TemporaryDirectory,
     classproperty,
 )

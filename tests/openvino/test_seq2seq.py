@@ -14,7 +14,6 @@
 
 import copy
 import gc
-import importlib.util
 import os
 import unittest
 from pathlib import Path

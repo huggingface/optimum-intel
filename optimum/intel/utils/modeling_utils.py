@@ -505,5 +505,3 @@ class _KokoroForTextToSpeech:
         model.config = config
 
         return model
-
-

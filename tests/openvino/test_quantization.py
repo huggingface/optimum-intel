@@ -1099,7 +1099,6 @@ class OVWeightCompressionTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForSpeechSeq2Seq, "qwen3_asr", True))
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForSpeechSeq2Seq, "fun_asr", True))
 
-
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.extend(
             [
