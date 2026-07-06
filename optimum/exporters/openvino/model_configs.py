@@ -275,13 +275,14 @@ def init_model_configs():
     if "funasr" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
         TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["funasr"] = {}
     if "funasr" not in TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP:
-        from optimum.intel.utils.modeling_utils import _FunASRForSpeechSeq2Seq
-
         try:
+            import importlib
+
             import funasr as _funasr_module
 
             if not hasattr(_funasr_module, "_FunASRForSpeechSeq2Seq"):
-                _funasr_module._FunASRForSpeechSeq2Seq = _FunASRForSpeechSeq2Seq
+                _funasr_mod = importlib.import_module("optimum.intel.openvino.modeling_funasr")
+                _funasr_module._FunASRForSpeechSeq2Seq = _funasr_mod._FunASRForSpeechSeq2Seq
             TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP["funasr"] = {
                 "automatic-speech-recognition": "_FunASRForSpeechSeq2Seq",
             }

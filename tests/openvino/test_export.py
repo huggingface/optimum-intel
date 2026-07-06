@@ -189,7 +189,7 @@ class ExportModelTest(unittest.TestCase):
 
             model = Qwen3ASRForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
         elif model_type == "fun_asr":
-            from optimum.intel.utils.modeling_utils import _FunASRForSpeechSeq2Seq
+            from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
 
             model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name, **loading_kwargs)
         elif model_type == "kokoro":

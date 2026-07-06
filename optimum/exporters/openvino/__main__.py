@@ -38,7 +38,6 @@ from optimum.intel.utils.import_utils import (
     is_transformers_version,
 )
 from optimum.intel.utils.modeling_utils import (
-    _FunASRForSpeechSeq2Seq,
     _infer_library_from_model_name_or_path,
     _KokoroForTextToSpeech,
     _OpenClipForZeroShotImageClassification,
@@ -525,6 +524,8 @@ def main_export(
         elif library_name == "kokoro":
             model = _KokoroForTextToSpeech.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         elif library_name == "funasr":
+            from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
+
             model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         else:
             # remote code models like phi3_v internvl2, minicpmv, internvl2, nanollava, maira2 should be loaded using AutoModelForCausalLM and not AutoModelForImageTextToText

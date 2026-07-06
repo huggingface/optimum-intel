@@ -1355,7 +1355,7 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
     def _is_funasr_source(model_id, **kwargs) -> bool:
         from optimum.exporters.tasks import TasksManager
 
-        from ...intel.utils.modeling_utils import _is_funasr_model
+        from .modeling_funasr import _is_funasr_model
 
         cache_dir = kwargs.get("cache_dir", HUGGINGFACE_HUB_CACHE)
         token = kwargs.get("token")
@@ -1402,7 +1402,7 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
 
         if _export:
             # Build the export-time config directly from the funasr model.
-            from ...intel.utils.modeling_utils import _FunASRForSpeechSeq2Seq
+            from .modeling_funasr import _FunASRForSpeechSeq2Seq
 
             funasr_wrapped = _FunASRForSpeechSeq2Seq.from_pretrained(
                 model_id, cache_dir=kwargs.get("cache_dir", HUGGINGFACE_HUB_CACHE), token=kwargs.get("token")
