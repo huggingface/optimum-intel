@@ -482,11 +482,9 @@ class OVASRTest(unittest.TestCase):
         )
 
         # For models with standalone preprocess_input, verify it reproduces the reference inputs.
-        if ref["preprocess_check_wav_path"] is not None:
-            import soundfile as sf
-
-            waveform, sampling_rate = sf.read(ref["preprocess_check_wav_path"], dtype="float32")
-            ov_inputs = ov_model.preprocess_input(waveform, sampling_rate, language="中文")
+        if ref.get("preprocess_check") is not None:
+            pc = ref["preprocess_check"]
+            ov_inputs = ov_model.preprocess_input(pc["waveform"], pc["sampling_rate"], language="中文")
             self.assertEqual(ov_inputs["input_features"].shape, ref["input_features"].shape)
             self.assertTrue(torch.equal(ov_inputs["decoder_input_ids"], ref["decoder_input_ids"]))
 
@@ -533,7 +531,9 @@ class OVASRTest(unittest.TestCase):
             core = funasr_model.model
             kwargs = dict(funasr_model.kwargs)
             tokenizer = kwargs["tokenizer"]
-            wav_path = f"{kwargs['model_path']}/example/zh.mp3"
+
+            audio_data, sample_rate = self._generate_audio_data()
+            audio_tensor = torch.from_numpy(audio_data)
 
             captured = {}
             orig_prepare = core.inference_prepare
@@ -549,7 +549,7 @@ class OVASRTest(unittest.TestCase):
             core.inference_prepare = _capture
             with redirect_stdout(buf), redirect_stderr(buf):
                 pt_result = funasr_model.generate(
-                    input=[wav_path],
+                    input=[audio_tensor],
                     cache={},
                     batch_size=1,
                     language="中文",
@@ -568,7 +568,7 @@ class OVASRTest(unittest.TestCase):
                 "decode_fn": lambda ids, prompt_len: tokenizer.decode(
                     ids[0][prompt_len:].tolist(), skip_special_tokens=True
                 ).strip(),
-                "preprocess_check_wav_path": wav_path,
+                "preprocess_check": {"waveform": audio_data, "sampling_rate": sample_rate},
                 "pt_model": funasr_model,
             }
         else:
