@@ -71,7 +71,7 @@ jobs:
           uv pip install transformers==${{ matrix.transformers-version }}
 
       - if: ${{ matrix.transformers-version == '4.57.6' }}
-        name: Install funasr package
+        name: Install qwen-asr funasr packages
         run: |
           uv pip install qwen-asr funasr
 
