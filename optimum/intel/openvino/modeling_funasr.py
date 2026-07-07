@@ -18,12 +18,10 @@ from typing import Dict, List, Optional, Union
 
 import numpy as np
 import torch
-from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import Core
 from transformers import PretrainedConfig
 
-from ..utils.funasr import _is_funasr_model, _is_funasr_source
 from ..utils.import_utils import is_funasr_available
 from .modeling_seq2seq import OVModelForSpeechSeq2Seq
 from .utils import OV_TOKENIZER_NAME
@@ -385,9 +383,7 @@ class _OVModelForFunAsr(OVModelForSpeechSeq2Seq):
                 new_ids = non_audio_before + [audio_token_id] * target_count + non_audio_after
                 result_ids.append(torch.tensor(new_ids, dtype=ids.dtype, device=ids.device))
         max_len = max(t.shape[0] for t in result_ids)
-        padded = torch.zeros(
-            len(result_ids), max_len, dtype=decoder_input_ids.dtype, device=decoder_input_ids.device
-        )
+        padded = torch.zeros(len(result_ids), max_len, dtype=decoder_input_ids.dtype, device=decoder_input_ids.device)
         for i, t in enumerate(result_ids):
             padded[i, : t.shape[0]] = t
         return padded

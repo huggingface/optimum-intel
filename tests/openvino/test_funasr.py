@@ -119,7 +119,9 @@ class OVFunASRTest(unittest.TestCase):
             "decoder_input_ids": captured["source_ids"],
             "pt_text": pt_text,
             "gen_kwargs": gen_kwargs,
-            "decode_fn": lambda ids, prompt_len: tokenizer.decode(ids[0][prompt_len:].tolist(), skip_special_tokens=True).strip(),
+            "decode_fn": lambda ids, prompt_len: tokenizer.decode(
+                ids[0][prompt_len:].tolist(), skip_special_tokens=True
+            ).strip(),
             "preprocess_check": {"waveform": audio_data, "sampling_rate": sample_rate},
             "pt_model": funasr_model,
         }
