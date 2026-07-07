@@ -10497,6 +10497,33 @@ class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
             del self._model._orig_forward
 
 
+def _funasr_sanm_attention_forward(self, x, mask=None, mask_shfit_chunk=None, mask_att_chunk_encoder=None):
+    q_h, k_h, v_h, v = self.forward_qkv(x)
+    # fsmn memory without masking
+    fsmn = v.transpose(1, 2)
+    fsmn = self.pad_fn(fsmn)
+    fsmn = self.fsmn_block(fsmn)
+    fsmn = fsmn.transpose(1, 2)
+    fsmn_memory = fsmn + v
+    q_h = q_h * self.d_k ** (-0.5)
+    scores = torch.matmul(q_h, k_h.transpose(-2, -1))
+    attn_weights = torch.softmax(scores, dim=-1)
+    out = torch.matmul(attn_weights, v_h)
+    n_batch = out.size(0)
+    out = out.transpose(1, 2).contiguous().view(n_batch, -1, self.h * self.d_k)
+    return self.linear_out(out) + fsmn_memory
+
+
+def _funasr_adaptor_attention_forward(self, query, key, value, mask=None):
+    q, k, v = self.forward_qkv(query, key, value)
+    scores = torch.matmul(q, k.transpose(-2, -1)) / (self.d_k**0.5)
+    attn_weights = torch.softmax(scores, dim=-1)
+    x = torch.matmul(attn_weights, v)
+    n_batch = x.size(0)
+    x = x.transpose(1, 2).contiguous().view(n_batch, -1, self.h * self.d_k)
+    return self.linear_out(x)
+
+
 class FunASRModelPatcher(OVSeq2SeqModelPatcher):
     """
     Model patcher for FunASR (e.g. Fun-ASR-Nano) encoder-decoder export.
@@ -10536,41 +10563,14 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
         for layer in sanm_layers:
             attn = layer.self_attn
             self._remember_forward(attn)
-
-            def patched_sanm_forward(att, x, mask=None, mask_shfit_chunk=None, mask_att_chunk_encoder=None):
-                q_h, k_h, v_h, v = att.forward_qkv(x)
-                # fsmn memory without masking
-                fsmn = v.transpose(1, 2)
-                fsmn = att.pad_fn(fsmn)
-                fsmn = att.fsmn_block(fsmn)
-                fsmn = fsmn.transpose(1, 2)
-                fsmn_memory = fsmn + v
-                q_h = q_h * att.d_k ** (-0.5)
-                scores = torch.matmul(q_h, k_h.transpose(-2, -1))
-                attn_weights = torch.softmax(scores, dim=-1)
-                out = torch.matmul(attn_weights, v_h)
-                n_batch = out.size(0)
-                out = out.transpose(1, 2).contiguous().view(n_batch, -1, att.h * att.d_k)
-                return att.linear_out(out) + fsmn_memory
-
-            attn.forward = types.MethodType(patched_sanm_forward, attn)
+            attn.forward = types.MethodType(_funasr_sanm_attention_forward, attn)
 
         # Patch adaptor transformer attention layers to drop the (all-ones) attention mask.
         if getattr(adaptor, "blocks", None) is not None:
             for block in adaptor.blocks:
                 attn = block.self_attn
                 self._remember_forward(attn)
-
-                def patched_adaptor_forward(att, query, key, value, mask=None):
-                    q, k, v = att.forward_qkv(query, key, value)
-                    scores = torch.matmul(q, k.transpose(-2, -1)) / (att.d_k**0.5)
-                    attn_weights = torch.softmax(scores, dim=-1)
-                    x = torch.matmul(attn_weights, v)
-                    n_batch = x.size(0)
-                    x = x.transpose(1, 2).contiguous().view(n_batch, -1, att.h * att.d_k)
-                    return att.linear_out(x)
-
-                attn.forward = types.MethodType(patched_adaptor_forward, attn)
+                attn.forward = types.MethodType(_funasr_adaptor_attention_forward, attn)
 
         self._remember_forward(encoder_wrap)
 
