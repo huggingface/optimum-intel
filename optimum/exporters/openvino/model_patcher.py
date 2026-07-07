@@ -10506,18 +10506,24 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
     bake trace-time sequence lengths into the graph. We drop these masks so the exported encoder
     works for dynamic audio lengths.
 
-    Decoder: a standard Qwen3 LLM. The audio embeddings produced by the encoder are spliced into the
-    decoder input embeddings at audio placeholder positions (token id == audio_token_id, which is 0
-    for FunASR), then the Qwen3 LM runs with self-attention KV cache only (no cross-attention).
+    Decoder: FunASR exposes a Qwen3 causal LM module. The audio embeddings produced by the encoder
+    are spliced into the decoder input embeddings at audio placeholder positions (token id ==
+    audio_token_id, which is 0 for FunASR), then the LM runs with self-attention KV cache only
+    (no cross-attention).
     """
 
     def __enter__(self):
+        self._funasr_patched_modules = []
         super().__enter__()
 
         if self.real_config._behavior == "encoder":
             self._patch_audio_encoder()
         elif self.real_config._behavior == "decoder":
             self._patch_decoder()
+
+    def _remember_forward(self, module):
+        module._orig_forward = module.forward
+        self._funasr_patched_modules.append(module)
 
     def _patch_audio_encoder(self):
         # self._model is the _FunASRAudioEncoder wrapper (audio_encoder + audio_adaptor)
@@ -10529,50 +10535,44 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
         sanm_layers = list(sense_voice.encoders0) + list(sense_voice.encoders) + list(sense_voice.tp_encoders)
         for layer in sanm_layers:
             attn = layer.self_attn
-            attn._orig_forward = attn.forward
+            self._remember_forward(attn)
 
-            def make_sanm_forward(att):
-                def patched_sanm_forward(x, mask=None, mask_shfit_chunk=None, mask_att_chunk_encoder=None):
-                    q_h, k_h, v_h, v = att.forward_qkv(x)
-                    # fsmn memory without masking
-                    fsmn = v.transpose(1, 2)
-                    fsmn = att.pad_fn(fsmn)
-                    fsmn = att.fsmn_block(fsmn)
-                    fsmn = fsmn.transpose(1, 2)
-                    fsmn_memory = fsmn + v
-                    q_h = q_h * att.d_k ** (-0.5)
-                    scores = torch.matmul(q_h, k_h.transpose(-2, -1))
-                    attn_weights = torch.softmax(scores, dim=-1)
-                    out = torch.matmul(attn_weights, v_h)
-                    n_batch = out.size(0)
-                    out = out.transpose(1, 2).contiguous().view(n_batch, -1, att.h * att.d_k)
-                    return att.linear_out(out) + fsmn_memory
+            def patched_sanm_forward(att, x, mask=None, mask_shfit_chunk=None, mask_att_chunk_encoder=None):
+                q_h, k_h, v_h, v = att.forward_qkv(x)
+                # fsmn memory without masking
+                fsmn = v.transpose(1, 2)
+                fsmn = att.pad_fn(fsmn)
+                fsmn = att.fsmn_block(fsmn)
+                fsmn = fsmn.transpose(1, 2)
+                fsmn_memory = fsmn + v
+                q_h = q_h * att.d_k ** (-0.5)
+                scores = torch.matmul(q_h, k_h.transpose(-2, -1))
+                attn_weights = torch.softmax(scores, dim=-1)
+                out = torch.matmul(attn_weights, v_h)
+                n_batch = out.size(0)
+                out = out.transpose(1, 2).contiguous().view(n_batch, -1, att.h * att.d_k)
+                return att.linear_out(out) + fsmn_memory
 
-                return patched_sanm_forward
-
-            attn.forward = make_sanm_forward(attn)
+            attn.forward = types.MethodType(patched_sanm_forward, attn)
 
         # Patch adaptor transformer attention layers to drop the (all-ones) attention mask.
         if getattr(adaptor, "blocks", None) is not None:
             for block in adaptor.blocks:
                 attn = block.self_attn
-                attn._orig_forward = attn.forward
+                self._remember_forward(attn)
 
-                def make_adaptor_forward(att):
-                    def patched_adaptor_forward(query, key, value, mask=None):
-                        q, k, v = att.forward_qkv(query, key, value)
-                        scores = torch.matmul(q, k.transpose(-2, -1)) / (att.d_k**0.5)
-                        attn_weights = torch.softmax(scores, dim=-1)
-                        x = torch.matmul(attn_weights, v)
-                        n_batch = x.size(0)
-                        x = x.transpose(1, 2).contiguous().view(n_batch, -1, att.h * att.d_k)
-                        return att.linear_out(x)
+                def patched_adaptor_forward(att, query, key, value, mask=None):
+                    q, k, v = att.forward_qkv(query, key, value)
+                    scores = torch.matmul(q, k.transpose(-2, -1)) / (att.d_k**0.5)
+                    attn_weights = torch.softmax(scores, dim=-1)
+                    x = torch.matmul(attn_weights, v)
+                    n_batch = x.size(0)
+                    x = x.transpose(1, 2).contiguous().view(n_batch, -1, att.h * att.d_k)
+                    return att.linear_out(x)
 
-                    return patched_adaptor_forward
+                attn.forward = types.MethodType(patched_adaptor_forward, attn)
 
-                attn.forward = make_adaptor_forward(attn)
-
-        encoder_wrap._orig_forward = encoder_wrap.forward
+        self._remember_forward(encoder_wrap)
 
         def patched_encoder_forward(input_features):
             # input_features: (batch, num_frames, feature_size)
@@ -10592,7 +10592,7 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
         # Force eager attention for stable OpenVINO tracing.
         llm.config._attn_implementation = "eager"
 
-        model._orig_forward = model.forward
+        self._remember_forward(model)
 
         def patched_decoder_forward(
             encoder_outputs=None,
@@ -10661,9 +10661,9 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if hasattr(self._model, "_orig_forward"):
-            self._model.forward = self._model._orig_forward
-            del self._model._orig_forward
+        for module in reversed(getattr(self, "_funasr_patched_modules", [])):
+            module.forward = module._orig_forward
+            del module._orig_forward
 
 
 class KokoroModelPatcher(ModelPatcher):

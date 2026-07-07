@@ -449,13 +449,13 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         gc.collect()
 
 
-class OVASRTest(unittest.TestCase):
+class Qwen3ASRTest(unittest.TestCase):
     """
-    Test ASR model types (Qwen3-ASR, FunASR).
-    Compares OpenVINO model output to original PyTorch model output.
+    Test Qwen3-ASR model type.
+    Compares OpenVINO model output to original PyTorch transformers model output.
     """
 
-    SUPPORTED_ARCHITECTURES = ("qwen3_asr", "fun_asr")
+    SUPPORTED_ARCHITECTURES = ("qwen3_asr",)
 
     def _generate_audio_data(self):
         np.random.seed(SEED)
@@ -480,14 +480,6 @@ class OVASRTest(unittest.TestCase):
             model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
         )
 
-        # For models with standalone preprocess_input, verify it reproduces the reference inputs.
-        if ref.get("preprocess_check") is not None:
-            pc = ref["preprocess_check"]
-            ov_inputs = ov_model.preprocess_input(pc["waveform"], pc["sampling_rate"], language="中文")
-            self.assertEqual(ov_inputs["input_features"].shape, ref["input_features"].shape)
-            self.assertTrue(torch.equal(ov_inputs["decoder_input_ids"], ref["decoder_input_ids"]))
-
-        # Generate with OV model using the exact PT-produced inputs.
         ov_gen_kwargs = {
             "input_features": ref["input_features"],
             "decoder_input_ids": ref["decoder_input_ids"],
@@ -512,116 +504,57 @@ class OVASRTest(unittest.TestCase):
     def _get_pt_reference(self, model_arch):
         """
         Obtain PyTorch reference: input_features, decoder_input_ids, pt_text, gen_kwargs, decode_fn.
-        Returns a dict with keys consumed by _test_common_asr.
+        Returns a dict with keys consumed by test_compare_to_transformers.
         """
         model_id = MODEL_NAMES[model_arch]
+        from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
 
-        if model_arch == "fun_asr":
-            import io
-            from contextlib import redirect_stderr, redirect_stdout
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
 
-            from funasr import AutoModel as FunASRAutoModel
+        audio_data, sample_rate = self._generate_audio_data()
+        text_prompt = processor.apply_chat_template(
+            [
+                {"role": "system", "content": ""},
+                {"role": "user", "content": [{"type": "audio", "audio": ""}]},
+            ],
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+        inputs = processor(
+            text=text_prompt,
+            audio=audio_data,
+            sampling_rate=sample_rate,
+            return_tensors="pt",
+        )
 
-            buf = io.StringIO()
-            with redirect_stdout(buf), redirect_stderr(buf):
-                funasr_model = FunASRAutoModel(
-                    model=model_id, hub="hf", trust_remote_code=True, device="cpu", disable_update=True
-                )
-            core = funasr_model.model
-            kwargs = dict(funasr_model.kwargs)
-            tokenizer = kwargs["tokenizer"]
+        transformers_model = Qwen3ASRForConditionalGeneration.from_pretrained(model_id, trust_remote_code=True)
+        transformers_model.eval()
 
-            audio_data, sample_rate = self._generate_audio_data()
-            audio_tensor = torch.from_numpy(audio_data)
+        gen_kwargs = {"max_new_tokens": 10}
 
-            captured = {}
-            orig_prepare = core.inference_prepare
-
-            def _capture(*args, **kw):
-                inputs_embeds, contents, batch, source_ids, meta = orig_prepare(*args, **kw)
-                captured["speech"] = batch["speech"]
-                captured["source_ids"] = source_ids
-                return inputs_embeds, contents, batch, source_ids, meta
-
-            gen_kwargs = {"max_new_tokens": 64}
-
-            core.inference_prepare = _capture
-            with redirect_stdout(buf), redirect_stderr(buf):
-                pt_result = funasr_model.generate(
-                    input=[audio_tensor],
-                    cache={},
-                    batch_size=1,
-                    language="中文",
-                    itn=True,
-                    max_length=gen_kwargs["max_new_tokens"],
-                )
-            core.inference_prepare = orig_prepare
-            pt_text = pt_result[0]["text"].strip()
-
-            return {
-                "input_features": captured["speech"].float(),
-                "decoder_input_ids": captured["source_ids"],
-                "attention_mask": None,
-                "pt_text": pt_text,
-                "gen_kwargs": gen_kwargs,
-                "decode_fn": lambda ids, prompt_len: tokenizer.decode(
-                    ids[0][prompt_len:].tolist(), skip_special_tokens=True
-                ).strip(),
-                "preprocess_check": {"waveform": audio_data, "sampling_rate": sample_rate},
-                "pt_model": funasr_model,
-            }
-        else:
-            from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
-
-            processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-
-            audio_data, sample_rate = self._generate_audio_data()
-            text_prompt = processor.apply_chat_template(
-                [
-                    {"role": "system", "content": ""},
-                    {"role": "user", "content": [{"type": "audio", "audio": ""}]},
-                ],
-                add_generation_prompt=True,
-                tokenize=False,
+        with torch.no_grad():
+            pt_generated_ids = transformers_model.generate(
+                input_ids=inputs["input_ids"],
+                input_features=inputs["input_features"],
+                feature_attention_mask=inputs["feature_attention_mask"],
+                attention_mask=inputs["attention_mask"],
+                **gen_kwargs,
             )
-            inputs = processor(
-                text=text_prompt,
-                audio=audio_data,
-                sampling_rate=sample_rate,
-                return_tensors="pt",
-            )
+        if hasattr(pt_generated_ids, "sequences"):
+            pt_generated_ids = pt_generated_ids.sequences
 
-            transformers_model = Qwen3ASRForConditionalGeneration.from_pretrained(model_id, trust_remote_code=True)
-            transformers_model.eval()
+        prompt_len = inputs["input_ids"].shape[1]
+        pt_text = processor.batch_decode(pt_generated_ids[:, prompt_len:], skip_special_tokens=True)[0]
 
-            gen_kwargs = {"max_new_tokens": 10}
-
-            with torch.no_grad():
-                pt_generated_ids = transformers_model.generate(
-                    input_ids=inputs["input_ids"],
-                    input_features=inputs["input_features"],
-                    feature_attention_mask=inputs["feature_attention_mask"],
-                    attention_mask=inputs["attention_mask"],
-                    **gen_kwargs,
-                )
-            if hasattr(pt_generated_ids, "sequences"):
-                pt_generated_ids = pt_generated_ids.sequences
-
-            prompt_len = inputs["input_ids"].shape[1]
-            pt_text = processor.batch_decode(pt_generated_ids[:, prompt_len:], skip_special_tokens=True)[0]
-
-            return {
-                "input_features": inputs["input_features"],
-                "decoder_input_ids": inputs["input_ids"],
-                "attention_mask": inputs.get("feature_attention_mask"),
-                "pt_text": pt_text,
-                "gen_kwargs": gen_kwargs,
-                "decode_fn": lambda ids, prompt_len: processor.batch_decode(
-                    ids[:, prompt_len:], skip_special_tokens=True
-                )[0],
-                "preprocess_check_wav_path": None,
-                "pt_model": transformers_model,
-            }
+        return {
+            "input_features": inputs["input_features"],
+            "decoder_input_ids": inputs["input_ids"],
+            "attention_mask": inputs.get("feature_attention_mask"),
+            "pt_text": pt_text,
+            "gen_kwargs": gen_kwargs,
+            "decode_fn": lambda ids, prompt_len: processor.batch_decode(ids[:, prompt_len:], skip_special_tokens=True)[0],
+            "pt_model": transformers_model,
+        }
 
 
 class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):

@@ -27,6 +27,7 @@ from huggingface_hub.hf_api import file_exists
 from transformers import CLIPConfig, PretrainedConfig, PreTrainedModel
 
 from optimum.exporters.tasks import TasksManager
+from optimum.intel.utils.funasr import _is_funasr_model
 from optimum.intel.utils.import_utils import (
     is_diffusers_available,
     is_open_clip_available,
@@ -172,8 +173,6 @@ def _infer_library_from_model_name_or_path(
     cache_dir: str = HUGGINGFACE_HUB_CACHE,
     token: Optional[Union[bool, str]] = None,
 ):
-    from ..openvino.modeling_funasr import _is_funasr_model
-
     all_files, _ = TasksManager.get_model_files(
         model_name_or_path, subfolder=subfolder, cache_dir=cache_dir, revision=revision, token=token
     )
