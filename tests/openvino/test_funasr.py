@@ -102,16 +102,18 @@ class OVFunASRTest(unittest.TestCase):
         gen_kwargs = {"max_new_tokens": 64}
 
         core.inference_prepare = _capture
-        with redirect_stdout(buf), redirect_stderr(buf):
-            pt_result = funasr_model.generate(
-                input=[audio_tensor],
-                cache={},
-                batch_size=1,
-                language="中文",
-                itn=True,
-                max_length=gen_kwargs["max_new_tokens"],
-            )
-        core.inference_prepare = orig_prepare
+        try:
+            with redirect_stdout(buf), redirect_stderr(buf):
+                pt_result = funasr_model.generate(
+                    input=[audio_tensor],
+                    cache={},
+                    batch_size=1,
+                    language="中文",
+                    itn=True,
+                    max_length=gen_kwargs["max_new_tokens"],
+                )
+        finally:
+            core.inference_prepare = orig_prepare
         pt_text = pt_result[0]["text"].strip()
 
         return {
