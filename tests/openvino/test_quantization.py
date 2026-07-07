@@ -1891,66 +1891,6 @@ class OVPipelineQuantizationTest(unittest.TestCase):
             ),
         )
 
-<<<<<<< HEAD
-=======
-    if is_transformers_version(">=", "4.49.0") and is_transformers_version("<", "4.54.0"):
-        PIPELINE_QUANTIZATION_SCOPE.extend(
-            [
-                (
-                    OVModelForVisualCausalLM,
-                    "phi4mm",
-                    True,
-                    dict(
-                        quantization_configs={
-                            "lm_model": dict(
-                                bits=4,
-                                group_size=16,
-                                dataset="textvqa",
-                                num_samples=1,
-                                ratio=0.8,
-                                sensitivity_metric="mean_activation_magnitude",
-                                quant_method=OVQuantizationMethod.AWQ,
-                                scale_estimation=True,
-                                lora_correction=True,
-                                ignored_scope={
-                                    "patterns": [
-                                        "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\."
-                                        "(qkv_proj|o_proj))\\.lora_B\\.speech/aten::linear/MatMul",
-                                    ],
-                                },
-                            ),
-                            "text_embeddings_model": dict(bits=8, sym=True, weight_only=True),
-                            "audio_encoder_model": dict(bits=8, sym=True, weight_only=True),
-                            "vision_embeddings_model": dict(bits=8, sym=True, weight_only=True),
-                        },
-                    ),
-                    {
-                        "lm_model": 0,
-                        "text_embeddings_model": 0,
-                        "audio_encoder_model": 0,
-                        "vision_embeddings_model": 0,
-                        "vision_projection_model": 0,
-                        "audio_embeddings_model": 0,
-                        "audio_forward_embeddings_model": 0,
-                        "audio_vision_projection_model": 0,
-                        "audio_speech_projection_model": 0,
-                    },
-                    {
-                        "lm_model": {"int8": 60, "int4": 26},
-                        "text_embeddings_model": {"int8": 1},
-                        "audio_encoder_model": {"int8": 25},
-                        "vision_embeddings_model": {"int8": 8},
-                        "vision_projection_model": {},
-                        "audio_embeddings_model": {},
-                        "audio_forward_embeddings_model": {},
-                        "audio_vision_projection_model": {},
-                        "audio_speech_projection_model": {},
-                    },
-                ),
-            ]
-        )
-
->>>>>>> main
     @parameterized.expand(PIPELINE_QUANTIZATION_SCOPE)
     def test_ovmodel_pipeline_quantization(
         self,
