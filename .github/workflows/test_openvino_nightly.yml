@@ -47,6 +47,7 @@ jobs:
             "*export*",
             "*decoder*",
             "*seq2seq*",
+            "*qwen3_asr*",
             "*funasr*",
             "*modeling*",
             "*diffusion*",
@@ -117,6 +118,16 @@ jobs:
         name: Install NNCF from main
         run: |
           pip install git+https://github.com/openvinotoolkit/nncf.git
+
+      - if: ${{ matrix.test-pattern == '*qwen3_asr*' }}
+        name: Install qwen-asr package
+        run: |
+          uv pip install qwen-asr
+
+      - if: ${{ matrix.test-pattern == '*funasr*' }}
+        name: Install funasr package
+        run: |
+          uv pip install funasr
 
       - if: ${{ matrix.test-pattern == '*decoder*'}}
         name: Install auto-gptq, autoawq
