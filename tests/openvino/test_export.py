@@ -360,8 +360,8 @@ class ExportModelTest(unittest.TestCase):
                     ov_model.model.get_rt_info()["optimum"]["transformers_version"], _transformers_version
                 )
 
-    @unittest.skipUnless(is_transformers_version(">=", "4.57.0"), "qwen3_omni_moe requires transformers >= 4.57.0")
     @parameterized.expand(["text-to-audio", "automatic-speech-recognition"])
+    @unittest.skipUnless(is_transformers_version(">=", "4.57.0"), "qwen3_omni_moe requires transformers >= 4.57.0")
     def test_qwen3_omni_moe_export_task(self, task):
         model_name = MODEL_NAMES["qwen3_omni_moe"]
         from transformers import Qwen3OmniMoeForConditionalGeneration

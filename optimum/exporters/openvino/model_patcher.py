@@ -4520,7 +4520,10 @@ class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
         model.__orig_forward = model.forward
         model.forward = types.MethodType(lm_forward, model)
 
-        language_model = model.model.language_model
+        # Qwen3-VL exposes the text stack as `model.language_model` on the bare `Qwen3VLModel`
+        # (used for feature-extraction/embedding) but nested under `model.model.language_model`
+        # on the conditional-generation wrapper. Mirror the guard used in `lm_forward` above.
+        language_model = model.model.language_model if hasattr(model, "model") else model.language_model
         language_model.__orig_deepstack_process = language_model._deepstack_process
         language_model._deepstack_process = types.MethodType(_deepstack_process_patched, language_model)
 
@@ -4529,7 +4532,9 @@ class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
-        language_model = self._model.model.language_model
+        language_model = (
+            self._model.model.language_model if hasattr(self._model, "model") else self._model.language_model
+        )
         language_model._deepstack_process = language_model.__orig_deepstack_process
 
 
