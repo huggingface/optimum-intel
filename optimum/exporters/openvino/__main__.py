@@ -176,6 +176,38 @@ def infer_task(
     return task
 
 
+def _ensure_qwen3_omni_rope_scaling(config):
+    """Fill in a valid ``rope_scaling`` for Qwen3-Omni-MoE sub-configs that are missing it."""
+    thinker_config = getattr(config, "thinker_config", None)
+    talker_config = getattr(config, "talker_config", None)
+    sub_configs = [
+        getattr(thinker_config, "text_config", None),
+        getattr(talker_config, "text_config", None),
+        getattr(talker_config, "code_predictor_config", None),
+    ]
+
+    for sub_config in sub_configs:
+        if sub_config is None or getattr(sub_config, "rope_scaling", None) is not None:
+            continue
+
+        head_dim = getattr(sub_config, "head_dim", None)
+        if head_dim is None:
+            hidden_size = getattr(sub_config, "hidden_size", None)
+            num_heads = getattr(sub_config, "num_attention_heads", None)
+            if not hidden_size or not num_heads:
+                continue
+            head_dim = hidden_size // num_heads
+
+        # mrope splits head_dim // 2 across the (temporal, height, width) axes; distribute the
+        # remainder to the leading axis, matching how real checkpoints are laid out.
+        half = head_dim // 2
+        base, remainder = divmod(half, 3)
+        mrope_section = [base + remainder, base, base]
+        sub_config.rope_scaling = {"rope_type": "default", "type": "default", "mrope_section": mrope_section}
+
+    return config
+
+
 def update_config_for_eagle3(config):
     moduler_name = "optimum.exporters.openvino.model_patcher"
     spec = importlib.util.find_spec(moduler_name)
@@ -373,6 +405,13 @@ def main_export(
             patch_qwenvl_configs()
 
         model_type = config.model_type
+
+        if model_type == "qwen3_omni_moe":
+            loading_kwargs["config"] = _ensure_qwen3_omni_rope_scaling(config)
+
+        if original_task == "auto" and model_type in {"phi4mm", "phi4_multimodal", "qwen3_omni_moe"}:
+            task = "image-text-to-text"
+
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             if custom_export_configs is None:
                 raise ValueError(
@@ -687,11 +726,14 @@ def _main_quantize(
             token=token,
         )
 
-    # NOTE: The Phi-4-multimodal-instruct model card contains a pipeline_tag set to automatic-speech-recognition,
-    # which is returned as the inferred task. As a result, we try to load the exported model using the
-    # OVModelForSpeechSeq2Seq class instead of the OVModelForVisualCausalLM class when the task is not specified
-    # explicitly. Because of this, we get an error.
-    if original_task == "auto" and library_name == "transformers":
+    # Some multimodal models must always be reloaded through OVModelForVisualCausalLM, but their task
+    # would otherwise route to the wrong OV class:
+    #   - Phi-4-multimodal-instruct: its model card pins pipeline_tag=automatic-speech-recognition, so the
+    #     *inferred* (auto) task is wrong and would pick OVModelForSpeechSeq2Seq.
+    #   - Qwen3-Omni-MoE: registers several tasks (text-to-audio, ASR, image-text-to-text); any of them,
+    #     whether inferred or passed explicitly, must still load through OVModelForVisualCausalLM.
+    # AutoConfig is cheap (cached) so we always read it to decide on the redirect.
+    if library_name == "transformers":
         config = AutoConfig.from_pretrained(
             model_name_or_path,
             subfolder=subfolder,
@@ -701,7 +743,10 @@ def _main_quantize(
             trust_remote_code=trust_remote_code,
         )
         model_type = config.model_type
-        if model_type in ["phi4mm", "phi4_multimodal"]:
+        # phi4mm is only misrouted by task inference, so keep its redirect limited to the auto case.
+        if original_task == "auto" and model_type in ["phi4mm", "phi4_multimodal"]:
+            task = "image-text-to-text"
+        elif model_type == "qwen3_omni_moe":
             task = "image-text-to-text"
 
     # Step 1. Obtain the correct OpenVINO model class
@@ -768,6 +813,10 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
     from optimum.exporters.openvino.convert import export_tokenizer
 
     if is_openvino_tokenizers_available():
+        model_type = None
+        if model and hasattr(model, "config"):
+            model_type = getattr(model.config, "export_model_type", None) or getattr(model.config, "model_type", None)
+
         if library_name != "diffusers" and preprocessors:
             processor_chat_template = None
             tokenizer = next(filter(lambda it: isinstance(it, PreTrainedTokenizerBase), preprocessors), None)
@@ -777,7 +826,13 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
                         processor_chat_template = processor.chat_template
             if tokenizer:
                 try:
-                    export_tokenizer(tokenizer, output, task=task, processor_chat_template=processor_chat_template)
+                    export_tokenizer(
+                        tokenizer,
+                        output,
+                        task=task,
+                        processor_chat_template=processor_chat_template,
+                        model_type=model_type,
+                    )
                 except Exception as exception:
                     logger.warning(
                         "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer "
@@ -787,7 +842,7 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
             for tokenizer_name in ("tokenizer", "tokenizer_2", "tokenizer_3"):
                 tokenizer = getattr(model, tokenizer_name, None)
                 if tokenizer:
-                    export_tokenizer(tokenizer, output / tokenizer_name, task=task)
+                    export_tokenizer(tokenizer, output / tokenizer_name, task=task, model_type=model_type)
     else:
         logger.warning("Tokenizer won't be converted.")
 
