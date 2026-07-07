@@ -377,7 +377,7 @@ class OVQuantizerTest(unittest.TestCase):
             "qwen2_vl",
             OVQuantizationConfig(
                 bits=8,
-                dataset="contextual",
+                dataset="textvqa",
                 num_samples=1,
             ),
             {
@@ -399,7 +399,7 @@ class OVQuantizerTest(unittest.TestCase):
             OVMixedQuantizationConfig(
                 weight_quantization_config=OVWeightQuantizationConfig(bits=4, group_size=16, ratio=0.7),
                 full_quantization_config=OVQuantizationConfig(dtype="f8e4m3", smooth_quant_alpha=0.9),
-                dataset="contextual",
+                dataset="textvqa",
                 num_samples=1,
             ),
             {
@@ -412,7 +412,7 @@ class OVQuantizerTest(unittest.TestCase):
                 "lm_model": {"f8e4m3": 8, "int4": 14},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"f8e4m3": 1},
-                "vision_embeddings_merger_model": {"f8e4m3": 2, "int4": 16},
+                "vision_embeddings_merger_model": {"f8e4m3": 5, "int4": 10},
             },
         ),
         (
@@ -420,7 +420,7 @@ class OVQuantizerTest(unittest.TestCase):
             "qwen3_vl",
             OVQuantizationConfig(
                 bits=8,
-                dataset="contextual",
+                dataset="textvqa",
                 num_samples=1,
             ),
             {
@@ -800,7 +800,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             dict(
                 bits=4,
                 group_size=16,
-                dataset="contextual",
+                dataset="textvqa",
                 ratio=0.8,
                 sensitivity_metric="hessian_input_activation",
                 num_samples=1,
@@ -819,7 +819,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             dict(
                 bits=4,
                 group_size=8,
-                dataset="contextual",
+                dataset="textvqa",
                 ratio=0.8,
                 sensitivity_metric="mean_activation_variance",
                 num_samples=1,
@@ -839,7 +839,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             dict(
                 bits=4,
                 group_size=16,
-                dataset="contextual",
+                dataset="textvqa",
                 ratio=0.8,
                 sensitivity_metric="hessian_input_activation",
                 num_samples=1,
@@ -860,7 +860,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             dict(
                 bits=4,
                 group_size=16,
-                dataset="contextual",
+                dataset="textvqa",
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 num_samples=1,
@@ -880,7 +880,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             dict(
                 bits=4,
                 group_size=4,
-                dataset="contextual",
+                dataset="textvqa",
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 num_samples=1,
@@ -898,7 +898,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             dict(
                 bits=4,
                 group_size=16,
-                dataset="contextual",
+                dataset="textvqa",
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 num_samples=1,
@@ -917,7 +917,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             dict(
                 bits=4,
                 group_size=8,
-                dataset="contextual",
+                dataset="textvqa",
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 num_samples=1,
@@ -937,7 +937,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             dict(
                 bits=4,
                 group_size=16,
-                dataset="contextual",
+                dataset="textvqa",
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 num_samples=1,
@@ -956,7 +956,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             dict(
                 bits=4,
                 group_size=16,
-                dataset="contextual",
+                dataset="textvqa",
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 num_samples=1,
@@ -975,13 +975,15 @@ class OVWeightCompressionTest(unittest.TestCase):
             dict(
                 bits=4,
                 group_size=16,
-                dataset="contextual",
+                dataset="textvqa",
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 num_samples=1,
             ),
             {
-                "lm_model": {"int8": 46, "int4": 56},
+                "lm_model": {"int8": 50, "int4": 52}
+                if is_transformers_version(">=", "4.57")
+                else {"int8": 46, "int4": 56},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 16},
             },
@@ -993,7 +995,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             dict(
                 bits=4,
                 group_size=4,
-                dataset="contextual",
+                dataset="textvqa",
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 num_samples=1,
@@ -1709,7 +1711,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         group_size=64,
                         num_samples=1,
                         scale_estimation=True,
-                        dataset="contextual",
+                        dataset="textvqa",
                         processor=model_id,
                     )
                 }
@@ -1872,7 +1874,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                         "lm_model": dict(bits=8, weight_only=True),
                         "vision_embeddings_model": dict(bits=8, weight_only=False),
                     },
-                    dataset="contextual",
+                    dataset="textvqa",
                     num_samples=1,
                     default_config=dict(bits=8, sym=True, weight_only=True),
                 ),
@@ -1889,6 +1891,66 @@ class OVPipelineQuantizationTest(unittest.TestCase):
             ),
         )
 
+<<<<<<< HEAD
+=======
+    if is_transformers_version(">=", "4.49.0") and is_transformers_version("<", "4.54.0"):
+        PIPELINE_QUANTIZATION_SCOPE.extend(
+            [
+                (
+                    OVModelForVisualCausalLM,
+                    "phi4mm",
+                    True,
+                    dict(
+                        quantization_configs={
+                            "lm_model": dict(
+                                bits=4,
+                                group_size=16,
+                                dataset="textvqa",
+                                num_samples=1,
+                                ratio=0.8,
+                                sensitivity_metric="mean_activation_magnitude",
+                                quant_method=OVQuantizationMethod.AWQ,
+                                scale_estimation=True,
+                                lora_correction=True,
+                                ignored_scope={
+                                    "patterns": [
+                                        "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\."
+                                        "(qkv_proj|o_proj))\\.lora_B\\.speech/aten::linear/MatMul",
+                                    ],
+                                },
+                            ),
+                            "text_embeddings_model": dict(bits=8, sym=True, weight_only=True),
+                            "audio_encoder_model": dict(bits=8, sym=True, weight_only=True),
+                            "vision_embeddings_model": dict(bits=8, sym=True, weight_only=True),
+                        },
+                    ),
+                    {
+                        "lm_model": 0,
+                        "text_embeddings_model": 0,
+                        "audio_encoder_model": 0,
+                        "vision_embeddings_model": 0,
+                        "vision_projection_model": 0,
+                        "audio_embeddings_model": 0,
+                        "audio_forward_embeddings_model": 0,
+                        "audio_vision_projection_model": 0,
+                        "audio_speech_projection_model": 0,
+                    },
+                    {
+                        "lm_model": {"int8": 60, "int4": 26},
+                        "text_embeddings_model": {"int8": 1},
+                        "audio_encoder_model": {"int8": 25},
+                        "vision_embeddings_model": {"int8": 8},
+                        "vision_projection_model": {},
+                        "audio_embeddings_model": {},
+                        "audio_forward_embeddings_model": {},
+                        "audio_vision_projection_model": {},
+                        "audio_speech_projection_model": {},
+                    },
+                ),
+            ]
+        )
+
+>>>>>>> main
     @parameterized.expand(PIPELINE_QUANTIZATION_SCOPE)
     def test_ovmodel_pipeline_quantization(
         self,

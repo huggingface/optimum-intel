@@ -460,7 +460,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "image-text-to-text",
             "internvl_chat",
             "f8e4m3",
-            "--dataset contextual --num-samples 1 --trust-remote-code",
+            "--dataset textvqa --num-samples 1 --trust-remote-code",
             {
                 "lm_model": 15,
                 "text_embeddings_model": 0,
@@ -596,7 +596,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "image-text-to-text",
             "llava_next",
             'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "hessian_input_activation" '
-            "--dataset contextual --num-samples 1",
+            "--dataset textvqa --num-samples 1",
             {
                 "lm_model": {"int8": 6, "int4": 24},
                 "text_embeddings_model": {"int8": 1},
@@ -617,7 +617,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "image-text-to-text",
             "llava-qwen2",
             'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_variance" '
-            "--dataset contextual --num-samples 1 --trust-remote-code",
+            "--dataset textvqa --num-samples 1 --trust-remote-code",
             {
                 "lm_model": {"int8": 16, "int4": 14},
                 "text_embeddings_model": {"int8": 1},
@@ -628,7 +628,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "image-text-to-text",
             "llava_next_video",
             'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "hessian_input_activation" '
-            "--dataset contextual --num-samples 1",
+            "--dataset textvqa --num-samples 1",
             {
                 "lm_model": {"int8": 6, "int4": 24},
                 "text_embeddings_model": {"int8": 1},
@@ -652,7 +652,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "image-text-to-text",
             "minicpmv",
             'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-            "--dataset contextual --num-samples 1 --trust-remote-code",
+            "--dataset textvqa --num-samples 1 --trust-remote-code",
             {
                 "lm_model": {"int8": 8, "int4": 22},
                 "text_embeddings_model": {"int8": 1},
@@ -674,7 +674,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "image-text-to-text",
             "internvl_chat",
             'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-            "--dataset contextual --num-samples 1 --trust-remote-code",
+            "--dataset textvqa --num-samples 1 --trust-remote-code",
             {
                 "lm_model": {"int8": 8, "int4": 22},
                 "text_embeddings_model": {"int8": 1},
@@ -685,7 +685,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "image-text-to-text",
             "qwen2_vl",
             'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-            "--dataset contextual --num-samples 1",
+            "--dataset textvqa --num-samples 1",
             {
                 "lm_model": {"int8": 10, "int4": 20},
                 "text_embeddings_model": {"int8": 1},
@@ -697,7 +697,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "image-text-to-text",
             "qwen3_vl",
             'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-            "--dataset contextual --num-samples 1",
+            "--dataset textvqa --num-samples 1",
             {
                 "lm_model": {"int8": 12, "int4": 18},
                 "text_embeddings_model": {"int8": 1},
@@ -721,7 +721,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "image-text-to-text",
             "phi3_v",
             'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-            "--dataset contextual --num-samples 1 --trust-remote-code",
+            "--dataset textvqa --num-samples 1 --trust-remote-code",
             {
                 "lm_model": {"int8": 4, "int4": 14},
                 "text_embeddings_model": {"int8": 1},
@@ -733,7 +733,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "image-text-to-text",
             "qwen2_5_vl",
             'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-            "--dataset contextual --num-samples 1 --trust-remote-code",
+            "--dataset textvqa --num-samples 1 --trust-remote-code",
             {
                 "lm_model": {"int8": 10, "int4": 20},
                 "text_embeddings_model": {"int8": 1},
@@ -745,7 +745,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "image-text-to-text",
             "phi4mm",
             'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-            "--dataset contextual --num-samples 1 --trust-remote-code",
+            "--dataset textvqa --num-samples 1 --trust-remote-code",
             {
                 "lm_model": {"int8": 8, "int4": 42},
                 "text_embeddings_model": {"int8": 1},
@@ -761,10 +761,12 @@ class OVCLIExportTestCase(unittest.TestCase):
         (
             "image-text-to-text",
             "llama4",
-            "int4 --group-size 16 --ratio 0.8 --dataset contextual --num-samples 1 "
+            "int4 --group-size 16 --ratio 0.8 --dataset textvqa --num-samples 1 "
             '--sensitivity-metric "mean_activation_magnitude"',
             {
-                "lm_model": {"int8": 46, "int4": 56},
+                "lm_model": {"int8": 50, "int4": 52}
+                if is_transformers_version(">=", "4.57")
+                else {"int8": 46, "int4": 56},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 16},
             },
@@ -773,7 +775,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "image-text-to-text",
             "minicpmo",
             'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-            "--dataset contextual --num-samples 1 --trust-remote-code",
+            "--dataset textvqa --num-samples 1 --trust-remote-code",
             {
                 "lm_model": {"int8": 6, "int4": 10},
                 "text_embeddings_model": {"int8": 1},
