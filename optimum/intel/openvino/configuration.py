@@ -162,7 +162,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 128,
         "ratio": 1.0,
-        "dataset": "contextual",
+        "dataset": "textvqa",
         "quant_method": OVQuantizationMethod.AWQ,
     },
     "Qwen/Qwen3-VL-8B-Instruct": {
@@ -333,7 +333,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
                 "bits": 4,
                 "sym": False,
                 "group_size": 64,
-                "dataset": "contextual",
+                "dataset": "textvqa",
                 "quant_method": OVQuantizationMethod.AWQ,
                 "scale_estimation": True,
                 "ignored_scope": {
@@ -445,7 +445,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 64,
         "ratio": 1.0,
-        "dataset": "contextual",
+        "dataset": "textvqa",
         "scale_estimation": True,
     },
     "google/gemma-4-26B-A4B-it": {
@@ -467,7 +467,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "bits": 4,
         "sym": False,
         "group_size": 64,
-        "dataset": "contextual",
+        "dataset": "textvqa",
         "quant_method": OVQuantizationMethod.AWQ,
         "scale_estimation": True,
     },
@@ -923,7 +923,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 ['auto', 'wikitext2','c4','c4-new']. With 'auto' the dataset will be collected from model's generations.
             - For diffusion models the dataset must be one of ['conceptual_captions',
                 'laion/220k-GPT4Vision-captions-from-LIVIS', 'laion/filtered-wit'].
-            - For visual language models the dataset must be set to 'contextual'.
+            - For visual language models the dataset must be set to 'textvqa' ('contextual' is deprecated).
             Alternatively, you can provide data objects via `calibration_dataset` argument of `OVQuantizer.quantize()`
             method.
         ratio (`float`, defaults to 1.0):
