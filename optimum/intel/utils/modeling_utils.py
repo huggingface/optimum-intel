@@ -165,6 +165,33 @@ def _is_kokoro_model(
         return False
 
 
+def _is_qwen3_tts_model(
+    model_name_or_path: Union[str, Path],
+    all_files: list,
+    cache_dir: str = HUGGINGFACE_HUB_CACHE,
+    token: Optional[Union[bool, str]] = None,
+) -> bool:
+    """Detect Qwen3-TTS models by checking ``model_type`` in config.json."""
+    if "config.json" not in all_files:
+        return False
+    try:
+        config_path = Path(model_name_or_path)
+        if config_path.is_dir():
+            config_file = config_path / "config.json"
+        else:
+            config_file = hf_hub_download(
+                repo_id=str(model_name_or_path), filename="config.json", cache_dir=cache_dir, token=token
+            )
+        with open(config_file, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        if config.get("model_type") == "qwen3_tts":
+            return True
+        architectures = config.get("architectures") or []
+        return "Qwen3TTSForConditionalGeneration" in architectures
+    except Exception:
+        return False
+
+
 def _infer_library_from_model_name_or_path(
     model_name_or_path: Union[str, Path],
     subfolder: str = "",
@@ -179,6 +206,8 @@ def _infer_library_from_model_name_or_path(
         library_name = "open_clip"
     elif _is_kokoro_model(model_name_or_path, all_files, cache_dir=cache_dir, token=token):
         library_name = "kokoro"
+    elif _is_qwen3_tts_model(model_name_or_path, all_files, cache_dir=cache_dir, token=token):
+        library_name = "qwen3_tts"
     else:
         library_name = TasksManager._infer_library_from_model_name_or_path(
             model_name_or_path=model_name_or_path, cache_dir=cache_dir
@@ -197,6 +226,8 @@ def _infer_library_from_model_or_model_class(
         library_name = "open_clip"
     elif model.__module__.startswith("kokoro") or getattr(model, "_kokoro_model", False):
         library_name = "kokoro"
+    elif getattr(model, "_qwen3_tts_model", False):
+        library_name = "qwen3_tts"
     elif model.__module__.startswith("optimum"):
         # for wrapped models like timm in optimum.intel.openvino.modeling_timm
         library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
@@ -499,3 +530,57 @@ class _KokoroForTextToSpeech:
         model.config = config
 
         return model
+
+
+class _Qwen3TTSForTextToSpeech:
+    """Wrapper for loading a Qwen3-TTS model for the OpenVINO export.
+
+    Qwen3-TTS is a multi-component autoregressive TTS model distributed as a
+    ``trust_remote_code`` model (the modelling code lives in the ``qwen_tts`` package).
+    The export only offloads the heavy talker decoder stack to OpenVINO; this loader
+    returns the underlying PyTorch ``Qwen3TTSForConditionalGeneration`` (exposing
+    ``talker.model``) tagged so that the OpenVINO export pipeline recognises it.
+    """
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_name_or_path: Union[str, Path],
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        local_files_only: bool = False,
+        force_download: bool = False,
+        **kwargs,
+    ):
+        try:
+            import torch
+            from qwen_tts import Qwen3TTSModel
+        except ImportError as exc:
+            raise ImportError(
+                "To load a Qwen3-TTS model, the `qwen_tts` package is required. "
+                "Please install it with `pip install qwen-tts`."
+            ) from exc
+
+        load_kwargs: Dict[str, Any] = {"dtype": torch.float32}
+        if token is not None:
+            load_kwargs["token"] = token
+        if revision is not None:
+            load_kwargs["revision"] = revision
+        if cache_dir is not None:
+            load_kwargs["cache_dir"] = cache_dir
+        load_kwargs["local_files_only"] = local_files_only
+        load_kwargs["force_download"] = force_download
+
+        pipeline = Qwen3TTSModel.from_pretrained(str(model_name_or_path), **load_kwargs)
+        model = pipeline.model
+        model.eval()
+        model._qwen3_tts_model = True
+        model._qwen3_tts_repo_id = str(model_name_or_path)
+        # Keep a handle to the high-level pipeline so assets can be materialized at save time.
+        model._qwen3_tts_pipeline = pipeline
+        if getattr(model.config, "model_type", None) != "qwen3_tts":
+            model.config.model_type = "qwen3_tts"
+
+        return model
+

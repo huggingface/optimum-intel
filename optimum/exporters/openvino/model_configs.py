@@ -164,6 +164,7 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3ASRModelPatcher,
     Qwen3MoeModelPatcher,
     Qwen3NextModelPatcher,
+    Qwen3TTSTalkerModelPatcher,
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
     QwenModelPatcher,
@@ -6254,3 +6255,96 @@ class TrOCROpenVINOConfig(TextSeq2SeqOpenVINOConfig):
         decoder_num_attention_heads="decoder_attention_heads",
         hidden_size="hidden_size",
     )
+
+
+class Qwen3TTSTalkerDummyInputGenerator(DummyInputGenerator):
+    """Generates the stateless talker-stack inputs used for the Qwen3-TTS OpenVINO export.
+
+    The Qwen3-TTS talker decoder stack is exported as a stateless graph whose rotary
+    position information (``cos``/``sin``) and per-layer key/value cache are passed
+    explicitly as separate inputs, so a dedicated dummy input generator is required.
+    """
+
+    SUPPORTED_INPUT_NAMES = (
+        "inputs_embeds",
+        "attention_mask",
+        "cos",
+        "sin",
+        "past_key",
+        "past_value",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = 1,
+        sequence_length: int = 4,
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        config = normalized_config.config
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.hidden_size = config.hidden_size
+        self.num_attention_heads = config.num_attention_heads
+        self.num_key_value_heads = config.num_key_value_heads
+        self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
+        self.num_hidden_layers = config.num_hidden_layers
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "inputs_embeds":
+            shape = [self.batch_size, self.sequence_length, self.hidden_size]
+        elif input_name == "attention_mask":
+            # Additive causal mask; at export there is no past so kv_length == sequence_length.
+            shape = [self.batch_size, 1, self.sequence_length, self.sequence_length]
+        elif input_name in ("cos", "sin"):
+            shape = [self.batch_size, self.sequence_length, self.head_dim]
+        elif input_name in ("past_key", "past_value"):
+            # Stacked per-layer cache with zero past length for the prefill trace.
+            shape = [self.num_hidden_layers, self.batch_size, self.num_key_value_heads, 0, self.head_dim]
+        else:
+            raise ValueError(f"Unsupported input name {input_name} for {self.__class__.__name__}")
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
+class Qwen3TTSTalkerOpenVINOConfig(OpenVINOConfig):
+    """OpenVINO export configuration for the stateless Qwen3-TTS talker decoder stack.
+
+    Conversion is performed through the standard ``export`` -> ``export_pytorch`` ->
+    ``convert_model`` pipeline. The talker forward is rewritten into a stateless,
+    KV-explicit form by :class:`Qwen3TTSTalkerModelPatcher`.
+    """
+
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (Qwen3TTSTalkerDummyInputGenerator,)
+    _MODEL_PATCHER = Qwen3TTSTalkerModelPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "inputs_embeds": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 2: "sequence_length", 3: "kv_length"},
+            "cos": {0: "batch_size", 1: "sequence_length"},
+            "sin": {0: "batch_size", 1: "sequence_length"},
+            "past_key": {1: "batch_size", 3: "past_length"},
+            "past_value": {1: "batch_size", 3: "past_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+            "present_key": {1: "batch_size", 3: "sequence_length"},
+            "present_value": {1: "batch_size", 3: "sequence_length"},
+        }
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](self.task, self._normalized_config, **kwargs)
+        return {
+            name: generator.generate(
+                name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
+            )
+            for name in self.inputs
+        }
