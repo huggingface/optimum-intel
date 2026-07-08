@@ -537,7 +537,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 13,
         "vision_embeddings_pos_model": 1,
         "audio_encoder_model": 18,
-        "talker_model": 43 if is_transformers_version("<", "5") else 27,
+        "talker_model": 43 if is_transformers_version("<", "5") else 35,
         "talker_text_embeddings_model": 1,
         "talker_projections_model": 4,
         "code_predictor_model": 16,

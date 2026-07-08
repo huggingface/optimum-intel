@@ -197,8 +197,13 @@ class ExportModelTest(unittest.TestCase):
                 library_name="kokoro",
             )
         elif model_type == "qwen3_omni_moe":
-            from transformers import Qwen3OmniMoeForConditionalGeneration
+            from transformers import AutoConfig, Qwen3OmniMoeForConditionalGeneration
 
+            from optimum.exporters.openvino.__main__ import _ensure_qwen3_omni_rope_scaling
+
+            # Tiny test checkpoints omit rope_scaling, which transformers >= 4.57 requires to build the
+            # rotary embedding. The CLI export backfills it; mirror that here for the direct model load.
+            loading_kwargs["config"] = _ensure_qwen3_omni_rope_scaling(AutoConfig.from_pretrained(model_name))
             model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
         else:
             model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
@@ -364,9 +369,16 @@ class ExportModelTest(unittest.TestCase):
     @unittest.skipUnless(is_transformers_version(">=", "4.57.0"), "qwen3_omni_moe requires transformers >= 4.57.0")
     def test_qwen3_omni_moe_export_task(self, task):
         model_name = MODEL_NAMES["qwen3_omni_moe"]
-        from transformers import Qwen3OmniMoeForConditionalGeneration
+        from transformers import AutoConfig, Qwen3OmniMoeForConditionalGeneration
 
-        model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(model_name, attn_implementation="eager")
+        from optimum.exporters.openvino.__main__ import _ensure_qwen3_omni_rope_scaling
+
+        # Tiny test checkpoints omit rope_scaling, which transformers >= 4.57 requires to build the
+        # rotary embedding. The CLI export backfills it; mirror that here for the direct model load.
+        config = _ensure_qwen3_omni_rope_scaling(AutoConfig.from_pretrained(model_name))
+        model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
+            model_name, config=config, attn_implementation="eager"
+        )
         self.assertGreater(getattr(model.config.thinker_config.text_config, "num_experts", 0), 1)
         self.assertGreater(getattr(model.config.talker_config.text_config, "shared_expert_intermediate_size", 0), 0)
         with TemporaryDirectory() as tmpdir:
