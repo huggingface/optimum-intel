@@ -136,7 +136,6 @@ class ExportModelTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.update(
             {
                 "qwen3_next": OVModelForCausalLM,
-                "qwen3_omni_moe": OVModelForVisualCausalLM,
             }
         )
 
@@ -146,6 +145,8 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "5.0"):
         SUPPORTED_ARCHITECTURES.update({"lfm2_moe": OVModelForCausalLM})
         SUPPORTED_ARCHITECTURES.update({"gemma3n": OVModelForVisualCausalLM})
+        # Qwen3-Omni-MoE requires Transformers 5.0+ (fused-experts / router API).
+        SUPPORTED_ARCHITECTURES.update({"qwen3_omni_moe": OVModelForVisualCausalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
@@ -366,7 +367,7 @@ class ExportModelTest(unittest.TestCase):
                 )
 
     @parameterized.expand(["text-to-audio", "automatic-speech-recognition"])
-    @unittest.skipUnless(is_transformers_version(">=", "4.57.0"), "qwen3_omni_moe requires transformers >= 4.57.0")
+    @unittest.skipUnless(is_transformers_version(">=", "5.0"), "qwen3_omni_moe requires transformers >= 5.0")
     def test_qwen3_omni_moe_export_task(self, task):
         model_name = MODEL_NAMES["qwen3_omni_moe"]
         from transformers import AutoConfig, Qwen3OmniMoeForConditionalGeneration

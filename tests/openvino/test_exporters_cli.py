@@ -202,8 +202,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "qwen3_next"),
-                ("text-to-audio", "qwen3_omni_moe"),
-                ("automatic-speech-recognition", "qwen3_omni_moe"),
             ]
         )
 
@@ -212,6 +210,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             [
                 ("text-generation", "lfm2_moe"),
                 ("text-generation-with-past", "lfm2_moe"),
+                # Qwen3-Omni-MoE requires Transformers 5.0+ (fused-experts / router API).
+                ("text-to-audio", "qwen3_omni_moe"),
+                ("automatic-speech-recognition", "qwen3_omni_moe"),
             ]
         )
 

@@ -847,7 +847,6 @@ def export_tokenizer(
     suffix: Optional[str] = "",
     task: Optional[str] = None,
     processor_chat_template: Optional[str] = None,
-    model_type: Optional[str] = None,
 ):
     # avoid circular imports
     from optimum.intel.openvino import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME
@@ -864,14 +863,11 @@ def export_tokenizer(
     if output.exists():
         tokenizer = maybe_convert_tokenizer_to_fast(tokenizer, output)
 
-    # Left-padding is required for decoder-only generation (text-generation and VLMs).
-    left_padding_audio_model_types = ("qwen3_omni_moe", "qwen3_omni", "qwen2_vl")
-    needs_left_padding = task is not None and (
-        task.startswith("text-generation")
-        or task == "image-text-to-text"
-        or (task in ("text-to-audio", "automatic-speech-recognition") and model_type in left_padding_audio_model_types)
-    )
-    if needs_left_padding and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0"):
+    if (
+        task is not None
+        and (task.startswith("text-generation") or task == "image-text-to-text")
+        and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0")
+    ):
         logger.info(f"Set tokenizer padding side to left for `{task}` task.")
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"

@@ -439,6 +439,13 @@ class OVQuantizerTest(unittest.TestCase):
                         "vision_embeddings_pos_model": {"int8": 1},
                     },
                 ),
+            ]
+        )
+
+    # Qwen3-Omni-MoE requires Transformers 5.0+ (fused-experts / router API).
+    if is_transformers_version(">=", "5.0"):
+        SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET.extend(
+            [
                 (
                     OVModelForVisualCausalLM,
                     "qwen3_omni_moe",
@@ -460,7 +467,7 @@ class OVQuantizerTest(unittest.TestCase):
                         "code2wav_model": 0,
                     },
                     {
-                        "lm_model": {"int8": 17 if is_transformers_version("<", "5") else 70},
+                        "lm_model": {"int8": 70},
                         "text_embeddings_model": {"int8": 1},
                         "vision_embeddings_model": {"int8": 13},
                         "vision_embeddings_pos_model": {"int8": 1},
@@ -1157,10 +1164,13 @@ class OVWeightCompressionTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.extend(
             [
                 (OVModelForVisualCausalLM, "qwen3_vl", False),
-                (OVModelForVisualCausalLM, "qwen3_omni_moe", False),
                 (OVModelForCausalLM, "hunyuan_v1_dense", False),
             ]
         )
+
+    # Qwen3-Omni-MoE requires Transformers 5.0+ (fused-experts / router API).
+    if is_transformers_version(">=", "5.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen3_omni_moe", False))
 
     if is_transformers_version(">=", "4.57"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append(
@@ -1332,7 +1342,10 @@ class OVWeightCompressionTest(unittest.TestCase):
         if is_transformers_version("<", "4.54"):
             expected.add("exaone4")
         if is_transformers_version("<", "4.57.0"):
-            expected.update({"qwen3_vl", "qwen3_omni_moe"})
+            expected.add("qwen3_vl")
+        # Qwen3-Omni-MoE requires Transformers 5.0+, so it is filtered out below that.
+        if is_transformers_version("<", "5.0"):
+            expected.add("qwen3_omni_moe")
         if is_transformers_version(">=", "4.54"):
             expected.update({"llava-qwen2", "phi3_v", "minicpmo"})
         if is_transformers_version(">=", "5"):

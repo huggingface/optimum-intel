@@ -709,8 +709,12 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     if is_transformers_version("<", "4.52"):
         SUPPORTED_ARCHITECTURES += ["minicpmo"]
     if is_transformers_version(">=", "4.57.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen3_vl", "qwen3_omni_moe"]
+        SUPPORTED_ARCHITECTURES += ["qwen3_vl"]
         SUPPORT_VIDEO += ["qwen3_vl"]
+
+    # Qwen3-Omni-MoE requires Transformers 5.0+ (fused-experts / router API).
+    if is_transformers_version(">=", "5.0"):
+        SUPPORTED_ARCHITECTURES += ["qwen3_omni_moe"]
         SUPPORT_AUDIO.append("qwen3_omni_moe")
         SUPPORT_AUDIO_OUTPUT.append("qwen3_omni_moe")
 
@@ -1200,7 +1204,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
         return (audio_data, sampling_rate)
 
-    @unittest.skipUnless(is_transformers_version(">=", "4.57.0"), "qwen3_omni_moe requires transformers >= 4.57.0")
+    @unittest.skipUnless(is_transformers_version(">=", "5.0"), "qwen3_omni_moe requires transformers >= 5.0")
     def test_qwen3_omni_moe_video_not_supported(self):
         model_id = MODEL_NAMES["qwen3_omni_moe"]
         model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
@@ -1211,7 +1215,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         del model
         gc.collect()
 
-    @unittest.skipUnless(is_transformers_version(">=", "4.57.0"), "qwen3_omni_moe requires transformers >= 4.57.0")
+    @unittest.skipUnless(is_transformers_version(">=", "5.0"), "qwen3_omni_moe requires transformers >= 5.0")
     def test_qwen3_omni_moe_sequential_generation(self):
         model_id = MODEL_NAMES["qwen3_omni_moe"]
         model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
@@ -1234,7 +1238,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         gc.collect()
 
     @parameterized.expand(["text-to-audio", "automatic-speech-recognition"])
-    @unittest.skipUnless(is_transformers_version(">=", "4.57.0"), "qwen3_omni_moe requires transformers >= 4.57.0")
+    @unittest.skipUnless(is_transformers_version(">=", "5.0"), "qwen3_omni_moe requires transformers >= 5.0")
     def test_qwen3_omni_moe_any2any_task_registration(self, task):
         model_id = MODEL_NAMES["qwen3_omni_moe"]
         model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, task=task, device=OPENVINO_DEVICE)
@@ -1248,7 +1252,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         del model
         gc.collect()
 
-    @unittest.skipUnless(is_transformers_version(">=", "4.57.0"), "qwen3_omni_moe requires transformers >= 4.57.0")
+    @unittest.skipUnless(is_transformers_version(">=", "5.0"), "qwen3_omni_moe requires transformers >= 5.0")
     def test_qwen3_omni_moe_multi_turn_conversation(self):
         """Test multi-turn conversation with mixed modalities across turns."""
         model_id = MODEL_NAMES["qwen3_omni_moe"]
@@ -1327,7 +1331,7 @@ def _generate_random_audio_data():
     return (audio_data, sampling_rate)
 
 
-@unittest.skipUnless(is_transformers_version(">=", "4.57.0"), "OVModelForMultimodalLM requires transformers >= 4.57.0")
+@unittest.skipUnless(is_transformers_version(">=", "5.0"), "OVModelForMultimodalLM requires transformers >= 5.0")
 class OVModelForMultimodalLMIntegrationTest(unittest.TestCase):
     def test_from_pretrained_export(self):
         model_id = MODEL_NAMES["qwen3_omni_moe"]

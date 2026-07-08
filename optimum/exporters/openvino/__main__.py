@@ -32,6 +32,7 @@ from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     DIFFUSERS_IMPORT_ERROR,
+    _transformers_version,
     is_diffusers_available,
     is_nncf_available,
     is_openvino_tokenizers_available,
@@ -407,6 +408,11 @@ def main_export(
         model_type = config.model_type
 
         if model_type == "qwen3_omni_moe":
+            if is_transformers_version("<", "5.0"):
+                raise ValueError(
+                    "Exporting Qwen3-Omni-MoE models requires transformers >= 5.0, "
+                    f"but found {_transformers_version}. Please upgrade transformers."
+                )
             loading_kwargs["config"] = _ensure_qwen3_omni_rope_scaling(config)
 
         if original_task == "auto" and model_type in {"phi4mm", "phi4_multimodal", "qwen3_omni_moe"}:
@@ -813,10 +819,6 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
     from optimum.exporters.openvino.convert import export_tokenizer
 
     if is_openvino_tokenizers_available():
-        model_type = None
-        if model and hasattr(model, "config"):
-            model_type = getattr(model.config, "export_model_type", None) or getattr(model.config, "model_type", None)
-
         if library_name != "diffusers" and preprocessors:
             processor_chat_template = None
             tokenizer = next(filter(lambda it: isinstance(it, PreTrainedTokenizerBase), preprocessors), None)
@@ -831,7 +833,6 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
                         output,
                         task=task,
                         processor_chat_template=processor_chat_template,
-                        model_type=model_type,
                     )
                 except Exception as exception:
                     logger.warning(
@@ -842,7 +843,7 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
             for tokenizer_name in ("tokenizer", "tokenizer_2", "tokenizer_3"):
                 tokenizer = getattr(model, tokenizer_name, None)
                 if tokenizer:
-                    export_tokenizer(tokenizer, output / tokenizer_name, task=task, model_type=model_type)
+                    export_tokenizer(tokenizer, output / tokenizer_name, task=task)
     else:
         logger.warning("Tokenizer won't be converted.")
 

@@ -464,8 +464,10 @@ class Qwen3VLTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     library_name="transformers",
 )
 class Qwen3OmniMoeTextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
-    # Inherits all config from Qwen3VL (identical architecture for text decoder)
-    pass
+    # Inherits all config from Qwen3VL (identical architecture for text decoder).
+    # Qwen3-Omni-MoE support requires Transformers 5.0+ (the fused-experts / router API);
+    # override the Qwen3VL parent's 4.57.0 floor so 4.x fails fast with a clear message.
+    MIN_TRANSFORMERS_VERSION = "5.0"
 
 
 @register_in_tasks_manager(
@@ -474,7 +476,7 @@ class Qwen3OmniMoeTextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
     library_name="transformers",
 )
 class Qwen3OmniMoeTalkerTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    MIN_TRANSFORMERS_VERSION = "5.0"
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
@@ -3566,7 +3568,7 @@ def _make_qwen3_omni_moe_projections_wrapper(text_proj, hidden_proj, config):
     library_name="transformers",
 )
 class Qwen3OmniMoeOpenVINOConfig(BaseVLMOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    MIN_TRANSFORMERS_VERSION = "5.0"
     SUPPORTED_BEHAVIORS = [b.value for b in Qwen3OmniMoeConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
