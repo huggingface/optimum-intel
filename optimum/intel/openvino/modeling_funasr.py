@@ -29,11 +29,7 @@ from .utils import OV_TOKENIZER_NAME
 
 
 class _FunASRAudioEncoder(torch.nn.Module):
-    """Wraps the FunASR audio encoder (SenseVoice) and audio adaptor as a single encoder module.
-
-    Produces audio embeddings already projected to the LLM hidden size, which are spliced into
-    the decoder input embeddings at the audio placeholder positions.
-    """
+    """Wraps the FunASR audio encoder (SenseVoice) and audio adaptor as a single encoder module."""
 
     def __init__(self, audio_encoder: torch.nn.Module, audio_adaptor: torch.nn.Module):
         super().__init__()
@@ -41,7 +37,6 @@ class _FunASRAudioEncoder(torch.nn.Module):
         self.audio_adaptor = audio_adaptor
 
     def forward(self, input_features: "torch.Tensor"):
-        # input_features: (batch, num_frames, feature_size)
         speech_lengths = torch.tensor([input_features.shape[1]] * input_features.shape[0], dtype=torch.int32)
         encoder_out, encoder_out_lens = self.audio_encoder(input_features, speech_lengths)
         adaptor_out, _ = self.audio_adaptor(encoder_out, encoder_out_lens)
@@ -325,8 +320,10 @@ def _get_ov_model_for_funasr_class():
             max_frames = max(num_frames)
             feature_size = feats[0].shape[-1]
             input_features = torch.zeros(len(feats), max_frames, feature_size, dtype=torch.float32)
+            attention_mask = torch.zeros(len(feats), max_frames, dtype=torch.long)
             for i, f in enumerate(feats):
                 input_features[i, : f.shape[0]] = f
+                attention_mask[i, : f.shape[0]] = 1
 
             asr_prompt = f"语音转写成{language}：" if itn else f"语音转写成{language}，不进行文本规整："
             before = f"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{asr_prompt}"
@@ -343,7 +340,17 @@ def _get_ov_model_for_funasr_class():
             for i, t in enumerate(prompt_ids):
                 decoder_input_ids[i, : t.shape[0]] = t
 
-            return {"input_features": input_features, "decoder_input_ids": decoder_input_ids}
+            decoder_attention_mask = torch.ones_like(decoder_input_ids)
+            for i, t in enumerate(prompt_ids):
+                if t.shape[0] < max_len:
+                    decoder_attention_mask[i, t.shape[0]:] = 0
+
+            return {
+                "input_features": input_features,
+                "attention_mask": attention_mask,
+                "decoder_input_ids": decoder_input_ids,
+                "decoder_attention_mask": decoder_attention_mask,
+            }
 
         def _funasr_tokenizer_encode(self, text: str) -> List[int]:
             """Encode text to token ids using the exported OpenVINO tokenizer IR."""
@@ -390,7 +397,7 @@ def _get_ov_model_for_funasr_class():
         ):
             if decoder_input_ids is not None and past_key_values is None:
                 if encoder_outputs is None and input_features is not None:
-                    encoder_outputs = self.encoder(input_ids=input_features, attention_mask=attention_mask)
+                    encoder_outputs = self.encoder(input_ids=input_features)
 
                 if encoder_outputs is not None:
                     audio_token_id = getattr(self.config, "audio_token_id", 0)
@@ -410,7 +417,6 @@ def _get_ov_model_for_funasr_class():
 
             return super().forward(
                 input_features=input_features,
-                attention_mask=attention_mask,
                 decoder_input_ids=decoder_input_ids,
                 decoder_attention_mask=decoder_attention_mask,
                 encoder_outputs=encoder_outputs,

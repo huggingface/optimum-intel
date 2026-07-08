@@ -1267,6 +1267,8 @@ class FunASRDummyAudioInputGenerator(DummyAudioInputGenerator):
     unlike the default (batch, feature_size, num_frames) layout used by the base generator.
     """
 
+    SUPPORTED_INPUT_NAMES = ("input_features",)
+
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "input_features":
             return self.random_float_tensor(

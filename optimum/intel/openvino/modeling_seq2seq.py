@@ -924,6 +924,9 @@ class OVEncoder(OVModelPart):
 
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names:
+            if attention_mask is None:
+                input_tensor = input_ids if input_ids is not None else kwargs.get(self.main_input_name)
+                attention_mask = torch.ones(input_tensor.shape[:2], dtype=torch.long)
             inputs["attention_mask"] = attention_mask
 
         # Qwen3-ASR requires input_features chunking before passing to encoder for processing of long audios.

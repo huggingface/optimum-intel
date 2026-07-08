@@ -10501,10 +10501,8 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
     """
     Model patcher for FunASR (e.g. Fun-ASR-Nano) encoder-decoder export.
 
-    Encoder: SenseVoice audio encoder + adaptor. The SANM encoder attention/fsmn and the adaptor
-    attention use attention masks that, for batch-size-1 unpadded audio, are all-ones (no-ops) but
-    bake trace-time sequence lengths into the graph. We drop these masks so the exported encoder
-    works for dynamic audio lengths.
+    Encoder: SenseVoice audio encoder + adaptor. All frames are assumed valid (no masking)
+    because funasr's native mask ops use .tolist() which bakes trace-time constants.
 
     Decoder: a standard Qwen3 LLM. The audio embeddings produced by the encoder are spliced into the
     decoder input embeddings at audio placeholder positions (token id == audio_token_id, which is 0
@@ -10525,58 +10523,35 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
         sense_voice = encoder_wrap.audio_encoder
         adaptor = encoder_wrap.audio_adaptor
 
-        # Patch SANM encoder self-attention layers to drop the (all-ones) attention/fsmn mask.
+        # Patch SANM encoder self-attention layers to skip masking during trace.
+        # The native mask computation uses `lengths.tolist()` which bakes trace-time values as constants,
+        # making the graph incompatible with different sequence lengths at inference time.
         sanm_layers = list(sense_voice.encoders0) + list(sense_voice.encoders) + list(sense_voice.tp_encoders)
+
+        def _sanm_forward_no_mask(self, x, mask=None, mask_shfit_chunk=None, mask_att_chunk_encoder=None):
+            return self._orig_forward(x, mask=None, mask_shfit_chunk=None, mask_att_chunk_encoder=None)
+
         for layer in sanm_layers:
             attn = layer.self_attn
             attn._orig_forward = attn.forward
+            attn.forward = types.MethodType(_sanm_forward_no_mask, attn)
 
-            def make_sanm_forward(att):
-                def patched_sanm_forward(x, mask=None, mask_shfit_chunk=None, mask_att_chunk_encoder=None):
-                    q_h, k_h, v_h, v = att.forward_qkv(x)
-                    # fsmn memory without masking
-                    fsmn = v.transpose(1, 2)
-                    fsmn = att.pad_fn(fsmn)
-                    fsmn = att.fsmn_block(fsmn)
-                    fsmn = fsmn.transpose(1, 2)
-                    fsmn_memory = fsmn + v
-                    q_h = q_h * att.d_k ** (-0.5)
-                    scores = torch.matmul(q_h, k_h.transpose(-2, -1))
-                    attn_weights = torch.softmax(scores, dim=-1)
-                    out = torch.matmul(attn_weights, v_h)
-                    n_batch = out.size(0)
-                    out = out.transpose(1, 2).contiguous().view(n_batch, -1, att.h * att.d_k)
-                    return att.linear_out(out) + fsmn_memory
+        # Patch adaptor transformer attention layers similarly.
+        def _adaptor_forward_no_mask(self, query, key, value, mask=None):
+            return self._orig_forward(query, key, value, mask=None)
 
-                return patched_sanm_forward
-
-            attn.forward = make_sanm_forward(attn)
-
-        # Patch adaptor transformer attention layers to drop the (all-ones) attention mask.
         if getattr(adaptor, "blocks", None) is not None:
             for block in adaptor.blocks:
                 attn = block.self_attn
                 attn._orig_forward = attn.forward
-
-                def make_adaptor_forward(att):
-                    def patched_adaptor_forward(query, key, value, mask=None):
-                        q, k, v = att.forward_qkv(query, key, value)
-                        scores = torch.matmul(q, k.transpose(-2, -1)) / (att.d_k**0.5)
-                        attn_weights = torch.softmax(scores, dim=-1)
-                        x = torch.matmul(attn_weights, v)
-                        n_batch = x.size(0)
-                        x = x.transpose(1, 2).contiguous().view(n_batch, -1, att.h * att.d_k)
-                        return att.linear_out(x)
-
-                    return patched_adaptor_forward
-
-                attn.forward = make_adaptor_forward(attn)
+                attn.forward = types.MethodType(_adaptor_forward_no_mask, attn)
 
         encoder_wrap._orig_forward = encoder_wrap.forward
 
         def patched_encoder_forward(input_features):
-            # input_features: (batch, num_frames, feature_size)
-            speech_lengths = torch.tensor([input_features.shape[1]] * input_features.shape[0], dtype=torch.int32)
+            speech_lengths = torch.tensor(
+                [input_features.shape[1]] * input_features.shape[0], dtype=torch.int32
+            )
             encoder_out, encoder_out_lens = sense_voice(input_features, speech_lengths)
             adaptor_out, _ = adaptor(encoder_out, encoder_out_lens)
             return BaseModelOutput(last_hidden_state=adaptor_out)
