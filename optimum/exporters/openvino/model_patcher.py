@@ -10565,7 +10565,7 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
         audio_token_id = getattr(model.config, "audio_token_id", 0)
 
         # Force eager attention for stable OpenVINO tracing.
-        llm.config._attn_implementation = "eager"
+        llm.set_attn_implementation("eager")
 
         model._orig_forward = model.forward
 
