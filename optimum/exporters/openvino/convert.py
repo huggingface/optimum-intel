@@ -97,13 +97,6 @@ if TYPE_CHECKING:
     from optimum.intel.openvino.configuration import OVConfig
 
 
-_VLM_LANGUAGE_MODEL_TASKS = ("image-text-to-text", "text-to-audio", "automatic-speech-recognition")
-
-
-def _is_vlm_language_model(task: str, model_name: str) -> bool:
-    return model_name == "language_model" and any(t in task for t in _VLM_LANGUAGE_MODEL_TASKS)
-
-
 def _set_runtime_options(
     models_and_export_configs: Dict[
         str,
@@ -119,13 +112,13 @@ def _set_runtime_options(
             sub_export_config.runtime_options = {}
         if (
             "text-generation" in task
-            or _is_vlm_language_model(task, model_name)
+            or ("image-text-to-text" in task and model_name == "language_model")
             or getattr(sub_export_config, "stateful", False)
         ):
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
         if not quantized_model and (
             "text-generation" in task
-            or _is_vlm_language_model(task, model_name)
+            or ("image-text-to-text" in task and model_name == "language_model")
             or getattr(sub_export_config, "stateful", False)
         ):
             sub_export_config.runtime_options["KV_CACHE_PRECISION"] = "f16"

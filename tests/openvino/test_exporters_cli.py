@@ -910,11 +910,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
 
     def _load_exported_ov_model(self, model_type: str, task: str, tmpdir: str, model_kwargs: Dict):
-        # qwen3_omni_moe spans multiple tasks but always loads via OVModelForVisualCausalLM.
+        # qwen3_omni_moe spans multiple tasks but always loads via OVModelForMultimodalLM,
+        # the dedicated omni-modal wrapper (talker/audio_encoder/code2wav) for this architecture.
         if model_type == "qwen3_omni_moe":
-            from optimum.intel.openvino import OVModelForVisualCausalLM
+            from optimum.intel.openvino import OVModelForMultimodalLM
 
-            return OVModelForVisualCausalLM.from_pretrained(tmpdir, **model_kwargs)
+            return OVModelForMultimodalLM.from_pretrained(tmpdir, **model_kwargs)
 
         # VLM Eagle3 exports a single causal LM (not a multi-component VLM)
         # so it must be loaded with OVModelForCausalLM rather than OVModelForVisualCausalLM.

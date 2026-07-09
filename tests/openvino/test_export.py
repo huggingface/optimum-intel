@@ -41,6 +41,7 @@ from optimum.intel import (
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
+    OVModelForMultimodalLM,
     OVModelForPix2Struct,
     OVModelForQuestionAnswering,
     OVModelForSeq2SeqLM,
@@ -145,8 +146,7 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "5.0"):
         SUPPORTED_ARCHITECTURES.update({"lfm2_moe": OVModelForCausalLM})
         SUPPORTED_ARCHITECTURES.update({"gemma3n": OVModelForVisualCausalLM})
-        # Qwen3-Omni-MoE requires Transformers 5.0+ (fused-experts / router API).
-        SUPPORTED_ARCHITECTURES.update({"qwen3_omni_moe": OVModelForVisualCausalLM})
+        SUPPORTED_ARCHITECTURES.update({"qwen3_omni_moe": OVModelForMultimodalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},

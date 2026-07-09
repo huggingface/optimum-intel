@@ -415,7 +415,9 @@ def main_export(
                 )
             loading_kwargs["config"] = _ensure_qwen3_omni_rope_scaling(config)
 
-        if original_task == "auto" and model_type in {"phi4mm", "phi4_multimodal", "qwen3_omni_moe"}:
+        if original_task == "auto" and model_type in {"phi4mm", "phi4_multimodal"}:
+            task = "image-text-to-text"
+        elif model_type == "qwen3_omni_moe":
             task = "image-text-to-text"
 
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
