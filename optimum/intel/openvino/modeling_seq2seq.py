@@ -1337,6 +1337,7 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
         """
         For qwen3_asr: skip prepending decoder_start_token_id since the full prompt
         (including chat template tokens) is already provided as decoder_input_ids.
+        This matches the PyTorch model behavior where input_ids is used as-is.
         """
         if getattr(self.config, "model_type", None) == "qwen3_asr":
             if model_kwargs is not None and "decoder_input_ids" in model_kwargs:
