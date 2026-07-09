@@ -1348,6 +1348,7 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
                 decoder_input_ids = None
 
             if decoder_input_ids is None:
+                # Fallback to default behavior if no decoder_input_ids provided
                 return super()._prepare_decoder_input_ids_for_generation(
                     batch_size, model_input_name, model_kwargs, decoder_start_token_id, device
                 )
