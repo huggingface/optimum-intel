@@ -1352,6 +1352,7 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
                 return super()._prepare_decoder_input_ids_for_generation(
                     batch_size, model_input_name, model_kwargs, decoder_start_token_id, device
                 )
+            # Return decoder_input_ids as-is without prepending decoder_start_token_id
             return decoder_input_ids, model_kwargs
 
         return super()._prepare_decoder_input_ids_for_generation(
