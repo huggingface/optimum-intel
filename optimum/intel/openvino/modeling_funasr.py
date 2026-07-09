@@ -53,9 +53,6 @@ class _FunASRForSpeechSeq2Seq(torch.nn.Module):
     `audio_token_id` placeholder marker) so it flows through the standard speech-seq2seq export path.
     """
 
-    # Audio placeholder token id used by FunASR (zero-id tokens are inserted as audio slots).
-    AUDIO_TOKEN_ID = 0
-
     def __init__(self, funasr_model: torch.nn.Module, config: "PretrainedConfig"):
         super().__init__()
         self.audio_encoder = funasr_model.audio_encoder
@@ -111,7 +108,7 @@ class _FunASRForSpeechSeq2Seq(torch.nn.Module):
         config.model_type = "fun_asr"
         config.export_model_type = "fun_asr"
         config.is_encoder_decoder = True
-        config.audio_token_id = cls.AUDIO_TOKEN_ID
+        config.audio_token_id = 0
         config.decoder_start_token_id = 0
         # text/decoder config (Qwen3)
         config.vocab_size = llm_config.vocab_size
