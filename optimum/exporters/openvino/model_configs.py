@@ -277,6 +277,14 @@ def init_model_configs():
         "AutoModelForCausalLM",
     )
 
+    # since transformers v4.52, model can be loaded using default AutoModelForImageTextToText
+    # https://github.com/huggingface/transformers/blob/v4.52.0/src/transformers/models/auto/modeling_auto.py#L899
+    if is_transformers_version("<", "4.52"):
+        TasksManager._CUSTOM_CLASSES[("pt", "llava_next_video", "image-text-to-text")] = (
+            "transformers",
+            "AutoModelForVision2Seq",
+        )
+
     # Qwen3-ASR is loaded via trust_remote_code; register custom classes for task lookup.
     if is_transformers_version("==", "4.57.6"):
         TasksManager._CUSTOM_CLASSES[("pt", "qwen3_asr", "automatic-speech-recognition")] = (

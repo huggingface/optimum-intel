@@ -23,23 +23,29 @@ import torch
 import transformers
 from transformers import PreTrainedModel
 from transformers.cache_utils import DynamicCache, EncoderDecoderCache
-from transformers.masking_utils import (
-    ALL_MASK_ATTENTION_FUNCTIONS,
-    _ignore_causal_mask_sdpa,
-    and_masks,
-    causal_mask_function,
-    eager_mask,
-    find_packed_sequence_indices,
-    padding_mask_function,
-    prepare_padding_mask,
-    sdpa_mask,
-)
 from transformers.modeling_outputs import BaseModelOutput
 
 from optimum.exporters.base import ExporterConfig
-from optimum.exporters.openvino._traceable_decorator import traceable_check_model_inputs
 from optimum.intel.utils.import_utils import is_transformers_version
 
+
+if is_transformers_version(">=", "4.53"):
+    from transformers.masking_utils import (
+        ALL_MASK_ATTENTION_FUNCTIONS,
+        _ignore_causal_mask_sdpa,
+        and_masks,
+        causal_mask_function,
+        eager_mask,
+        padding_mask_function,
+        prepare_padding_mask,
+        sdpa_mask,
+    )
+
+if is_transformers_version(">=", "4.53.1"):
+    from transformers.masking_utils import find_packed_sequence_indices
+
+if is_transformers_version(">=", "4.54"):
+    from optimum.exporters.openvino._traceable_decorator import traceable_check_model_inputs
 
 if is_transformers_version(">=", "4.56"):
     import transformers.masking_utils
@@ -67,7 +73,7 @@ def override_arguments(args, kwargs, forward_signature, model_kwargs: dict[str, 
 
 
 def preprocess_encoder_outputs(encoder_outputs):
-    if isinstance(encoder_outputs, (list, tuple)):
+    if is_transformers_version(">=", "4.54") and isinstance(encoder_outputs, (list, tuple)):
         encoder_outputs = BaseModelOutput(*encoder_outputs)
 
     return encoder_outputs
@@ -139,6 +145,12 @@ def find_packed_sequence_indices_patched(position_ids: torch.Tensor) -> torch.Te
     return torch.zeros_like(position_ids)
 
 
+if is_transformers_version(">=", "4.53"):
+    _prepare_padding_mask_slice = "_slice" in inspect.signature(prepare_padding_mask).parameters
+else:
+    _prepare_padding_mask_slice = False
+
+
 # Custom vectorized implementation of sdpa_mask without using vmap
 def _orig_sdpa_mask_without_vmap(
     batch_size: int,
@@ -156,7 +168,7 @@ def _orig_sdpa_mask_without_vmap(
 
     q_length = cache_position.shape[0]
     # Potentially pad the 2D mask, and slice it correctly
-    if "_slice" in inspect.signature(prepare_padding_mask).parameters:
+    if _prepare_padding_mask_slice:
         padding_mask = prepare_padding_mask(attention_mask, kv_length, kv_offset, _slice=False)
     else:
         padding_mask = prepare_padding_mask(attention_mask, kv_length, kv_offset)
@@ -264,7 +276,7 @@ class ModelPatcher:
         self.orig_forward_name = "forward" if hasattr(self._model, "forward") else "call"
         self.orig_forward = getattr(self._model, self.orig_forward_name)
 
-        if hasattr(self.orig_forward, "__wrapped__"):
+        if is_transformers_version(">=", "4.54") and hasattr(self.orig_forward, "__wrapped__"):
             # the original check_model_inputs has some failing cases that we fix in traceable_check_model_inputs
             # we fix those issues in a PR in transformers https://github.com/huggingface/transformers/pull/40811
             # issues are: support for positional args (use_cache for instance) and fix for _CAN_RECORD_REGISTRY
@@ -369,14 +381,16 @@ class ModelPatcher:
 
         # This is a workaround for mask generation in transformers >= 4.53.
         # The masking process uses vmap which is not traceable by TorchScript.
-        ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask_without_vmap)
-        ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
+        if is_transformers_version(">=", "4.53"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask_without_vmap)
+            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
 
         # This is a workaround for the find_packed_sequence_indices function in transformers which
         # should only return a tensor of zeros with the same shape as position_ids indicating no packed sequence indices.
         # The function uses torch.diff which is not traceable by TorchScript.
-        self.original_find_packed_sequence_indices = find_packed_sequence_indices
-        transformers.masking_utils.find_packed_sequence_indices = find_packed_sequence_indices_patched
+        if is_transformers_version(">=", "4.53.1"):
+            self.original_find_packed_sequence_indices = find_packed_sequence_indices
+            transformers.masking_utils.find_packed_sequence_indices = find_packed_sequence_indices_patched
 
         # Starting from transformers 4.56.0, DynamicCache uses DynamicLayer which has an update method
         # that uses torch.cat to concatenate an empty tensor with the key/value states during the first call.
@@ -389,10 +403,12 @@ class ModelPatcher:
         self.restore_ops()
         setattr(self._model, self.orig_forward_name, self.orig_forward)
 
-        ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
-        ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
+        if is_transformers_version(">=", "4.53"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
+            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
 
-        transformers.masking_utils.find_packed_sequence_indices = self.original_find_packed_sequence_indices
+        if is_transformers_version(">=", "4.53.1"):
+            transformers.masking_utils.find_packed_sequence_indices = self.original_find_packed_sequence_indices
 
         if is_transformers_version(">=", "4.56"):
             DynamicLayer.update = self.original_dynamic_layer_update
