@@ -525,7 +525,9 @@ def main_export(
             if library_name == "transformers":
                 has_remote_code = hasattr(config, "auto_map")
                 if has_remote_code and trust_remote_code and task == "image-text-to-text":
-                    task_model_loading = "text-generation"
+                    auto_map = getattr(config, "auto_map", {})
+                    if "AutoModelForImageTextToText" not in auto_map:
+                        task_model_loading = "text-generation"
 
             model = TasksManager.get_model_from_task(
                 task_model_loading,
