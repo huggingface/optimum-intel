@@ -4272,6 +4272,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM, Qwen3VLModel, Qwen3VLVisio
         return final_result
 
     def generate(self, *args, **kwargs):
+        # Clear cached rope delta from previous generations
         self.rope_deltas = None
 
         return super().generate(*args, **kwargs)

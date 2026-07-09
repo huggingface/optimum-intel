@@ -11002,74 +11002,28 @@ class KokoroModelPatcher(ModelPatcher):
 def qwen3_omni_moe_talker_sparse_forward_patched(self, hidden_states: torch.Tensor) -> torch.Tensor:
     batch_size, sequence_length, hidden_dim = hidden_states.shape
     hidden_states = hidden_states.view(-1, hidden_dim)
-    gate_output = self.gate(hidden_states)
+    _, routing_weights, selected_experts = self.gate(hidden_states)
 
-    # In Transformers 5.0, gate returns (router_logits, router_scores, router_indices)
-    # and experts are parameter tensors accessed via self.experts.gate_up_proj[expert_idx].
-    # In Transformers 4.x, gate returns just router_logits and experts are individual modules
-    # accessed via self.experts[expert_idx].
-    if isinstance(gate_output, tuple):
-        router_logits, routing_weights, selected_experts = gate_output
-        # Transformers 5.0: manual loop using expert parameter tensors (avoid .nonzero())
-        final_hidden_states = torch.zeros_like(hidden_states)
-        expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.gate.num_experts)
-        expert_mask = expert_mask.permute(2, 1, 0)
+    final_hidden_states = torch.zeros_like(hidden_states)
+    expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.gate.num_experts)
+    expert_mask = expert_mask.permute(2, 1, 0)
 
-        # Static expert processing for torch.jit.trace compatibility: process all tokens through
-        # every expert, then zero out non-selected tokens via the routing weights.
-        for expert_idx in range(self.gate.num_experts):
-            gate, up = torch.nn.functional.linear(hidden_states, self.experts.gate_up_proj[expert_idx]).chunk(
-                2, dim=-1
-            )
-            expert_output = self.experts.act_fn(gate) * up
-            expert_output = torch.nn.functional.linear(expert_output, self.experts.down_proj[expert_idx])
+    # Static expert processing for torch.jit.trace compatibility: process all tokens through
+    # every expert, then zero out non-selected tokens via the routing weights.
+    for expert_idx in range(self.gate.num_experts):
+        gate, up = torch.nn.functional.linear(hidden_states, self.experts.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+        expert_output = self.experts.act_fn(gate) * up
+        expert_output = torch.nn.functional.linear(expert_output, self.experts.down_proj[expert_idx])
 
-            expert_mask_for_expert = expert_mask[expert_idx].float()  # (top_k, num_tokens)
-            weighted_mask = expert_mask_for_expert * routing_weights.t()  # (top_k, num_tokens)
-            token_weights = weighted_mask.sum(dim=0)  # (num_tokens,) - sum over top_k positions
+        expert_mask_for_expert = expert_mask[expert_idx].float()  # (top_k, num_tokens)
+        weighted_mask = expert_mask_for_expert * routing_weights.t()  # (top_k, num_tokens)
+        token_weights = weighted_mask.sum(dim=0)  # (num_tokens,) - sum over top_k positions
 
-            weighted_output = expert_output * token_weights.unsqueeze(-1)
-            final_hidden_states = final_hidden_states + weighted_output
-    else:
-        router_logits = gate_output
-        num_experts = self.num_experts
-        top_k = self.top_k
-        norm_topk_prob = self.norm_topk_prob
-        routing_weights = torch.nn.functional.softmax(router_logits, dim=1, dtype=torch.float)
-        routing_weights, selected_experts = torch.topk(routing_weights, top_k, dim=-1)
-        if norm_topk_prob:
-            routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        routing_weights = routing_weights.to(hidden_states.dtype)
-
-        final_hidden_states = torch.zeros(
-            (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
-        )
-
-        expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=num_experts).permute(2, 1, 0)
-
-        # Static expert processing for torch.jit.trace compatibility (Transformers 4.x)
-        for expert_idx in range(num_experts):
-            expert_layer = self.experts[expert_idx]
-
-            gate, up = expert_layer.gate_proj(hidden_states), expert_layer.up_proj(hidden_states)
-            expert_output = expert_layer.act_fn(gate) * up
-            expert_output = expert_layer.down_proj(expert_output)
-
-            expert_mask_for_expert = expert_mask[expert_idx].squeeze(0).float()  # (top_k, num_tokens)
-            weighted_mask = expert_mask_for_expert * routing_weights.t()  # (top_k, num_tokens)
-            token_weights = weighted_mask.sum(dim=0)  # (num_tokens,)
-
-            weighted_output = expert_output * token_weights.unsqueeze(-1)
-
-            final_hidden_states = final_hidden_states + weighted_output
+        weighted_output = expert_output * token_weights.unsqueeze(-1)
+        final_hidden_states = final_hidden_states + weighted_output
 
     shared_expert_output = self.shared_expert(hidden_states)
     shared_expert_output = torch.nn.functional.sigmoid(self.shared_expert_gate(hidden_states)) * shared_expert_output
     final_hidden_states = final_hidden_states + shared_expert_output
 
-    final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
-    # Transformers 5.0 only returns hidden_states, not (hidden_states, router_logits)
-    if isinstance(gate_output, tuple):
-        return final_hidden_states
-    else:
-        return final_hidden_states, router_logits
+    return final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
