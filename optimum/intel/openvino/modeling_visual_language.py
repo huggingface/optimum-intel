@@ -6,7 +6,8 @@ import inspect
 import logging
 import math
 import os
-import sys  # Used for dynamic module loading (sys.modules) and path manipulation (sys.path)
+import shutil
+import sys
 import threading
 import types
 import warnings
@@ -614,7 +615,6 @@ class OVCode2Wav(OVModelPart):
         self._ensure_infer_pool(min(len(starts), 4))
         pool = self._async_infer_requests or [self.request]
 
-        # Dispatch chunks round-robin onto the pool; each request does start_async then wait.
         segments: List[np.ndarray] = []
         for i, start in enumerate(starts):
             end = min(start + chunk_size, total_t)
@@ -892,7 +892,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             model_save_dir = Path(model_id)
             file_names = {k: os.path.join(model_id, model_file_names[k]) for k in model_file_names}
         else:
-            # Core components required for all VLM models (must exist or raise error)
             required_keys = {
                 "lm_model",
                 "lm_model_bin",
@@ -918,7 +917,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                     file_names[name] = model_cache_path
                 except EntryNotFoundError:
                     if name in required_keys:
-                        raise  # Required component missing - model is incomplete
+                        raise
                     logger.info(f"Could not download '{file_name}' from Hub, skipping.")
             model_save_dir = Path(file_names["lm_model"]).parent
         if not compile_only:
@@ -4375,20 +4374,17 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
     def _save_pretrained(self, save_directory):
         super()._save_pretrained(save_directory)
 
-        try:
-            import shutil
-            from pathlib import Path
-
-            dest_preprocessor = Path(save_directory) / "preprocessor_config.json"
-            if not dest_preprocessor.exists():
-                source_model_path = getattr(self.config, "_name_or_path", None)
-                if source_model_path:
-                    source_preprocessor = Path(source_model_path) / "preprocessor_config.json"
-                    if source_preprocessor.exists():
+        dest_preprocessor = Path(save_directory) / "preprocessor_config.json"
+        if not dest_preprocessor.exists():
+            source_model_path = getattr(self.config, "_name_or_path", None)
+            if source_model_path:
+                source_preprocessor = Path(source_model_path) / "preprocessor_config.json"
+                if source_preprocessor.exists():
+                    try:
                         shutil.copy2(source_preprocessor, dest_preprocessor)
                         logger.info("Copied preprocessor_config.json from source model")
-        except Exception as ex:
-            logger.warning(f"Failed to copy preprocessor_config.json: {ex}")
+                    except OSError as ex:
+                        logger.warning(f"Failed to copy preprocessor_config.json: {ex}")
 
     def fast_pos_embed_interpolate(self, grid_thw):
         thinker_config = getattr(self.config, "thinker_config", self.config)

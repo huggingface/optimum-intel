@@ -1204,7 +1204,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
         return (audio_data, sampling_rate)
 
-    @unittest.skipUnless(is_transformers_version(">=", "5.0"), "qwen3_omni_moe requires transformers >= 5.0")
+    @pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="qwen3_omni_moe requires transformers >= 5.0")
     def test_qwen3_omni_moe_video_not_supported(self):
         model_id = MODEL_NAMES["qwen3_omni_moe"]
         model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
@@ -1215,7 +1215,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         del model
         gc.collect()
 
-    @unittest.skipUnless(is_transformers_version(">=", "5.0"), "qwen3_omni_moe requires transformers >= 5.0")
+    @pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="qwen3_omni_moe requires transformers >= 5.0")
     def test_qwen3_omni_moe_sequential_generation(self):
         model_id = MODEL_NAMES["qwen3_omni_moe"]
         model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
@@ -1238,7 +1238,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         gc.collect()
 
     @parameterized.expand(["text-to-audio", "automatic-speech-recognition"])
-    @unittest.skipUnless(is_transformers_version(">=", "5.0"), "qwen3_omni_moe requires transformers >= 5.0")
+    @pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="qwen3_omni_moe requires transformers >= 5.0")
     def test_qwen3_omni_moe_any2any_task_registration(self, task):
         model_id = MODEL_NAMES["qwen3_omni_moe"]
         model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, task=task, device=OPENVINO_DEVICE)
@@ -1252,7 +1252,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         del model
         gc.collect()
 
-    @unittest.skipUnless(is_transformers_version(">=", "5.0"), "qwen3_omni_moe requires transformers >= 5.0")
+    @pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="qwen3_omni_moe requires transformers >= 5.0")
     def test_qwen3_omni_moe_multi_turn_conversation(self):
         """Test multi-turn conversation with mixed modalities across turns."""
         model_id = MODEL_NAMES["qwen3_omni_moe"]
@@ -1323,16 +1323,18 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             self.assertIsInstance(ov_restored_model, type(ov_model))
 
 
-def _generate_random_audio_data():
-    np.random.seed(10)
-    sampling_rate = 16000
-    t = np.linspace(0, 5.0, int(5.0 * sampling_rate), endpoint=False)
-    audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
-    return (audio_data, sampling_rate)
-
-
-@unittest.skipUnless(is_transformers_version(">=", "5.0"), "OVModelForMultimodalLM requires transformers >= 5.0")
+@pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="OVModelForMultimodalLM requires transformers >= 5.0")
 class OVModelForMultimodalLMIntegrationTest(unittest.TestCase):
+    def _generate_random_audio_data(self):
+        np.random.seed(10)
+        sampling_rate = 16000
+        t = np.linspace(0, 5.0, int(5.0 * sampling_rate), endpoint=False)
+        audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
+        return (audio_data, sampling_rate)
+
+    def _get_preprocessors(self, model_id):
+        return {"processor": AutoProcessor.from_pretrained(model_id), "tokenizer": None, "config": None}
+
     def test_from_pretrained_export(self):
         model_id = MODEL_NAMES["qwen3_omni_moe"]
         model = OVModelForMultimodalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
@@ -1360,7 +1362,7 @@ class OVModelForMultimodalLMIntegrationTest(unittest.TestCase):
     def test_text_only_generation(self):
         model_id = MODEL_NAMES["qwen3_omni_moe"]
         model = OVModelForMultimodalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
-        preprocessors = {"processor": AutoProcessor.from_pretrained(model_id), "tokenizer": None, "config": None}
+        preprocessors = self._get_preprocessors(model_id)
         inputs = model.preprocess_inputs(text="Hello", **preprocessors)
         output = model.generate(**inputs, max_new_tokens=5)
         self.assertIsInstance(output, torch.Tensor)
@@ -1371,8 +1373,8 @@ class OVModelForMultimodalLMIntegrationTest(unittest.TestCase):
     def test_audio_input_generation(self):
         model_id = MODEL_NAMES["qwen3_omni_moe"]
         model = OVModelForMultimodalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
-        preprocessors = {"processor": AutoProcessor.from_pretrained(model_id), "tokenizer": None, "config": None}
-        audio_data = _generate_random_audio_data()
+        preprocessors = self._get_preprocessors(model_id)
+        audio_data = self._generate_random_audio_data()
         inputs = model.preprocess_inputs(text="Translate", audio=[audio_data], **preprocessors)
         output = model.generate(**inputs, max_new_tokens=5)
         self.assertIsInstance(output, torch.Tensor)
@@ -1382,7 +1384,7 @@ class OVModelForMultimodalLMIntegrationTest(unittest.TestCase):
     def test_audio_output_generation(self):
         model_id = MODEL_NAMES["qwen3_omni_moe"]
         model = OVModelForMultimodalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
-        preprocessors = {"processor": AutoProcessor.from_pretrained(model_id), "tokenizer": None, "config": None}
+        preprocessors = self._get_preprocessors(model_id)
         inputs = model.preprocess_inputs(text="Say hello", **preprocessors)
         text_result, audio_result = model.generate(
             **inputs, max_new_tokens=10, return_audio=True, talker_max_new_tokens=20
@@ -1424,7 +1426,7 @@ class OVModelForMultimodalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES["qwen3_omni_moe"]
         model = OVModelForMultimodalLM.from_pretrained(model_id, export=True, task=task, device=OPENVINO_DEVICE)
         self.assertIsNotNone(model.language_model)
-        preprocessors = {"processor": AutoProcessor.from_pretrained(model_id), "tokenizer": None, "config": None}
+        preprocessors = self._get_preprocessors(model_id)
         inputs = model.preprocess_inputs(text="Hello", **preprocessors)
         output = model.generate(**inputs, max_new_tokens=5)
         self.assertIsInstance(output, torch.Tensor)

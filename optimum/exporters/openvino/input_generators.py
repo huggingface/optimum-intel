@@ -1816,8 +1816,8 @@ class DummyQwen3OmniMoeAudioInputGenerator(DummyInputGenerator):
         self.num_mels = getattr(audio_config, "num_mel_bins", 128)
         self.time_in = 200  # Mel spectrogram frames (~12.5s audio)
         self.aftercnn_time = self.time_in // 8  # After 3 stride-2 conv layers
-        n_window = getattr(audio_config, "n_window")
-        n_window_infer = getattr(audio_config, "n_window_infer")
+        n_window = audio_config.n_window
+        n_window_infer = audio_config.n_window_infer
         window_aftercnn = self.aftercnn_time * (n_window_infer // (n_window * 2))
         num_full = self.aftercnn_time // window_aftercnn
         single_batch_chunks = [window_aftercnn] * num_full
@@ -1928,8 +1928,7 @@ class DummyQwen3OmniMoeVisionInputGenerator(DummyQwen3VLVisionEmbedInputGenerato
         seq_len = self.batch_size * grid_h * grid_w
 
         if input_name == "hidden_states":
-            # hidden_states are raw patch data (patch_channels), not embeddings
-            # The vision model does patch embedding internally
+            # Raw patch data (patch_channels), not embeddings: the vision model embeds patches internally.
             return self.random_float_tensor([seq_len, self.patch_channels], framework=framework, dtype=float_dtype)
 
         if input_name == "pos_embeds":

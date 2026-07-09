@@ -169,7 +169,12 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3ASRModelPatcher,
     Qwen3MoeModelPatcher,
     Qwen3NextModelPatcher,
+    Qwen3OmniMoeAudioEncoderPatcher,
+    Qwen3OmniMoeCode2WavPatcher,
+    Qwen3OmniMoeCodePredictorPatcher,
+    Qwen3OmniMoeLanguageModelPatcher,
     Qwen3OmniMoeTalkerLanguageModelPatcher,
+    Qwen3OmniMoeVisionMergerPatcher,
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
     QwenModelPatcher,
@@ -335,19 +340,20 @@ def init_model_configs():
 
     # Qwen3OmniMoe is registered in transformers only under MODEL_FOR_TEXT_TO_WAVEFORM, so ASR and
     # image-text-to-text routings cannot be resolved by the stock AutoModel mappings and need
-    # explicit custom classes.
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen3_omni_moe", "automatic-speech-recognition")] = (
-        "transformers",
-        "Qwen3OmniMoeForConditionalGeneration",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen3_omni_moe", "image-text-to-text")] = (
-        "transformers",
-        "Qwen3OmniMoeForConditionalGeneration",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen3_omni_moe", "text-to-audio")] = (
-        "transformers",
-        "Qwen3OmniMoeForConditionalGeneration",
-    )
+    # explicit custom classes. Qwen3OmniMoeForConditionalGeneration was added in transformers 5.0.
+    if is_transformers_version(">=", "5.0"):
+        TasksManager._CUSTOM_CLASSES[("pt", "qwen3_omni_moe", "automatic-speech-recognition")] = (
+            "transformers",
+            "Qwen3OmniMoeForConditionalGeneration",
+        )
+        TasksManager._CUSTOM_CLASSES[("pt", "qwen3_omni_moe", "image-text-to-text")] = (
+            "transformers",
+            "Qwen3OmniMoeForConditionalGeneration",
+        )
+        TasksManager._CUSTOM_CLASSES[("pt", "qwen3_omni_moe", "text-to-audio")] = (
+            "transformers",
+            "Qwen3OmniMoeForConditionalGeneration",
+        )
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
@@ -3454,16 +3460,16 @@ class Qwen3OmniMoeConfigBehavior(str, enum.Enum):
     are relative to that root.
     """
 
-    LANGUAGE = "language"  # thinker.model (+ lm_head) — the Thinker text decoder
+    LANGUAGE = "language"  # thinker.model (+ lm_head), the Thinker text decoder
     TEXT_EMBEDDINGS = "text_embeddings"  # thinker.model.embed_tokens
-    VISION_EMBEDDINGS = "vision_embeddings"  # thinker.visual — the vision encoder
+    VISION_EMBEDDINGS = "vision_embeddings"  # thinker.visual, the vision encoder
     VISION_EMBEDDINGS_POS = "vision_embeddings_pos"  # thinker.visual.pos_embed
     AUDIO_ENCODER = "audio_encoder"  # thinker.audio_tower
-    TALKER = "talker"  # talker.model (+ codec_head) — the Talker text decoder
+    TALKER = "talker"  # talker.model (+ codec_head), the Talker text decoder
     TALKER_TEXT_EMBEDDINGS = "talker_text_embeddings"  # talker.model.embed_tokens
     TALKER_PROJECTIONS = "talker_projections"  # talker.text_projection + talker.hidden_projection
     CODE_PREDICTOR = "code_predictor"  # talker.code_predictor
-    CODE2WAV = "code2wav"  # code2wav — the code-to-waveform vocoder
+    CODE2WAV = "code2wav"  # code2wav, the code-to-waveform vocoder
 
 
 def _append_hidden_states_output(
@@ -3635,7 +3641,7 @@ class Qwen3OmniMoeOpenVINOConfig(BaseVLMOpenVINOConfig):
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3OmniMoeProjectionInputGenerator,)
 
     @staticmethod
-    def get_model_for_behavior(model, behavior: Union[str, "Qwen3OmniMoeConfigBehavior"]):
+    def get_model_for_behavior(model, behavior: Union[str, Qwen3OmniMoeConfigBehavior]):
         if isinstance(behavior, str) and not isinstance(behavior, Qwen3OmniMoeConfigBehavior):
             behavior = Qwen3OmniMoeConfigBehavior(behavior)
 
@@ -3687,7 +3693,7 @@ class Qwen3OmniMoeOpenVINOConfig(BaseVLMOpenVINOConfig):
 
         raise ValueError(f"Unsupported Qwen3-Omni-MoE behavior: {behavior}")
 
-    def with_behavior(self, behavior: Union[str, "Qwen3OmniMoeConfigBehavior"]):
+    def with_behavior(self, behavior: Union[str, Qwen3OmniMoeConfigBehavior]):
         if isinstance(behavior, str) and not isinstance(behavior, Qwen3OmniMoeConfigBehavior):
             behavior = Qwen3OmniMoeConfigBehavior(behavior)
 
@@ -3698,8 +3704,6 @@ class Qwen3OmniMoeOpenVINOConfig(BaseVLMOpenVINOConfig):
             return get_vlm_text_embeddings_config("qwen3_omni_moe_text", text_config, self.int_dtype, self.float_dtype)
 
         if behavior == Qwen3OmniMoeConfigBehavior.LANGUAGE:
-            from .model_patcher import Qwen3OmniMoeLanguageModelPatcher
-
             text_config = getattr(thinker_config, "text_config", thinker_config)
             internal_config = get_vlm_internal_text_generation_config(
                 "qwen3_omni_moe_text", text_config, self.int_dtype, self.float_dtype
@@ -3724,8 +3728,6 @@ class Qwen3OmniMoeOpenVINOConfig(BaseVLMOpenVINOConfig):
             )
 
         if behavior == Qwen3OmniMoeConfigBehavior.TALKER:
-            from .model_patcher import Qwen3OmniMoeTalkerLanguageModelPatcher
-
             talker_config = getattr(self._orig_config, "talker_config", self._orig_config)
             talker_text_config = getattr(talker_config, "text_config", talker_config)
             internal_config = get_vlm_internal_text_generation_config(
@@ -3739,8 +3741,6 @@ class Qwen3OmniMoeOpenVINOConfig(BaseVLMOpenVINOConfig):
             return config
 
         if behavior == Qwen3OmniMoeConfigBehavior.CODE_PREDICTOR:
-            from .model_patcher import Qwen3OmniMoeCodePredictorPatcher
-
             talker_config = getattr(self._orig_config, "talker_config", self._orig_config)
             cp_config = getattr(talker_config, "code_predictor_config", talker_config)
             internal_config = get_vlm_internal_text_generation_config(
@@ -3765,18 +3765,12 @@ class Qwen3OmniMoeOpenVINOConfig(BaseVLMOpenVINOConfig):
     def patch_model_for_export(self, model: Union["PreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior == Qwen3OmniMoeConfigBehavior.VISION_EMBEDDINGS:
-            from .model_patcher import Qwen3OmniMoeVisionMergerPatcher
-
             return Qwen3OmniMoeVisionMergerPatcher(self, model, model_kwargs)
         if self._behavior == Qwen3OmniMoeConfigBehavior.AUDIO_ENCODER:
-            from .model_patcher import Qwen3OmniMoeAudioEncoderPatcher
-
             return Qwen3OmniMoeAudioEncoderPatcher(self, model, model_kwargs)
         if self._behavior == Qwen3OmniMoeConfigBehavior.VISION_EMBEDDINGS_POS:
             return InputEmbeddingPatcher(self, model, model_kwargs=model_kwargs)
         if self._behavior == Qwen3OmniMoeConfigBehavior.CODE2WAV:
-            from .model_patcher import Qwen3OmniMoeCode2WavPatcher
-
             return Qwen3OmniMoeCode2WavPatcher(self, model, model_kwargs)
         if self._behavior == Qwen3OmniMoeConfigBehavior.TALKER_PROJECTIONS:
             return ModelPatcher(self, model, model_kwargs=model_kwargs)

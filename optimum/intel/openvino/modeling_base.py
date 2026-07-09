@@ -1070,7 +1070,6 @@ class OVModelPart(OVModelHostMixin):
         self._model_name = model_name
         self.config = self.parent_model.config
         self._model_dir = Path(model_dir or parent_model.model_save_dir)
-        # Per-part device override for multi-component models (e.g., place audio_encoder on GPU, talker on CPU)
         self._device_override: Optional[str] = None
 
     def compile(self):

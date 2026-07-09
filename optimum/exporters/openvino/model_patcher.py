@@ -4799,8 +4799,8 @@ class Qwen3OmniMoeVisionMergerPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OpenVINOConfig",
-        model: Union["PreTrainedModel"],
-        model_kwargs: Dict[str, Any] = None,
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         model.__orig_forward = model.forward
 
@@ -4841,17 +4841,23 @@ class Qwen3OmniMoeAudioEncoderPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OpenVINOConfig",
-        model: Union["PreTrainedModel"],
-        model_kwargs: Dict[str, Any] = None,
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         model.__orig_forward = model.forward
 
         encoder = model
 
-        # Force eager attention to avoid cu_seqlens dependency (follows Qwen3ASR pattern)
+        # Force eager attention to avoid cu_seqlens dependency (follows Qwen3ASR pattern).
+        # Save the previous value on each config we touch so __exit__ can restore it. Layers may
+        # share the encoder config object, so guard the save to keep the true original value.
+        if not hasattr(encoder.config, "_orig_attn_implementation"):
+            encoder.config._orig_attn_implementation = encoder.config._attn_implementation
         encoder.config._attn_implementation = "eager"
 
         for layer in encoder.layers:
+            if not hasattr(layer.self_attn.config, "_orig_attn_implementation"):
+                layer.self_attn.config._orig_attn_implementation = layer.self_attn.config._attn_implementation
             layer.self_attn.config._attn_implementation = "eager"
 
             attn = layer.self_attn
@@ -4967,6 +4973,10 @@ class Qwen3OmniMoeAudioEncoderPatcher(ModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
 
+        if hasattr(self._model.config, "_orig_attn_implementation"):
+            self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+            del self._model.config._orig_attn_implementation
+
         for layer in self._model.layers:
             if hasattr(layer, "_orig_forward"):
                 layer.forward = layer._orig_forward
@@ -4974,6 +4984,9 @@ class Qwen3OmniMoeAudioEncoderPatcher(ModelPatcher):
             if hasattr(layer.self_attn, "_orig_forward"):
                 layer.self_attn.forward = layer.self_attn._orig_forward
                 del layer.self_attn._orig_forward
+            if hasattr(layer.self_attn.config, "_orig_attn_implementation"):
+                layer.self_attn.config._attn_implementation = layer.self_attn.config._orig_attn_implementation
+                del layer.self_attn.config._orig_attn_implementation
 
 
 class _Qwen3OmniMoeLMPatcherMixin:
@@ -4997,7 +5010,7 @@ class Qwen3OmniMoeLanguageModelPatcher(_Qwen3OmniMoeLMPatcherMixin, OVDecoderMod
     def __init__(
         self,
         config: "OpenVINOConfig",
-        model: Union["PreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         # Transformers 5.0 fuses the routed experts into a single `Qwen3OmniMoeThinkerTextExperts`
@@ -5062,7 +5075,7 @@ class Qwen3OmniMoeTalkerLanguageModelPatcher(_Qwen3OmniMoeLMPatcherMixin, OVDeco
     def __init__(
         self,
         config: "OpenVINOConfig",
-        model: Union["PreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         self._moe_block_cls = Qwen3OmniMoeTalkerTextSparseMoeBlock
@@ -5107,7 +5120,7 @@ class Qwen3OmniMoeCodePredictorPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OpenVINOConfig",
-        model: Union["PreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         code_predictor = model.talker.code_predictor
@@ -5201,7 +5214,7 @@ class Qwen3OmniMoeCode2WavPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OpenVINOConfig",
-        model: Union["PreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(config, model, model_kwargs=model_kwargs or {})
@@ -5221,7 +5234,6 @@ class Qwen3OmniMoeCode2WavPatcher(ModelPatcher):
         # base class. Register them here so the Code2Wav attention layers trace under 5.x.
         ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
         ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
-        return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -11003,25 +11015,20 @@ def qwen3_omni_moe_talker_sparse_forward_patched(self, hidden_states: torch.Tens
         expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.gate.num_experts)
         expert_mask = expert_mask.permute(2, 1, 0)
 
-        # Static expert processing for torch.jit.trace compatibility
-        # Process ALL tokens through each expert - routing weights naturally zero out non-selected tokens
+        # Static expert processing for torch.jit.trace compatibility: process all tokens through
+        # every expert, then zero out non-selected tokens via the routing weights.
         for expert_idx in range(self.gate.num_experts):
-            # Process all tokens through this expert (no dynamic indexing)
             gate, up = torch.nn.functional.linear(hidden_states, self.experts.gate_up_proj[expert_idx]).chunk(
                 2, dim=-1
             )
             expert_output = self.experts.act_fn(gate) * up
             expert_output = torch.nn.functional.linear(expert_output, self.experts.down_proj[expert_idx])
 
-            # Apply routing weights for this expert
             expert_mask_for_expert = expert_mask[expert_idx].float()  # (top_k, num_tokens)
             weighted_mask = expert_mask_for_expert * routing_weights.t()  # (top_k, num_tokens)
             token_weights = weighted_mask.sum(dim=0)  # (num_tokens,) - sum over top_k positions
 
-            # Weight the expert output (zeros for non-selected tokens)
             weighted_output = expert_output * token_weights.unsqueeze(-1)
-
-            # Add to final output
             final_hidden_states = final_hidden_states + weighted_output
     else:
         router_logits = gate_output
