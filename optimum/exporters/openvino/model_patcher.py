@@ -10526,12 +10526,13 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
         # Patch SANM encoder self-attention layers to skip masking during trace.
         # The native mask computation uses `lengths.tolist()` which bakes trace-time values as constants,
         # making the graph incompatible with different sequence lengths at inference time.
-        sanm_layers = list(sense_voice.encoders0) + list(sense_voice.encoders) + list(sense_voice.tp_encoders)
+        self._sanm_layers = list(sense_voice.encoders0) + list(sense_voice.encoders) + list(sense_voice.tp_encoders)
+        self._adaptor_blocks = getattr(adaptor, "blocks", None)
 
         def _sanm_forward_no_mask(self, x, mask=None, mask_shfit_chunk=None, mask_att_chunk_encoder=None):
             return self._orig_forward(x, mask=None, mask_shfit_chunk=None, mask_att_chunk_encoder=None)
 
-        for layer in sanm_layers:
+        for layer in self._sanm_layers:
             attn = layer.self_attn
             attn._orig_forward = attn.forward
             attn.forward = types.MethodType(_sanm_forward_no_mask, attn)
@@ -10540,8 +10541,8 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
         def _adaptor_forward_no_mask(self, query, key, value, mask=None):
             return self._orig_forward(query, key, value, mask=None)
 
-        if getattr(adaptor, "blocks", None) is not None:
-            for block in adaptor.blocks:
+        if self._adaptor_blocks is not None:
+            for block in self._adaptor_blocks:
                 attn = block.self_attn
                 attn._orig_forward = attn.forward
                 attn.forward = types.MethodType(_adaptor_forward_no_mask, attn)
@@ -10561,10 +10562,12 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
     def _patch_decoder(self):
         # self._model is the _FunASRForSpeechSeq2Seq wrapper
         model = self._model
-        llm = model.llm
+        self._llm = model.llm
+        llm = self._llm
         audio_token_id = getattr(model.config, "audio_token_id", 0)
 
         # Force eager attention for stable OpenVINO tracing.
+        self._orig_attn_implementation = llm.config._attn_implementation
         llm.set_attn_implementation("eager")
 
         model._orig_forward = model.forward
@@ -10639,6 +10642,25 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
         if hasattr(self._model, "_orig_forward"):
             self._model.forward = self._model._orig_forward
             del self._model._orig_forward
+
+        # Restore attention implementation on the LLM.
+        if getattr(self, "_llm", None) is not None and getattr(self, "_orig_attn_implementation", None) is not None:
+            self._llm.set_attn_implementation(self._orig_attn_implementation)
+
+        # Unpatch SANM and adaptor attention layers.
+        if getattr(self, "_sanm_layers", None) is not None:
+            for layer in self._sanm_layers:
+                attn = layer.self_attn
+                if hasattr(attn, "_orig_forward"):
+                    attn.forward = attn._orig_forward
+                    del attn._orig_forward
+
+        if getattr(self, "_adaptor_blocks", None) is not None:
+            for block in self._adaptor_blocks:
+                attn = block.self_attn
+                if hasattr(attn, "_orig_forward"):
+                    attn.forward = attn._orig_forward
+                    del attn._orig_forward
 
 
 class KokoroModelPatcher(ModelPatcher):
