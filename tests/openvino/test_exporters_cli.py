@@ -225,6 +225,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             "remote_code": True,
         },
     }
+    # filter models depending on min/max transformers supported versions
+    TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
+        model_type: config
+        for model_type, config in TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.items()
+        if TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type)
+        in get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
+    }
 
     SUPPORTED_SD_HYBRID_ARCHITECTURES = [
         ("flux", 7, 56),
@@ -838,7 +845,15 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_filtered_architectures(cls):
         expected = {
             model_type
-            for model_type in ("llava-qwen2", "phi3_v", "phi4mm", "minicpmo")
+            for model_type in (
+                "llava-qwen2",
+                "phi3_v",
+                "phi4mm",
+                "minicpmo",
+                "qwen2_vl",
+                "qwen2_5_vl",
+                "qwen3_vl",
+            )
             if not is_model_type_transformers_compatible(model_type)
         }
         if is_transformers_version(">=", "5"):
