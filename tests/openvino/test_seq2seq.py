@@ -46,7 +46,7 @@ from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
 from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TEST_IMAGE_URL, Timer
 
-from optimum.exporters.openvino.model_configs import Gemma3nTextOpenVINOConfig
+from optimum.exporters.openvino.model_configs import Gemma3nTextOpenVINOConfig, Qwen3OmniMoeOpenVINOConfig
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.stateful import model_has_state
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
@@ -137,6 +137,9 @@ class OVSeq2SeqTestMixin(unittest.TestCase):
 
         if is_transformers_version("<", str(Gemma3nTextOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures -= {"gemma3n"}
+
+        if is_transformers_version("<", str(Qwen3OmniMoeOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures -= {"qwen3_omni_moe"}
 
         untested_architectures = supported_architectures - tested_architectures
 
