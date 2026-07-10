@@ -1238,7 +1238,7 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
     @require_diffusers
     def test_load_vanilla_model_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
-            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
+            _ = self.OVMODEL_CLASS.from_pretrained(HUB_MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
 
         self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 
