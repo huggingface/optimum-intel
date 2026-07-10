@@ -25,6 +25,7 @@ import openvino as ov
 import torch
 from huggingface_hub import constants, scan_cache_dir
 
+import optimum.exporters.openvino  # noqa: F401 (registers OpenVINO export configs in TasksManager)
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import is_transformers_version
 
