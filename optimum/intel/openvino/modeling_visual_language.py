@@ -29,6 +29,7 @@ from transformers import (
     AutoConfig,
     AutoImageProcessor,
     AutoModel,
+    AutoModelForImageTextToText,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
@@ -69,8 +70,6 @@ if is_transformers_version(">=", "5.0.0"):
 
     transformers_auto_class = AutoModelForMultimodalLM
 else:
-    from transformers import AutoModelForImageTextToText
-
     transformers_auto_class = AutoModelForImageTextToText
 
 
