@@ -1041,7 +1041,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         "sentence-transformers-bert",
         "qwen3",
     )
-    if is_transformers_version("<", "5.4") or is_transformers_version(">", "5.5"):
+    if is_transformers_version("<", "5.4") or is_transformers_version(">=", "5.6"):
         SUPPORTED_ARCHITECTURES += ("qwen3_vl_embedding",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
