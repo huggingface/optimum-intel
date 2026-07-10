@@ -31,9 +31,9 @@ jobs:
         test-pattern:
           [
             "*export*",
+            "*decoder*",
             "*seq2seq*",
             "*transformation*",
-            "*decoder*",
           ]
 
     runs-on: ubuntu-22.04
@@ -62,13 +62,13 @@ jobs:
           uv pip install --pre -U openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
       - name: Gemma 4 Unified Validation
-        if: ${{ matrix.test-pattern != '*quantization*' }}
+        if: ${{ matrix.test-pattern != '*decoder*' }}
         run: |
           uv pip install "transformers>=5.10,<5.11"
           pytest tests/openvino/${{ matrix.test-pattern }} -k gemma4_unified --durations=0
 
       - name: transformers 4.51 remote-code models validation
-        if: ${{ matrix.test-pattern == '*export*' || matrix.test-pattern == '*decoder*' }}
+        if: ${{ matrix.test-pattern == '*seq2seq*' || matrix.test-pattern == '*decoder*' }}
         run: |
           uv pip install "transformers==4.51.0" transformers_stream_generator
           pytest tests/openvino/${{ matrix.test-pattern }} -k "(chatglm and not chatglm4) or (minicpm and not minicpmv) or (qwen and not qwen2 and not qwen3 and not videochat_flash_qwen) or arctic or deepseek or llava-qwen2 or phi3_v or phi4mm or minicpmo or test_filtered_architectures" --durations=0
