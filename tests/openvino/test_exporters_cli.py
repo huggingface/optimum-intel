@@ -36,6 +36,7 @@ from utils_tests import (
     check_compression_state_per_model,
     get_num_quantized_nodes,
     get_supported_model_for_library,
+    is_model_type_transformers_compatible,
 )
 
 from optimum.exporters.openvino.__main__ import main_export
@@ -816,7 +817,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
 
     def test_filtered_architectures(cls):
-        expected = {"llava-qwen2", "phi3_v", "phi4mm", "minicpmo"}
+        expected = {
+            model_type
+            for model_type in ("llava-qwen2", "phi3_v", "phi4mm", "minicpmo")
+            if not is_model_type_transformers_compatible(model_type)
+        }
         if is_transformers_version(">=", "5"):
             expected.update({"videochat_flash_qwen", "llama4", "llava_next_video", "minicpmv", "internvl_chat"})
 

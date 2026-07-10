@@ -88,6 +88,7 @@ from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     check_compression_state_per_model,
     get_supported_model_for_library,
+    is_model_type_transformers_compatible,
     TEST_NAME_TO_MODEL_TYPE,
     OPENVINO_DEVICE,
     HUB_MODEL_NAMES,
@@ -1246,8 +1247,11 @@ class OVWeightCompressionTest(unittest.TestCase):
     ]
 
     def test_filtered_architectures(cls):
-        expected = set()
-        expected.update({"llava-qwen2", "phi3_v", "minicpmo"})
+        expected = {
+            model_type
+            for model_type in ("llava-qwen2", "phi3_v", "minicpmo")
+            if not is_model_type_transformers_compatible(model_type)
+        }
         if is_transformers_version(">=", "5"):
             expected.update({"llama4", "llava_next_video", "minicpmv", "internvl_chat", "exaone4"})
 
