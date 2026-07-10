@@ -627,6 +627,7 @@ class GemmaOpenVINOConfig(TextDecoderOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
     _MODEL_PATCHER = OVDecoderModelPatcher
+    MAX_TRANSFORMERS_VERSION = "5.0"
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -3146,6 +3147,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     ]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLVisionEmbedInputGenerator,)
+    MAX_TRANSFORMERS_VERSION = "5.0"
 
     def __init__(
         self,
@@ -3280,6 +3282,8 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
 
 @register_in_tasks_manager("qwen2_5_vl", *["image-text-to-text"], library_name="transformers")
 class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
+    MAX_TRANSFORMERS_VERSION = "5.0"
+
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
@@ -3817,7 +3821,7 @@ class Qwen3OmniMoeOpenVINOConfig(BaseVLMOpenVINOConfig):
     library_name="transformers",
 )
 class GLMOpenVINOConfig(LlamaOpenVINOConfig):
-    pass
+    MAX_TRANSFORMERS_VERSION = "5.0"
 
 
 @register_in_tasks_manager(
