@@ -32,11 +32,6 @@ from transformers import (
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLModel
 from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLModel, VisionRotaryEmbedding
-from transformers.models.qwen3_vl.modeling_qwen3_vl import (
-    Qwen3VLModel,
-    Qwen3VLVisionModel,
-    Qwen3VLVisionRotaryEmbedding,
-)
 from transformers.utils import ModelOutput
 
 from optimum.exporters.openvino import main_export
@@ -53,6 +48,14 @@ from optimum.intel.openvino.utils import (
     classproperty,
 )
 from optimum.intel.utils.import_utils import is_transformers_version
+
+
+if is_transformers_version(">=", "4.57"):
+    from transformers.models.qwen3_vl.modeling_qwen3_vl import (
+        Qwen3VLModel,
+        Qwen3VLVisionModel,
+        Qwen3VLVisionRotaryEmbedding,
+    )
 
 
 if is_transformers_version(">=", "5.2"):
@@ -2603,7 +2606,7 @@ class QWen2VLModelOutputWithPast(ModelOutput):
 
 class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
     get_rope_index = Qwen2VLModel.get_rope_index
-    get_vision_position_ids = getattr(Qwen2_5_VLModel, "get_vision_position_ids", None)
+    get_vision_position_ids = getattr(Qwen2VLModel, "get_vision_position_ids", None)
     additional_parts = ["vision_embeddings_merger"]
 
     def __init__(
@@ -2914,7 +2917,6 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
 class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
     get_rope_index = Qwen2_5_VLModel.get_rope_index
     get_vision_position_ids = getattr(Qwen2_5_VLModel, "get_vision_position_ids", None)
-
     additional_parts = ["vision_embeddings_merger"]
 
     def __init__(
@@ -3278,11 +3280,6 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
 
 
 class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
-    get_placeholder_mask = Qwen3VLModel.get_placeholder_mask
-    get_rope_index = Qwen3VLModel.get_rope_index
-    get_video_features = Qwen3VLModel.get_video_features
-    rot_pos_emb = Qwen3VLVisionModel.rot_pos_emb
-    get_vision_position_ids = getattr(Qwen3VLModel, "get_vision_position_ids", None)
     additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
 
     def __init__(
@@ -3693,6 +3690,14 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
         self.rope_deltas = None
 
         return super().generate(*args, **kwargs)
+
+
+if is_transformers_version(">=", "4.57"):
+    _OVQwen3VLForCausalLM.get_placeholder_mask = Qwen3VLModel.get_placeholder_mask
+    _OVQwen3VLForCausalLM.get_rope_index = Qwen3VLModel.get_rope_index
+    _OVQwen3VLForCausalLM.get_video_features = Qwen3VLModel.get_video_features
+    _OVQwen3VLForCausalLM.rot_pos_emb = Qwen3VLVisionModel.rot_pos_emb
+    _OVQwen3VLForCausalLM.get_vision_position_ids = getattr(Qwen3VLModel, "get_vision_position_ids", None)
 
 
 class _OVMaira2ForCausalLM(_OVLlavaForCausalLM):
