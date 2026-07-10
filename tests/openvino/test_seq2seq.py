@@ -45,7 +45,6 @@ from transformers import (
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
-from transformers.video_utils import load_video
 from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TEST_IMAGE_URL, Timer
 
 from optimum.exporters.openvino.stateful import model_has_state
@@ -68,6 +67,12 @@ from optimum.intel.openvino.modeling_text2speech import (
 from optimum.intel.openvino.modeling_visual_language import MODEL_PARTS_CLS_MAPPING, MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+
+
+if is_transformers_version("<=", "4.52"):
+    from transformers.image_utils import load_video
+else:
+    from transformers.video_utils import load_video
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
