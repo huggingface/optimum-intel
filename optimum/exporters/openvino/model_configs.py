@@ -1651,7 +1651,9 @@ def get_vlm_internal_text_generation_config(model_type, model_config, int_dtype,
     return export_config
 
 
-def get_vlm_text_embeddings_config(model_type, model_config, int_dtype, float_dtype):
+def get_vlm_text_embeddings_config(
+    model_type, model_config, int_dtype, float_dtype, min_transformers_version=None, max_transformers_version=None
+):
     internal_export_config = get_vlm_internal_text_generation_config(model_type, model_config, int_dtype, float_dtype)
     InputEmbedOpenVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
     export_config = InputEmbedOpenVINOConfig(
@@ -1660,6 +1662,10 @@ def get_vlm_text_embeddings_config(model_type, model_config, int_dtype, float_dt
         int_dtype=int_dtype,
         float_dtype=float_dtype,
     )
+    if min_transformers_version is not None:
+        export_config.MIN_TRANSFORMERS_VERSION = min_transformers_version
+    if max_transformers_version is not None:
+        export_config.MAX_TRANSFORMERS_VERSION = max_transformers_version
     return export_config
 
 
@@ -1672,6 +1678,8 @@ def get_vlm_text_generation_config(
     dummy_input_generator=None,
     inputs_update=None,
     task=None,
+    min_transformers_version=None,
+    max_transformers_version=None,
 ):
     internal_export_config = get_vlm_internal_text_generation_config(model_type, model_config, int_dtype, float_dtype)
     export_config = LMInputEmbedsConfigHelper(
@@ -1682,6 +1690,10 @@ def get_vlm_text_generation_config(
         task=task,
     )
     export_config._normalized_config = internal_export_config._normalized_config
+    if min_transformers_version is not None:
+        export_config.MIN_TRANSFORMERS_VERSION = min_transformers_version
+    if max_transformers_version is not None:
+        export_config.MAX_TRANSFORMERS_VERSION = max_transformers_version
     return export_config
 
 
@@ -2105,11 +2117,25 @@ class LlavaQwen2OpenVINOConfig(BaseVLMOpenVINOConfig):
 
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
             model_type = self._orig_config.model_type.replace("llava-", "")
-            return get_vlm_text_embeddings_config(model_type, self._orig_config, self.int_dtype, self.float_dtype)
+            return get_vlm_text_embeddings_config(
+                model_type,
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
 
         if behavior == VLMConfigBehavior.LANGUAGE:
             model_type = self._orig_config.model_type.replace("llava-", "")
-            return get_vlm_text_generation_config(model_type, self._orig_config, self.int_dtype, self.float_dtype)
+            return get_vlm_text_generation_config(
+                model_type,
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
 
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
@@ -2729,10 +2755,24 @@ class Phi3VisionOpenVINOConfig(BaseVLMOpenVINOConfig):
             behavior = Phi3VisionConfigBehavior(behavior)
 
         if behavior == Phi3VisionConfigBehavior.TEXT_EMBEDDINGS:
-            return get_vlm_text_embeddings_config("phi3", self._orig_config, self.int_dtype, self.float_dtype)
+            return get_vlm_text_embeddings_config(
+                "phi3",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
 
         if behavior == Phi3VisionConfigBehavior.LANGUAGE:
-            return get_vlm_text_generation_config("phi3", self._orig_config, self.int_dtype, self.float_dtype)
+            return get_vlm_text_generation_config(
+                "phi3",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
 
         if behavior == Phi3VisionConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
@@ -2901,11 +2941,24 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
             behavior = Phi4MMConfigBehavior(behavior)
 
         if behavior == Phi4MMConfigBehavior.TEXT_EMBEDDINGS:
-            return get_vlm_text_embeddings_config("phi3", self._orig_config, self.int_dtype, self.float_dtype)
+            return get_vlm_text_embeddings_config(
+                "phi3",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
 
         if behavior == Phi4MMConfigBehavior.LANGUAGE:
             return get_vlm_text_generation_config(
-                "phi3", self._orig_config, self.int_dtype, self.float_dtype, model_patcher=Phi4MMLanguageModelPatcher
+                "phi3",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Phi4MMLanguageModelPatcher,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
             )
 
         return self.__class__(
