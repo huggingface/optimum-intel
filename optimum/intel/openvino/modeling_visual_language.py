@@ -2605,8 +2605,6 @@ class QWen2VLModelOutputWithPast(ModelOutput):
 
 
 class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
-    get_rope_index = Qwen2VLModel.get_rope_index
-    get_vision_position_ids = getattr(Qwen2VLModel, "get_vision_position_ids", None)
     additional_parts = ["vision_embeddings_merger"]
 
     def __init__(
@@ -2622,6 +2620,9 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
+        if is_transformers_version("<", "4.57"):
+            raise Exception("Qwen2VL is not supported in transformers versions earlier than 4.57.")
+
         super().__init__(
             language_model=language_model,
             text_embeddings=text_embeddings,
@@ -2915,8 +2916,6 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
 
 
 class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
-    get_rope_index = Qwen2_5_VLModel.get_rope_index
-    get_vision_position_ids = getattr(Qwen2_5_VLModel, "get_vision_position_ids", None)
     additional_parts = ["vision_embeddings_merger"]
 
     def __init__(
@@ -2932,6 +2931,9 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
+        if is_transformers_version("<", "4.57"):
+            raise Exception("Qwen2_5_VL is not supported in transformers versions earlier than 4.57.")
+
         super().__init__(
             language_model=language_model,
             text_embeddings=text_embeddings,
@@ -3277,6 +3279,13 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
             inputs["second_per_grid_ts"] = torch.tensor(full_ts, dtype=inputs["second_per_grid_ts"].dtype)
 
         return inputs
+
+
+if is_transformers_version(">=", "4.57"):
+    _OVQwen2VLForCausalLM.get_rope_index = Qwen2VLModel.get_rope_index
+    _OVQwen2VLForCausalLM.get_vision_position_ids = getattr(Qwen2VLModel, "get_vision_position_ids", None)
+    _OVQwen2_5_VLForCausalLM.get_rope_index = Qwen2_5_VLModel.get_rope_index
+    _OVQwen2_5_VLForCausalLM.get_vision_position_ids = getattr(Qwen2_5_VLModel, "get_vision_position_ids", None)
 
 
 class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
