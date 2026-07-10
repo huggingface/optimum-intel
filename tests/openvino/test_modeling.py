@@ -709,7 +709,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         gc.collect()
 
     def test_export_dtype(self):
-        model_id = "optimum-intel-internal-testing/tiny-random-GemmaForCausalLM"
+        model_id = "optimum-intel-internal-testing/tiny-random-PhiForCausalLM"
         for dtype in ["f32", "f16", "bf16"]:
             torch_dtype = OV_TO_PT_TYPE[dtype]
             ov_dtype = STR_TO_OV_TYPE[dtype]
@@ -1040,8 +1040,9 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         "roberta",
         "sentence-transformers-bert",
         "qwen3",
-        "qwen3_vl_embedding",
     )
+    if is_transformers_version("<", "5.4") or is_transformers_version(">", "5.5"):
+        SUPPORTED_ARCHITECTURES += ("qwen3_vl_embedding",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):

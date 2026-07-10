@@ -496,6 +496,12 @@ class OVQuantizerTest(unittest.TestCase):
             },
         ),
     ]
+    # filter models type depending on min max transformers version
+    SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET = [
+        config
+        for config in SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET
+        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
+    ]
 
     @staticmethod
     def get_calibration_dataset(
@@ -1164,43 +1170,28 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForCausalLM, "smollm3", False),
         (OVModelForFeatureExtraction, "qwen3_vl_embedding", False),
         (OVModelForVisualCausalLM, "qwen3_omni_moe", False),
+        (OVModelForCausalLM, "exaone4", True),
+        (OVModelForVisualCausalLM, "llava_next_video", False),
+        (OVModelForVisualCausalLM, "minicpmv", True),
+        (OVModelForSpeechSeq2Seq, "qwen3_asr", True),
+        (OVModelForVisualCausalLM, "videochat_flash_qwen", True),
+        (OVModelForVisualCausalLM, "qwen3_5", False),
+        (OVModelForVisualCausalLM, "qwen3_5_moe", False),
+        (OVModelForVisualCausalLM, "gemma4", False),
+        (OVModelForVisualCausalLM, "gemma4_moe", False),
     ]
 
     # gemma3n openvino>=2026.2.0 because it needs erfinv operation,
     # quantization tests will be moved to openvino==2026.2.0 in CVS-189051
-    if is_transformers_version(">=", "5.0") and is_openvino_version(">=", "2026.2.0"):
+    if is_openvino_version(">=", "2026.2.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "gemma3n", False))
 
-    if is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.extend(
-            [
-                (OVModelForCausalLM, "exaone4", True),
-                (OVModelForVisualCausalLM, "llava_next_video", False),
-                (OVModelForVisualCausalLM, "minicpmv", True),
-            ]
-        )
-
-    if is_transformers_version("==", "4.57.6"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForSpeechSeq2Seq, "qwen3_asr", True))
-
-    if is_transformers_version("<=", "4.57.6"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "videochat_flash_qwen", True))
-
-    if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.extend(
-            [
-                (OVModelForVisualCausalLM, "qwen3_5", False),
-                (OVModelForVisualCausalLM, "qwen3_5_moe", False),
-            ]
-        )
-
-    if is_transformers_version(">=", "5.5.0"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.extend(
-            [
-                (OVModelForVisualCausalLM, "gemma4", False),
-                (OVModelForVisualCausalLM, "gemma4_moe", False),
-            ]
-        )
+    # filter models type depending on min max transformers version
+    SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = [
+        config
+        for config in SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION
+        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
+    ]
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
@@ -1339,7 +1330,15 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_filtered_architectures(cls):
         expected = {
             model_type
-            for model_type in ("llava-qwen2", "phi3_v", "minicpmo", "qwen3_omni_moe")
+            for model_type in (
+                "llava-qwen2",
+                "phi3_v",
+                "minicpmo",
+                "qwen3_omni_moe",
+                "qwen2_vl",
+                "qwen2_5_vl",
+                "qwen3_vl",
+            )
             if not is_model_type_transformers_compatible(model_type)
         }
         if is_transformers_version(">=", "5"):

@@ -47,6 +47,8 @@ from utils_tests import (
     OPENVINO_DEVICE,
     REMOTE_CODE_MODELS,
     TEST_IMAGE_URL,
+    TEST_NAME_TO_MODEL_TYPE,
+    get_supported_model_for_library,
 )
 
 from optimum.exporters.openvino import main_export
@@ -160,34 +162,32 @@ class LLMPipelineTestCase(unittest.TestCase):
         "gpt_oss",
         "smollm3",
         "phi3",
+        "phimoe",
+        "exaone4",
+        "codegen2",
+        "exaone",
+        "decilm",
+        "internlm2",
+        "orion",
+        "aquila2",
+        "jais",
+        "aquila",
+        "internlm",
+        "dbrx",
     )
 
     # to be expanded, other architectures work on NPU too
     # qwen2, phi and phi3 tests are flaky on NPU, not including for now
     NPU_SUPPORTED_ARCHITECTURES = ("gpt2", "glm", "opt", "qwen3_moe", "gpt_oss")
 
-    if is_transformers_version("<", "5"):
-        ALL_SUPPORTED_ARCHITECTURES += (
-            "phimoe",
-            "exaone4",
-            # remote modeling incompatible with v5
-            "codegen2",
-            "exaone",
-            "decilm",
-            "internlm2",
-            "orion",
-            "aquila2",
-            "jais",
-            # remote modeling code failing with v5
-            "aquila",
-            "internlm",
-            # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-            "dbrx",
-            # "phimoe",
-        )
-
     # for now we do not test NPU with old transformers versions
     SUPPORTED_ARCHITECTURES = NPU_SUPPORTED_ARCHITECTURES if OPENVINO_DEVICE == "NPU" else ALL_SUPPORTED_ARCHITECTURES
+    # filter architectures depending on min/max transformers supported versions
+    SUPPORTED_ARCHITECTURES = tuple(
+        arch
+        for arch in SUPPORTED_ARCHITECTURES
+        if TEST_NAME_TO_MODEL_TYPE.get(arch, arch) in get_supported_model_for_library("transformers")
+    )
 
     REMOTE_CODE_MODELS = (
         "minicpm",
@@ -300,14 +300,20 @@ class VLMPipelineTestCase(unittest.TestCase):
         "llava_next_mistral",
         "qwen2_5_vl",
         "gemma3",
+        "llava",
+        "llava_next_video",
     )
-    if is_transformers_version("<", "5"):
-        ALL_SUPPORTED_ARCHITECTURES += ("llava", "llava_next_video")
 
     # for now we do not test NPU with old transformers versions
     NPU_SUPPORTED_ARCHITECTURES = ("qwen2_vl", "qwen2_5_vl")
 
     SUPPORTED_ARCHITECTURES = NPU_SUPPORTED_ARCHITECTURES if OPENVINO_DEVICE == "NPU" else ALL_SUPPORTED_ARCHITECTURES
+    # filter architectures depending on min/max transformers supported versions
+    SUPPORTED_ARCHITECTURES = tuple(
+        arch
+        for arch in SUPPORTED_ARCHITECTURES
+        if TEST_NAME_TO_MODEL_TYPE.get(arch, arch) in get_supported_model_for_library("transformers")
+    )
 
     REMOTE_CODE_MODELS = (
         "minicpmv",
