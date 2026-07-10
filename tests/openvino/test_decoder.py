@@ -10,7 +10,6 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     GenerationConfig,
-    Mxfp4Config,
     PretrainedConfig,
     pipeline,
     set_seed,
