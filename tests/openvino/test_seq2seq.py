@@ -45,7 +45,16 @@ from transformers import (
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
-from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TEST_IMAGE_URL, Timer
+from utils_tests import (
+    F32_CONFIG,
+    MODEL_NAMES,
+    OPENVINO_DEVICE,
+    SEED,
+    TEST_IMAGE_URL,
+    TEST_NAME_TO_MODEL_TYPE,
+    Timer,
+    get_supported_model_for_library,
+)
 
 from optimum.exporters.openvino.stateful import model_has_state
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
@@ -664,8 +673,26 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen2_5_vl",
         "gemma3",
         "qwen3_vl",
+        "idefics3",
+        "got_ocr2",
+        "smolvlm",
+        "llama4",
+        "llava_next_video",
+        "videochat_flash_qwen",
+        "internvl_chat",
+        "minicpmv",
+        "minicpmo",
+        "llava-qwen2",
+        "phi3_v",
+        "phi4mm",
+        "gemma4",
+        "gemma4_moe",
+        "gemma4_unified",
+        "gemma3n",
+        "qwen3_5",
+        "qwen3_5_moe",
     ]
-    SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl", "qwen2_5_vl", "qwen3_vl"]
+    SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl", "qwen2_5_vl", "qwen3_vl", "videochat_flash_qwen"]
     SUPPORT_AUDIO = []
     # "llama" is registered for image-text-to-text
     # to support VLM Eagle3 draft models (tested separately in test_genai.py).
@@ -673,29 +700,18 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     OVMODEL_CLASS = OVModelForVisualCausalLM
     TASK = "image-text-to-text"
 
-    if is_transformers_version("<", "5"):
-        # remote code models incompatible before transformers v4.54 and after transformers v4.57.6
-        SUPPORT_VIDEO += ["videochat_flash_qwen"]
-
-    _is_model_supported = {
-        "idefics3": is_transformers_version("<", "5"),
-        "got_ocr2": is_transformers_version("<", "5"),
-        "smolvlm": is_transformers_version("<", "5"),
-        "llama4": is_transformers_version("<", "5"),
-        "llava_next_video": is_transformers_version("<", "5"),
-        # remote code models incompatible after transformers v5
-        "videochat_flash_qwen": is_transformers_version("<", "5"),
-        "internvl_chat": is_transformers_version("<", "5"),
-        "minicpmv": is_transformers_version("<", "5"),
-        "gemma4": is_transformers_version(">=", "5.5"),
-        "gemma4_moe": is_transformers_version(">=", "5.5"),
-        "qwen3_5": is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"),
-        "qwen3_5_moe": is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"),
-        "gemma4_unified": is_transformers_version(">=", "5.10"),
-        "gemma3n": is_transformers_version(">=", "5.0"),
-    }
-    SUPPORTED_ARCHITECTURES += [arch for arch, supported in _is_model_supported.items() if supported]
-    UNSUPPORTED_ARCHITECTURES.update(arch for arch, supported in _is_model_supported.items() if not supported)
+    # filter architectures depending on min/max transformers supported versions declared on their
+    # OpenVINO export config
+    UNSUPPORTED_ARCHITECTURES.update(
+        arch
+        for arch in SUPPORTED_ARCHITECTURES
+        if TEST_NAME_TO_MODEL_TYPE.get(arch, arch) not in get_supported_model_for_library("transformers")
+    )
+    SUPPORTED_ARCHITECTURES = [
+        arch
+        for arch in SUPPORTED_ARCHITECTURES
+        if TEST_NAME_TO_MODEL_TYPE.get(arch, arch) in get_supported_model_for_library("transformers")
+    ]
 
     REMOTE_CODE_MODELS = [
         "internvl_chat",

@@ -67,7 +67,7 @@ jobs:
           uv pip install "transformers>=5.10,<5.11"
           pytest tests/openvino/${{ matrix.test-pattern }} -k gemma4_unified --durations=0
 
-      - name: transformers 4.51 remote-code models validation
+      - name: Legacy remote-code models validation
         if: ${{ matrix.test-pattern == '*seq2seq*' || matrix.test-pattern == '*decoder*' }}
         run: |
           uv pip install "transformers==4.51.0" transformers_stream_generator

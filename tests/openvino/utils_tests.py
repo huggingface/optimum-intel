@@ -792,6 +792,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "chatglm4": "chatglm",
     "codegen2": "codegen",
     "falcon-40b": "falcon",
+    "gemma4_moe": "gemma4",
     "gpt_oss_mxfp4": "gpt_oss",
     "llama_awq": "llama",
     "llava_next_mistral": "llava_next",
