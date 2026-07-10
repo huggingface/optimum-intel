@@ -341,9 +341,14 @@ class OVQuantizerTest(unittest.TestCase):
                 dataset="wikitext2:seq_len=64",
                 num_samples=1,
             ),
-            {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
-            if is_transformers_version("<=", "4.45")
-            else {"encoder": 30, "decoder": 52},
+            (
+                {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
+                if is_transformers_version("<=", "4.45")
+                else {
+                    "encoder": 30,
+                    "decoder": 52,
+                }
+            ),
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
                 if is_transformers_version("<=", "4.45")
@@ -432,6 +437,46 @@ class OVQuantizerTest(unittest.TestCase):
                         "vision_embeddings_model": {"int8": 1},
                         "vision_embeddings_merger_model": {"int8": 32},
                         "vision_embeddings_pos_model": {"int8": 1},
+                    },
+                ),
+            ]
+        )
+
+    # Qwen3-Omni-MoE requires Transformers 5.0+ (fused-experts / router API).
+    if is_transformers_version(">=", "5.0"):
+        SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET.extend(
+            [
+                (
+                    OVModelForVisualCausalLM,
+                    "qwen3_omni_moe",
+                    OVQuantizationConfig(
+                        bits=8,
+                        dataset="contextual",
+                        num_samples=1,
+                    ),
+                    {
+                        "lm_model": 16,
+                        "text_embeddings_model": 0,
+                        "vision_embeddings_model": 0,
+                        "vision_embeddings_pos_model": 0,
+                        "audio_encoder_model": 0,
+                        "talker_model": 0,
+                        "talker_text_embeddings_model": 0,
+                        "talker_projections_model": 0,
+                        "code_predictor_model": 0,
+                        "code2wav_model": 0,
+                    },
+                    {
+                        "lm_model": {"int8": 70},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 13},
+                        "vision_embeddings_pos_model": {"int8": 1},
+                        "audio_encoder_model": {"int8": 18},
+                        "talker_model": {"int8": 43},
+                        "talker_text_embeddings_model": {"int8": 1},
+                        "talker_projections_model": {"int8": 4},
+                        "code_predictor_model": {"int8": 15},
+                        "code2wav_model": {"int8": 53},
                     },
                 ),
             ]
@@ -639,9 +684,11 @@ class OVWeightCompressionTest(unittest.TestCase):
                 group_size=32,
                 ignored_scope={
                     "names": [
-                        "__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
-                        if is_transformers_version("<", "4.57")
-                        else "__module.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
+                        (
+                            "__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
+                            if is_transformers_version("<", "4.57")
+                            else "__module.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
+                        )
                     ]
                 },
             ),
@@ -930,6 +977,31 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForVisualCausalLM,
+            "qwen3_omni_moe",
+            False,
+            dict(
+                bits=4,
+                group_size=8,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+            ),
+            {
+                "lm_model": {"int8": 12, "int4": 22},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 13},
+                "vision_embeddings_pos_model": {"int8": 1},
+                "audio_encoder_model": {"int8": 18},
+                "talker_model": {"int8": 43},
+                "talker_text_embeddings_model": {"int8": 1},
+                "talker_projections_model": {"int8": 4},
+                "code_predictor_model": {"int8": 15},
+                "code2wav_model": {"int8": 53},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
             "phi3_v",
             True,
             dict(
@@ -1089,8 +1161,16 @@ class OVWeightCompressionTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "exaone4", True))
 
     if is_transformers_version(">=", "4.57.0"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen3_vl", False))
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "hunyuan_v1_dense", False))
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.extend(
+            [
+                (OVModelForVisualCausalLM, "qwen3_vl", False),
+                (OVModelForCausalLM, "hunyuan_v1_dense", False),
+            ]
+        )
+
+    # Qwen3-Omni-MoE requires Transformers 5.0+ (fused-experts / router API).
+    if is_transformers_version(">=", "5.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen3_omni_moe", False))
 
     if is_transformers_version(">=", "4.57"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append(
@@ -1261,8 +1341,11 @@ class OVWeightCompressionTest(unittest.TestCase):
             expected.add("llama4")
         if is_transformers_version("<", "4.54"):
             expected.add("exaone4")
-        if is_transformers_version("<", "4.57"):
+        if is_transformers_version("<", "4.57.0"):
             expected.add("qwen3_vl")
+        # Qwen3-Omni-MoE requires Transformers 5.0+, so it is filtered out below that.
+        if is_transformers_version("<", "5.0"):
+            expected.add("qwen3_omni_moe")
         if is_transformers_version(">=", "4.54"):
             expected.update({"llava-qwen2", "phi3_v", "minicpmo"})
         if is_transformers_version(">=", "5"):

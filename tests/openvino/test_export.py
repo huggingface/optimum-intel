@@ -28,7 +28,7 @@ from utils_tests import (
 )
 
 from optimum.exporters.openvino import export_from_model, main_export
-from optimum.exporters.openvino.model_configs import BertOpenVINOConfig
+from optimum.exporters.openvino.model_configs import BertOpenVINOConfig, Qwen3OmniMoeConfigBehavior
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVFlux2KleinPipeline,
@@ -41,6 +41,7 @@ from optimum.intel import (
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
+    OVModelForMultimodalLM,
     OVModelForPix2Struct,
     OVModelForQuestionAnswering,
     OVModelForSeq2SeqLM,
@@ -133,7 +134,11 @@ class ExportModelTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.update({"hunyuan_v1_dense": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES.update({"qwen3_next": OVModelForCausalLM})
+        SUPPORTED_ARCHITECTURES.update(
+            {
+                "qwen3_next": OVModelForCausalLM,
+            }
+        )
 
     if is_transformers_version(">=", "4.49") and is_transformers_version("<=", "4.57.6"):
         SUPPORTED_ARCHITECTURES.update({"videochat_flash_qwen": OVModelForVisualCausalLM})
@@ -141,6 +146,7 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "5.0"):
         SUPPORTED_ARCHITECTURES.update({"lfm2_moe": OVModelForCausalLM})
         SUPPORTED_ARCHITECTURES.update({"gemma3n": OVModelForVisualCausalLM})
+        SUPPORTED_ARCHITECTURES.update({"qwen3_omni_moe": OVModelForMultimodalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
@@ -191,6 +197,15 @@ class ExportModelTest(unittest.TestCase):
                 framework="pt",
                 library_name="kokoro",
             )
+        elif model_type == "qwen3_omni_moe":
+            from transformers import AutoConfig, Qwen3OmniMoeForConditionalGeneration
+
+            from optimum.exporters.openvino.__main__ import _ensure_qwen3_omni_rope_scaling
+
+            # Tiny test checkpoints omit rope_scaling, which transformers >= 4.57 requires to build the
+            # rotary embedding. The CLI export backfills it; mirror that here for the direct model load.
+            loading_kwargs["config"] = _ensure_qwen3_omni_rope_scaling(AutoConfig.from_pretrained(model_name))
+            model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
         else:
             model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
 
@@ -350,6 +365,28 @@ class ExportModelTest(unittest.TestCase):
                 self.assertEqual(
                     ov_model.model.get_rt_info()["optimum"]["transformers_version"], _transformers_version
                 )
+
+    @parameterized.expand(["text-to-audio", "automatic-speech-recognition"])
+    @unittest.skipUnless(is_transformers_version(">=", "5.0"), "qwen3_omni_moe requires transformers >= 5.0")
+    def test_qwen3_omni_moe_export_task(self, task):
+        model_name = MODEL_NAMES["qwen3_omni_moe"]
+        from transformers import AutoConfig, Qwen3OmniMoeForConditionalGeneration
+
+        from optimum.exporters.openvino.__main__ import _ensure_qwen3_omni_rope_scaling
+
+        # Tiny test checkpoints omit rope_scaling, which transformers >= 4.57 requires to build the
+        # rotary embedding. The CLI export backfills it; mirror that here for the direct model load.
+        config = _ensure_qwen3_omni_rope_scaling(AutoConfig.from_pretrained(model_name))
+        model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
+            model_name, config=config, attn_implementation="eager"
+        )
+        self.assertGreater(getattr(model.config.thinker_config.text_config, "num_experts", 0), 1)
+        self.assertGreater(getattr(model.config.talker_config.text_config, "shared_expert_intermediate_size", 0), 0)
+        with TemporaryDirectory() as tmpdir:
+            export_from_model(model, tmpdir, task=task, stateful=True)
+            for behavior in Qwen3OmniMoeConfigBehavior:
+                model_path = Path(tmpdir) / f"openvino_{behavior.value}_model.xml"
+                self.assertTrue(model_path.exists(), f"Missing {behavior.value}_model for task={task}")
 
     def test_compare_openvino_onnx_supported_architectures(self):
         onnx_architectures = set()
