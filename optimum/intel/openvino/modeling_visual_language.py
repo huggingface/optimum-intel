@@ -68,8 +68,10 @@ if is_transformers_version(">=", "5.0.0"):
     from transformers import AutoModelForMultimodalLM
 
     transformers_auto_class = AutoModelForMultimodalLM
-elif is_transformers_version(">=", "4.46.0"):
+else:
     from transformers import AutoModelForImageTextToText
+
+    transformers_auto_class = AutoModelForImageTextToText
 
 
 if is_transformers_version(">=", "5.2"):
@@ -78,9 +80,6 @@ if is_transformers_version(">=", "5.2"):
         Qwen3_5VisionModel,
         Qwen3_5VisionRotaryEmbedding,
     )
-
-
-from transformers import AutoModelForImageTextToText
 
 
 if TYPE_CHECKING:
