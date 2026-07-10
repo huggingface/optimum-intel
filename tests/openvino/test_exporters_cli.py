@@ -159,9 +159,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         "flux": 4,
         "flux.2-klein": 2,
         "flux-fill": 4,
-        "lfm2": 2
-        if is_openvino_version(">=", "2026.0")
-        else 0,  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
+        "lfm2": (
+            2 if is_openvino_version(">=", "2026.0") else 0
+        ),  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
         "lfm2_moe": 2,
         "llava": 2,
         "sana": 2,
@@ -173,6 +173,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "mamba": 2,
         "falcon_mamba": 2,
         "qwen3": 2,
+        "qwen3_omni_moe": 2,
         "zamba2": 2,
         "exaone4": 2,
         "bitnet": 2,
@@ -816,6 +817,24 @@ class OVCLIExportTestCase(unittest.TestCase):
                 model_name_or_path=model_name, output=tmpdir, task=task, model_kwargs=model_kwargs, **loading_kwargs
             )
 
+    def _load_exported_ov_model(self, model_type: str, task: str, tmpdir: str, model_kwargs: Dict):
+        # qwen3_omni_moe spans multiple tasks but always loads via OVModelForMultimodalLM,
+        # the dedicated omni-modal wrapper (talker/audio_encoder/code2wav) for this architecture.
+        if model_type == "qwen3_omni_moe":
+            from optimum.intel.openvino import OVModelForMultimodalLM
+
+            return OVModelForMultimodalLM.from_pretrained(tmpdir, **model_kwargs)
+
+        # VLM Eagle3 exports a single causal LM (not a multi-component VLM)
+        # so it must be loaded with OVModelForCausalLM rather than OVModelForVisualCausalLM.
+        if model_type == "qwen3_vl_eagle3":
+            model_cls_name = "OVModelForCausalLM"
+        elif task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS:
+            model_cls_name = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+        else:
+            model_cls_name = _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
+        return eval(model_cls_name).from_pretrained(tmpdir, **model_kwargs)
+
     def test_filtered_architectures(cls):
         expected = {
             model_type
@@ -861,15 +880,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             if model_type in REMOTE_CODE_MODELS:
                 model_kwargs["trust_remote_code"] = True
 
-            # VLM Eagle3 exports a single causal LM (not a multi-component VLM)
-            # so it must be loaded with OVModelForCausalLM rather than OVModelForVisualCausalLM.
-            if model_type == "qwen3_vl_eagle3":
-                automodel_cls = "OVModelForCausalLM"
-            elif task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS:
-                automodel_cls = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
-            else:
-                automodel_cls = _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
-            eval(automodel_cls).from_pretrained(tmpdir, **model_kwargs)
+            self._load_exported_ov_model(model_type, task, tmpdir, model_kwargs)
 
     @parameterized.expand(
         arch
@@ -1055,13 +1066,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
             if model_type in REMOTE_CODE_MODELS:
                 model_kwargs["trust_remote_code"] = True
-            if model_type == "qwen3_vl_eagle3":
-                automodel_cls = "OVModelForCausalLM"
-            elif task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS:
-                automodel_cls = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
-            else:
-                automodel_cls = _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
-            eval(automodel_cls).from_pretrained(tmpdir, **model_kwargs)
+            self._load_exported_ov_model(model_type, task, tmpdir, model_kwargs)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_int8(self, task: str, model_type: str):
@@ -1084,13 +1089,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
             if model_type in REMOTE_CODE_MODELS:
                 model_kwargs["trust_remote_code"] = True
-            if model_type == "qwen3_vl_eagle3":
-                automodel_cls = "OVModelForCausalLM"
-            elif task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS:
-                automodel_cls = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
-            else:
-                automodel_cls = _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
-            model = eval(automodel_cls).from_pretrained(tmpdir, **model_kwargs)
+            model = self._load_exported_ov_model(model_type, task, tmpdir, model_kwargs)
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
             expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):

@@ -439,6 +439,62 @@ class OVQuantizerTest(unittest.TestCase):
                 "vision_embeddings_pos_model": {"int8": 1},
             },
         ),
+        (
+            OVModelForVisualCausalLM,
+            "qwen3_vl",
+            OVQuantizationConfig(
+                bits=8,
+                dataset="textvqa",
+                num_samples=1,
+            ),
+            {
+                "lm_model": 14,
+                "text_embeddings_model": 0,
+                "vision_embeddings_model": 1,
+                "vision_embeddings_merger_model": 44,
+                "vision_embeddings_pos_model": 0,
+            },
+            {
+                "lm_model": {"int8": 15},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 32},
+                "vision_embeddings_pos_model": {"int8": 1},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "qwen3_omni_moe",
+            OVQuantizationConfig(
+                bits=8,
+                dataset="contextual",
+                num_samples=1,
+            ),
+            {
+                "lm_model": 16,
+                "text_embeddings_model": 0,
+                "vision_embeddings_model": 0,
+                "vision_embeddings_pos_model": 0,
+                "audio_encoder_model": 0,
+                "talker_model": 0,
+                "talker_text_embeddings_model": 0,
+                "talker_projections_model": 0,
+                "code_predictor_model": 0,
+                "code2wav_model": 0,
+            },
+            {
+                "lm_model": {"int8": 70},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 13},
+                "vision_embeddings_pos_model": {"int8": 1},
+                "audio_encoder_model": {"int8": 18},
+                "talker_model": {"int8": 43},
+                "talker_text_embeddings_model": {"int8": 1},
+                "talker_projections_model": {"int8": 4},
+                "code_predictor_model": {"int8": 15},
+                "code2wav_model": {"int8": 53},
+            },
+        ),
     ]
 
     @staticmethod
@@ -646,7 +702,15 @@ class OVWeightCompressionTest(unittest.TestCase):
                 bits=4,
                 sym=False,
                 group_size=32,
-                ignored_scope={"names": ["__module.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"]},
+                ignored_scope={
+                    "names": [
+                        (
+                            "__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
+                            if is_transformers_version("<", "4.57")
+                            else "__module.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
+                        )
+                    ]
+                },
             ),
             {"model": {"int8": 4, "int4": 38}},
         ),
@@ -933,6 +997,31 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForVisualCausalLM,
+            "qwen3_omni_moe",
+            False,
+            dict(
+                bits=4,
+                group_size=8,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+            ),
+            {
+                "lm_model": {"int8": 12, "int4": 22},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 13},
+                "vision_embeddings_pos_model": {"int8": 1},
+                "audio_encoder_model": {"int8": 18},
+                "talker_model": {"int8": 43},
+                "talker_text_embeddings_model": {"int8": 1},
+                "talker_projections_model": {"int8": 4},
+                "code_predictor_model": {"int8": 15},
+                "code2wav_model": {"int8": 53},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
             "phi3_v",
             True,
             dict(
@@ -1074,6 +1163,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForCausalLM, "hunyuan_v1_dense", False),
         (OVModelForCausalLM, "smollm3", False),
         (OVModelForFeatureExtraction, "qwen3_vl_embedding", False),
+        (OVModelForVisualCausalLM, "qwen3_omni_moe", False),
     ]
 
     # gemma3n openvino>=2026.2.0 because it needs erfinv operation,
@@ -1249,7 +1339,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_filtered_architectures(cls):
         expected = {
             model_type
-            for model_type in ("llava-qwen2", "phi3_v", "minicpmo")
+            for model_type in ("llava-qwen2", "phi3_v", "minicpmo", "qwen3_omni_moe")
             if not is_model_type_transformers_compatible(model_type)
         }
         if is_transformers_version(">=", "5"):
