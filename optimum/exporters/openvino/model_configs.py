@@ -2677,10 +2677,24 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
             behavior = MiniCPMVConfigBehavior(behavior)
 
         if behavior == MiniCPMVConfigBehavior.TEXT_EMBEDDINGS:
-            return get_vlm_text_embeddings_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
+            return get_vlm_text_embeddings_config(
+                "qwen2",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
 
         if behavior == MiniCPMVConfigBehavior.LANGUAGE:
-            return get_vlm_text_generation_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
+            return get_vlm_text_generation_config(
+                "qwen2",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
 
         if behavior == MiniCPMVConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
