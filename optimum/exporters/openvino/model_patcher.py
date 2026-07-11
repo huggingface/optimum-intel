@@ -11033,9 +11033,7 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
         encoder_wrap._orig_forward = encoder_wrap.forward
 
         def patched_encoder_forward(input_features):
-            speech_lengths = torch.tensor(
-                [input_features.shape[1]] * input_features.shape[0], dtype=torch.int32
-            )
+            speech_lengths = torch.tensor([input_features.shape[1]] * input_features.shape[0], dtype=torch.int32)
             encoder_out, encoder_out_lens = sense_voice(input_features, speech_lengths)
             adaptor_out, _ = adaptor(encoder_out, encoder_out_lens)
             return BaseModelOutput(last_hidden_state=adaptor_out)

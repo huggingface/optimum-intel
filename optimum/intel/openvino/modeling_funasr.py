@@ -189,7 +189,6 @@ def _is_funasr_source(model_id, **kwargs) -> bool:
 
 
 class _OVModelForFunAsr(OVModelForSpeechSeq2Seq):
-
     @classmethod
     def _from_pretrained_funasr(cls, model_id, export: bool = False, **kwargs):
         from ..utils.modeling_utils import _find_files_matching_pattern
@@ -330,7 +329,7 @@ class _OVModelForFunAsr(OVModelForSpeechSeq2Seq):
         decoder_attention_mask = torch.ones_like(decoder_input_ids)
         for i, t in enumerate(prompt_ids):
             if t.shape[0] < max_len:
-                decoder_attention_mask[i, t.shape[0]:] = 0
+                decoder_attention_mask[i, t.shape[0] :] = 0
 
         return {
             "input_features": input_features,
@@ -441,9 +440,7 @@ class _OVModelForFunAsr(OVModelForSpeechSeq2Seq):
                 new_ids = non_audio_before + [audio_token_id] * target_count + non_audio_after
                 result_ids.append(torch.tensor(new_ids, dtype=ids.dtype, device=ids.device))
         max_len = max(t.shape[0] for t in result_ids)
-        padded = torch.zeros(
-            len(result_ids), max_len, dtype=decoder_input_ids.dtype, device=decoder_input_ids.device
-        )
+        padded = torch.zeros(len(result_ids), max_len, dtype=decoder_input_ids.dtype, device=decoder_input_ids.device)
         for i, t in enumerate(result_ids):
             padded[i, : t.shape[0]] = t
         return padded
