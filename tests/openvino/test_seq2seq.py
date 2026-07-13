@@ -354,6 +354,8 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
     OVMODEL_CLASS = OVModelForSpeechSeq2Seq
     AUTOMODEL_CLASS = AutoModelForSpeechSeq2Seq
     TASK = "automatic-speech-recognition"
+    # cohere_asr ships as a HuggingFace Hub remote-code model and requires opting in.
+    REMOTE_CODE_MODELS = ("cohere_asr",)
 
     def _generate_random_audio_data(self):
         np.random.seed(10)
@@ -366,20 +368,26 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
     def test_compare_to_transformers(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        transformers_model = self.AUTOMODEL_CLASS.from_pretrained(model_id)
+        trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
+        transformers_model = self.AUTOMODEL_CLASS.from_pretrained(model_id, trust_remote_code=trust_remote_code)
         ov_model = self.OVMODEL_CLASS.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, trust_remote_code=trust_remote_code
         )
         ov_model_stateless = self.OVMODEL_CLASS.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, stateful=False, device=OPENVINO_DEVICE
+            model_id,
+            export=True,
+            ov_config=F32_CONFIG,
+            stateful=False,
+            device=OPENVINO_DEVICE,
+            trust_remote_code=trust_remote_code,
         )
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
         self._check_openvino_model_attributes(ov_model_stateless, use_cache=True, stateful=False)
 
-        processor = AutoProcessor.from_pretrained(model_id)
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=trust_remote_code)
         data = self._generate_random_audio_data()
         pt_features = processor.feature_extractor(data, return_tensors="pt")
-        decoder_start_token_id = transformers_model.config.decoder_start_token_id
+        decoder_start_token_id = getattr(transformers_model.config, "decoder_start_token_id", None) or 0
         decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
 
         with torch.no_grad():
@@ -437,8 +445,9 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = self.OVMODEL_CLASS.from_pretrained(model_id, device=OPENVINO_DEVICE)
-        processor = AutoProcessor.from_pretrained(model_id)
+        trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
+        model = self.OVMODEL_CLASS.from_pretrained(model_id, device=OPENVINO_DEVICE, trust_remote_code=trust_remote_code)
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=trust_remote_code)
         pipe = pipeline(
             "automatic-speech-recognition",
             model=model,

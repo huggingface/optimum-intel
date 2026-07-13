@@ -9904,6 +9904,79 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
                     del attn._orig_forward
 
 
+class CohereAsrModelPatcher(OVSeq2SeqModelPatcher):
+    """
+    Model patcher for CohereLabs/cohere-transcribe (Conformer encoder + Transformer decoder).
+
+    The remote-code Conformer encoder's relative positional encoding
+    (`RelPositionalEncoding` in `modeling_cohere_asr.py`) lazily materializes a `pe` buffer in
+    `_materialize_pe`, a method decorated with `torch._dynamo.disable(...)`. `torch.jit.trace`
+    (used by the OpenVINO exporter) re-invokes the traced module a second time to check that
+    the captured graph is deterministic (`check_trace`). The dynamo-disable wrapper hooks into
+    the same CPython frame-evaluation API used by the tracer, so the lazily-cached `pe` buffer
+    (and/or its recomputation) is not observed consistently across the two invocations,
+    producing constant nodes that differ (including differing dtypes for internal index
+    tensors), so `torch.jit.trace` aborts with:
+
+        "Tensor-valued Constant nodes differed in value across invocations."
+
+    Fix: replace `_materialize_pe` with a dynamo-free implementation that *always* recomputes
+    the `pe` buffer from scratch (no lazy "already materialized?" caching, no
+    `torch._dynamo.disable`). Because `_create_pe` is a pure, deterministic function of
+    `length`/`device`/`dtype`, a fresh eager recompute on every call is guaranteed to produce
+    bit-identical constants across `torch.jit.trace`'s two check-trace invocations, regardless
+    of the actual sequence length seen at trace time (dummy inputs) vs. `pos_enc.max_len`.
+    """
+
+    def __enter__(self):
+        super().__enter__()
+        self._patched_pos_encs = []
+        self._patch_positional_encoding()
+
+    def _patch_positional_encoding(self):
+        # Look up positional-encoding submodules by class name (rather than a fixed attribute
+        # path) so the patch keeps working whether `self._model` is the full model, the
+        # encoder-only submodule used for the "encoder" export variant, or a monolith variant.
+        pos_encs = [module for module in self._model.modules() if type(module).__name__ == "RelPositionalEncoding"]
+
+        for pos_enc in pos_encs:
+            pos_enc._orig_materialize_pe = pos_enc._materialize_pe
+            pos_enc._materialize_pe = self._make_frozen_materialize_pe(pos_enc)
+            self._patched_pos_encs.append(pos_enc)
+
+    @staticmethod
+    def _materialize_pe_eager(pos_enc, length, device, dtype):
+        """Plain-eager re-implementation of `RelPositionalEncoding._materialize_pe`, always
+        recomputing the buffer (no lazy reuse) so it stays deterministic under `torch.jit.trace`."""
+        effective_length = max(length, getattr(pos_enc, "max_len", length))
+        positions = torch.arange(
+            effective_length - 1, -effective_length, -1, dtype=torch.float32, device=device
+        ).unsqueeze(1)
+        pe = pos_enc._create_pe(positions=positions, dtype=dtype)
+        if hasattr(pos_enc, "pe"):
+            pos_enc.pe = pe
+        else:
+            pos_enc.register_buffer("pe", pe, persistent=False)
+
+    @classmethod
+    def _make_frozen_materialize_pe(cls, pos_enc):
+        # Deliberately unconditional: no `hasattr(self, "pe")` cache-hit branch, no
+        # `torch._dynamo.disable`. Always recomputing keeps the result a pure function of the
+        # call arguments, which is what makes it safe under `torch.jit.trace`'s check-pass.
+        def frozen_materialize_pe(length, device, dtype):
+            cls._materialize_pe_eager(pos_enc, length=length, device=device, dtype=dtype)
+
+        return frozen_materialize_pe
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        for pos_enc in getattr(self, "_patched_pos_encs", []):
+            if hasattr(pos_enc, "_orig_materialize_pe"):
+                pos_enc._materialize_pe = pos_enc._orig_materialize_pe
+                del pos_enc._orig_materialize_pe
+
+
 class KokoroModelPatcher(ModelPatcher):
     """
     Patches the Kokoro TTS model for OpenVINO export by redirecting forward

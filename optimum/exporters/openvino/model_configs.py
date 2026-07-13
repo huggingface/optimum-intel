@@ -99,6 +99,7 @@ from optimum.exporters.openvino.model_patcher import (
     BloomModelPatcher,
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
+    CohereAsrModelPatcher,
     CommonImageEmbeddingsModelPatcher,
     DBRXModelPatcher,
     DeciLMModelPatcher,
@@ -4123,6 +4124,8 @@ class CohereAsrOpenVINOConfig(WhisperOpenVINOConfig):
     contract as Whisper (input_features → encoder; encoder_outputs +
     decoder_input_ids + past_key_values → decoder logits).
     """
+
+    _MODEL_PATCHER = CohereAsrModelPatcher
 
     NORMALIZED_CONFIG_CLASS = NormalizedSeq2SeqConfig.with_args(
         encoder_num_layers="encoder_layers",
