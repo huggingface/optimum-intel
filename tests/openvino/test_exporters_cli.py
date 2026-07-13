@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import importlib.util
 import json
 import subprocess
 import unittest
@@ -18,7 +19,6 @@ from pathlib import Path
 from typing import Dict
 from unittest.mock import Mock
 
-import torch
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
@@ -580,6 +580,15 @@ class OVCLIExportTestCase(unittest.TestCase):
         )
 
     TRANSFORMERS_4BIT_CONFIGURATIONS = [
+        (
+            # Pre-quantized compressed-tensors (AWQ pack-quantized) model. It is already
+            # quantized, so it is exported without a `--weight-format`: the OpenVINO PyTorch
+            # frontend converts the packed weights directly into int4 constants.
+            "text-generation-with-past",
+            "llama_compressed_tensors",
+            None,
+            {"model": {"int4": 14}},
+        ),
         (
             "text-generation-with-past",
             "opt125m",
@@ -1205,15 +1214,24 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_4bit(
         self, task: str, model_type: str, option: str, expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]]
     ):
+        # option=None means the model is already quantized (e.g. compressed-tensors) and is
+        # exported as-is, without an NNCF weight-compression `--weight-format`.
+        is_prequantized = option is None
+        if model_type == "llama_compressed_tensors":
+            if is_openvino_version("<", "2026.3"):
+                self.skipTest("compressed-tensors export requires OpenVINO 2026.3 or newer")
+            if importlib.util.find_spec("compressed_tensors") is None:
+                self.skipTest("compressed_tensors is not installed")
         with TemporaryDirectory() as tmpdir:
+            weight_format = "" if is_prequantized else f"--weight-format {option}"
             result = subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {weight_format} {tmpdir}",
                 shell=True,
                 check=True,
                 capture_output=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-            if "--trust-remote-code" in option:
+            if not is_prequantized and "--trust-remote-code" in option:
                 model_kwargs["trust_remote_code"] = True
             model = eval(
                 _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
@@ -1221,7 +1239,17 @@ class OVCLIExportTestCase(unittest.TestCase):
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
 
-            check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
+            # Already-quantized models keep the default f16 KV cache precision, unlike models
+            # whose weights are compressed by NNCF during export.
+            check_compression_state_per_model(
+                self,
+                model.ov_models,
+                expected_num_weight_nodes_per_model,
+                check_kv_cache_precision=not is_prequantized,
+            )
+
+            if is_prequantized:
+                return
 
             # Starting from NNCF 2.17 there is a support for data-free AWQ
             awq_str = b"Applying data-aware AWQ" if "--dataset" in option else b"Applying data-free AWQ"
@@ -1581,29 +1609,3 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = eval(_HEAD_TO_AUTOMODELS["stable-diffusion"]).from_pretrained(tmpdir, compile=False)
             for component in ["text_encoder", "tokenizer", "unet", "vae_encoder", "vae_decoder"]:
                 self.assertIsNotNone(getattr(model, component))
-
-    def test_export_openvino_with_compressed_tensors_model(self):
-        model_id = MODEL_NAMES["llama_compressed_tensors"]
-
-        with TemporaryDirectory() as tmpdir:
-            subprocess.run(
-                f"optimum-cli export openvino --model {model_id} --task text-generation-with-past {tmpdir}",
-                shell=True,
-                check=True,
-            )
-            model = OVModelForCausalLM.from_pretrained(tmpdir)
-
-            _, num_weight_nodes = get_num_quantized_nodes(model)
-            self.assertGreater(
-                num_weight_nodes["int4"],
-                0,
-                "Expected compressed-tensors pack-quantized weights to be exported "
-                "as OpenVINO int4 constants",
-            )
-
-            # The model is tiny-random, so its outputs are meaningless; a few arbitrary
-            # token ids within the vocabulary are enough to exercise the generation loop.
-            input_ids = torch.tensor([[1, 2, 3, 4, 5]])
-            outputs = model.generate(input_ids=input_ids, max_new_tokens=5, do_sample=False)
-            self.assertEqual(outputs.shape[0], input_ids.shape[0])
-            self.assertGreater(outputs.shape[1], input_ids.shape[1])

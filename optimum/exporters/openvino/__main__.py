@@ -380,6 +380,14 @@ def main_export(
                 "Please upgrade OpenVINO, e.g. `pip install --upgrade openvino`."
             )
 
+        # Loading a compressed-tensors model and keeping its packed weights intact
+        # requires the `compressed_tensors` package.
+        if do_ct_patching and importlib.util.find_spec("compressed_tensors") is None:
+            raise RuntimeError(
+                "Exporting compressed-tensors quantized models requires the `compressed_tensors` "
+                "package, which is not installed. Please install it, e.g. `pip install compressed_tensors`."
+            )
+
         if is_transformers_version(">=", "4.56") and config.model_type in {"qwen2_vl_text", "qwen2_5_vl_text"}:
             patch_qwenvl_configs()
 
