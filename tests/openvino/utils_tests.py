@@ -25,6 +25,7 @@ import openvino as ov
 import torch
 from huggingface_hub import constants, scan_cache_dir
 
+import optimum.exporters.openvino  # noqa: F401 (registers OpenVINO export configs in TasksManager)
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import is_transformers_version
 
@@ -397,11 +398,11 @@ EAGLE3_VLM_MODELS = {
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "afmoe": {"model": 16},
-    "bert": {"model": 68 if is_transformers_version("<", "5") else 70},
+    "bert": {"model": 68 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 70},
     "roberta": {"model": 68},
     "albert": {"model": 84},
     "vit": {"model": 64},
-    "blenderbot": {"model": 70 if is_transformers_version("<", "5") else 72},
+    "blenderbot": {"model": 70 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 72},
     "cohere2": {"model": 30},
     "gpt2": {"model": 44},
     "granitemoehybrid": {"model": 118},
@@ -409,8 +410,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "distilbert": {"model": 66},
     "t5": {
         "encoder": 64,
-        "decoder": 104 if is_transformers_version("<", "5") else 106,
-        "decoder_with_past": 84 if is_transformers_version("<", "5") else 86,
+        "decoder": 104 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 106,
+        "decoder_with_past": 84 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 86,
     },
     "stable-diffusion": {
         "unet": 242,
@@ -804,6 +805,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "chatglm4": "chatglm",
     "codegen2": "codegen",
     "falcon-40b": "falcon",
+    "gemma4_moe": "gemma4",
     "gpt_oss_mxfp4": "gpt_oss",
     "llama_awq": "llama",
     "llava_next_mistral": "llava_next",
@@ -814,11 +816,25 @@ TEST_NAME_TO_MODEL_TYPE = {
     "opt_gptq": "opt",
     "perceiver_text": "perceiver",
     "perceiver_vision": "perceiver",
+    "qwen3_vl_embedding": "qwen3_vl",
     "swin-window": "swin",
     "vit-with-attentions": "vit",
     "vit-with-hidden-states": "vit",
     "wav2vec2-hf": "wav2vec2",
 }
+
+
+def get_transformers_versions(model_type, library_name="transformers"):
+    supported_model_type = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES[library_name]
+    export_config = next(iter(supported_model_type[model_type]["openvino"].values()))
+    min_transformers = str(getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", "0"))
+    max_transformers = str(getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", "999"))
+    return min_transformers, max_transformers
+
+
+def is_model_type_transformers_compatible(model_type, library_name="transformers"):
+    min_transformers, max_transformers = get_transformers_versions(model_type, library_name)
+    return is_transformers_version(">=", min_transformers) and is_transformers_version("<=", max_transformers)
 
 
 def get_supported_model_for_library(library_name):
@@ -827,12 +843,7 @@ def get_supported_model_for_library(library_name):
 
     for model_type in supported_model_type:
         if supported_model_type[model_type].get("openvino"):
-            export_config = next(iter(supported_model_type[model_type]["openvino"].values()))
-
-            min_transformers = str(getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", "0"))
-            max_transformers = str(getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", "999"))
-
-            if is_transformers_version(">=", min_transformers) and is_transformers_version("<=", max_transformers):
+            if is_model_type_transformers_compatible(model_type, library_name):
                 valid_model.add(model_type)
 
     return valid_model

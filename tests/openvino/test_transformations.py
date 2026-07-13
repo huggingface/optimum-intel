@@ -19,7 +19,13 @@ import textwrap
 import unittest
 
 from parameterized import parameterized
-from utils_tests import ARCH_TO_MODEL_CLASS, MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS
+from utils_tests import (
+    ARCH_TO_MODEL_CLASS,
+    MODEL_NAMES,
+    OPENVINO_DEVICE,
+    REMOTE_CODE_MODELS,
+    get_supported_model_for_library,
+)
 
 from optimum.intel.utils.import_utils import is_transformers_version
 
@@ -28,13 +34,10 @@ from optimum.intel.utils.import_utils import is_transformers_version
 #   "convert" — MoC (Model Optimizer Common) transformations applied during model conversion
 #   "compile" — device-specific transformations applied during compilation (e.g. CPU)
 #
-# Architectures are conditionally included based on transformers version
-# to match model compatibility constraints.
-# Some transformations are only applied in newer OpenVINO versions.
-ARCH_TO_EXPECTED_TRANSFORMATIONS = {}
-
-if is_transformers_version(">=", "4.51.0"):
-    ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"] = {
+# Architectures are filtered by get_supported_model_for_library and will be excluded if
+# export config MIN/MAX_TRANSFORMERS_VERSION don't match the installed transformers version.
+ARCH_TO_EXPECTED_TRANSFORMATIONS = {
+    "qwen3_moe": {
         "convert": [
             "SDPAFusion",
             "MakeStateful",
@@ -56,18 +59,8 @@ if is_transformers_version(">=", "4.51.0"):
             "ConvertToPowerStatic",
             "ConvertToSwishCPU",
         ],
-    }
-    if is_transformers_version(">=", "5.0.0"):
-        ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["convert"].extend(
-            [
-                "TransposeMatMul",
-                "ReshapeAMatMul",
-            ]
-        )
-
-
-if is_transformers_version(">=", "4.51.0") and is_transformers_version("<", "5"):
-    ARCH_TO_EXPECTED_TRANSFORMATIONS["llama4"] = {
+    },
+    "llama4": {
         "convert": [
             "SDPAFusion",
             "StatefulSDPAFusion",
@@ -93,10 +86,8 @@ if is_transformers_version(">=", "4.51.0") and is_transformers_version("<", "5")
             "Tokenization",
             "ConvertBroadcast3",
         ],
-    }
-
-if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
-    ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2"] = {
+    },
+    "lfm2": {
         "convert": [
             "SDPAFusion",
             "StatefulSDPAFusion",
@@ -120,11 +111,8 @@ if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
             "Snippets",
             "Tokenization",
         ],
-    }
-
-
-if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "5.5.0"):
-    ARCH_TO_EXPECTED_TRANSFORMATIONS["afmoe"] = {
+    },
+    "afmoe": {
         "convert": [
             "SDPAFusion",
             "MakeStateful",
@@ -145,10 +133,8 @@ if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "5.5
             "ConvertToPowerStatic",
             "ConvertToSwishCPU",
         ],
-    }
-
-if is_transformers_version(">=", "5.0") and is_transformers_version("<", "5.4.0"):
-    ARCH_TO_EXPECTED_TRANSFORMATIONS["lfm2_moe"] = {
+    },
+    "lfm2_moe": {
         "convert": [
             "SDPAFusion",
             "MakeStateful",
@@ -171,10 +157,8 @@ if is_transformers_version(">=", "5.0") and is_transformers_version("<", "5.4.0"
             "MoveReadValueInputsToSubgraph",
             "MulAddToFMA",
         ],
-    }
-
-if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
-    ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_5_moe"] = {
+    },
+    "qwen3_5_moe": {
         "convert": [
             "SDPAFusion",
             "MakeStateful",
@@ -202,10 +186,8 @@ if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.
             "ConvertToPowerStatic",
             "ConvertToSwishCPU",
         ],
-    }
-
-if is_transformers_version(">=", "5.5.0"):
-    ARCH_TO_EXPECTED_TRANSFORMATIONS["gemma4_moe"] = {
+    },
+    "gemma4_moe": {
         "convert": [
             "SDPAFusion",
             "SDPAFusionMatcher",
@@ -233,10 +215,8 @@ if is_transformers_version(">=", "5.5.0"):
             "ConvertMatMulToFC",
             "ConvertToPowerStatic",
         ],
-    }
-
-if is_transformers_version(">=", "5.10"):
-    ARCH_TO_EXPECTED_TRANSFORMATIONS["gemma4_unified"] = {
+    },
+    "gemma4_unified": {
         "convert": [
             "SDPAFusion",
             "SDPAFusionMatcher",
@@ -258,7 +238,24 @@ if is_transformers_version(">=", "5.10"):
             "ConvertMatMulToFC",
             "ConvertToPowerStatic",
         ],
-    }
+    },
+}
+
+if is_transformers_version(">=", "5.0.0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["convert"].extend(
+        [
+            "TransposeMatMul",
+            "ReshapeAMatMul",
+        ]
+    )
+
+
+# filter architectures depending on min/max transformers supported versions
+ARCH_TO_EXPECTED_TRANSFORMATIONS = {
+    arch: v
+    for arch, v in ARCH_TO_EXPECTED_TRANSFORMATIONS.items()
+    if arch in get_supported_model_for_library("transformers")
+}
 
 
 def _get_flat_transforms(arch):

@@ -31,6 +31,7 @@ from transformers import (
     AutoConfig,
     AutoImageProcessor,
     AutoModelForCausalLM,
+    AutoModelForImageTextToText,
     AutoModelForSeq2SeqLM,
     AutoModelForSpeechSeq2Seq,
     AutoModelForTextToSpectrogram,
@@ -44,19 +45,26 @@ from transformers import (
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
-from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TEST_IMAGE_URL, Timer
+from utils_tests import (
+    F32_CONFIG,
+    MODEL_NAMES,
+    OPENVINO_DEVICE,
+    SEED,
+    TEST_IMAGE_URL,
+    TEST_NAME_TO_MODEL_TYPE,
+    Timer,
+    get_supported_model_for_library,
+)
 
-from optimum.exporters.openvino.model_configs import Gemma3nTextOpenVINOConfig, Qwen3OmniMoeOpenVINOConfig
-from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.stateful import model_has_state
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
+    OVModelForImageTextToText,
     OVModelForMultimodalLM,
     OVModelForSeq2SeqLM,
     OVModelForSpeechSeq2Seq,
     OVModelForTextToSpeechSeq2Seq,
-    OVModelForVision2Seq,
     OVModelForVisualCausalLM,
 )
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
@@ -75,16 +83,10 @@ from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 
 
-# AutoModelForVision2Seq is deprecated since v4.54
-# https://github.com/huggingface/transformers/blob/v4.54.0/src/transformers/models/auto/modeling_auto.py#L2151
-if is_transformers_version(">=", "4.54.0"):
-    from transformers import AutoModelForImageTextToText
-
-    transformers_auto_class = AutoModelForImageTextToText
+if is_transformers_version("<=", "4.52"):
+    from transformers.image_utils import load_video
 else:
-    from transformers import AutoModelForVision2Seq
-
-    transformers_auto_class = AutoModelForVision2Seq
+    from transformers.video_utils import load_video
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -134,13 +136,6 @@ class OVSeq2SeqTestMixin(unittest.TestCase):
         }
         supported_architectures = ov_architectures & transformers_architectures
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
-
-        if is_transformers_version("<", str(Gemma3nTextOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
-            supported_architectures -= {"gemma3n"}
-
-        if is_transformers_version("<", str(Qwen3OmniMoeOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
-            supported_architectures -= {"qwen3_omni_moe"}
-
         untested_architectures = supported_architectures - tested_architectures
 
         if len(untested_architectures - self.UNSUPPORTED_ARCHITECTURES) > 0:
@@ -156,8 +151,6 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
         "blenderbot",
         "blenderbot-small",
         "longt5",
-        "m2m_100",
-        "mbart",
         "pegasus",
         "t5",
     )
@@ -166,26 +159,32 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
     TASK = "text2text-generation"
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
-    UNSUPPORTED_ARCHITECTURES = set()
-    if not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2026.1")) and is_transformers_version(
-        "<", "5"
-    ):
-        # There are known issues with marian model on OpenVINO 2025.3.x and 2025.4.x
-        SUPPORTED_ARCHITECTURES += ("marian",)
-    else:
-        UNSUPPORTED_ARCHITECTURES.add("marian")
+    _is_model_supported = {
+        # config loading failing coming from type mismatch coming from transformers v5.4
+        "m2m_100": is_transformers_version("!=", "5.4"),
+        "mbart": is_transformers_version("!=", "5.4"),
+        # known issues with marian on OpenVINO 2025.3.x and 2025.4.x
+        "marian": not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2026.1"))
+        and is_transformers_version("<", "5"),
+        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly (mt5)
+        "mt5": is_transformers_version("<", "5"),
+    }
+    SUPPORTED_ARCHITECTURES += tuple(arch for arch, supported in _is_model_supported.items() if supported)
+    UNSUPPORTED_ARCHITECTURES = {arch for arch, supported in _is_model_supported.items() if not supported}
 
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES += ("mt5",)
-    else:
-        UNSUPPORTED_ARCHITECTURES.add("mt5")
-
-    SUPPORT_STATEFUL = ("t5", "mt5", "longt5")
-    if is_transformers_version(">=", "4.52.0"):
-        SUPPORT_STATEFUL += ("bart", "blenderbot", "blenderbot-small", "m2m_100", "marian", "mbart")
-    if is_transformers_version(">=", "4.53.0"):
-        SUPPORT_STATEFUL += ("pegasus", "bigbird_pegasus")
+    SUPPORT_STATEFUL = (
+        "t5",
+        "mt5",
+        "longt5",
+        "bart",
+        "blenderbot",
+        "blenderbot-small",
+        "m2m_100",
+        "marian",
+        "mbart",
+        "pegasus",
+        "bigbird_pegasus",
+    )
 
     def test_find_untested_architectures(self):
         self._test_find_untested_architectures()
@@ -203,7 +202,7 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
         ov_stateless_model = self.OVMODEL_CLASS.from_pretrained(
             model_id, export=True, use_cache=False, stateful=False, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
         )
-        expected_stateful = is_transformers_version(">", "4.46") and model_arch in self.SUPPORT_STATEFUL
+        expected_stateful = model_arch in self.SUPPORT_STATEFUL
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=expected_stateful)
         self._check_openvino_model_attributes(ov_stateless_model, use_cache=False, stateful=False)
 
@@ -400,7 +399,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
             )
 
         generate_kwrgs = {}
-        if is_transformers_version(">=", "4.50") and is_transformers_version("<", "5"):
+        if is_transformers_version("<", "5"):
             generate_kwrgs = {"use_model_defaults": False}
 
         gen_config = GenerationConfig(
@@ -554,14 +553,21 @@ class Qwen3ASRTest(unittest.TestCase):
         gc.collect()
 
 
-class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
-    SUPPORTED_ARCHITECTURES = ["vision-encoder-decoder", "trocr", "donut"]
+class OVModelForImageTextToTextIntegrationTest(OVSeq2SeqTestMixin):
+    SUPPORTED_ARCHITECTURES = ["vision-encoder-decoder", "trocr"]
     # GOT-OCR2 models shouldn't be exported using the task image-to-text (currently equivalent to exporting the model using image-text-to-text) and will be deprecated v1.29
     # TODO: move pix2struct tests from OVModelForPix2StructIntegrationTest
-    UNSUPPORTED_ARCHITECTURES = {"got_ocr2", "pix2struct"}
+
+    # config loading failing coming from type mismatch coming from transformers v5.4
+    _is_model_supported = {"donut": is_transformers_version("!=", "5.4")}
+    SUPPORTED_ARCHITECTURES += [arch for arch, supported in _is_model_supported.items() if supported]
+    UNSUPPORTED_ARCHITECTURES = {"got_ocr2", "pix2struct"} | {
+        arch for arch, supported in _is_model_supported.items() if not supported
+    }
+
     TASK = "image-to-text"
-    OVMODEL_CLASS = OVModelForVision2Seq
-    AUTOMODEL_CLASS = transformers_auto_class
+    OVMODEL_CLASS = OVModelForImageTextToText
+    AUTOMODEL_CLASS = AutoModelForImageTextToText
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
@@ -668,89 +674,52 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "llava_next",
         "llava_next_mistral",
         "qwen2_vl",
+        "maira2",
+        "qwen2_5_vl",
+        "gemma3",
+        "qwen3_vl",
+        "idefics3",
+        "got_ocr2",
+        "smolvlm",
+        "llama4",
+        "llava_next_video",
+        "videochat_flash_qwen",
+        "internvl_chat",
+        "minicpmv",
+        "minicpmo",
+        "llava-qwen2",
+        "phi3_v",
+        "phi4mm",
+        "gemma4",
+        "gemma4_moe",
+        "gemma4_unified",
+        "gemma3n",
+        "qwen3_5",
+        "qwen3_5_moe",
+        "qwen3_omni_moe",
     ]
-    SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl"]
-    SUPPORT_AUDIO = []
+    SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl", "qwen2_5_vl", "qwen3_vl", "videochat_flash_qwen"]
+    SUPPORT_AUDIO = ["qwen3_omni_moe"]
     # "llama" is registered for image-text-to-text
     # to support VLM Eagle3 draft models (tested separately in test_genai.py).
     UNSUPPORTED_ARCHITECTURES = {"phi4_multimodal", "llama"}
-    SUPPORT_AUDIO_OUTPUT = []
+    SUPPORT_AUDIO_OUTPUT = ["qwen3_omni_moe"]
     OVMODEL_CLASS = OVModelForVisualCausalLM
     TASK = "image-text-to-text"
 
-    if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ["maira2"]
+    # filter architectures depending on min/max transformers supported versions declared on their
+    # OpenVINO export config
+    UNSUPPORTED_ARCHITECTURES.update(
+        arch
+        for arch in SUPPORTED_ARCHITECTURES
+        if TEST_NAME_TO_MODEL_TYPE.get(arch, arch) not in get_supported_model_for_library("transformers")
+    )
+    SUPPORTED_ARCHITECTURES = [
+        arch
+        for arch in SUPPORTED_ARCHITECTURES
+        if TEST_NAME_TO_MODEL_TYPE.get(arch, arch) in get_supported_model_for_library("transformers")
+    ]
 
-        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-        if is_transformers_version("<", "5"):
-            SUPPORTED_ARCHITECTURES += ["idefics3"]
-
-    if is_transformers_version(">=", "4.49.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl"]
-        SUPPORT_VIDEO.append("qwen2_5_vl")
-
-        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-        if is_transformers_version("<", "5"):
-            SUPPORTED_ARCHITECTURES += ["got_ocr2"]
-
-        if is_transformers_version("<", "4.54.0"):
-            # remote code models differs after transformers v4.54
-            SUPPORTED_ARCHITECTURES += ["phi4mm"]
-            SUPPORT_AUDIO.append("phi4mm")
-
-    if is_transformers_version(">=", "4.50"):
-        SUPPORTED_ARCHITECTURES += ["gemma3"]
-        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-        if is_transformers_version("<", "5"):
-            SUPPORTED_ARCHITECTURES += ["smolvlm"]
-
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version(">=", "4.51") and is_transformers_version("<", "5"):
-        # SUPPORTED_ARCHITECTURES += ["llama4", "phi4_multimodal"]
-        SUPPORTED_ARCHITECTURES += ["llama4"]
-
-    if is_transformers_version("<", "4.52"):
-        SUPPORTED_ARCHITECTURES += ["minicpmo"]
-    if is_transformers_version(">=", "4.57.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen3_vl"]
-        SUPPORT_VIDEO += ["qwen3_vl"]
-
-    # Qwen3-Omni-MoE requires Transformers 5.0+ (fused-experts / router API).
-    if is_transformers_version(">=", "5.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen3_omni_moe"]
-        SUPPORT_AUDIO.append("qwen3_omni_moe")
-        SUPPORT_AUDIO_OUTPUT.append("qwen3_omni_moe")
-
-    if is_transformers_version(">=", "4.54.0") and is_transformers_version("<=", "4.57.6"):
-        # remote code models incompatible before transformers v4.54 and after transformers v4.57.6
-        SUPPORTED_ARCHITECTURES += ["videochat_flash_qwen"]
-        SUPPORT_VIDEO += ["videochat_flash_qwen"]
-
-    if is_transformers_version("<", "4.54.0"):
-        # remote code models differs after transformers v4.54
-        SUPPORTED_ARCHITECTURES += ["llava-qwen2", "phi3_v"]
-
-    if is_transformers_version("<", "5"):
-        # remote code models incompatible after transformers v5
-        SUPPORTED_ARCHITECTURES += ["internvl_chat", "minicpmv"]
-
-    if is_transformers_version(">=", "5.5"):
-        SUPPORTED_ARCHITECTURES += ["gemma4", "gemma4_moe"]
-
-    if is_transformers_version(">=", "5.0"):
-        SUPPORTED_ARCHITECTURES += ["gemma3n"]
-
-    if is_transformers_version(">=", "5.10"):
-        SUPPORTED_ARCHITECTURES += ["gemma4_unified"]
-
-    if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen3_5", "qwen3_5_moe"]
-
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES += ("llava_next_video",)
-    else:
-        UNSUPPORTED_ARCHITECTURES.update({"got_ocr2", "idefics3", "llama4", "llava_next_video", "smolvlm"})
     REMOTE_CODE_MODELS = [
         "internvl_chat",
         "minicpmv",
@@ -774,7 +743,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             from transformers import Qwen3OmniMoeForConditionalGeneration
 
             return Qwen3OmniMoeForConditionalGeneration
-        if is_transformers_version(">=", "4.46") and model_arch in [
+        if model_arch in [
             "llava",
             "llava_next",
             "llava_next_mistral",
@@ -917,8 +886,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 f"but found counts: {bos_token_counts.tolist()}",
             )
 
-            if is_transformers_version(">=", "4.57.0"):
-                inputs.pop("token_type_ids")
+            inputs.pop("token_type_ids")
 
         transformers_inputs = copy.deepcopy(inputs)
         # llama4 preprocessing force bf16 dtype for pixel_values, that does not work on CPU with fp32 model
@@ -976,19 +944,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         set_seed(SEED)
 
         additional_inputs = {}
-        # gemma3 does not support dynamic cache until v4.53, we cannot compare dynamic cache result vs hybrid cache,
-        # align cache representation in torch model
-        if model_arch == "gemma3" and is_transformers_version("<", "4.53.0"):
-            patch_update_causal_mask(
-                transformers_model if is_transformers_version("<", "4.52.0") else transformers_model.language_model,
-                "4.43.0",
-            )
-            transformers_model._supports_cache_class = True
-            transformers_model.generation_config.cache_implementation = None
-            from transformers.cache_utils import DynamicCache
-
-            additional_inputs = {"past_key_values": DynamicCache()}
-
         if model_arch == "llama4":
             transformers_inputs["past_key_values"] = DynamicCache()
 
@@ -1014,13 +969,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
         )
 
-        # video loader helper only available for transformers >= 4.49
-        if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
-            if is_transformers_version("<=", "4.52"):
-                from transformers.image_utils import load_video
-            else:
-                from transformers.video_utils import load_video
-
+        if model_arch in self.SUPPORT_VIDEO:
             video_path = hf_hub_download(
                 repo_id="raushan-testing-hf/videos-test",
                 filename="sample_demo_1.mp4",
@@ -1137,13 +1086,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
             self.assertIsInstance(outputs[0], str)
 
-            if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
-                # video loader helper only available for transformers >= 4.49
-                if is_transformers_version("<=", "4.52"):
-                    from transformers.image_utils import load_video
-                else:
-                    from transformers.video_utils import load_video
-
+            if model_arch in self.SUPPORT_VIDEO:
                 video_path = hf_hub_download(
                     repo_id="raushan-testing-hf/videos-test",
                     filename="sample_demo_1.mp4",
@@ -1579,8 +1522,8 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
 class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ["pix2struct"]
     TASK = "image-to-text"  # is it fine as well with visual-question-answering?
-    OVMODEL_CLASS = OVModelForVision2Seq
-    AUTOMODEL_CLASS = transformers_auto_class
+    OVMODEL_CLASS = OVModelForImageTextToText
+    AUTOMODEL_CLASS = AutoModelForImageTextToText
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
