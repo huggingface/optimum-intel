@@ -467,7 +467,7 @@ class OVQuantizerTest(unittest.TestCase):
             "qwen3_omni_moe",
             OVQuantizationConfig(
                 bits=8,
-                dataset="contextual",
+                dataset="textvqa",
                 num_samples=1,
             ),
             {
@@ -483,15 +483,15 @@ class OVQuantizerTest(unittest.TestCase):
                 "code2wav_model": 0,
             },
             {
-                "lm_model": {"int8": 70},
+                "lm_model": {"int8": 17},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 13},
                 "vision_embeddings_pos_model": {"int8": 1},
                 "audio_encoder_model": {"int8": 18},
-                "talker_model": {"int8": 43},
+                "talker_model": {"int8": 35},
                 "talker_text_embeddings_model": {"int8": 1},
                 "talker_projections_model": {"int8": 4},
-                "code_predictor_model": {"int8": 15},
+                "code_predictor_model": {"int8": 16},
                 "code2wav_model": {"int8": 53},
             },
         ),
@@ -1008,7 +1008,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             dict(
                 bits=4,
                 group_size=8,
-                dataset="contextual",
+                dataset="textvqa",
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 num_samples=1,
