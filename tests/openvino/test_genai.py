@@ -164,7 +164,6 @@ class LLMPipelineTestCase(unittest.TestCase):
         "phi3",
         "phimoe",
         "exaone4",
-        "codegen2",
         "exaone",
         "decilm",
         "internlm2",
@@ -175,6 +174,10 @@ class LLMPipelineTestCase(unittest.TestCase):
         "internlm",
         "dbrx",
     )
+
+    # remote modeling incompatible with v5 but not filtered as CodeGenOpenVINOConfig is compatible (codegen)
+    if is_transformers_version("<", "5"):
+        ALL_SUPPORTED_ARCHITECTURES += ("codegen2",)
 
     # to be expanded, other architectures work on NPU too
     # qwen2, phi and phi3 tests are flaky on NPU, not including for now
