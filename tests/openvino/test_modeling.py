@@ -117,6 +117,7 @@ from optimum.utils import (
 )
 from optimum.utils.testing_utils import require_diffusers
 
+
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
