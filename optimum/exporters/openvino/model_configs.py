@@ -5576,6 +5576,11 @@ class MobileBertOpenVINOConfig(BertOpenVINOConfig):
     pass
 
 
+@register_in_tasks_manager("nomic_bert", *COMMON_TEXT_TASKS)
+class NomicBertOpenVINOConfig(BertOpenVINOConfig):
+    pass
+
+
 @register_in_tasks_manager("xlm", *COMMON_TEXT_TASKS)
 class XLMOpenVINOConfig(BertOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
