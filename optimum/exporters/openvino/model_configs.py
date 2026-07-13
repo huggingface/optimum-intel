@@ -6392,6 +6392,47 @@ class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
 
 
 @register_in_tasks_manager(
+    "cosmos3_omni",
+    *["image-text-to-text", "feature-extraction", "feature-extraction-with-past"],
+    library_name="transformers",
+)
+class Cosmos3OmniOpenVINOConfig(Qwen3VLOpenVINOConfig):
+    # Cosmos3Omni's Reasoner surface is architecturally identical to Qwen3-VL (upstream
+    # `transformers` defines `Cosmos3OmniForConditionalGeneration(Qwen3VLForConditionalGeneration): pass`,
+    # only the `model_type` string and released checkpoint differ). Native support first
+    # appears in `transformers` v5.11.0.
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior]
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
+    # `Qwen3VLOpenVINOConfig` (parent) caps MAX_TRANSFORMERS_VERSION at "5.0", which predates
+    # cosmos3_omni's introduction in transformers 5.11.0 -- override the range to the versions
+    # this config has actually been verified against.
+    MIN_TRANSFORMERS_VERSION = "5.11.0"
+    MAX_TRANSFORMERS_VERSION = "5.13.99"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: QwenVLConfigBehavior = QwenVLConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+            behavior=behavior,
+        )
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+            self._normalized_config.use_embed_dim = True
+
+
+@register_in_tasks_manager(
     "qwen3_5",
     *["image-text-to-text"],
     library_name="transformers",
