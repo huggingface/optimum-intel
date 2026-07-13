@@ -4832,47 +4832,28 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        # Difference from original:
-        # uses Dynamic cache from legacy cache instead of HybridCache
-        # calculate causal mask from multimodal
-
-        def forward(
-            self, attention_mask, position_ids, past_key_values, token_type_ids, inputs_embeds, use_cache=True
-        ):
-            if is_transformers_version("<", "5"):
-                pkv = DynamicCache.from_legacy_cache(past_key_values)
-            else:
-                pkv = DynamicCache(past_key_values)
-
-            past_seen_tokens = past_key_values[0][0].shape[-2]
-            cache_position = torch.arange(
-                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
-            )
-            forward_kwargs = {}
-
-            forward_kwargs["token_type_ids"] = token_type_ids
-
-            result = self.__orig_forward(
-                input_ids=None,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                cache_position=cache_position,
-                past_key_values=pkv,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                **forward_kwargs,
-            )
-            upd_pkv = result["past_key_values"]
-            result["past_key_values"] = postprocess_past_key_values(upd_pkv)
-            return result
-
         super().__init__(config, model, model_kwargs)
 
-    def __enter__(self):
-        super().__enter__()
+        model_forward = self.orig_forward
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
+        # precompute the token_type_ids bidirectional (image) mask since transformers v5.6
+        # (https://github.com/huggingface/transformers/pull/45454) is_first_iteration removed
+        # in create_causal_mask_mapping
+        @functools.wraps(model_forward)
+        def forward_with_precomputed_mask(*args, **kwargs):
+            bound_args = inspect.signature(model_forward).bind(*args, **kwargs)
+            bound_args.apply_defaults()
+            inputs_embeds = bound_args.arguments.get("inputs_embeds")
+            token_type_ids = bound_args.arguments.get("token_type_ids")
+            attention_mask = bound_args.arguments.get("attention_mask")
+            if token_type_ids is not None and isinstance(attention_mask, torch.Tensor):
+                sliding_window = self._model.config.get_text_config().sliding_window
+                bound_args.arguments["attention_mask"] = _create_gemma4_unified_bidirectional_mask_dict(
+                    attention_mask, token_type_ids, inputs_embeds, sliding_window
+                )
+            return model_forward(*bound_args.args, **bound_args.kwargs)
+
+        self.orig_forward = forward_with_precomputed_mask
 
 
 # Forward method of the language model of Gemma3n, needs to be patched to pass 'per_layer_inputs',
@@ -4956,11 +4937,12 @@ def gemma3n_language_model_forward(
     return outputs
 
 
-# Creates a dict of causal masks with bidirectional attention for vision tokens
-# on sliding_attention layers, matching the behavior of transformers
-# create_causal_mask_mapping when use_bidirectional_attention == "vision".
+# Creates a dict of causal masks with bidirectional attention for vision tokens,
+# matching the behavior of transformers create_masks_for_generate with
+# block_sequence_ids when use_bidirectional_attention == "vision" (the bidirectional
+# overlay applies to both the full-attention and sliding-attention masks).
 # Needs to be patched to pass proper 'sliding_mask' for prefill stage.
-# Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/gemma4/modeling_gemma4.py#L1986
+# Original code: https://github.com/huggingface/transformers/blob/v5.10.0/src/transformers/models/gemma4/modeling_gemma4.py#L2320
 def _create_gemma4_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids, inputs_embeds, sliding_window):
     dtype = inputs_embeds.dtype
     device = inputs_embeds.device
@@ -5008,7 +4990,9 @@ def _create_gemma4_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids,
     same_group = (query_groups.unsqueeze(2) == key_groups.unsqueeze(1)) & (key_groups.unsqueeze(1) >= 0)
     same_group = same_group.unsqueeze(1)  # [batch, 1, seq_len, total_len]
 
-    # Undo masking for same-group vision tokens in sliding mask
+    # Un-mask same-group vision tokens in both masks (bidirectional attention within an image).
+    if is_transformers_version(">=", "5.9"):
+        full_mask = full_mask.masked_fill(same_group, 0.0)
     sliding_mask = sliding_mask.masked_fill(same_group, 0.0)
 
     return {
@@ -5216,6 +5200,10 @@ def gemma4_text_attention_forward(
 ) -> tuple:
     from transformers.models.gemma4.modeling_gemma4 import apply_rotary_pos_emb as apply_rotary_pos_emb_gemma4
 
+    # since transformers >= v5.6 (PR #45788) `shared_kv_states` dict and is passed and `kv_shared_layer_index` removed
+    shared_kv_states = kwargs.pop("shared_kv_states", None)
+    legacy_shared_kv_states = hasattr(self, "kv_shared_layer_index")
+
     input_shape = hidden_states.shape[:-1]
     hidden_shape = (*input_shape, -1, self.head_dim)
 
@@ -5226,8 +5214,12 @@ def gemma4_text_attention_forward(
     query_states = apply_rotary_pos_emb_gemma4(query_states, cos, sin, unsqueeze_dim=2)
     query_states = query_states.transpose(1, 2)
 
-    if self.is_kv_shared_layer and past_key_values is not None:
-        key_states, value_states = past_key_values.shared_layers[self.kv_shared_layer_index]
+    if self.is_kv_shared_layer and (not legacy_shared_kv_states or past_key_values is not None):
+        if legacy_shared_kv_states:
+            key_states, value_states = past_key_values.shared_layers[self.kv_shared_layer_index]
+        else:
+            key_states, value_states = shared_kv_states[self.layer_type]
+
         key_states = key_states.to(query_states.device)
         value_states = value_states.to(query_states.device)
     else:
@@ -5242,18 +5234,26 @@ def gemma4_text_attention_forward(
         value_states = value_states.transpose(1, 2)
 
     if past_key_values is not None:
-        cache_kwargs = {
-            "sin": sin,
-            "cos": cos,
-            "cache_position": cache_position,
-            "sliding_window": self.sliding_window,
-        }
-        if not self.is_kv_shared_layer:
-            key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
-        if self.store_full_length_kv:
-            if not hasattr(past_key_values, "shared_layers"):
-                past_key_values.shared_layers = {}
-            past_key_values.shared_layers[self.layer_idx] = key_states, value_states
+        if legacy_shared_kv_states:
+            cache_kwargs = {
+                "sin": sin,
+                "cos": cos,
+                "cache_position": cache_position,
+                "sliding_window": self.sliding_window,
+            }
+            if not self.is_kv_shared_layer:
+                key_states, value_states = past_key_values.update(
+                    key_states, value_states, self.layer_idx, cache_kwargs
+                )
+            if self.store_full_length_kv:
+                if not hasattr(past_key_values, "shared_layers"):
+                    past_key_values.shared_layers = {}
+                past_key_values.shared_layers[self.layer_idx] = key_states, value_states
+        else:
+            if not self.is_kv_shared_layer:
+                key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx)
+            if self.store_full_length_kv and shared_kv_states is not None:
+                shared_kv_states[self.layer_type] = key_states, value_states
 
     attention_interface = gemma4_eager_attention_forward_patched
 
@@ -8701,8 +8701,9 @@ def _create_gemma4_unified_bidirectional_mask_dict(
     same_group = (query_groups.unsqueeze(2) == key_groups.unsqueeze(1)) & (key_groups.unsqueeze(1) >= 0)
     same_group = same_group.unsqueeze(1)  # [batch, 1, seq_len, total_len]
 
-    # Un-mask same-group vision tokens in both masks (bidirectional attention within an image).
-    full_mask = full_mask.masked_fill(same_group, 0.0)
+    # Un-mask same-group vision tokens in both masks (bidirectional attention within an image)
+    if is_transformers_version(">=", "5.9"):
+        full_mask = full_mask.masked_fill(same_group, 0.0)
     sliding_mask = sliding_mask.masked_fill(same_group, 0.0)
 
     return {
