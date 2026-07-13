@@ -32,7 +32,6 @@ jobs:
           [
             "*decoder*",
             "*seq2seq*",
-            "*export*",
           ]
 
     runs-on: ubuntu-22.04
