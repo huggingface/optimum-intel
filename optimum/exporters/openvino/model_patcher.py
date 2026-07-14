@@ -9911,22 +9911,47 @@ class CohereAsrModelPatcher(OVSeq2SeqModelPatcher):
 
     The remote-code Conformer encoder's relative positional encoding
     (`RelPositionalEncoding` in `modeling_cohere_asr.py`) lazily materializes a `pe` buffer in
-    `_materialize_pe`, a method decorated with `torch._dynamo.disable(...)`. `torch.jit.trace`
-    (used by the OpenVINO exporter) re-invokes the traced module a second time to check that
-    the captured graph is deterministic (`check_trace`). The dynamo-disable wrapper hooks into
-    the same CPython frame-evaluation API used by the tracer, so the lazily-cached `pe` buffer
-    (and/or its recomputation) is not observed consistently across the two invocations,
-    producing constant nodes that differ (including differing dtypes for internal index
-    tensors), so `torch.jit.trace` aborts with:
+    `_materialize_pe`, a method decorated with `torch._dynamo.disable(...)`. The exact patched
+    code, from `modeling_cohere_asr.py` at Hub revision `b1eacc2686a3d08ceaae5f24a88b1d519620bc09`
+    of `CohereLabs/cohere-transcribe-03-2026` (line numbers as of that revision)::
+
+        @_dynamo_disable
+        def _materialize_pe(self, length: int, device: torch.device, dtype: torch.dtype):
+            needed_size = 2 * length - 1
+            if hasattr(self, "pe") and self.pe.size(1) >= needed_size:
+                if self.pe.device != device:
+                    self.pe = self.pe.to(device=device)
+                if self.pe.dtype != dtype:
+                    self.pe = self.pe.to(dtype=dtype)
+                return
+            effective_length = max(length, self.max_len)
+            positions = torch.arange(
+                effective_length - 1, -effective_length, -1, dtype=torch.float32, device=device
+            ).unsqueeze(1)
+            pe = self._create_pe(positions=positions, dtype=dtype)
+            if hasattr(self, "pe"):
+                self.pe = pe
+            else:
+                self.register_buffer("pe", pe, persistent=False)
+        # (modeling_cohere_asr.py, lines ~199-215)
+
+    `torch.jit.trace` (used by the OpenVINO exporter) re-invokes the traced module a second time
+    to check that the captured graph is deterministic (`check_trace`). The dynamo-disable
+    wrapper hooks into the same CPython frame-evaluation API used by the tracer, so the
+    lazily-cached `pe` buffer (and the `hasattr(self, "pe") and self.pe.size(1) >= needed_size`
+    early-return above) is not observed consistently across the two invocations, producing
+    constant nodes that differ (including differing dtypes for internal index tensors), so
+    `torch.jit.trace` aborts with:
 
         "Tensor-valued Constant nodes differed in value across invocations."
 
-    Fix: replace `_materialize_pe` with a dynamo-free implementation that *always* recomputes
-    the `pe` buffer from scratch (no lazy "already materialized?" caching, no
-    `torch._dynamo.disable`). Because `_create_pe` is a pure, deterministic function of
-    `length`/`device`/`dtype`, a fresh eager recompute on every call is guaranteed to produce
-    bit-identical constants across `torch.jit.trace`'s two check-trace invocations, regardless
-    of the actual sequence length seen at trace time (dummy inputs) vs. `pos_enc.max_len`.
+    Fix: replace `_materialize_pe` with a dynamo-free implementation (`_materialize_pe_eager`
+    below) that *always* recomputes the `pe` buffer from scratch (no lazy "already
+    materialized?" caching, no `torch._dynamo.disable`). Because `_create_pe` is a pure,
+    deterministic function of `length`/`device`/`dtype`, a fresh eager recompute on every call
+    is guaranteed to produce bit-identical constants across `torch.jit.trace`'s two check-trace
+    invocations, regardless of the actual sequence length seen at trace time (dummy inputs) vs.
+    `pos_enc.max_len`.
     """
 
     def __enter__(self):
@@ -9939,19 +9964,33 @@ class CohereAsrModelPatcher(OVSeq2SeqModelPatcher):
         """
         `CohereAsrForConditionalGeneration.forward` (and its `_prepare_inputs_for_generation`
         helper) derive the decoder's self/cross-attention masks from `_get_cache_seq_length`,
-        a free function (in the remote-code module) that does `int(past_key_values.get_seq_length())`.
-        The explicit `int(...)` cast immediately materializes the cache length into a plain
-        Python int at trace time, which `torch.jit.trace` then bakes as a graph *constant*
-        wherever it feeds `torch.arange`/mask-shape arithmetic (`total_kv_len`,
-        `self_attention_mask`, `_align_decoder_attention_mask`). This makes the exported
-        with-past decoder only valid for the exact KV-cache length seen during tracing, so real
-        inference at any other step count fails with a `ScaledDotProductAttentionWithKVCache`
-        shape-mismatch error (traced/static kv length vs. actual kv length).
+        a free function in the remote-code module. The exact patched code, from
+        `modeling_cohere_asr.py` at Hub revision `b1eacc2686a3d08ceaae5f24a88b1d519620bc09` of
+        `CohereLabs/cohere-transcribe-03-2026` (lines ~1423-1430)::
 
-        Fix: monkeypatch the module-level `_get_cache_seq_length` for the trace duration so it
-        returns the tensor-derived length without the `int(...)` cast, keeping it dynamic
-        through `torch.jit.trace` (mirroring how `past_key_values[0][0].shape[-2]` stays dynamic
-        for every other seq2seq/decoder-only architecture in this file).
+            def _get_cache_seq_length(past_key_values) -> int:
+                if past_key_values is None:
+                    return 0
+                if hasattr(past_key_values, "get_seq_length"):
+                    return int(past_key_values.get_seq_length())
+                if isinstance(past_key_values, tuple) and past_key_values:
+                    return int(past_key_values[0][0][0].shape[-2])
+                return 0
+
+        The explicit `int(...)` cast on both non-trivial branches immediately materializes the
+        cache length into a plain Python int at trace time, which `torch.jit.trace` then bakes
+        as a graph *constant* wherever it feeds `torch.arange`/mask-shape arithmetic
+        (`total_kv_len`, `self_attention_mask`, `_align_decoder_attention_mask`). This makes the
+        exported with-past decoder only valid for the exact KV-cache length seen during tracing,
+        so real inference at any other step count fails with a
+        `ScaledDotProductAttentionWithKVCache` shape-mismatch error (traced/static kv length vs.
+        actual kv length).
+
+        Fix: monkeypatch the module-level `_get_cache_seq_length` for the trace duration
+        (`_dynamic_get_cache_seq_length` below) so it returns the tensor-derived length without
+        the `int(...)` cast, keeping it dynamic through `torch.jit.trace` (mirroring how
+        `past_key_values[0][0].shape[-2]` stays dynamic for every other seq2seq/decoder-only
+        architecture in this file).
         """
         module = sys.modules.get(type(self._model).__module__)
         if module is None or not hasattr(module, "_get_cache_seq_length"):
