@@ -897,6 +897,25 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             self._load_exported_ov_model(model_type, task, tmpdir, model_kwargs)
 
+    @unittest.skipUnless(is_transformers_version(">=", "4.46"), reason="GLM-Edge-V requires transformers>=4.46")
+    def test_exporters_cli_glm_edge_v_without_trust_remote_code(self):
+        # GLM-Edge-V reuses model_type="glm" and packs its SigLIP vision tower inside the trust-remote-code
+        # GlmForCausalLM. The canonical export command (without --trust-remote-code) must still build the
+        # vision tower: the exporter auto-enables remote code for this multimodal glm variant, otherwise the
+        # built-in text-only GLM loads and drops all model.vision.* weights, crashing the vision-embeddings
+        # patcher with "'GlmModel' object has no attribute 'vision'".
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES['glm_edge_v']} "
+                f"--task image-text-to-text {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            exported = {p.name for p in Path(tmpdir).rglob("*.xml")}
+            self.assertIn("openvino_vision_embeddings_model.xml", exported, msg=sorted(exported))
+            self.assertIn("openvino_language_model.xml", exported, msg=sorted(exported))
+            self.assertIn("openvino_text_embeddings_model.xml", exported, msg=sorted(exported))
+
     @parameterized.expand(
         arch
         for arch in SUPPORTED_ARCHITECTURES

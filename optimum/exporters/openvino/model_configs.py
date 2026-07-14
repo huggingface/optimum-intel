@@ -323,6 +323,16 @@ def init_model_configs():
             "transformers",
             "Qwen3OmniMoeForConditionalGeneration",
         )
+    TasksManager._CUSTOM_CLASSES[("pt", "llama4", "image-text-to-text")] = (
+        "transformers",
+        "AutoModelForImageTextToText",
+    )
+    # GLM-Edge-V models declare model_type="glm" with a nested `vision_config`, and the multimodal
+    # architecture is only available through the trust-remote-code `GlmForCausalLM` class.
+    TasksManager._CUSTOM_CLASSES[("pt", "glm", "image-text-to-text")] = (
+        "transformers",
+        "AutoModelForCausalLM",
+    )
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
@@ -3569,6 +3579,14 @@ class Qwen3OmniMoeOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [b.value for b in Qwen3OmniMoeConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
+@register_in_tasks_manager("glm", *["image-text-to-text"], library_name="transformers")
+class GlmEdgeVOpenVINOConfig(BaseVLMOpenVINOConfig):
+    # GLM-Edge-V is a trust-remote-code multimodal model that reuses `model_type="glm"` and packs a
+    # SigLIP vision encoder inside `GlmForCausalLM`. It is only exported for the image-text-to-text
+    # task, and only when the config carries a nested `vision_config`.
+    MIN_TRANSFORMERS_VERSION = "4.44.0"
+    SUPPORTS_PAST = True
+    DUMMY_INPUT_GENERATOR_CLASSES = (GlmEdgeVDummyVisionInputGenerator,)
 
     def __init__(
         self,
@@ -3578,6 +3596,7 @@ class Qwen3OmniMoeOpenVINOConfig(BaseVLMOpenVINOConfig):
         float_dtype: str = "fp32",
         behavior: Qwen3OmniMoeConfigBehavior = Qwen3OmniMoeConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
+        **kwargs,
     ):
         super().__init__(
             config=config,

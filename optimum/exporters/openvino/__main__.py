@@ -571,7 +571,44 @@ def main_export(
             task_model_loading = task
             if library_name == "transformers":
                 has_remote_code = hasattr(config, "auto_map")
-                if has_remote_code and trust_remote_code and task == "image-text-to-text":
+                # Some remote-code multimodal models (e.g. GLM-Edge-V, model_type="glm" with a nested
+                # `vision_config`) register a dedicated `image-text-to-text` custom loading class that
+                # instantiates the vision tower (`model.vision`). Downgrading the loading task to
+                # "text-generation" for those models would bypass this registration and load the
+                # built-in text-only class (dropping the vision weights), so only downgrade when no
+                # such custom class is registered for this model type.
+                model_type = getattr(config, "model_type", None)
+                has_itt_custom_class = (
+                    model_type is not None
+                    and ("pt", model_type, "image-text-to-text") in TasksManager._CUSTOM_CLASSES
+                )
+                # GLM-Edge-V reuses `model_type="glm"` and packs its SigLIP vision tower (`model.vision`)
+                # inside the trust-remote-code `GlmForCausalLM`. That multimodal architecture is *only*
+                # available through the remote code: loading it without `trust_remote_code=True` falls back
+                # to the built-in text-only GLM and silently drops all `model.vision.*` weights, which later
+                # crashes the vision-embeddings patcher with `'GlmModel' object has no attribute 'vision'`.
+                # For this case the vision tower is mandatory, so force remote code even when the user did
+                # not pass `--trust-remote-code`.
+                if (
+                    has_remote_code
+                    and has_itt_custom_class
+                    and task == "image-text-to-text"
+                    and model_type == "glm"
+                    and getattr(config, "vision_config", None) is not None
+                    and not trust_remote_code
+                ):
+                    logger.warning(
+                        "Detected a GLM-Edge-V multimodal model (model_type='glm' with a nested "
+                        "`vision_config`). Its vision tower is only available through trust-remote-code; "
+                        "enabling `trust_remote_code=True` for the export to avoid dropping the vision weights."
+                    )
+                    trust_remote_code = True
+                if (
+                    has_remote_code
+                    and trust_remote_code
+                    and task == "image-text-to-text"
+                    and not has_itt_custom_class
+                ):
                     task_model_loading = "text-generation"
 
             model = TasksManager.get_model_from_task(

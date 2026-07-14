@@ -7346,6 +7346,81 @@ if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.rot_pos_emb = Qwen3_5VisionModel.rot_pos_emb
 
 
+class _OVGlmEdgeVForCausalLM(OVModelForVisualCausalLM):
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        pixel_values = torch.as_tensor(pixel_values) if not isinstance(pixel_values, torch.Tensor) else pixel_values
+        # GLM-Edge-V processors emit pixel values with extra leading dims
+        # ([batch, num_media, num_tiles, C, H, W]); the exported vision model expects [N, C, H, W].
+        if pixel_values.ndim > 4:
+            pixel_values = pixel_values.reshape(-1, *pixel_values.shape[-3:])
+        image_features = self.vision_embeddings(pixel_values).last_hidden_state
+        return image_features
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids, attention_mask, position_ids=None, **kwargs
+    ):
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        vision_embeds = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        boi_token_id = self.config.boi_token_id
+        B, N, C = inputs_embeds.shape
+        flat_embeds = inputs_embeds.reshape(B * N, C)
+        flat_ids = input_ids.reshape(B * N)
+        selected = flat_ids == boi_token_id
+        assert selected.sum() != 0, "No image (boi) tokens found in input_ids for GLM-Edge-V."
+        flat_embeds[selected] = vision_embeds.reshape(-1, C).to(flat_embeds.dtype)
+        inputs_embeds = flat_embeds.reshape(B, N, C)
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+
+        # GLM-Edge-V does not expose a combined multimodal AutoProcessor: loading it
+        # returns the text tokenizer only. When WWB (or another caller) resolves the
+        # "processor" via AutoProcessor it therefore hands us the tokenizer. Fall back
+        # to whichever text tokenizer we were given.
+        text_tokenizer = tokenizer if tokenizer is not None else processor
+        if text_tokenizer is None:
+            raise ValueError("Tokenizer is required.")
+
+        if image is not None:
+            content = [{"type": "image"}, {"type": "text", "text": text}]
+        else:
+            content = [{"type": "text", "text": text}]
+        messages = [{"role": "user", "content": content}]
+        inputs = text_tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, return_dict=True, tokenize=True, return_tensors="pt"
+        )
+        result = {"input_ids": inputs["input_ids"], "attention_mask": inputs["attention_mask"]}
+        if image is not None:
+            # Images are handled by a separate MllamaImageProcessor which must be loaded
+            # explicitly from the model directory, since the text tokenizer cannot process images.
+            model_path = getattr(processor, "name_or_path", None)
+            if model_path is None:
+                model_path = getattr(text_tokenizer, "name_or_path", None)
+            if model_path is None and config is not None:
+                model_path = getattr(config, "_name_or_path", None)
+            if model_path is None:
+                raise ValueError("Unable to determine model path to load the GLM-Edge-V image processor.")
+            image_processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)
+            pixel_values = image_processor(images=image, return_tensors="pt").pixel_values
+            result["pixel_values"] = torch.as_tensor(pixel_values)
+        return result
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
