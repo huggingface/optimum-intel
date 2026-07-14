@@ -195,9 +195,9 @@ class OVASRTest(unittest.TestCase):
             "attention_mask": inputs.get("feature_attention_mask"),
             "pt_text": pt_text,
             "gen_kwargs": gen_kwargs,
-            "decode_fn": lambda ids, prompt_len: processor.batch_decode(
-                ids[:, prompt_len:], skip_special_tokens=True
-            )[0],
+            "decode_fn": lambda ids, prompt_len: processor.batch_decode(ids[:, prompt_len:], skip_special_tokens=True)[
+                0
+            ],
             "preprocess_check": None,
             "pt_model": transformers_model,
         }
