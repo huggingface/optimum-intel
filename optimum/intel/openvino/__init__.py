@@ -35,8 +35,12 @@ from .utils import (
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
+
+logger = logging.getLogger(__name__)
+
+
 if is_openvino_version("<", "2025.4.0"):
-    raise ImportError(
+    logger.warning(
         "Optimum-intel requires OpenVINO version 2025.4.0 or higher. "
         "Please upgrade OpenVINO to version 2025.4 or later. "
         f"The current version of OpenVINO is {_openvino_version}."
@@ -50,8 +54,6 @@ from .configuration import (
     OVWeightQuantizationConfig,
 )
 
-
-logger = logging.getLogger(__name__)
 
 if is_nncf_available():
     import nncf
@@ -85,14 +87,21 @@ from .modeling_open_clip import (
     OVModelOpenCLIPVisual,
 )
 from .modeling_sam import OVSamModel
-from .modeling_seq2seq import OVModelForPix2Struct, OVModelForSeq2SeqLM, OVModelForSpeechSeq2Seq, OVModelForVision2Seq
+from .modeling_seq2seq import (
+    OVModelForImageTextToText,
+    OVModelForPix2Struct,
+    OVModelForSeq2SeqLM,
+    OVModelForSpeechSeq2Seq,
+    OVModelForVision2Seq,
+)
 from .modeling_text2speech import OVModelForTextToSpeechSeq2Seq
-from .modeling_visual_language import OVModelForVisualCausalLM
+from .modeling_visual_language import OVModelForMultimodalLM, OVModelForVisualCausalLM
 
 
 if is_diffusers_available():
     from .modeling_diffusion import (
         OVDiffusionPipeline,
+        OVFlux2KleinPipeline,
         OVFluxFillPipeline,
         OVFluxImg2ImgPipeline,
         OVFluxInpaintPipeline,

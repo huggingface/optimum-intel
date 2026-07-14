@@ -14,23 +14,23 @@
 
 import json
 import logging
-import math
 import os
-import platform
 import re
 from glob import glob
 from pathlib import Path
 from typing import Dict, List, Optional, Type, Union
 
 import torch
-from huggingface_hub import HfApi, HfFolder, hf_hub_download
+from huggingface_hub import HfApi, get_token, hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.hf_api import file_exists
 from transformers import CLIPConfig, PretrainedConfig, PreTrainedModel
 
 from optimum.exporters.tasks import TasksManager
-
-from .import_utils import is_diffusers_available, is_numa_available, is_open_clip_available, is_psutil_available
+from optimum.intel.utils.import_utils import (
+    is_diffusers_available,
+    is_open_clip_available,
+)
 
 
 if is_diffusers_available():
@@ -115,7 +115,7 @@ def _find_files_matching_pattern(
     model_path = Path(model_name_or_path) if not isinstance(model_name_or_path, Path) else model_name_or_path
 
     if isinstance(use_auth_token, bool):
-        token = HfFolder().get_token()
+        token = get_token()
     else:
         token = use_auth_token
 
@@ -141,108 +141,28 @@ def _find_files_matching_pattern(
     return files
 
 
-def replace_customized_linear_with_linear(model):
-    """
-    Replace custom linear to torch linear so ipex could recognize and replace them to ipex linear.
-    """
-    if isinstance(model, torch.jit.ScriptModule):
-        return
-    if not model.training:
-        for child_name, child in model.named_children():
-            if isinstance(child, torch.nn.Linear) and child.__class__.__name__ in [
-                "FalconLinear",
-                "Linear",
-            ]:
-                new_m = torch.nn.Linear(
-                    child.in_features,
-                    child.out_features,
-                    bias=False if child.bias is None else True,
-                )
-                new_m.weight = child.weight
-                if child.bias is not None:
-                    new_m.bias = child.bias
-                setattr(model, child_name, new_m)
-            else:
-                replace_customized_linear_with_linear(child)
-
-
-def get_int_from_env(env_keys, default):
-    """Returns the first positive env value found in the `env_keys` list or the default."""
-    for e in env_keys:
-        val = int(os.environ.get(e, -1))
-        if val >= 0:
-            return val
-    return default
-
-
-def bind_cores_for_best_perf():
-    """
-    Set number of threads per rank, numa cpu affinity and numa memory binding if not already set for better OOB performance.
-    Works for wold_size >= 1 and rank >= 1
-
-    Example:
-    .. code-block:: python
-
-        from optimum.intel.ipex import IPEXModelForCausalLM
-        from optimum.intel.utils.modeling_utils import bind_cores_for_best_perf
-
-        bind_cores_for_best_perf()
-        model = IPEXModelForCausalLM.from_pretrained("gpt2", torch_dtype=torch.bfloat16, export=True)
-        tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        input_sentence = ["tell me a story about a trip to the moon"]
-        model_inputs = tokenizer(input_sentence, return_tensors="pt")
-        generation_kwargs = dict(max_new_tokens=500)
-        generated_ids = model.generate(**model_inputs, **generation_kwargs)
-
-    Returns:
-        None
-
-    """
-    if platform.system() != "Linux":
-        logger.error("bind_cores_for_best_perf: OS not supported, this function can only be run on Linux systems.")
-        raise OSError("bind_cores_for_best_perf: OS not supported, this function can only be run on Linux systems.")
-    if not is_psutil_available():
-        logger.error("`psutil` module not found")
-        raise ImportError("'psutil' module not found, install with 'pip install psutil'")
-    import psutil
-
-    if not is_numa_available():
-        logger.error("'numa' module not found")
-        raise ImportError("'numa' module not found, install with 'pip install py-libnuma'")
-    import numa
-
-    local_size = get_int_from_env(
-        ["LOCAL_WORLD_SIZE", "MPI_LOCALNRANKS", "OMPI_COMM_WORLD_LOCAL_SIZE", "MV2_COMM_WORLD_LOCAL_SIZE"], 1
-    )
-    rank_id = get_int_from_env(
-        ["LOCAL_RANK", "MPI_LOCALRANKID", "OMPI_COMM_WORLD_LOCAL_RANK", "MV2_COMM_WORLD_LOCAL_RANK"], 0
-    )
-    nodes = numa.info.get_max_node() + 1
-    rank_per_node = math.ceil(local_size / nodes)
-    num_cpus_per_nodes = int(psutil.cpu_count(logical=False) / nodes)
-    node_id = int(rank_id / rank_per_node)
-    rank_offset_per_node = rank_id % rank_per_node
-    if os.getenv("OMP_NUM_THREADS") is None:
-        num_cpus_per_rank = max(int(num_cpus_per_nodes / rank_per_node), 1)
-        logger.info(f"Setting OMP_NUM_THREADS to {num_cpus_per_rank} for better performance")
-    else:
-        num_cpus_per_rank = int(os.getenv("OMP_NUM_THREADS"))
-        logger.info(f"OMP_NUM_THREADS already set to  {num_cpus_per_rank}")
-    if len(numa.memory.get_membind_nodes()) == nodes:
-        # if numa memory binding is not set, set it to the node where the rank is running
-        numa.memory.set_membind_nodes((node_id))
-
-    torch.set_num_threads(num_cpus_per_rank)
-
-    if len(numa.schedule.get_affinitive_cpus(0)) == psutil.cpu_count(logical=True):
-        # if numa affinity is unset (default value is set to all logical cores) set it to the physical cores assigned to the rank
-        cpu_start = num_cpus_per_rank * rank_offset_per_node
-        numa.schedule.run_on_cpus(
-            0,
-            *(numa.info.node_to_cpus(node_id)[cpu_start : cpu_start + num_cpus_per_rank]),
-        )
-
-    logger.info(f"affinity={numa.schedule.get_affinitive_cpus(0)}, membind = {numa.memory.get_membind_nodes()}")
+def _is_kokoro_model(
+    model_name_or_path: Union[str, Path],
+    all_files: list,
+    cache_dir: str = HUGGINGFACE_HUB_CACHE,
+    token: Optional[Union[bool, str]] = None,
+) -> bool:
+    """Detect Kokoro TTS models by checking for 'istftnet' key in config.json."""
+    if "config.json" not in all_files:
+        return False
+    try:
+        config_path = Path(model_name_or_path)
+        if config_path.is_dir():
+            config_file = config_path / "config.json"
+        else:
+            config_file = hf_hub_download(
+                repo_id=str(model_name_or_path), filename="config.json", cache_dir=cache_dir, token=token
+            )
+        with open(config_file, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        return "istftnet" in config and "plbert" in config
+    except Exception:
+        return False
 
 
 def _infer_library_from_model_name_or_path(
@@ -257,6 +177,8 @@ def _infer_library_from_model_name_or_path(
     )
     if "open_clip_config.json" in all_files or "open_clip_pytorch_model.bin" in all_files:
         library_name = "open_clip"
+    elif _is_kokoro_model(model_name_or_path, all_files, cache_dir=cache_dir, token=token):
+        library_name = "kokoro"
     else:
         library_name = TasksManager._infer_library_from_model_name_or_path(
             model_name_or_path=model_name_or_path, cache_dir=cache_dir
@@ -273,11 +195,24 @@ def _infer_library_from_model_or_model_class(
         return library_name
     if model.__module__.startswith("open_clip"):
         library_name = "open_clip"
+    elif model.__module__.startswith("kokoro") or getattr(model, "_kokoro_model", False):
+        library_name = "kokoro"
     elif model.__module__.startswith("optimum"):
         # for wrapped models like timm in optimum.intel.openvino.modeling_timm
         library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
     else:
-        library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+        try:
+            library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+        except ValueError:
+            # Custom trust_remote_code models (e.g. qwen_asr) have modules outside
+            # of transformers/diffusers but still inherit from PreTrainedModel.
+            from transformers import PreTrainedModel
+
+            model_cls = model if isinstance(model, type) else type(model)
+            if issubclass(model_cls, PreTrainedModel):
+                library_name = "transformers"
+            else:
+                raise
 
     return library_name
 
@@ -493,3 +428,74 @@ class _OpenClipForZeroShotImageClassification(PreTrainedModel):
                 setattr(model.config, "export_model_type", "clip")
 
             return model
+
+
+class _KokoroForTextToSpeech:
+    """Wrapper for loading Kokoro TTS model with a config conforming to optimum-intel expectations."""
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_name_or_path: Union[str, Path],
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        token: Optional[Union[bool, str]] = None,
+        **kwargs,
+    ):
+        try:
+            from kokoro import KModel, KPipeline
+        except ImportError:
+            raise ImportError(
+                "To load a Kokoro TTS model, the `kokoro` package is required. "
+                "Please install it with `pip install kokoro`."
+            )
+
+        # Check if model_name_or_path is a local directory
+        model_path = Path(model_name_or_path)
+        is_local_dir = model_path.is_dir()
+
+        if is_local_dir:
+            # For local directories, load KModel directly from local artifacts.
+            config_file = model_path / "config.json"
+            if not config_file.exists():
+                raise FileNotFoundError(f"config.json not found in {model_path}")
+
+            # Find the model file (.pth) in the local directory
+            model_files = list(model_path.glob("*.pth"))
+            if not model_files:
+                raise FileNotFoundError(f"No .pth model file found in {model_path}")
+            local_model = KModel(
+                repo_id=str(model_name_or_path),
+                config=str(config_file),
+                model=str(model_files[0]),
+            )
+            model = local_model.to("cpu").eval()
+            model._kokoro_model = True
+            model._kokoro_repo_id = str(model_name_or_path)
+        else:
+            # For remote models, use standard KPipeline
+            pipeline = KPipeline(lang_code="a", repo_id=str(model_name_or_path))
+            model = pipeline.model
+            model._kokoro_model = True
+            model._kokoro_repo_id = str(model_name_or_path)
+
+        # Load config.json and create a PretrainedConfig-like object
+        config_path = Path(model_name_or_path)
+        if config_path.is_dir():
+            config_file = config_path / "config.json"
+        else:
+            config_file = hf_hub_download(
+                repo_id=str(model_name_or_path), filename="config.json", cache_dir=cache_dir, token=token
+            )
+
+        with open(config_file, "r", encoding="utf-8") as f:
+            config_dict = json.load(f)
+
+        config = PretrainedConfig()
+        config.model_type = "kokoro"
+        config.export_model_type = "kokoro"
+        for key, value in config_dict.items():
+            setattr(config, key, value)
+
+        model.config = config
+
+        return model

@@ -28,10 +28,11 @@ from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, Pro
 from transformers.utils import is_torch_available
 
 from openvino import Core, Type, save_model
-from optimum.exporters.onnx.base import OnnxConfig
+from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     DIFFUSERS_IMPORT_ERROR,
+    _transformers_version,
     is_diffusers_available,
     is_nncf_available,
     is_openvino_tokenizers_available,
@@ -39,6 +40,7 @@ from optimum.intel.utils.import_utils import (
 )
 from optimum.intel.utils.modeling_utils import (
     _infer_library_from_model_name_or_path,
+    _KokoroForTextToSpeech,
     _OpenClipForZeroShotImageClassification,
 )
 
@@ -86,6 +88,8 @@ def infer_task(
     if task == "auto":
         if library_name == "open_clip":
             task = "zero-shot-image-classification"
+        elif library_name == "kokoro":
+            task = "text-to-audio"
         else:
             try:
                 task = TasksManager._infer_task_from_model_name_or_path(
@@ -98,10 +102,23 @@ def infer_task(
                 )
             except KeyError as e:
                 try:
-                    config = AutoConfig.from_pretrained(model_name_or_path)
-                    with_past_arch_list = ["MistralForCausalLM", "Zamba2ForCausalLM"]
+                    config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
+                    with_past_arch_list = [
+                        "MistralForCausalLM",
+                        "Zamba2ForCausalLM",
+                        "LlamaForCausalLMEagle3",
+                        "Eagle3LlamaForCausalLM",
+                    ]
                     if any(arch in config.architectures for arch in with_past_arch_list):
-                        task = "text-generation-with-past"
+                        # VLM Eagle3 models (targeting VLM architectures like Qwen3-VL)
+                        # should use image-text-to-text task for proper inputs_embeds/3D position_ids export.
+                        if "Eagle3LlamaForCausalLM" in config.architectures and (
+                            getattr(config, "modal_type", "") == "VLM"
+                            or getattr(config, "target_model_type", "") in {"qwen2_vl", "qwen3_vl"}
+                        ):
+                            task = "image-text-to-text"
+                        else:
+                            task = "text-generation-with-past"
                 except Exception:
                     raise KeyError(
                         f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
@@ -112,14 +129,35 @@ def infer_task(
                 )
 
     if library_name == "transformers":
-        config = AutoConfig.from_pretrained(
-            model_name_or_path,
-            subfolder=subfolder,
-            revision=revision,
-            cache_dir=cache_dir,
-            token=token,
-            trust_remote_code=trust_remote_code,
-        )
+        try:
+            config = AutoConfig.from_pretrained(
+                model_name_or_path,
+                subfolder=subfolder,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
+                trust_remote_code=trust_remote_code,
+            )
+        except (KeyError, ValueError) as e:
+            # Some custom model types are registered with transformers via a separate
+            # third-party package (e.g. `qwen_asr` for `qwen3_asr`). Try to import it
+            # lazily so we don't have a hard dependency at import time.
+            if "qwen3_asr" in str(e):
+                try:
+                    import qwen_asr  # noqa: F401
+
+                    config = AutoConfig.from_pretrained(
+                        model_name_or_path,
+                        subfolder=subfolder,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        token=token,
+                        trust_remote_code=trust_remote_code,
+                    )
+                except ImportError:
+                    raise e
+            else:
+                raise
         if hasattr(config, "export_model_type"):
             model_type = config.export_model_type
         else:
@@ -137,6 +175,38 @@ def infer_task(
                     f" if needed, please pass `--task {task}-with-past` to export using the past key values."
                 )
     return task
+
+
+def _ensure_qwen3_omni_rope_scaling(config):
+    """Fill in a valid ``rope_scaling`` for Qwen3-Omni-MoE sub-configs that are missing it."""
+    thinker_config = getattr(config, "thinker_config", None)
+    talker_config = getattr(config, "talker_config", None)
+    sub_configs = [
+        getattr(thinker_config, "text_config", None),
+        getattr(talker_config, "text_config", None),
+        getattr(talker_config, "code_predictor_config", None),
+    ]
+
+    for sub_config in sub_configs:
+        if sub_config is None or getattr(sub_config, "rope_scaling", None) is not None:
+            continue
+
+        head_dim = getattr(sub_config, "head_dim", None)
+        if head_dim is None:
+            hidden_size = getattr(sub_config, "hidden_size", None)
+            num_heads = getattr(sub_config, "num_attention_heads", None)
+            if not hidden_size or not num_heads:
+                continue
+            head_dim = hidden_size // num_heads
+
+        # mrope splits head_dim // 2 across the (temporal, height, width) axes; distribute the
+        # remainder to the leading axis, matching how real checkpoints are laid out.
+        half = head_dim // 2
+        base, remainder = divmod(half, 3)
+        mrope_section = [base + remainder, base, base]
+        sub_config.rope_scaling = {"rope_type": "default", "type": "default", "mrope_section": mrope_section}
+
+    return config
 
 
 def update_config_for_eagle3(config):
@@ -190,7 +260,7 @@ def main_export(
     local_files_only: bool = False,
     token: Optional[Union[bool, str]] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    custom_export_configs: Optional[Dict[str, "OnnxConfig"]] = None,
+    custom_export_configs: Optional[Dict[str, "OpenVINOConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
     ov_config: "OVConfig" = None,
     stateful: bool = True,
@@ -246,7 +316,7 @@ def main_export(
             the export. This argument should be used along the `custom_export_configs` argument
             in case, for example, the model inputs/outputs are changed (for example, if
             `model_kwargs={"output_attentions": True}` is passed).
-        custom_export_configs (`Optional[Dict[str, OnnxConfig]]`, defaults to `None`):
+        custom_export_configs (`Optional[Dict[str, OpenVINOConfig]]`, defaults to `None`):
             Experimental usage: override the default export config used for the given model. This argument may be useful for advanced users that desire a finer-grained control on the export. An example is available [here](https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model).
         fn_get_submodels (`Optional[Callable]`, defaults to `None`):
             Experimental usage: Override the default submodels that are used at the export. This is
@@ -316,9 +386,10 @@ def main_export(
         quantization_config = getattr(config, "quantization_config", None)
         quant_method = quantization_config.get("quant_method", None) if quantization_config else None
 
-        # update config to load eagle3 models
+        # update config to load eagle3 models (both text-only and VLM variants)
         archs = getattr(config, "architectures", None)
-        if isinstance(archs, list) and len(archs) > 0 and archs[0] == "LlamaForCausalLMEagle3":
+        _eagle3_archs = {"LlamaForCausalLMEagle3", "Eagle3LlamaForCausalLM"}
+        if isinstance(archs, list) and len(archs) > 0 and archs[0] in _eagle3_archs:
             loading_kwargs["config"] = update_config_for_eagle3(config)
 
         # mxfp4 quantized model will be dequantized to bf16
@@ -335,6 +406,20 @@ def main_export(
             patch_qwenvl_configs()
 
         model_type = config.model_type
+
+        if model_type == "qwen3_omni_moe":
+            if is_transformers_version("<", "5.0"):
+                raise ValueError(
+                    "Exporting Qwen3-Omni-MoE models requires transformers >= 5.0, "
+                    f"but found {_transformers_version}. Please upgrade transformers."
+                )
+            loading_kwargs["config"] = _ensure_qwen3_omni_rope_scaling(config)
+
+        if original_task == "auto" and model_type in {"phi4mm", "phi4_multimodal"}:
+            task = "image-text-to-text"
+        elif model_type == "qwen3_omni_moe":
+            task = "image-text-to-text"
+
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             if custom_export_configs is None:
                 raise ValueError(
@@ -371,7 +456,7 @@ def main_export(
         # for avoiding confusion we disable remote code for them
         if (
             trust_remote_code
-            and model_type in {"falcon", "mpt", "phi"}
+            and model_type in {"falcon", "mpt", "phi", "phi3"}
             and ("with-past" in task or original_task == "auto")
             and not custom_export_configs
         ):
@@ -415,14 +500,21 @@ def main_export(
                 orig_post_init_model = GPTQQuantizer.post_init_model
 
                 def post_init_model(self, model):
-                    from auto_gptq import exllama_set_max_input_length
+                    # optimum 2.1 / transformers v5 auto_gptq support dropped
+                    from gptqmodel import exllama_set_max_input_length
+                    from gptqmodel.utils.model import hf_convert_gptq_v1_to_v2_format
 
                     class StoreAttr(object):
                         pass
 
+                    model, _ = hf_convert_gptq_v1_to_v2_format(
+                        model, self.bits, self.quant_linear, self.format, self.meta
+                    )
+
                     model.quantize_config = StoreAttr()
                     model.quantize_config.desc_act = self.desc_act
-                    if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
+                    # BACKEND.EXLLAMA_V1 removed in gptqmodel >= v5.8
+                    if self.desc_act and self.backend == "exllama_v1" and self.max_input_length is not None:
                         model = exllama_set_max_input_length(model, self.max_input_length)
                     return model
 
@@ -471,6 +563,8 @@ def main_export(
     try:
         if library_name == "open_clip":
             model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
+        elif library_name == "kokoro":
+            model = _KokoroForTextToSpeech.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         else:
             # remote code models like phi3_v internvl2, minicpmv, internvl2, nanollava, maira2 should be loaded using AutoModelForCausalLM and not AutoModelForImageTextToText
             # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)
@@ -495,6 +589,9 @@ def main_export(
                 library_name=library_name,
                 **loading_kwargs,
             )
+
+        if getattr(model, "dtype", None) in [torch.float16, torch.bfloat16]:
+            patch_16bit = True
 
         needs_pad_token_id = task == "text-classification" and getattr(model.config, "pad_token_id", None) is None
 
@@ -637,11 +734,14 @@ def _main_quantize(
             token=token,
         )
 
-    # NOTE: The Phi-4-multimodal-instruct model card contains a pipeline_tag set to automatic-speech-recognition,
-    # which is returned as the inferred task. As a result, we try to load the exported model using the
-    # OVModelForSpeechSeq2Seq class instead of the OVModelForVisualCausalLM class when the task is not specified
-    # explicitly. Because of this, we get an error.
-    if original_task == "auto" and library_name == "transformers":
+    # Some multimodal models must always be reloaded through OVModelForVisualCausalLM, but their task
+    # would otherwise route to the wrong OV class:
+    #   - Phi-4-multimodal-instruct: its model card pins pipeline_tag=automatic-speech-recognition, so the
+    #     *inferred* (auto) task is wrong and would pick OVModelForSpeechSeq2Seq.
+    #   - Qwen3-Omni-MoE: registers several tasks (text-to-audio, ASR, image-text-to-text); any of them,
+    #     whether inferred or passed explicitly, must still load through OVModelForVisualCausalLM.
+    # AutoConfig is cheap (cached) so we always read it to decide on the redirect.
+    if library_name == "transformers":
         config = AutoConfig.from_pretrained(
             model_name_or_path,
             subfolder=subfolder,
@@ -651,7 +751,10 @@ def _main_quantize(
             trust_remote_code=trust_remote_code,
         )
         model_type = config.model_type
-        if model_type in ["phi4mm", "phi4_multimodal"]:
+        # phi4mm is only misrouted by task inference, so keep its redirect limited to the auto case.
+        if original_task == "auto" and model_type in ["phi4mm", "phi4_multimodal"]:
+            task = "image-text-to-text"
+        elif model_type == "qwen3_omni_moe":
             task = "image-text-to-text"
 
     # Step 1. Obtain the correct OpenVINO model class
@@ -727,7 +830,12 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
                         processor_chat_template = processor.chat_template
             if tokenizer:
                 try:
-                    export_tokenizer(tokenizer, output, task=task, processor_chat_template=processor_chat_template)
+                    export_tokenizer(
+                        tokenizer,
+                        output,
+                        task=task,
+                        processor_chat_template=processor_chat_template,
+                    )
                 except Exception as exception:
                     logger.warning(
                         "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer "

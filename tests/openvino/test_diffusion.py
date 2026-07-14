@@ -28,7 +28,7 @@ from diffusers import (
 from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.utils import load_image
 from parameterized import parameterized
-from utils_tests import MODEL_NAMES, OPENVINO_DEVICE, SEED
+from utils_tests import HUB_MODEL_NAMES, MODEL_NAMES, OPENVINO_DEVICE, SEED
 
 from optimum.intel.openvino import (
     OVDiffusionPipeline,
@@ -38,7 +38,7 @@ from optimum.intel.openvino import (
     OVPipelineForText2Video,
 )
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import is_diffusers_version
+from optimum.intel.utils.import_utils import is_diffusers_version, is_transformers_version
 from optimum.utils.testing_utils import require_diffusers
 
 
@@ -80,7 +80,6 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         "stable-diffusion",
         "stable-diffusion-xl",
         "latent-consistency",
-        "stable-diffusion-3",
         "flux",
         "sana",
     ]
@@ -91,10 +90,18 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         "latent-consistency",
     ]
 
+    if is_diffusers_version(">=", "0.37.0"):
+        SUPPORTED_ARCHITECTURES.extend(["flux.2-klein"])
+
     if is_diffusers_version(">=", "0.33.0"):
         SUPPORTED_ARCHITECTURES.extend(["sana-sprint"])
+
     if is_diffusers_version(">=", "0.35.0"):
         SUPPORTED_ARCHITECTURES.extend(["qwenimage"])
+
+    if is_transformers_version("<", "5") or is_diffusers_version(">=", "0.37"):
+        SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
+
     CALLBACK_SUPPORT_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
 
     OVMODEL_CLASS = OVPipelineForText2Image
@@ -116,7 +123,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_load_vanilla_model_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
-            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
+            _ = self.OVMODEL_CLASS.from_pretrained(HUB_MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
 
         self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 
@@ -156,7 +163,13 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
         auto_cls = self.AUTOMODEL_CLASS if "sana" not in model_arch else DiffusionPipeline
-        diffusers_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
+        model_kwargs = (
+            {"torch_dtype": torch.float32}
+            if is_transformers_version(">=", "5") and model_arch == "stable-diffusion-3"
+            else {}
+        )
+        diffusers_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch], **model_kwargs)
+        atol = 1.5e-2 if model_arch == "flux.2-klein" else 6e-3
 
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
@@ -166,7 +179,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
-            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=atol, rtol=1e-2)
 
         # test on inputs nondivisible on 64
         height, width, batch_size = 96, 96, 1
@@ -180,7 +193,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=atol, rtol=1e-2)
 
     @parameterized.expand(CALLBACK_SUPPORT_ARCHITECTURES)
     @require_diffusers
@@ -232,12 +245,19 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             elif output_type == "pt":
                 self.assertEqual(outputs.shape, (batch_size, 3, height, width))
             else:
-                if model_arch != "flux":
+                if model_arch == "flux":
+                    packed_height = height // pipeline.vae_scale_factor // 2
+                    packed_width = width // pipeline.vae_scale_factor // 2
+                    channels = pipeline.transformer.config.in_channels
+                    self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
+                else:
                     out_channels = (
                         pipeline.unet.config.out_channels
                         if pipeline.unet is not None
                         else pipeline.transformer.config.out_channels
                     )
+                    if out_channels is None:
+                        out_channels = pipeline.vae.config.latent_channels
                     self.assertEqual(
                         outputs.shape,
                         (
@@ -247,11 +267,6 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
                             width // pipeline.vae_scale_factor,
                         ),
                     )
-                else:
-                    packed_height = height // pipeline.vae_scale_factor // 2
-                    packed_width = width // pipeline.vae_scale_factor // 2
-                    channels = pipeline.transformer.config.in_channels
-                    self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -501,9 +516,11 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         "stable-diffusion",
         "stable-diffusion-xl",
         "latent-consistency",
-        "stable-diffusion-3",
         "flux",
     ]
+    if is_transformers_version("<", "5") or is_diffusers_version(">=", "0.37"):
+        SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
+
     AUTOMODEL_CLASS = AutoPipelineForImage2Image
     OVMODEL_CLASS = OVPipelineForImage2Image
     TASK = "image-to-image"
@@ -526,7 +543,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_load_vanilla_model_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
-            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
+            _ = self.OVMODEL_CLASS.from_pretrained(HUB_MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
 
         self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 
@@ -629,7 +646,12 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         height, width, batch_size = 128, 128, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
 
-        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        model_kwargs = (
+            {"torch_dtype": torch.float32}
+            if is_transformers_version(">=", "5") and model_arch == "stable-diffusion-3"
+            else {}
+        )
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], **model_kwargs)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         for output_type in ["latent", "np", "pt"]:
@@ -756,7 +778,11 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
 
 
 class OVPipelineForInpaintingTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "stable-diffusion-3", "flux", "flux-fill"]
+    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "flux", "flux-fill"]
+
+    if is_transformers_version("<", "5") or is_diffusers_version(">=", "0.37"):
+        SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
+
     AUTOMODEL_CLASS = AutoPipelineForInpainting
     OVMODEL_CLASS = OVPipelineForInpainting
     TASK = "inpainting"
@@ -781,7 +807,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     @require_diffusers
     def test_load_vanilla_model_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
-            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
+            _ = self.OVMODEL_CLASS.from_pretrained(HUB_MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
 
         self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 
@@ -891,12 +917,18 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     @require_diffusers
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+        model_kwargs = (
+            {"torch_dtype": torch.float32}
+            if is_transformers_version(">=", "5") and model_arch == "stable-diffusion-3"
+            else {}
+        )
+
         if model_arch != "flux-fill":
-            diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+            diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], **model_kwargs)
         else:
             from diffusers import FluxFillPipeline
 
-            diffusers_pipeline = FluxFillPipeline.from_pretrained(MODEL_NAMES[model_arch])
+            diffusers_pipeline = FluxFillPipeline.from_pretrained(MODEL_NAMES[model_arch], **model_kwargs)
 
         height, width, batch_size = 64, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_arch=model_arch)
@@ -1048,7 +1080,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
     @require_diffusers
     def test_load_vanilla_model_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
-            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
+            _ = self.OVMODEL_CLASS.from_pretrained(HUB_MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
 
         self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 

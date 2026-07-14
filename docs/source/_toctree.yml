@@ -23,24 +23,5 @@
       isExpanded: false
     title: OpenVINO
     isExpanded: true
-  - sections:
-    - local: neural_compressor/optimization
-      title: Optimization
-    - local: neural_compressor/distributed_training
-      title: Distributed Training
-    - local: neural_compressor/reference
-      title: Reference
-    title: Neural Compressor
-  - sections:
-    - local: ipex/inference
-      title: Inference
-    - local: ipex/models
-      title: Supported Models
-    - sections:
-      - local: ipex/tutorials/notebooks
-        title: Notebooks
-      title: Tutorials
-      isExpanded: false
-    title: IPEX
   title: Optimum Intel
   isExpanded: false

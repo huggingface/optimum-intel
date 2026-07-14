@@ -55,7 +55,10 @@ from ..utils.import_utils import is_timm_available, is_timm_version
 from .configuration import OVQuantizationConfigBase
 from .modeling_base import OVBaseModel
 from .modeling_sam import OVSamModel
-from .utils import _is_timm_ov_dir
+from .utils import (
+    _is_timm_ov_dir,
+    ensure_numpy,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -176,10 +179,10 @@ class OVModelForSequenceClassification(OVModel):
         self.compile()
 
         np_inputs = isinstance(input_ids, np.ndarray)
-        if not np_inputs:
-            input_ids = input_ids.cpu().numpy()
-            attention_mask = attention_mask.cpu().numpy()
-            token_type_ids = token_type_ids.cpu().numpy() if token_type_ids is not None else token_type_ids
+
+        input_ids = ensure_numpy(input_ids)
+        attention_mask = ensure_numpy(attention_mask)
+        token_type_ids = ensure_numpy(token_type_ids)
 
         inputs = {
             "input_ids": input_ids,
@@ -241,10 +244,10 @@ class OVModelForQuestionAnswering(OVModel):
         self.compile()
 
         np_inputs = isinstance(input_ids, np.ndarray)
-        if not np_inputs:
-            input_ids = input_ids.cpu().numpy()
-            attention_mask = attention_mask.cpu().numpy()
-            token_type_ids = token_type_ids.cpu().numpy() if token_type_ids is not None else token_type_ids
+
+        input_ids = ensure_numpy(input_ids)
+        attention_mask = ensure_numpy(attention_mask)
+        token_type_ids = ensure_numpy(token_type_ids)
 
         inputs = {
             "input_ids": input_ids,
@@ -310,10 +313,10 @@ class OVModelForTokenClassification(OVModel):
         self.compile()
 
         np_inputs = isinstance(input_ids, np.ndarray)
-        if not np_inputs:
-            input_ids = input_ids.cpu().numpy()
-            attention_mask = attention_mask.cpu().numpy()
-            token_type_ids = token_type_ids.cpu().numpy() if token_type_ids is not None else token_type_ids
+
+        input_ids = ensure_numpy(input_ids)
+        attention_mask = ensure_numpy(attention_mask)
+        token_type_ids = ensure_numpy(token_type_ids)
 
         inputs = {
             "input_ids": input_ids,
@@ -381,10 +384,10 @@ class OVModelForFeatureExtraction(OVModel):
         self.compile()
 
         np_inputs = isinstance(input_ids, np.ndarray)
-        if not np_inputs:
-            input_ids = input_ids.cpu().numpy()
-            attention_mask = attention_mask.cpu().numpy()
-            token_type_ids = token_type_ids.cpu().numpy() if token_type_ids is not None else token_type_ids
+
+        input_ids = ensure_numpy(input_ids)
+        attention_mask = ensure_numpy(attention_mask)
+        token_type_ids = ensure_numpy(token_type_ids)
 
         inputs = {
             "input_ids": input_ids,
@@ -408,8 +411,16 @@ class OVModelForFeatureExtraction(OVModel):
 
     @classmethod
     def _from_pretrained(cls, model_id: Union[str, Path], config: PretrainedConfig, *args, **kwargs):
+        from .modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
+
         if config.model_type == "sam":
             return OVSamModel._from_pretrained(model_id, config, *args, **kwargs)
+        if config.model_type in MODEL_TYPE_TO_CLS_MAPPING.keys():
+            from .modeling_visual_language import OVModelForVisualCausalLM
+
+            return OVModelForVisualCausalLM.from_pretrained(
+                model_id, config=config, export_feature="feature-extraction", *args, **kwargs
+            )
         else:
             return super()._from_pretrained(model_id, config, *args, **kwargs)
 
@@ -470,10 +481,10 @@ class OVModelForMaskedLM(OVModel):
         self.compile()
 
         np_inputs = isinstance(input_ids, np.ndarray)
-        if not np_inputs:
-            input_ids = input_ids.cpu().numpy()
-            attention_mask = attention_mask.cpu().numpy()
-            token_type_ids = token_type_ids.cpu().numpy() if token_type_ids is not None else token_type_ids
+
+        input_ids = ensure_numpy(input_ids)
+        attention_mask = ensure_numpy(attention_mask)
+        token_type_ids = ensure_numpy(token_type_ids)
 
         inputs = {
             "input_ids": input_ids,
@@ -571,16 +582,16 @@ class OVModelForImageClassification(OVModel):
                     "To load a timm model, please make sure to upgrade your `timm` version to at least 0.9.0, you can upgrade it by running `pip install --upgrade timm`"
                 )
 
-            from .modeling_timm import TimmConfig, TimmForImageClassification, TimmOnnxConfig
+            from .modeling_timm import TimmConfig, TimmForImageClassification, TimmOpenVINOConfig
 
             config = TimmConfig.from_pretrained(model_id, **kwargs)
             #  If locally saved timm model, directly load
             if local_timm_model:
                 return super()._from_pretrained(model_id=model_id, config=config)
             model = TimmForImageClassification.from_pretrained(model_id, **kwargs)
-            onnx_config = TimmOnnxConfig(model.config)
+            openvino_config = TimmOpenVINOConfig(model.config)
 
-            return cls._to_load(model=model, config=config, onnx_config=onnx_config, stateful=False, **kwargs)
+            return cls._to_load(model=model, config=config, exporter_config=openvino_config, stateful=False, **kwargs)
         else:
             return super().from_pretrained(
                 model_id=model_id,
@@ -613,8 +624,8 @@ class OVModelForImageClassification(OVModel):
         self.compile()
 
         np_inputs = isinstance(pixel_values, np.ndarray)
-        if not np_inputs:
-            pixel_values = pixel_values.cpu().numpy()
+
+        pixel_values = ensure_numpy(pixel_values)
 
         inputs = {
             "pixel_values": pixel_values,
@@ -672,9 +683,9 @@ class OVModelForAudioClassification(OVModel):
         self.compile()
 
         np_inputs = isinstance(input_values, np.ndarray)
-        if not np_inputs:
-            input_values = input_values.cpu().numpy()
-            attention_mask = attention_mask.cpu().numpy() if attention_mask is not None else attention_mask
+
+        input_values = ensure_numpy(input_values)
+        attention_mask = ensure_numpy(attention_mask)
 
         inputs = {
             "input_values": input_values,
@@ -716,7 +727,7 @@ CTC_EXAMPLE = r"""
 
 @add_start_docstrings(
     """
-    Onnx Model with a language modeling head on top for Connectionist Temporal Classification (CTC).
+    OpenVINO Model with a language modeling head on top for Connectionist Temporal Classification (CTC).
     """,
     MODEL_START_DOCSTRING,
 )
@@ -743,9 +754,9 @@ class OVModelForCTC(OVModel):
         **kwargs,
     ):
         np_inputs = isinstance(input_values, np.ndarray)
-        if not np_inputs:
-            input_values = input_values.cpu().numpy()
-            attention_mask = attention_mask.cpu().numpy() if attention_mask is not None else attention_mask
+
+        input_values = ensure_numpy(input_values)
+        attention_mask = ensure_numpy(attention_mask)
 
         inputs = {
             "input_values": input_values,
@@ -796,7 +807,7 @@ AUDIO_XVECTOR_EXAMPLE = r"""
 
 @add_start_docstrings(
     """
-    Onnx Model with an XVector feature extraction head on top for tasks like Speaker Verification.
+    OpenVINO Model with an XVector feature extraction head on top for tasks like Speaker Verification.
     """,
     MODEL_START_DOCSTRING,
 )
@@ -823,9 +834,9 @@ class OVModelForAudioXVector(OVModel):
         **kwargs,
     ):
         np_inputs = isinstance(input_values, np.ndarray)
-        if not np_inputs:
-            input_values = input_values.cpu().numpy()
-            attention_mask = attention_mask.cpu().numpy() if attention_mask is not None else attention_mask
+
+        input_values = ensure_numpy(input_values)
+        attention_mask = ensure_numpy(attention_mask)
 
         inputs = {
             "input_values": input_values,
@@ -899,9 +910,9 @@ class OVModelForAudioFrameClassification(OVModel):
         **kwargs,
     ):
         np_inputs = isinstance(input_values, np.ndarray)
-        if not np_inputs:
-            input_values = input_values.cpu().numpy()
-            attention_mask = attention_mask.cpu().numpy() if attention_mask is not None else attention_mask
+
+        input_values = ensure_numpy(input_values)
+        attention_mask = ensure_numpy(attention_mask)
 
         inputs = {
             "input_values": input_values,
@@ -987,10 +998,11 @@ class OVModelForZeroShotImageClassification(OVModel):
         self.compile()
 
         np_inputs = isinstance(input_ids, np.ndarray)
-        if not np_inputs:
-            input_ids = input_ids.cpu().numpy()
-            pixel_values = pixel_values.cpu().numpy()
-            attention_mask = attention_mask.cpu().numpy() if attention_mask is not None else attention_mask
+
+        input_ids = ensure_numpy(input_ids)
+        pixel_values = ensure_numpy(pixel_values)
+        attention_mask = ensure_numpy(attention_mask)
+
         inputs = {"input_ids": input_ids, "pixel_values": pixel_values}
         # Add the attention_mask when needed
         if "attention_mask" in self.input_names:

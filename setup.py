@@ -28,12 +28,15 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=2.1",
-    "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git@main",
-    "transformers>=4.45,<4.58",
+    "safetensors<0.8.0",
+    "optimum@git+https://github.com/huggingface/optimum.git",
+    "transformers>=4.51,<5.6",
     "setuptools",
+    "huggingface-hub>=0.23.2,<1.22",
     "nncf>=2.19.0",
-    "openvino>=2025.4.0",
-    "openvino-tokenizers>=2025.4.0",
+    "openvino>=2026.0",
+    "openvino-tokenizers>=2026.0",
+    "requests>=2.33,<3.0",
 ]
 
 TESTS_REQUIRE = [
@@ -52,26 +55,28 @@ TESTS_REQUIRE = [
     "transformers_stream_generator",
     "einops",
     "tiktoken",
-    "sentence-transformers",
+    "sentence-transformers<5.4.0",
     "open_clip_torch>=2.26.1",
     "peft",
-    "datasets[audio]>=1.4.0,<4.0.0",
+    "datasets>=1.4.0,<4.0.0",
     "tbb",
-    "langchain-huggingface",
     "hf_xet",
     "num2words",
     "vocos",
     "vector_quantize_pytorch",
     "openvino-genai",
+    "av",
+    "decord",
+    "imageio",
+    "kokoro",
+    "protobuf",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 
 EXTRAS_REQUIRE = {
     "nncf": ["nncf>=2.19.0"],
-    "openvino": ["nncf>=2.19.0", "openvino>=2025.4.0", "openvino-tokenizers>=2025.4.0"],
-    "neural-compressor": ["neural-compressor[pt]>=3.4.1", "accelerate", "transformers<4.46", "datasets"],
-    "ipex": ["intel-extension-for-pytorch>=2.8", "transformers>4.54,<4.56", "accelerate"],
+    "openvino": ["nncf>=2.19.0", "openvino>=2026.0", "openvino-tokenizers>=2026.0"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
