@@ -50,9 +50,6 @@ from optimum.exporters.openvino.input_generators import (
     DummyMiniCPMVImageInputGenerator,
     DummyMiniCPMVResampleInputGenerator,
     DummyPhi3VisionProjectionInputGenerator,
-    DummyQwenImageTransformerVisionInputGenerator,
-    DummyQwenImageTextInputGenerator,
-    DummyQwenImageRotaryEmbInputGenerator,
     DummyQwen2VLLMInputGenerator,
     DummyQwen2VLVisionEmbedInputGenerator,
     DummyQwen3_5LMInputGenerator,
@@ -63,6 +60,9 @@ from optimum.exporters.openvino.input_generators import (
     DummyQwen3OmniMoeVisionInputGenerator,
     DummyQwen3VLLMInputGenerator,
     DummyQwen3VLVisionEmbedInputGenerator,
+    DummyQwenImageRotaryEmbInputGenerator,
+    DummyQwenImageTextInputGenerator,
+    DummyQwenImageTransformerVisionInputGenerator,
     DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator,
     DummySanaTimestepInputGenerator,
     DummySanaTransformerVisionInputGenerator,
@@ -2623,7 +2623,7 @@ class QwenImageTransformerOpenVINOConfig(UNetOpenVINOConfig):
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         # bypass UNetOnnxConfig.generate_dummy_inputs which unwraps `encoder_hidden_states[0]`
         # (QwenImage's text dummy generator already returns a plain 3D tensor)
-        return OnnxConfig.generate_dummy_inputs(self, framework=framework, **kwargs)
+        return OpenVINOConfig.generate_dummy_inputs(self, framework=framework, **kwargs)
 
     @property
     def inputs(self):
@@ -2693,6 +2693,7 @@ class QwenImageVaeDecoderDummyInputGenerator(LTXVaeDummyInputGenerator):
 
 @register_in_tasks_manager("qwenimage-vae-encoder", *["semantic-segmentation"], library_name="diffusers")
 class QwenImageVaeEncoderOpenVINOConfig(VisionOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(num_channels="input_channels", allow_new=True)
     DUMMY_INPUT_GENERATOR_CLASSES = (QwenImageVaeEncoderDummyInputGenerator,)
     _MODEL_PATCHER = QwenImageVaeModelPatcher
 
@@ -2711,6 +2712,7 @@ class QwenImageVaeEncoderOpenVINOConfig(VisionOpenVINOConfig):
 
 @register_in_tasks_manager("qwenimage-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
 class QwenImageVaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(num_channels="z_dim", allow_new=True)
     DUMMY_INPUT_GENERATOR_CLASSES = (QwenImageVaeDecoderDummyInputGenerator,)
     _MODEL_PATCHER = QwenImageVaeModelPatcher
 

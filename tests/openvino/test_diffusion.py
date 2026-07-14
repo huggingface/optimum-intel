@@ -245,7 +245,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             elif output_type == "pt":
                 self.assertEqual(outputs.shape, (batch_size, 3, height, width))
             else:
-                if model_arch == "flux":
+                if model_arch in ["flux", "qwenimage"]:
                     packed_height = height // pipeline.vae_scale_factor // 2
                     packed_width = width // pipeline.vae_scale_factor // 2
                     channels = pipeline.transformer.config.in_channels
@@ -435,7 +435,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             and "timestep_cond" not in {inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs}
         ) or (
             ov_pipeline.transformer is not None
-            and "txt_ids" not in {inputs.get_any_name() for inputs in ov_pipeline.transformer.model.inputs}
+            and not {"txt_ids", "txt_cos"}.intersection(
+                {inputs.get_any_name() for inputs in ov_pipeline.transformer.model.inputs}
+            )
         ):
             expected_batch *= 2
         self.assertEqual(

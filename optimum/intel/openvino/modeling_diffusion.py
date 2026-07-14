@@ -946,13 +946,15 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(
-                # GemmaTokenizer uses inf as model_max_length, Text Encoder in LTX do not pad input to model_max_length
+                # GemmaTokenizer uses inf as model_max_length; LTX and QwenImage text encoders do not
+                # pad their input to model_max_length, so their sequence dimension must stay dynamic
                 self.text_encoder.model,
                 batch_size,
                 (
                     getattr(self.tokenizer, "model_max_length", -1)
                     if "Gemma" not in self.tokenizer.__class__.__name__
                     and not self.__class__.__name__.startswith("OVLTX")
+                    and not self.__class__.__name__.startswith("OVQwenImage")
                     else -1
                 ),
             )
