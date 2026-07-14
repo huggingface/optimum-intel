@@ -1209,6 +1209,54 @@ class DummyQwen3VLVisionEmbedInputGenerator(DummyQwen2VLVisionEmbedInputGenerato
             )
 
 
+class CohereAsrDummyAudioInputGenerator(DummyAudioInputGenerator):
+    """
+    Adds a `length` dummy input alongside `input_features` for CohereLabs/cohere-transcribe.
+
+    Unlike Whisper, `CohereAsrFeatureExtractor` (Hub remote code) does not pad `input_features`
+    to a fixed `nb_max_frames`; it pads only to the batch's max sample length and returns a
+    second `length` tensor with the true per-sample frame count, which `ConformerEncoder`/
+    `ConvSubsampling` use for masking. During dummy tracing every sample in the batch is
+    generated with the same `nb_max_frames` frames (no padding in the trace), so `length` is
+    simply `nb_max_frames` for every batch entry.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("input_features", "input_values", "length")
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "length":
+            return self.random_int_tensor(
+                shape=[self.batch_size],
+                max_value=self.nb_max_frames + 1,
+                min_value=self.nb_max_frames,
+                framework=framework,
+                dtype=int_dtype,
+            )
+        return super().generate(input_name, framework=framework, int_dtype=int_dtype, float_dtype=float_dtype)
+
+
+class CohereAsrDummySeq2SeqDecoderTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
+    """
+    Generates `encoder_outputs`/`encoder_hidden_states` dummy tensors with the Conformer
+    encoder's own `d_model` width (pre-`encoder_decoder_proj`) instead of the decoder's
+    `hidden_size`.
+
+    Unlike Whisper (where the encoder and decoder share the same hidden size),
+    `CohereAsrForConditionalGeneration.forward` always applies `self.encoder_decoder_proj`
+    (Linear(encoder.d_model -> decoder_hidden_size)) to whatever it receives as
+    `encoder_outputs.last_hidden_state` -- including a pre-computed `encoder_outputs` passed in
+    directly for the decoder-only/with-past export. The base
+    `DummySeq2SeqDecoderTextInputGenerator` sizes that dummy tensor using
+    `normalized_config.hidden_size`, which here is the *decoder's* hidden size, producing a
+    tensor with the wrong last dimension and a MatMul shape-inference failure in
+    `encoder_decoder_proj` during ONNX/OpenVINO conversion of the with-past decoder.
+    """
+
+    def __init__(self, task, normalized_config, **kwargs):
+        super().__init__(task, normalized_config, **kwargs)
+        self.hidden_size = normalized_config.encoder_hidden_size
+
+
 class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummySeq2SeqPastKeyValuesGenerator):
     """Custom KV cache generator for Qwen3-ASR with GQA (num_key_value_heads != num_attention_heads).
     Qwen3-ASR has no cross-attention, so only self-attention KV cache is generated (2 per layer)."""

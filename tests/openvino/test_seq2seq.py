@@ -466,6 +466,119 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         del model
         gc.collect()
 
+    @pytest.mark.run_slow
+    @slow
+    def test_cohere_asr_generate_non_30s_multiple_audio(self):
+        """
+        Regression test for https://github.com/huggingface/optimum-intel/pull/1788: the encoder
+        of `CohereAsrOpenVINOConfig` used to inherit `WhisperOpenVINOConfig`'s dummy-input
+        generator unchanged, which hardcodes `input_features`' last dimension to Whisper's
+        static `nb_max_frames=3000`. `CohereAsrFeatureExtractor` (unlike Whisper's) does not pad
+        to a fixed 3000-frame convention -- it only pads to the batch's own max sample length --
+        so any real (non-30s-multiple) audio produced a `[batch, feature_size, natural_len]`
+        tensor that couldn't be fed to the static-shape encoder, raising an OpenVINO shape
+        `RuntimeError` at inference time (export itself succeeded, masking the bug from
+        export-only tests). This exercises the actual `generate()` call path end-to-end on
+        several odd/non-30s-multiple durations to confirm the encoder's `input_features` and
+        `length` inputs are genuinely dynamic and multi-step decoding completes without error.
+        """
+        if "cohere_asr" not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest("cohere_asr not in SUPPORTED_ARCHITECTURES for this transformers version")
+
+        model_id = MODEL_NAMES["cohere_asr"]
+        model = self.OVMODEL_CLASS.from_pretrained(
+            model_id, export=True, device=OPENVINO_DEVICE, trust_remote_code=True
+        )
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+
+        # Encoder input_features/length must stay dynamic (no hardcoded nb_max_frames=3000).
+        encoder_inputs = {inp.get_any_name(): inp.get_partial_shape() for inp in model.encoder.model.inputs}
+        self.assertIn("length", encoder_inputs, "encoder must expose a `length` input for cohere_asr")
+        input_features_shape = encoder_inputs["input_features"]
+        self.assertTrue(
+            input_features_shape[-1].is_dynamic,
+            f"encoder `input_features` last dim must be dynamic, got {input_features_shape}",
+        )
+
+        np.random.seed(SEED)
+        for seconds in (3, 7, 11):
+            audio = (np.random.randn(16000 * seconds).astype(np.float32)) * 0.01
+            inputs = processor(audio, sampling_rate=16000, return_tensors="pt")
+            generated = model.generate(**inputs, max_new_tokens=8)
+            self.assertEqual(generated.shape[0], 1)
+            self.assertGreater(generated.shape[1], 1)
+
+        del model
+        gc.collect()
+
+    @pytest.mark.run_slow
+    @slow
+    def test_cohere_asr_with_past_decoder_is_stateful(self):
+        """
+        Regression test for https://github.com/huggingface/optimum-intel/pull/1788: exporting
+        `cohere_asr` with `--task automatic-speech-recognition-with-past` used to only produce a
+        single, non-stateful `openvino_decoder_model.xml` (no `beam_idx` input, no KV-cache
+        state/sinks), which downstream stateful-decoder consumers (e.g.
+        `openvino_genai.WhisperPipeline`) require. Asserts the with-past export produces a
+        genuinely stateful decoder, mirroring the statefulness assertions already used elsewhere
+        in this file (`_check_openvino_model_attributes`/`model_has_state`).
+        """
+        if "cohere_asr" not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest("cohere_asr not in SUPPORTED_ARCHITECTURES for this transformers version")
+
+        model_id = MODEL_NAMES["cohere_asr"]
+        model = self.OVMODEL_CLASS.from_pretrained(
+            model_id, export=True, device=OPENVINO_DEVICE, trust_remote_code=True, stateful=True
+        )
+        self.assertTrue(model_has_state(model.decoder.model))
+        decoder_input_names = {inp.get_any_name() for inp in model.decoder.model.inputs}
+        self.assertIn("beam_idx", decoder_input_names)
+        self.assertGreater(len(model.decoder.model.get_sinks()), 0)
+
+        # And the stateful decoder must actually support >1 decode step without raising
+        # (regression test for the `_get_cache_seq_length`-derived shape-baking bug where the
+        # attention-mask's total kv length got fixed at trace time).
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        np.random.seed(SEED)
+        audio = (np.random.randn(16000 * 5).astype(np.float32)) * 0.01
+        inputs = processor(audio, sampling_rate=16000, return_tensors="pt")
+        generated = model.generate(**inputs, max_new_tokens=12)
+        self.assertGreater(generated.shape[1], 1)
+
+        del model
+        gc.collect()
+
+    @pytest.mark.run_slow
+    @slow
+    def test_cohere_asr_exported_processor_is_self_contained(self):
+        """
+        Regression check for the reported "Bug 3" in the PR #1788 follow-up ticket: a user
+        claimed `optimum-cli export openvino` doesn't copy tokenizer files (`tokenizer.json`,
+        `tokenizer.model`, `special_tokens_map.json`) into the export directory for cohere_asr,
+        so `AutoProcessor.from_pretrained(export_dir, trust_remote_code=True)` -- exactly as
+        documented in PR #1788's own "Inference" snippet -- fails. This does not reproduce with
+        the current `CohereAsrTokenizer`/`CohereAsrFeatureExtractor` remote code (confirmed via
+        real-model testing against `CohereLabs/cohere-transcribe-03-2026`), but is asserted here
+        so any future regression is caught by CI rather than only by a user report.
+        """
+        if "cohere_asr" not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest("cohere_asr not in SUPPORTED_ARCHITECTURES for this transformers version")
+
+        model_id = MODEL_NAMES["cohere_asr"]
+        with TemporaryDirectory() as tmp_dir:
+            model = self.OVMODEL_CLASS.from_pretrained(
+                model_id, export=True, device=OPENVINO_DEVICE, trust_remote_code=True
+            )
+            model.save_pretrained(tmp_dir)
+            processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+            processor.save_pretrained(tmp_dir)
+
+            # Must succeed without any manual file copying, exactly as documented in the PR.
+            reloaded_processor = AutoProcessor.from_pretrained(tmp_dir, trust_remote_code=True)
+            self.assertIsNotNone(reloaded_processor.tokenizer)
+            del model
+            gc.collect()
+
 
 class Qwen3ASRTest(unittest.TestCase):
     """

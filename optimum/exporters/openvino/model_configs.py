@@ -39,6 +39,8 @@ from optimum.exporters.openvino.config import (
 from optimum.exporters.openvino.input_generators import (
     AquilaDummyPastKeyValuesGenerator,
     ChatGLM2DummyPastKeyValuesGenerator,
+    CohereAsrDummyAudioInputGenerator,
+    CohereAsrDummySeq2SeqDecoderTextInputGenerator,
     DeciDummyPastKeyValuesGenerator,
     DummyAudioPhi4MMInputGenerator,
     DummyFluxTextInputGenerator,
@@ -220,7 +222,6 @@ from optimum.utils.normalized_config import (
     NormalizedTextConfig,
     NormalizedVisionConfig,
 )
-
 
 COMMON_TEXT_TASKS = [
     "feature-extraction",
@@ -4117,13 +4118,27 @@ class FunASROpenVINOConfig(AudioToTextOpenVINOConfig):
     ],
     library_name="transformers",
 )
-class CohereAsrOpenVINOConfig(WhisperOpenVINOConfig):
+class CohereAsrOpenVINOConfig(AudioToTextOpenVINOConfig):
     """
     OpenVINO export config for CohereAsrForConditionalGeneration.
-    Architecture: Conformer encoder + Transformer decoder, same tensor
-    contract as Whisper (input_features → encoder; encoder_outputs +
+    Architecture: Conformer encoder + Transformer decoder (encoder_outputs +
     decoder_input_ids + past_key_values → decoder logits).
+
+    Unlike Whisper, the Conformer encoder consumes a *variable-length*
+    `input_features` tensor: `CohereAsrFeatureExtractor` (Hub remote code) does not pad to a
+    fixed `nb_max_frames=3000` (Whisper's 30s convention) — it pads only to the batch's max
+    sample length and additionally returns a `length` tensor with the true per-sample frame
+    count, which `ConformerEncoder`/`ConvSubsampling` require for correct masking. Because of
+    this different contract, this class extends `AudioToTextOpenVINOConfig` directly instead of
+    `WhisperOpenVINOConfig` (whose `.inputs`/`.outputs` overrides hardcode the static
+    Whisper-only 3000-frame shape) and adds `length` as an explicit second encoder input.
     """
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        CohereAsrDummyAudioInputGenerator,
+        CohereAsrDummySeq2SeqDecoderTextInputGenerator,
+        DummySeq2SeqPastKeyValuesGenerator,
+    )
 
     _MODEL_PATCHER = CohereAsrModelPatcher
 
@@ -4134,6 +4149,10 @@ class CohereAsrOpenVINOConfig(WhisperOpenVINOConfig):
         num_attention_heads="num_attention_heads",
         decoder_num_attention_heads="num_key_value_heads",
         feature_size="num_mel_bins",
+        # Encoder (Conformer) `d_model`, distinct from the decoder's `hidden_size` above -- used
+        # to correctly size the `encoder_outputs` dummy input for `encoder_decoder_proj`,
+        # see `CohereAsrDummySeq2SeqDecoderTextInputGenerator`.
+        encoder_hidden_size="d_model",
         allow_new=True,
     )
 
@@ -4186,6 +4205,15 @@ class CohereAsrOpenVINOConfig(WhisperOpenVINOConfig):
             preprocessors=preprocessors,
             **kwargs,
         )
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = super().inputs
+        if self._behavior in {ConfigBehavior.ENCODER, ConfigBehavior.MONOLITH}:
+            # `length` carries the true per-sample frame count (before any batch padding) that
+            # ConformerEncoder/ConvSubsampling need for masking; see CohereAsrDummyAudioInputGenerator.
+            common_inputs["length"] = {0: "batch_size"}
+        return common_inputs
 
 
 @register_in_tasks_manager(

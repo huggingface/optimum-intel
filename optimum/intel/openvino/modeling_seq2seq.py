@@ -58,7 +58,6 @@ from .utils import (
     classproperty,
 )
 
-
 core = Core()
 
 logger = logging.getLogger(__name__)
@@ -750,8 +749,10 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             elif is_decoder and not inputs.get_any_name().startswith("encoder"):
                 if not inputs.get_any_name().startswith("beam_idx"):
                     shapes[inputs][1] = -1
-            else:
+            elif len(shapes[inputs]) > 1:
                 shapes[inputs][1] = sequence_length
+            # rank-1 encoder inputs (e.g. cohere_asr's `length`, one value per batch entry)
+            # only have a batch dimension, already set above; nothing else to reshape.
         model.reshape(shapes)
         return model
 
@@ -904,6 +905,7 @@ class OVEncoder(OVModelPart):
         self,
         input_ids: torch.LongTensor = None,
         attention_mask: torch.LongTensor = None,
+        length: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> BaseModelOutput:
         self.compile()
@@ -916,6 +918,27 @@ class OVEncoder(OVModelPart):
             if attention_mask is None:
                 attention_mask = torch.ones_like(inputs[self.main_input_name])
             inputs["attention_mask"] = attention_mask
+
+        # cohere_asr: `length` carries the true (pre-padding) per-sample frame count that the
+        # Conformer encoder (ConvSubsampling) needs for correct masking. Declaring `length` as an
+        # explicit parameter (rather than only accepting it via **kwargs) is required so that
+        # `GenerationMixin._validate_model_kwargs`/`_prepare_encoder_decoder_kwargs_for_generation`
+        # (which inspect `encoder.forward`'s signature) recognize and forward it.
+        if "length" in self.input_names:
+            if length is None:
+                # Matches CohereAsr's own eager default (`ConformerEncoder.forward`): when the
+                # caller doesn't supply `length` (e.g. calling the model directly, bypassing
+                # `generate()`), assume every sample in the batch spans the full unpadded
+                # `input_features` time dimension. The traced OV graph always requires this
+                # input, unlike the eager module where it's optional.
+                input_features = inputs[self.main_input_name]
+                length = torch.full(
+                    (input_features.shape[0],),
+                    input_features.shape[-1],
+                    dtype=torch.int64,
+                    device=input_features.device if hasattr(input_features, "device") else None,
+                )
+            inputs["length"] = length
 
         # Qwen3-ASR requires input_features chunking before passing to encoder for processing of long audios.
         if getattr(self.config, "model_type", None) == "qwen3_asr":

@@ -16,6 +16,7 @@ import functools
 import inspect
 import logging
 import math
+import sys
 import types
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -9932,6 +9933,42 @@ class CohereAsrModelPatcher(OVSeq2SeqModelPatcher):
         super().__enter__()
         self._patched_pos_encs = []
         self._patch_positional_encoding()
+        self._patch_cache_seq_length()
+
+    def _patch_cache_seq_length(self):
+        """
+        `CohereAsrForConditionalGeneration.forward` (and its `_prepare_inputs_for_generation`
+        helper) derive the decoder's self/cross-attention masks from `_get_cache_seq_length`,
+        a free function (in the remote-code module) that does `int(past_key_values.get_seq_length())`.
+        The explicit `int(...)` cast immediately materializes the cache length into a plain
+        Python int at trace time, which `torch.jit.trace` then bakes as a graph *constant*
+        wherever it feeds `torch.arange`/mask-shape arithmetic (`total_kv_len`,
+        `self_attention_mask`, `_align_decoder_attention_mask`). This makes the exported
+        with-past decoder only valid for the exact KV-cache length seen during tracing, so real
+        inference at any other step count fails with a `ScaledDotProductAttentionWithKVCache`
+        shape-mismatch error (traced/static kv length vs. actual kv length).
+
+        Fix: monkeypatch the module-level `_get_cache_seq_length` for the trace duration so it
+        returns the tensor-derived length without the `int(...)` cast, keeping it dynamic
+        through `torch.jit.trace` (mirroring how `past_key_values[0][0].shape[-2]` stays dynamic
+        for every other seq2seq/decoder-only architecture in this file).
+        """
+        module = sys.modules.get(type(self._model).__module__)
+        if module is None or not hasattr(module, "_get_cache_seq_length"):
+            return
+
+        def _dynamic_get_cache_seq_length(past_key_values):
+            if past_key_values is None:
+                return 0
+            if hasattr(past_key_values, "get_seq_length"):
+                return past_key_values.get_seq_length()
+            if isinstance(past_key_values, tuple) and past_key_values:
+                return past_key_values[0][0][0].shape[-2]
+            return 0
+
+        self._orig_get_cache_seq_length = module._get_cache_seq_length
+        self._patched_cache_seq_length_module = module
+        module._get_cache_seq_length = _dynamic_get_cache_seq_length
 
     def _patch_positional_encoding(self):
         # Look up positional-encoding submodules by class name (rather than a fixed attribute
@@ -9975,6 +10012,12 @@ class CohereAsrModelPatcher(OVSeq2SeqModelPatcher):
             if hasattr(pos_enc, "_orig_materialize_pe"):
                 pos_enc._materialize_pe = pos_enc._orig_materialize_pe
                 del pos_enc._orig_materialize_pe
+
+        module = getattr(self, "_patched_cache_seq_length_module", None)
+        if module is not None and hasattr(self, "_orig_get_cache_seq_length"):
+            module._get_cache_seq_length = self._orig_get_cache_seq_length
+            del self._orig_get_cache_seq_length
+            self._patched_cache_seq_length_module = None
 
 
 class KokoroModelPatcher(ModelPatcher):
