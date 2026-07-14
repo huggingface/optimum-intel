@@ -165,6 +165,20 @@ def _is_kokoro_model(
         return False
 
 
+def _is_chatterbox_model(all_files: list) -> bool:
+    """Detect ResembleAI Chatterbox TTS models.
+
+    The Chatterbox repository does not ship a ``config.json`` recognizable by
+    ``AutoConfig``. Instead it is identified by its characteristic checkpoint
+    files (the T3 token-to-token model, the S3Gen vocoder and the voice encoder).
+    """
+    file_names = {Path(f).name for f in all_files}
+    has_t3 = "t3_cfg.safetensors" in file_names or "t3_cfg.pt" in file_names
+    has_s3gen = "s3gen.safetensors" in file_names or "s3gen.pt" in file_names
+    has_ve = "ve.safetensors" in file_names or "ve.pt" in file_names
+    return has_t3 and has_s3gen and has_ve
+
+
 def _infer_library_from_model_name_or_path(
     model_name_or_path: Union[str, Path],
     subfolder: str = "",
@@ -179,6 +193,8 @@ def _infer_library_from_model_name_or_path(
         library_name = "open_clip"
     elif _is_kokoro_model(model_name_or_path, all_files, cache_dir=cache_dir, token=token):
         library_name = "kokoro"
+    elif _is_chatterbox_model(all_files):
+        library_name = "chatterbox"
     else:
         library_name = TasksManager._infer_library_from_model_name_or_path(
             model_name_or_path=model_name_or_path, cache_dir=cache_dir
@@ -197,6 +213,8 @@ def _infer_library_from_model_or_model_class(
         library_name = "open_clip"
     elif model.__module__.startswith("kokoro") or getattr(model, "_kokoro_model", False):
         library_name = "kokoro"
+    elif model.__module__.startswith("chatterbox") or getattr(model, "_chatterbox_model", False):
+        library_name = "chatterbox"
     elif model.__module__.startswith("optimum"):
         # for wrapped models like timm in optimum.intel.openvino.modeling_timm
         library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
@@ -499,3 +517,131 @@ class _KokoroForTextToSpeech:
         model.config = config
 
         return model
+
+
+class _ChatterboxForTextToSpeech:
+    """Wrapper for loading a ResembleAI Chatterbox TTS model for OpenVINO export.
+
+    Chatterbox is a multi-stage TTS pipeline (a T3 token-to-token model with a Llama
+    backbone, the S3Gen flow-matching vocoder and a voice encoder) that is not natively
+    recognized by ``AutoModel``. This wrapper loads the original ``ChatterboxTTS`` object
+    and attaches a ``PretrainedConfig`` carrying the metadata required by the export and
+    inference code, so it conforms to optimum-intel expectations.
+    """
+
+    # File sets identifying each Chatterbox variant.
+    _ENGLISH_FILES = ["ve.safetensors", "t3_cfg.safetensors", "s3gen.safetensors", "tokenizer.json", "conds.pt"]
+    _MULTILINGUAL_FILES = [
+        "ve.pt",
+        "t3_mtl23ls_v2.safetensors",
+        "s3gen.pt",
+        "grapheme_mtl_merged_expanded_v1.json",
+        "conds.pt",
+        "Cangjie5_TC.json",
+    ]
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_name_or_path: Union[str, Path],
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        token: Optional[Union[bool, str]] = None,
+        multilingual: Optional[bool] = None,
+        **kwargs,
+    ):
+        try:
+            from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+            from chatterbox.tts import ChatterboxTTS
+        except ImportError:
+            raise ImportError(
+                "To load a Chatterbox TTS model, the `chatterbox-tts` package is required. "
+                "Please install it with `pip install chatterbox-tts`."
+            )
+
+        model_path = Path(model_name_or_path)
+
+        # Decide which variant to load (English vs multilingual 23-language model).
+        # For local directories the variant is inferred from the available checkpoint files;
+        # for remote repositories the multilingual model is used by default.
+        if multilingual is None:
+            if model_path.is_dir():
+                has_english = (model_path / "t3_cfg.safetensors").is_file()
+                has_multilingual = (model_path / "t3_mtl23ls_v2.safetensors").is_file()
+                # Prefer multilingual unless only the English checkpoint is present.
+                multilingual = has_multilingual or not has_english
+            else:
+                multilingual = True
+
+        required_files = cls._MULTILINGUAL_FILES if multilingual else cls._ENGLISH_FILES
+
+        if model_path.is_dir():
+            ckpt_dir = model_path
+        else:
+            # Download the required checkpoint files and resolve their common parent dir.
+            from huggingface_hub import hf_hub_download
+
+            local_path = None
+            for fpath in required_files:
+                local_path = hf_hub_download(
+                    repo_id=str(model_name_or_path), filename=fpath, cache_dir=cache_dir, token=token
+                )
+            ckpt_dir = Path(local_path).parent
+
+        loader = ChatterboxMultilingualTTS if multilingual else ChatterboxTTS
+        tts = loader.from_local(ckpt_dir, device="cpu")
+
+        config = cls._build_config(tts, multilingual=multilingual)
+        tts.config = config
+        tts._chatterbox_model = True
+        tts._chatterbox_ckpt_dir = str(ckpt_dir)
+        tts._chatterbox_multilingual = multilingual
+        return tts
+
+    @staticmethod
+    def _build_config(tts, multilingual: bool = False) -> PretrainedConfig:
+        hp = tts.t3.hp
+        llama_cfg = tts.t3.cfg
+        flow = tts.s3gen.flow
+        cfm = flow.decoder
+        hift = tts.s3gen.mel2wav
+
+        config = PretrainedConfig()
+        config.model_type = "chatterbox"
+        config.export_model_type = "chatterbox"
+
+        # T3 (token-to-token) parameters
+        config.hidden_size = llama_cfg.hidden_size
+        config.speech_vocab_size = hp.speech_tokens_dict_size
+        config.start_text_token = hp.start_text_token
+        config.stop_text_token = hp.stop_text_token
+        config.start_speech_token = hp.start_speech_token
+        config.stop_speech_token = hp.stop_speech_token
+        config.speech_cond_prompt_len = hp.speech_cond_prompt_len
+        config.is_multilingual = hp.is_multilingual
+        config.llama_config = llama_cfg.to_dict()
+
+        # Tokenizer / front-end metadata. The multilingual model uses MTLTokenizer with a
+        # language token prepended to the text, the English model uses EnTokenizer.
+        config.multilingual = bool(multilingual)
+        config.tokenizer_file = "grapheme_mtl_merged_expanded_v1.json" if multilingual else "tokenizer.json"
+
+        # S3Gen flow parameters
+        config.n_mels = flow.output_size
+        config.token_mel_ratio = flow.token_mel_ratio
+        config.pre_lookahead_len = flow.pre_lookahead_len
+        config.inference_cfg_rate = cfm.inference_cfg_rate
+        config.t_scheduler = cfm.t_scheduler
+        config.n_cfm_timesteps = 10
+        config.speaker_embedding_dim = flow.spk_embed_affine_layer.in_features
+
+        # Built-in voice conditionals geometry
+        gen = tts.conds.gen
+        config.prompt_token_len = int(gen["prompt_token"].shape[1])
+        config.prompt_feat_len = int(gen["prompt_feat"].shape[1])
+
+        # HiFiGAN vocoder parameters
+        config.istft_n_fft = hift.istft_params["n_fft"]
+        config.istft_hop_len = hift.istft_params["hop_len"]
+        config.sampling_rate = tts.sr
+
+        return config

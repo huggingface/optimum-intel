@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -20,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import openvino
 import torch
+import torch.nn.functional as F
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from torch import nn
@@ -162,6 +164,21 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
 
     @classmethod
     def from_pretrained(cls, model_id, **kwargs):
+        # Chatterbox models do not ship a config.json recognizable by AutoConfig; their
+        # metadata lives in `chatterbox_config.json`. When such a model is detected we
+        # bypass the generic library/config inference (which requires a config.json) and
+        # route directly to the Chatterbox implementation.
+        if kwargs.get("config") is None and not kwargs.get("export", False):
+            config = _try_load_chatterbox_config(
+                model_id,
+                cache_dir=kwargs.get("cache_dir", HUGGINGFACE_HUB_CACHE),
+                token=kwargs.get("token"),
+                revision=kwargs.get("revision"),
+                local_files_only=kwargs.get("local_files_only", False),
+            )
+            if config is not None:
+                return _OVModelForChatterboxTextToSpeech._from_pretrained(model_id, config, **kwargs)
+
         # For Kokoro models, load config via PretrainedConfig since AutoConfig
         # does not recognize the "kokoro" model_type.
         if kwargs.get("config") is None:
@@ -197,10 +214,14 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
     ):
         if getattr(config, "model_type", None) == "kokoro":
             return _OVModelForKokoroTextToSpeech._from_pretrained(model_id, config, **kwargs)
+        elif getattr(config, "model_type", None) == "chatterbox":
+            return _OVModelForChatterboxTextToSpeech._from_pretrained(model_id, config, **kwargs)
         elif getattr(config, "architectures", None) and "SpeechT5ForTextToSpeech" in config.architectures:
             return _OVModelForSpeechT5ForTextToSpeech._from_pretrained(model_id, config, **kwargs)
         else:
-            raise ValueError(f"{getattr(config, 'model_type')} are not supported text-to-audio model using OpenVINO")
+            raise ValueError(
+                f"{getattr(config, 'architectures', None)} are not supported text-to-audio model using OpenVINO"
+            )
 
     def reshape(self, *args, **kwargs):
         logger.warning("Static shapes are not supported for this model.")
@@ -890,3 +911,500 @@ class _OVModelForKokoroTextToSpeech(OVBaseModel):
             "segments": preprocessed_segments,
             "speed": speed,
         }
+
+
+def _try_load_chatterbox_config(
+    model_id, cache_dir=HUGGINGFACE_HUB_CACHE, token=None, revision=None, local_files_only=False
+):
+    """Load the Chatterbox inference config from an exported model directory or hub repo.
+
+    Returns a ``PretrainedConfig`` with ``model_type == "chatterbox"`` if a
+    ``chatterbox_config.json`` is found, otherwise ``None``.
+    """
+    config_path = None
+    model_path = Path(model_id)
+    if model_path.is_dir():
+        candidate = model_path / "chatterbox_config.json"
+        if candidate.is_file():
+            config_path = str(candidate)
+    else:
+        try:
+            config_path = hf_hub_download(
+                repo_id=str(model_id),
+                filename="chatterbox_config.json",
+                cache_dir=cache_dir,
+                token=token,
+                revision=revision,
+                local_files_only=local_files_only,
+            )
+        except Exception:
+            config_path = None
+
+    if config_path is None:
+        return None
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        config_dict = json.load(f)
+    config = PretrainedConfig()
+    for key, value in config_dict.items():
+        setattr(config, key, value)
+    config.model_type = "chatterbox"
+    config.export_model_type = "chatterbox"
+    return config
+
+
+def _chatterbox_punc_norm(text: str) -> str:
+    """Light text normalization matching the original Chatterbox front-end."""
+    if len(text) == 0:
+        return "You need to add some text for me to talk."
+    if text[0].islower():
+        text = text[0].upper() + text[1:]
+    text = " ".join(text.split())
+    punc_to_replace = [
+        ("...", ", "),
+        ("…", ", "),
+        (":", ","),
+        (" - ", ", "),
+        (";", ", "),
+        ("—", "-"),
+        ("–", "-"),
+        (" ,", ","),
+        ("“", '"'),
+        ("”", '"'),
+        ("‘", "'"),
+        ("’", "'"),
+    ]
+    for old, new in punc_to_replace:
+        text = text.replace(old, new)
+    text = text.rstrip(" ")
+    sentence_enders = {".", "!", "?", "-", ","}
+    if not any(text.endswith(p) for p in sentence_enders):
+        text += "."
+    return text
+
+
+class _OVModelForChatterboxTextToSpeech(OVBaseModel):
+    """OpenVINO inference for the ResembleAI Chatterbox TTS model.
+
+    The pipeline runs three exported submodels with thin PyTorch glue:
+
+    * ``t3``      -- stateful autoregressive Llama decoder that consumes ``inputs_embeds``
+      and produces speech-token logits. Embedding tables and the built-in voice
+      conditioning prefix are stored as assets and applied in Python.
+    * ``flow``    -- whole S3Gen flow (token -> mel) with the diffusion noise as an input.
+    * ``hifigan`` -- vocoder (mel -> waveform).
+    """
+
+    export_feature = "text-to-audio"
+    auto_model_class = AutoModelForTextToSpectrogram
+
+    SPEECH_VOCAB_SIZE = 6561
+
+    def __init__(self, t3, flow, hifigan, config: PretrainedConfig = None, **kwargs):
+        self.config = config
+        self.model_save_dir = kwargs.get("model_save_dir", None)
+        self._device = kwargs.get("device", "CPU").upper()
+        self.ov_config = kwargs.get("ov_config") or {}
+        self.is_dynamic = True
+        self._compile_only = kwargs.get("compile_only", False)
+        self.generation_config = kwargs.get("generation_config", None)
+        self._openvino_config = None
+
+        self._t3_model = t3
+        self._flow_model = flow
+        self._hifigan_model = hifigan
+        self.request_t3 = None
+        self.request_flow = None
+        self.request_hifigan = None
+
+        # Assets and tokenizer
+        self._assets = kwargs.get("assets", {})
+        self._tokenizer = kwargs.get("tokenizer", None)
+        self.preprocessors = kwargs.get("preprocessors", [])
+        self.multilingual = bool(getattr(config, "multilingual", False))
+
+        if kwargs.get("compile", True) and not self._compile_only:
+            self.compile()
+
+    @staticmethod
+    def _core_for_models():
+        return openvino.Core()
+
+    @staticmethod
+    def _load_tokenizer(tokenizer_path, multilingual: bool = False):
+        """Load the Chatterbox text front-end.
+
+        Prefers the original ``MTLTokenizer``/``EnTokenizer`` classes (they implement
+        language-specific normalization and the ``[lang]`` token prefix), and falls back
+        to a raw ``tokenizers.Tokenizer`` if the ``chatterbox`` package is unavailable.
+        """
+        if tokenizer_path is None or not os.path.isfile(tokenizer_path):
+            logger.warning("Chatterbox tokenizer file not found; text preprocessing will be unavailable.")
+            return None
+        try:
+            if multilingual:
+                from chatterbox.models.tokenizers import MTLTokenizer
+
+                return MTLTokenizer(str(tokenizer_path))
+            from chatterbox.models.tokenizers import EnTokenizer
+
+            return EnTokenizer(str(tokenizer_path))
+        except Exception as e:
+            logger.warning(
+                f"Could not load the Chatterbox tokenizer class ({e}). Falling back to a raw tokenizer; "
+                "language-specific preprocessing will not be applied."
+            )
+            try:
+                from tokenizers import Tokenizer
+
+                return Tokenizer.from_file(str(tokenizer_path))
+            except Exception as e2:
+                logger.warning(f"Could not load Chatterbox tokenizer: {e2}")
+                return None
+
+    def _save_config(self, save_directory):
+        # The Chatterbox metadata is persisted as `chatterbox_config.json` rather than the
+        # standard config.json (handled in `_save_pretrained`).
+        pass
+
+    def _save_pretrained(self, save_directory: Union[str, Path]):
+        """Persist the OpenVINO submodels and the Chatterbox assets to ``save_directory``."""
+        import shutil
+
+        save_directory = Path(save_directory)
+        models = {
+            "openvino_t3.xml": self._t3_model,
+            "openvino_flow.xml": self._flow_model,
+            "openvino_hifigan.xml": self._hifigan_model,
+        }
+        for file_name, ov_model in models.items():
+            openvino.save_model(ov_model, save_directory / file_name)
+
+        # Copy the non-IR artifacts (assets, config and tokenizer) from the source dir.
+        if self.model_save_dir is not None:
+            src = Path(self.model_save_dir)
+            for extra in ("chatterbox_assets.safetensors", "chatterbox_config.json", "tokenizer.json"):
+                src_path = src / extra
+                if src_path.is_file():
+                    shutil.copy(src_path, save_directory / extra)
+
+    @classmethod
+    def _from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        config: "PretrainedConfig",
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        local_files_only: bool = False,
+        load_in_8bit: bool = False,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        trust_remote_code: bool = False,
+        **kwargs,
+    ):
+        from safetensors.torch import load_file
+
+        device = kwargs.pop("device", "CPU")
+        ov_config = kwargs.pop("ov_config", None)
+        compile_only = kwargs.pop("compile_only", False)
+        enable_compilation = kwargs.pop("compile", True)
+
+        file_names = {
+            "t3": "openvino_t3.xml",
+            "flow": "openvino_flow.xml",
+            "hifigan": "openvino_hifigan.xml",
+        }
+        tokenizer_file = getattr(config, "tokenizer_file", "tokenizer.json")
+        extra_files = ["chatterbox_assets.safetensors", tokenizer_file]
+        if getattr(config, "multilingual", False):
+            extra_files.append("Cangjie5_TC.json")
+
+        if os.path.isdir(model_id):
+            model_save_dir = Path(model_id)
+            resolved = {k: os.path.join(model_id, v) for k, v in file_names.items()}
+            for extra in extra_files:
+                resolved[extra] = os.path.join(model_id, extra)
+        else:
+            resolved = {}
+            for name, file_name in {**file_names, **{e: e for e in extra_files}}.items():
+                for suffix in [".bin"] if name in file_names else []:
+                    bin_name = file_name.replace(".xml", suffix)
+                    hf_hub_download(
+                        repo_id=str(model_id),
+                        filename=bin_name,
+                        token=token,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        local_files_only=local_files_only,
+                    )
+                resolved[name] = hf_hub_download(
+                    repo_id=str(model_id),
+                    filename=file_name,
+                    token=token,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                )
+            model_save_dir = Path(resolved["t3"]).parent
+
+        t3_model = cls._core_for_models().read_model(resolved["t3"])
+        flow_model = cls._core_for_models().read_model(resolved["flow"])
+        hifigan_model = cls._core_for_models().read_model(resolved["hifigan"])
+
+        assets = load_file(resolved["chatterbox_assets.safetensors"])
+
+        tokenizer = cls._load_tokenizer(
+            resolved.get(tokenizer_file), multilingual=getattr(config, "multilingual", False)
+        )
+
+        return cls(
+            t3=t3_model,
+            flow=flow_model,
+            hifigan=hifigan_model,
+            config=config,
+            device=device,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            compile_only=compile_only,
+            compile=enable_compilation,
+            assets=assets,
+            tokenizer=tokenizer,
+        )
+
+    def compile(self):
+        core = self._core_for_models()
+        if self.request_t3 is None:
+            self.request_t3 = core.compile_model(self._t3_model, self._device, self.ov_config).create_infer_request()
+        if self.request_flow is None:
+            self.request_flow = core.compile_model(self._flow_model, self._device, self.ov_config)
+        if self.request_hifigan is None:
+            self.request_hifigan = core.compile_model(self._hifigan_model, self._device, self.ov_config)
+
+    def clear_requests(self):
+        self.request_t3 = None
+        self.request_flow = None
+        self.request_hifigan = None
+
+    def reshape(self, *args, **kwargs):
+        logger.warning("Static shapes are not supported for Chatterbox model.")
+        return self
+
+    def can_generate(self) -> bool:
+        return True
+
+    # ------------------------------------------------------------------ tokenization
+    def _text_to_tokens(self, text: str, language_id: Optional[str] = None) -> torch.Tensor:
+        if self._tokenizer is None:
+            raise ValueError(
+                "The Chatterbox tokenizer is not available. Make sure the tokenizer file is present "
+                "in the model directory."
+            )
+        if self.multilingual and language_id is None:
+            language_id = "en"
+
+        # The original Chatterbox tokenizer classes expose `text_to_tokens`, applying
+        # language-specific normalization and the `[lang]` prefix for the multilingual model.
+        if hasattr(self._tokenizer, "text_to_tokens"):
+            if self.multilingual:
+                tokens = self._tokenizer.text_to_tokens(text, language_id=language_id.lower())
+            else:
+                tokens = self._tokenizer.text_to_tokens(text)
+            return tokens.to(dtype=torch.long)
+
+        # Raw `tokenizers.Tokenizer` fallback (English only, no language handling).
+        text = text.replace(" ", "[SPACE]")
+        ids = self._tokenizer.encode(text).ids
+        return torch.tensor(ids, dtype=torch.long).unsqueeze(0)
+
+    def preprocess_input(self, text: str, language_id: Optional[str] = None, **kwargs) -> dict:
+        """Normalize and tokenize text into ``input_ids`` ready for ``generate``.
+
+        Args:
+            text: The input text to synthesize.
+            language_id: Two-letter language code (e.g. ``"ru"``, ``"fr"``, ``"zh"``) for the
+                multilingual model. Ignored by the English-only model.
+        """
+        text = _chatterbox_punc_norm(text)
+        return {"input_ids": self._text_to_tokens(text, language_id=language_id)}
+
+    # ------------------------------------------------------------------ T3 stage
+    def _emb(self, weight_key: str, idx: torch.Tensor) -> torch.Tensor:
+        return F.embedding(idx, self._assets[weight_key])
+
+    def _run_t3(
+        self,
+        input_ids: torch.Tensor,
+        max_new_tokens: int = 1000,
+        temperature: float = 0.8,
+        cfg_weight: float = 0.5,
+        repetition_penalty: float = 1.2,
+        min_p: float = 0.05,
+        top_p: float = 1.0,
+    ) -> torch.Tensor:
+        from transformers.generation.logits_process import (
+            MinPLogitsWarper,
+            RepetitionPenaltyLogitsProcessor,
+            TopPLogitsWarper,
+        )
+
+        cfg = self.config
+        sot, eot = cfg.start_text_token, cfg.stop_text_token
+        sst, est = cfg.start_speech_token, cfg.stop_speech_token
+
+        if input_ids.dim() == 1:
+            input_ids = input_ids.unsqueeze(0)
+
+        # CFG: duplicate the sequence (conditional + unconditional).
+        text_tokens = torch.cat([input_ids, input_ids], dim=0)
+        text_tokens = F.pad(text_tokens, (1, 0), value=sot)
+        text_tokens = F.pad(text_tokens, (0, 1), value=eot)
+
+        text_e = self._emb("text_emb_weight", text_tokens)
+        # The unconditional (CFG) branch zeros the token embedding BEFORE the positional
+        # embedding is added, so the position information is preserved (matches the reference).
+        text_e[1].zero_()
+        text_e = text_e + self._assets["text_pos_emb_weight"][: text_tokens.shape[1]]
+
+        cond = self._assets["cond_prefix_emb"].expand(2, -1, -1)
+        # The reference pipeline prefixes the speech part with an initial start-of-speech
+        # token (inside `prepare_input_embeds`) and then concatenates an explicit BOS token,
+        # so the prefill contains two identical speech-token embeddings at position 0.
+        bos = torch.full((2, 1), sst, dtype=torch.long)
+        bos_e = self._emb("speech_emb_weight", bos) + self._assets["speech_pos_emb_weight"][0:1]
+        embeds = torch.cat([cond, text_e, bos_e, bos_e], dim=1)
+
+        rep = RepetitionPenaltyLogitsProcessor(penalty=float(repetition_penalty))
+        topp = TopPLogitsWarper(top_p=top_p)
+        minp = MinPLogitsWarper(min_p=min_p)
+
+        self.request_t3.reset_state()
+
+        # The stateful decoder derives RoPE positions from the attention-mask length, which
+        # must cover the full sequence seen so far (past cache + current tokens).
+        past_len = 0
+
+        def run(ie):
+            nonlocal past_len
+            am = np.ones((ie.shape[0], ie.shape[1] + past_len), dtype=np.int64)
+            res = self.request_t3.infer(
+                {
+                    "inputs_embeds": ie.numpy().astype(np.float32),
+                    "attention_mask": am,
+                    "beam_idx": np.arange(ie.shape[0], dtype=np.int32),
+                }
+            )
+            past_len += ie.shape[1]
+            return torch.from_numpy(next(iter(res.values())))
+
+        logits = run(embeds)
+        generated = bos[:1].clone()  # track only the conditional batch
+        predicted = []
+        for i in range(max_new_tokens):
+            step = logits[:, -1, :]
+            cond_logits, uncond_logits = step[0:1], step[1:2]
+            scaled = cond_logits + cfg_weight * (cond_logits - uncond_logits)
+            ids = generated
+            scaled = rep(ids, scaled)
+            if temperature != 1.0:
+                scaled = scaled / temperature
+            scaled = minp(ids, scaled)
+            scaled = topp(ids, scaled)
+            probs = torch.softmax(scaled, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1)
+            predicted.append(next_token)
+            generated = torch.cat([generated, next_token], dim=1)
+            if next_token.view(-1).item() == est:
+                break
+            next_e = self._emb("speech_emb_weight", next_token) + self._assets["speech_pos_emb_weight"][i + 1 : i + 2]
+            next_e = torch.cat([next_e, next_e])  # CFG
+            logits = run(next_e)
+
+        self.request_t3.reset_state()
+        if not predicted:
+            return torch.zeros((1, 0), dtype=torch.long)
+        return torch.cat(predicted, dim=1)
+
+    # ------------------------------------------------------------------ flow + vocoder
+    def _run_flow_and_vocoder(self, speech_tokens: torch.Tensor) -> torch.Tensor:
+        st = speech_tokens.view(-1)
+        st = st[st < self.SPEECH_VOCAB_SIZE]
+        token = st.unsqueeze(0).to(torch.float32)
+        token_len = torch.tensor([token.shape[1]], dtype=torch.float32)
+
+        prompt_token = self._assets["gen_prompt_token"]
+        prompt_token_len = self._assets["gen_prompt_token_len"]
+        prompt_feat = self._assets["gen_prompt_feat"]
+        embedding = self._assets["gen_embedding"]
+
+        token_mel_ratio = getattr(self.config, "token_mel_ratio", 2)
+        n_mels = getattr(self.config, "n_mels", 80)
+        total_tokens = prompt_token.shape[1] + token.shape[1]
+        mel_t = token_mel_ratio * total_tokens
+        noise = torch.randn(1, n_mels, mel_t)
+
+        flow_out = self.request_flow(
+            [
+                token.numpy(),
+                token_len.numpy(),
+                prompt_token.numpy(),
+                prompt_token_len.numpy(),
+                prompt_feat.numpy(),
+                embedding.numpy(),
+                noise.numpy(),
+            ]
+        )
+        mel = flow_out[0]
+        wav = self.request_hifigan([mel])[0]
+        return torch.from_numpy(wav)
+
+    # ------------------------------------------------------------------ public API
+    @torch.no_grad()
+    def generate(
+        self,
+        input_ids: Optional[Union[torch.Tensor, np.ndarray]] = None,
+        text: Optional[str] = None,
+        language_id: Optional[str] = None,
+        max_new_tokens: int = 1000,
+        temperature: float = 0.8,
+        cfg_weight: float = 0.5,
+        repetition_penalty: float = 1.2,
+        min_p: float = 0.05,
+        top_p: float = 1.0,
+        **kwargs,
+    ) -> torch.FloatTensor:
+        """Generate an audio waveform from token ids or raw text.
+
+        Args:
+            input_ids: Tokenized input from ``preprocess_input``. If not provided, ``text``
+                is tokenized internally.
+            text: Raw text to synthesize (used when ``input_ids`` is ``None``).
+            language_id: Two-letter language code (e.g. ``"ru"``, ``"fr"``, ``"zh"``) for the
+                multilingual model; ignored by the English-only model. Used only when the
+                text is tokenized internally (i.e. ``input_ids`` is ``None``).
+        """
+        if input_ids is None:
+            if text is None:
+                raise ValueError("Either `input_ids` or `text` must be provided.")
+            input_ids = self.preprocess_input(text, language_id=language_id)["input_ids"]
+        if isinstance(input_ids, np.ndarray):
+            input_ids = torch.from_numpy(input_ids)
+
+        speech_tokens = self._run_t3(
+            input_ids,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            cfg_weight=cfg_weight,
+            repetition_penalty=repetition_penalty,
+            min_p=min_p,
+            top_p=top_p,
+        )
+        if speech_tokens.shape[1] == 0:
+            raise RuntimeError("Chatterbox T3 produced no speech tokens for the given input.")
+        return self._run_flow_and_vocoder(speech_tokens)
+
+    @property
+    def sampling_rate(self) -> int:
+        return int(getattr(self.config, "sampling_rate", 24000))

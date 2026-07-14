@@ -116,6 +116,13 @@ if _kokoro_available:
         _kokoro_version = importlib_metadata.version("kokoro")
     except importlib_metadata.PackageNotFoundError:
         _kokoro_available = False
+_chatterbox_available = importlib.util.find_spec("chatterbox") is not None
+_chatterbox_version = "N/A"
+if _chatterbox_available:
+    try:
+        _chatterbox_version = importlib_metadata.version("chatterbox-tts")
+    except importlib_metadata.PackageNotFoundError:
+        _chatterbox_available = False
 
 _safetensors_version = "N/A"
 _safetensors_available = importlib.util.find_spec("safetensors") is not None
@@ -300,6 +307,10 @@ def is_open_clip_available():
 
 def is_kokoro_available():
     return _kokoro_available
+
+
+def is_chatterbox_available():
+    return _chatterbox_available
 
 
 def is_safetensors_available():
