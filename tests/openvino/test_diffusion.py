@@ -1365,3 +1365,36 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
         inputs.pop("width")
         image = np.array(pipeline(**inputs).frames[0])
         self.assertTupleEqual(image.shape[-3:-1], (64, 96))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_image_resize_behavior(self, model_arch: str):
+        from PIL import Image
+
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+
+        height, width = 64, 96
+        inputs = self.generate_inputs(height=height, width=width, batch_size=1)
+        # Replace with an image that has different dimensions than requested
+        inputs["image"] = Image.new("RGB", (256, 256))
+
+        outputs = pipeline(**inputs).frames
+        output_frame = np.array(outputs[0])
+        # Output resolution must match the requested height/width, not the input image size
+        self.assertEqual(output_frame.shape[-3], height)
+        self.assertEqual(output_frame.shape[-2], width)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_num_frames_validation(self, model_arch: str):
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+
+        # Valid LTX num_frames must satisfy (num_frames - 1) % 8 == 0
+        valid_inputs = self.generate_inputs(height=64, width=96, batch_size=1, num_frames=9)
+        outputs = pipeline(**valid_inputs).frames
+        self.assertEqual(len(np.array(outputs[0])), 9)
+
+        # num_frames that violates the LTX constraint should raise
+        invalid_inputs = self.generate_inputs(height=64, width=96, batch_size=1, num_frames=10)
+        with self.assertRaises(Exception):
+            pipeline(**invalid_inputs)
