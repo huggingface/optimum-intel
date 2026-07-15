@@ -706,6 +706,16 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORT_AUDIO_OUTPUT = ["qwen3_omni_moe"]
     OVMODEL_CLASS = OVModelForVisualCausalLM
     TASK = "image-text-to-text"
+    REMOTE_CODE_MODELS = [
+        "internvl_chat",
+        "minicpmv",
+        "minicpmo",
+        "llava-qwen2",
+        "phi3_v",
+        "maira2",
+        "phi4mm",
+        "glm_edge_v",
+    ]
 
     # filter architectures depending on min/max transformers supported versions declared on their
     # OpenVINO export config
@@ -1241,6 +1251,14 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             preprocessors = {"processor": None, "tokenizer": tokenizer, "config": config}
+        elif model_arch == "glm_edge_v":
+            processor = AutoImageProcessor.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            preprocessors = {"processor": processor, "tokenizer": tokenizer, "config": config}
         else:
             processor = AutoProcessor.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
