@@ -3324,6 +3324,112 @@ class LlavaQwen2ImageEmbeddingsModelPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
+def _glm_edge_v_vision_embeddings_forward(self, pixel_values):
+    # `self` is the top-level `GlmForCausalLM`. Its multimodal vision stack lives in `self.model.vision`
+    # (a SigLIP encoder + adapter) and maps `[num_images, C, H, W]` pixel values to per-image token
+    # embeddings that are later spliced into the text embeddings at the image (boi) token positions.
+    return self.model.vision(pixel_values)
+
+
+class GlmEdgeVImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(_glm_edge_v_vision_embeddings_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+def _glm_edge_v_language_model_forward(
+    self,
+    attention_mask=None,
+    position_ids=None,
+    past_key_values=None,
+    inputs_embeds=None,
+    use_cache=None,
+    **kwargs,
+):
+    # Language part of GLM-Edge-V exported with `inputs_embeds` already containing the merged
+    # text + vision embeddings. Vision fusion is done outside (at runtime), so the decoder must
+    # bypass the remote-code image-splicing branch of `GlmModel.forward` entirely.
+    from transformers.cache_utils import DynamicCache
+    from transformers.modeling_outputs import BaseModelOutputWithPast
+
+    decoder = self.model
+    use_cache = use_cache if use_cache is not None else decoder.config.use_cache
+
+    return_legacy_cache = False
+    if use_cache and not isinstance(past_key_values, DynamicCache):
+        return_legacy_cache = True
+        if past_key_values is None:
+            past_key_values = DynamicCache()
+        else:
+            past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+
+    past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+    cache_position = torch.arange(
+        past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
+    )
+    if position_ids is None:
+        position_ids = cache_position.unsqueeze(0)
+
+    causal_mask = decoder._update_causal_mask(
+        attention_mask, inputs_embeds, cache_position, past_key_values, False
+    )
+    hidden_states = inputs_embeds
+    position_embeddings = decoder.rotary_emb(hidden_states, position_ids)
+
+    for decoder_layer in decoder.layers:
+        layer_outputs = decoder_layer(
+            hidden_states,
+            attention_mask=causal_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_values,
+            output_attentions=False,
+            use_cache=use_cache,
+            cache_position=cache_position,
+            position_embeddings=position_embeddings,
+        )
+        hidden_states = layer_outputs[0]
+        if use_cache:
+            past_key_values = layer_outputs[1]
+
+    hidden_states = decoder.norm(hidden_states)
+    logits = self.lm_head(hidden_states)
+
+    next_cache = past_key_values if use_cache else None
+    if return_legacy_cache and next_cache is not None:
+        next_cache = next_cache.to_legacy_cache()
+
+    return CausalLMOutputWithPast(logits=logits, past_key_values=next_cache)
+
+
+class GlmEdgeVLanguageModelPatcher(OVDecoderModelPatcher):
+    def __init__(self, config: "OnnxConfig", model: "PreTrainedModel", model_kwargs: Dict[str, Any]):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(_glm_edge_v_language_model_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        if is_torch_version(">=", "2.1.0"):
+            self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+            self._model.config._attn_implementation = "sdpa"
+        super().__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        if hasattr(self._model.config, "_orig_attn_implementation"):
+            self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+
+
 class InputEmbeddingPatcher(ModelPatcher):
     def __init__(
         self,
