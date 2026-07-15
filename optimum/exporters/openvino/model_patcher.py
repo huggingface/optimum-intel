@@ -5057,6 +5057,79 @@ def _gemma3_mm_update_causal_mask(
     return causal_mask
 
 
+# Original code: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/gemma3/modeling_gemma3.py#L760
+def gemma3_create_causal_mask_mapping_patched(
+        config,
+        input_embeds: torch.Tensor,
+        attention_mask: torch.Tensor | None,
+        cache_position: torch.Tensor,
+        past_key_values: Cache | None,
+        position_ids: torch.Tensor | None,
+        token_type_ids: torch.Tensor | None = None,
+        pixel_values: torch.FloatTensor | None = None,
+        is_training: bool = False,
+        is_first_iteration: bool | None = None,
+        **kwargs,
+) -> dict:
+    """
+    Overwrites the base `create_masks_for_generate` with `token_type_ids` masking to create the causal mask mapping
+    for all kinds of forward passes. Gemma3 uses a bidirectional mask for images.
+
+    Uses `pixel_values` as an optional input to disambiguate edge cases.
+    """
+    from transformers.models.gemma3.modeling_gemma3 import token_type_ids_mask_function
+    from transformers.masking_utils import create_masks_for_generate
+
+    mask_kwargs = {
+        "config": config.get_text_config(),
+        "input_embeds": input_embeds,
+        "attention_mask": attention_mask,
+        "cache_position": cache_position,
+        "past_key_values": past_key_values,
+        "position_ids": position_ids,
+    }
+    if token_type_ids is not None and input_embeds.shape[1] != 1:
+        # We need to pass an additional mask function to account for token type ids, and it needs to be an `or` (to
+        # undo the causal masking)
+
+        # First find where a new image block starts: 1 if image and previous not image
+        # The images cannot attend to future images, but can attend to all prev images and to itself bidirectionally
+        is_image = (token_type_ids == 1).to(cache_position.device)
+        is_previous_image = torch.nn.functional.pad(is_image[:, :-1].to(dtype=torch.int64), (1, 0), value=0).bool()
+        new_image_start = is_image & ~is_previous_image
+        image_group_ids = torch.cumsum(new_image_start.to(dtype=torch.int64), dim=1) - 1
+        image_group_ids = torch.where(is_image, image_group_ids, -1)
+        mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
+            token_type_ids.to(cache_position.device), image_group_ids
+        )
+
+    return create_masks_for_generate(**mask_kwargs)
+
+
+def create_masks_for_generate_patched(
+        config,
+        input_embeds: torch.Tensor,
+        attention_mask: torch.Tensor | None,
+        cache_position: torch.Tensor,
+        past_key_values: Cache | None,
+        position_ids: torch.Tensor | None,
+        token_type_ids: torch.Tensor | None = None,
+        is_first_iteration: bool | None = False,
+        **kwargs,
+) -> dict:
+    # Uses the overwritten `create_masks_for_generate` with `token_type_ids` masking
+    return gemma3_create_causal_mask_mapping_patched(
+        config,
+        input_embeds,
+        attention_mask,
+        cache_position,
+        past_key_values,
+        position_ids,
+        token_type_ids,
+        is_first_iteration=is_first_iteration,
+        **{k: v for k, v in kwargs.items() if k != "pixel_values"},
+    )
+
 class Gemma3LMModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
@@ -5064,6 +5137,205 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
+        # Original code: https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/gemma3/modeling_gemma3.py#L836
+        def patched_lm_forward_4_57_6(
+                self,
+                input_ids: Optional[torch.LongTensor] = None,
+                pixel_values: Optional[torch.FloatTensor] = None,
+                attention_mask: Optional[torch.Tensor] = None,
+                position_ids: Optional[torch.LongTensor] = None,
+                past_key_values: Optional[Cache] = None,
+                token_type_ids: Optional[torch.LongTensor] = None,
+                cache_position: Optional[torch.LongTensor] = None,
+                inputs_embeds: Optional[torch.FloatTensor] = None,
+                labels: Optional[torch.LongTensor] = None,
+                use_cache: Optional[bool] = None,
+                output_attentions: Optional[bool] = None,
+                output_hidden_states: Optional[bool] = None,
+                return_dict: Optional[bool] = None,
+                **lm_kwargs,
+        ):
+            from transformers.models.gemma3.modeling_gemma3 import Gemma3ModelOutputWithPast, \
+                token_type_ids_mask_function, create_sliding_window_causal_mask
+
+            if (input_ids is None) ^ (inputs_embeds is not None):
+                raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+
+            output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+            output_hidden_states = (
+                output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+            )
+            return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+            # Replace image id with PAD if the image token if OOV, to avoid index-errors
+            if input_ids is not None and self.config.image_token_id >= self.vocab_size:
+                special_image_mask = input_ids == self.config.image_token_id
+                llm_input_ids = input_ids.clone()
+                llm_input_ids[special_image_mask] = 0
+            else:
+                llm_input_ids = input_ids
+
+            if inputs_embeds is None:
+                inputs_embeds = self.get_input_embeddings()(llm_input_ids)
+
+            if cache_position is None:
+                past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+                cache_position = torch.arange(
+                    past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
+                )
+
+            # Merge text and images
+            if pixel_values is not None:
+                image_features = self.get_image_features(pixel_values)
+                image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
+                special_image_mask = self.get_placeholder_mask(
+                    input_ids, inputs_embeds=inputs_embeds, image_features=image_features
+                )
+                inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+
+            # It may already have been prepared by e.g. `generate`
+            if not isinstance(causal_mask_mapping := attention_mask, dict):
+                # Prepare mask arguments
+                mask_kwargs = {
+                    "config": self.config.get_text_config(),
+                    "input_embeds": inputs_embeds,
+                    "attention_mask": attention_mask,
+                    "cache_position": cache_position,
+                    "past_key_values": past_key_values,
+                    "position_ids": position_ids,
+                }
+                # NOTE: this `is_prefill` logic is not flawless, it fails when we're using a cache eagerly initialized
+                # (e.g. compiled prefill) AND `pixel_values` are not provided. Determining prefill in that case requires
+                # checking data values, which is not compile-compatible.
+                is_prefill = (
+                        not use_cache
+                        or past_key_values is None
+                        or not past_key_values.is_initialized
+                        or pixel_values is not None
+                )
+
+                # if token_type_ids is not None and is_prefill:
+                if token_type_ids is not None and inputs_embeds.shape[1] != 1:
+                    # We need to pass an additional mask function to account for token type ids, and it needs to be an `or`
+
+                    # First find where a new image block starts: 1 if image and previous not image
+                    # The images cannot attend to future images, but can attend to all prev images and to itself
+                    # bidirectionally
+                    is_image = (token_type_ids == 1).to(cache_position.device)
+                    new_image_start = is_image & ~nn.functional.pad(is_image, (1, 0), value=0)[:, :-1]
+                    image_group_ids = torch.cumsum(new_image_start.int(), dim=1) - 1
+                    image_group_ids = torch.where(
+                        is_image, image_group_ids, torch.full_like(token_type_ids, -1, device=is_image.device)
+                    )
+                    mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
+                        token_type_ids.to(cache_position.device), image_group_ids, self.config.mm_tokens_per_image
+                    )
+
+                # Create the masks
+                causal_mask_mapping = {
+                    "full_attention": create_causal_mask(**mask_kwargs),
+                    "sliding_attention": create_sliding_window_causal_mask(**mask_kwargs),
+                }
+
+            outputs = self.language_model(
+                attention_mask=causal_mask_mapping,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=True,
+                cache_position=cache_position,
+                **lm_kwargs,
+            )
+
+            return Gemma3ModelOutputWithPast(
+                last_hidden_state=outputs.last_hidden_state,
+                past_key_values=outputs.past_key_values if use_cache else None,
+                hidden_states=outputs.hidden_states,
+                attentions=outputs.attentions,
+                image_hidden_states=image_features if pixel_values is not None else None,
+            )
+
+        def patched_lm_forward_5_0(
+                self,
+                input_ids: torch.LongTensor | None = None,
+                pixel_values: torch.FloatTensor | None = None,
+                attention_mask: torch.Tensor | None = None,
+                position_ids: torch.LongTensor | None = None,
+                past_key_values: Cache | None = None,
+                token_type_ids: torch.LongTensor | None = None,
+                cache_position: torch.LongTensor | None = None,
+                inputs_embeds: torch.FloatTensor | None = None,
+                labels: torch.LongTensor | None = None,
+                use_cache: bool | None = None,
+                **lm_kwargs: Unpack[TransformersKwargs],
+        ):
+            from transformers.models.gemma3.modeling_gemma3 import Gemma3ModelOutputWithPast
+
+            if (input_ids is None) ^ (inputs_embeds is not None):
+                raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+
+            # Replace image id with PAD if the image token if OOV, to avoid index-errors
+            if input_ids is not None and self.config.image_token_id >= self.vocab_size:
+                special_image_mask = input_ids == self.config.image_token_id
+                llm_input_ids = input_ids.clone()
+                llm_input_ids[special_image_mask] = 0
+            else:
+                llm_input_ids = input_ids
+
+            if inputs_embeds is None:
+                inputs_embeds = self.get_input_embeddings()(llm_input_ids)
+
+            if cache_position is None:
+                past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+                cache_position = torch.arange(
+                    past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
+                )
+
+            # Merge text and images
+            if pixel_values is not None:
+                image_features = self.get_image_features(pixel_values, return_dict=True).pooler_output
+                image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
+                special_image_mask = self.get_placeholder_mask(
+                    input_ids, inputs_embeds=inputs_embeds, image_features=image_features
+                )
+                inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+
+            # It may already have been prepared by e.g. `generate`
+            if not isinstance(causal_mask_mapping := attention_mask, dict):
+                causal_mask_mapping = gemma3_create_causal_mask_mapping_patched(
+                    self.config,
+                    inputs_embeds,
+                    attention_mask,
+                    cache_position,
+                    past_key_values,
+                    position_ids,
+                    token_type_ids,
+                    pixel_values,
+                    is_training=self.training,
+                )
+
+            outputs = self.language_model(
+                attention_mask=causal_mask_mapping,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+                return_dict=True,
+                cache_position=cache_position,
+                **lm_kwargs,
+            )
+
+            return Gemma3ModelOutputWithPast(
+                last_hidden_state=outputs.last_hidden_state,
+                past_key_values=outputs.past_key_values,
+                hidden_states=outputs.hidden_states,
+                attentions=outputs.attentions,
+                image_hidden_states=image_features if pixel_values is not None else None,
+            )
+
         # Difference from original:
         # uses Dynamic cache from legacy cache instead of HybridCache
         # calculate causal mask from multimodal
@@ -5107,6 +5379,14 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
             model.__orig_forward = model.forward
             model.forward = types.MethodType(forward, model)
 
+        if is_transformers_version("==", "4.57.6"):
+            model.orig_lm_forward = model.model.forward
+            model.model.forward = types.MethodType(patched_lm_forward_4_57_6, model.model)
+
+        if is_transformers_version(">=", "5.0"):
+            model.orig_lm_forward = model.model.forward
+            model.model.forward = types.MethodType(patched_lm_forward_5_0, model.model)
+
         super().__init__(config, model, model_kwargs)
 
     def __enter__(self):
@@ -5137,6 +5417,9 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
         ):
             self._model.model._update_causal_mask = self._model.model._orig_update_causual_mask
             del self._model.model._orig_update_causual_mask
+
+        if is_transformers_version(">=", "4.57.6"):
+            self._model.model.forward = self._model.orig_lm_forward
 
 
 # Creates a dict of causal masks with bidirectional attention for vision tokens
