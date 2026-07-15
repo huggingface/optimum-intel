@@ -364,6 +364,38 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
         return audio_data
 
+    def test_pipeline_autodetection_registers_non_whisper_architectures(self):
+        """Regression test for the `transformers.pipeline("automatic-speech-recognition", ...)`
+        misdetection bug reported against `cohere_asr` (follow-up to optimum-intel#1788).
+
+        `AutomaticSpeechRecognitionPipeline.__init__` decides its internal behavior with:
+            - `model.config.model_type == "whisper"` -> "seq2seq_whisper"
+            - `model.__class__.__name__ in MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES.values()` ->
+              "seq2seq"
+            - otherwise -> "ctc" (calls `model(**inputs)` directly instead of
+              `model.generate(**inputs)`)
+
+        `MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES` only ever lists native PyTorch class names
+        (e.g. "CohereAsrForConditionalGeneration"), never `OVModelForSpeechSeq2Seq`. Since Whisper
+        is the only architecture that takes the first branch, every *other* OpenVINO ASR
+        architecture (`cohere_asr`, `qwen3_asr`, ...) used to be silently misrouted to the "ctc"
+        branch, crashing deep inside `OVModelForSeq2SeqLM.forward()` (e.g.
+        `AttributeError: 'NoneType' object has no attribute 'shape'` from a `None`
+        `decoder_input_ids`) instead of raising a clear, actionable error.
+
+        This does not need a real model/checkpoint: the fix registers the (single,
+        architecture-independent) `OVModelForSpeechSeq2Seq` class name once at import time.
+        """
+        from transformers.models.auto.modeling_auto import MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES
+
+        self.assertIn(
+            OVModelForSpeechSeq2Seq.__name__,
+            MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES.values(),
+            "OVModelForSpeechSeq2Seq must be registered so transformers.pipeline("
+            "'automatic-speech-recognition', ...) routes non-Whisper OpenVINO ASR architectures "
+            "through .generate() instead of misdetecting them as CTC models.",
+        )
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         set_seed(SEED)

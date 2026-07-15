@@ -1636,3 +1636,41 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
             logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
             generation_config.forced_decoder_ids = forced_decoder_ids
         return logits_processor
+
+
+def _register_ov_speech_seq2seq_for_pipeline_autodetection():
+    """Make `transformers.pipeline("automatic-speech-recognition", ...)` recognize `OVModelForSpeechSeq2Seq`.
+
+    `AutomaticSpeechRecognitionPipeline.__init__` picks its internal behavior ("seq2seq_whisper" /
+    "seq2seq" / "ctc") using a heuristic that never accounts for wrapped/exported model classes:
+
+        if model.config.model_type == "whisper":
+            self.type = "seq2seq_whisper"
+        elif model.__class__.__name__ in MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES.values():
+            self.type = "seq2seq"
+        ...
+        else:
+            self.type = "ctc"
+
+    `MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES` only ever contains native PyTorch class names (e.g.
+    "CohereAsrForConditionalGeneration"), never `OVModelForSpeechSeq2Seq`. For any non-Whisper
+    architecture (`cohere_asr`, `qwen3_asr`, ...) this silently misroutes the pipeline to the "ctc"
+    branch, which calls `model(**inputs)` directly instead of `model.generate(**inputs)` -- the wrong
+    calling contract for our stateful, generate()-only decoder, and typically crashes deep inside
+    `OVModelForSeq2SeqLM.forward()` with unrelated-looking errors (e.g. `decoder_input_ids` being
+    `None`). Whisper itself is unaffected because it takes the `model_type == "whisper"` branch above.
+    Registering our (single, architecture-independent) wrapper class name here once fixes pipeline
+    auto-detection for every current and future non-Whisper OpenVINO ASR architecture.
+    """
+    try:
+        from transformers.models.auto.modeling_auto import MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES
+    except ImportError:
+        return
+
+    if OVModelForSpeechSeq2Seq.__name__ not in MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES.values():
+        MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES["_optimum_intel_ov_speech_seq2seq"] = (
+            OVModelForSpeechSeq2Seq.__name__
+        )
+
+
+_register_ov_speech_seq2seq_for_pipeline_autodetection()
