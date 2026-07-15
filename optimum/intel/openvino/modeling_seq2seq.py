@@ -13,6 +13,7 @@
 #  limitations under the License.
 import logging
 import os
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -23,8 +24,11 @@ from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import CompiledModel, Core
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
+from torch import nn
+from torch.nn import functional as F
 from transformers import (
     AutoConfig,
+    AutoModelForImageTextToText,
     AutoModelForSeq2SeqLM,
     AutoModelForSpeechSeq2Seq,
     GenerationConfig,
@@ -53,21 +57,6 @@ from .utils import (
     TemporaryDirectory,
     classproperty,
 )
-
-
-# AutoModelForVision2Seq is deprecated since v4.54
-# https://github.com/huggingface/transformers/blob/v4.54.0/src/transformers/models/auto/modeling_auto.py#L2151
-if is_transformers_version(">=", "4.54.0"):
-    from transformers import AutoModelForImageTextToText
-
-    transformers_auto_class = AutoModelForImageTextToText
-else:
-    from transformers import AutoModelForVision2Seq
-
-    transformers_auto_class = AutoModelForVision2Seq
-
-from torch import nn
-from torch.nn import functional as F
 
 
 core = Core()
@@ -616,6 +605,10 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         # now we use model_kwargs only for text-to-speech models to specify vocoder
         model_kwargs = kwargs if cls.export_feature == "text-to-audio" else None
 
+        # FunASR has no transformers processor, so its tokenizer/detokenizer IR is needed at inference
+        # time (e.g. by preprocess_input). Always export them for this model type.
+        convert_tokenizer = getattr(config, "model_type", None) == "fun_asr"
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -631,6 +624,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             stateful=stateful,
             variant=variant,
             model_kwargs=model_kwargs,
+            convert_tokenizer=convert_tokenizer,
         )
 
         # Reload the config from the export output directory, as the export process
@@ -638,7 +632,16 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         exported_config_path = save_dir_path / "config.json"
         if exported_config_path.exists():
             original_name_or_path = getattr(config, "_name_or_path", None) or model_id
-            config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
+            try:
+                config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
+            except (KeyError, ValueError):
+                # Custom model types not registered with transformers AutoConfig (e.g. `fun_asr`,
+                # loaded via the funasr library) are stored as a plain PretrainedConfig.
+                config = PretrainedConfig.from_pretrained(save_dir_path)
+            # PretrainedConfig does not serialize the instance-level `model_type`; restore it
+            # from `export_model_type` so downstream model_type-based dispatch keeps working.
+            if not getattr(config, "model_type", None) and getattr(config, "export_model_type", None):
+                config.model_type = config.export_model_type
             # Preserve the original model identifier so that default quantization
             # config lookup based on the model id keeps working.
             config._name_or_path = original_name_or_path
@@ -910,6 +913,8 @@ class OVEncoder(OVModelPart):
 
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names:
+            if attention_mask is None:
+                attention_mask = torch.ones_like(inputs[self.main_input_name])
             inputs["attention_mask"] = attention_mask
 
         # Qwen3-ASR requires input_features chunking before passing to encoder for processing of long audios.
@@ -1104,8 +1109,8 @@ class OVDecoder(OVModelPart):
     """,
     INPUTS_DOCSTRING,
 )
-class OVModelForVision2Seq(OVModelForSeq2SeqLM):
-    auto_model_class = transformers_auto_class
+class OVModelForImageTextToText(OVModelForSeq2SeqLM):
+    auto_model_class = AutoModelForImageTextToText
     main_input_name = "pixel_values"
     export_feature = "image-to-text"
 
@@ -1163,7 +1168,7 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
         + IMAGE_TO_TEXT_EXAMPLE.format(
             processor_class=_PROCESSOR_FOR_DOC,
             tokenizer_class=_TOKENIZER_FOR_DOC,
-            model_class="OVModelForVision2Seq",
+            model_class="OVModelForImageTextToText",
             checkpoint="microsoft/trocr-small-handwritten",
         )
     )
@@ -1209,15 +1214,15 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
     """,
     INPUTS_DOCSTRING,
 )
-class OVModelForPix2Struct(OVModelForVision2Seq):
+class OVModelForPix2Struct(OVModelForImageTextToText):
     auto_model_class = Pix2StructForConditionalGeneration
     main_input_name = "flattened_patches"
     export_feature = "image-to-text"
 
-    # this is needed to avoid circular calls when OVModelForVision2Seq is called to instantiate a OVModelForPix2Struct
+    # this is needed to avoid circular calls when OVModelForImageTextToText is called to instantiate a OVModelForPix2Struct
     @classmethod
     def _from_pretrained(cls, model_id: Union[str, Path], config: "PretrainedConfig", **kwargs):
-        return super(OVModelForVision2Seq, cls)._from_pretrained(model_id, config, **kwargs)
+        return super(OVModelForImageTextToText, cls)._from_pretrained(model_id, config, **kwargs)
 
     def prepare_inputs_for_generation(
         self,
@@ -1293,6 +1298,18 @@ class OVModelForPix2Struct(OVModelForVision2Seq):
         return model
 
 
+class OVModelForVision2Seq(OVModelForImageTextToText):
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        warnings.warn(
+            "OVModelForVision2Seq is deprecated and will be removed in a future release. "
+            "Use OVModelForImageTextToText instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        return super().from_pretrained(*args, **kwargs)
+
+
 @add_start_docstrings(
     """
     Speech Sequence-to-sequence model with a language modeling head for OpenVINO inference. This class officially supports whisper, speech_to_text.
@@ -1303,6 +1320,16 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
     auto_model_class = AutoModelForSpeechSeq2Seq
     main_input_name = "input_features"
     export_feature = "automatic-speech-recognition"
+
+    @classmethod
+    def from_pretrained(cls, model_id, export: bool = False, config: Optional["PretrainedConfig"] = None, **kwargs):
+        from .modeling_funasr import _is_funasr_source, _OVModelForFunAsr
+
+        # the original FunASR model has no config file, so _from_pretrained() dispatch does not work
+        if config is None and _is_funasr_source(model_id, **kwargs):
+            return _OVModelForFunAsr._from_pretrained_funasr(model_id, export=export, **kwargs)
+
+        return super().from_pretrained(model_id, export=export, config=config, **kwargs)
 
     def _prepare_decoder_input_ids_for_generation(
         self, batch_size, model_input_name, model_kwargs, decoder_start_token_id, device=None
@@ -1467,14 +1494,16 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
         config: "PretrainedConfig",
         **kwargs,
     ):
-        if "WhisperForConditionalGeneration" in getattr(config, "architectures", []):
+        if "WhisperForConditionalGeneration" in (getattr(config, "architectures", None) or []):
             return _OVModelForWhisper._from_pretrained(model_id, config, **kwargs)
-        elif getattr(config, "model_type", None) == "qwen3_asr":
-            # Ensure is_encoder_decoder is set for proper model loading
+        if getattr(config, "model_type", None) == "fun_asr":
+            from .modeling_funasr import _OVModelForFunAsr
+
             config.is_encoder_decoder = True
-            return super()._from_pretrained(model_id, config, **kwargs)
-        else:
-            return super()._from_pretrained(model_id, config, **kwargs)
+            return _OVModelForFunAsr._from_pretrained(model_id, config, **kwargs)
+        if getattr(config, "model_type", None) == "qwen3_asr":
+            config.is_encoder_decoder = True
+        return super()._from_pretrained(model_id, config, **kwargs)
 
 
 class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneration):
@@ -1580,9 +1609,7 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
             logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
         else:
             forced_decoder_ids = generation_config.forced_decoder_ids
-
-            if is_transformers_version(">=", "4.50.0"):
-                generation_config.forced_decoder_ids = None
+            generation_config.forced_decoder_ids = None
             logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
             generation_config.forced_decoder_ids = forced_decoder_ids
         return logits_processor

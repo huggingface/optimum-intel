@@ -20,13 +20,13 @@ from huggingface_hub import HfApi, constants, scan_cache_dir, snapshot_download
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "openvino"))
 
-from utils_tests import MODEL_NAMES
+from utils_tests import HUB_MODEL_NAMES
 
 
 # github actions repo cache limit is 10 GB so using 9 GB
 CACHE_LIMIT = 9 * 10**9
-# exclude model larger than 100 MB
-MODEL_SIZE_THRESHOLD = 100 * 10**6
+# exclude model larger than 500 MB
+MODEL_SIZE_THRESHOLD = 500 * 10**6
 
 
 def hub_size(api: HfApi, repo_id: str) -> int:
@@ -41,8 +41,7 @@ def hub_size(api: HfApi, repo_id: str) -> int:
 def main() -> None:
     api = HfApi()
     candidates = {}
-
-    for name, repo_id in MODEL_NAMES.items():
+    for name, repo_id in HUB_MODEL_NAMES.items():
         if not isinstance(repo_id, str) or not repo_id or repo_id.startswith("/"):
             continue
         candidates[repo_id] = name
@@ -89,6 +88,25 @@ def main() -> None:
     print(f"Skipped (too large) : {len(skipped_too_large)}  ({', '.join(skipped_too_large)})")
     print(f"Skipped (cache full): {len(skipped_cache_full)}  ({', '.join(skipped_cache_full)})")
     print(f"Loading failed      : {len(failed)}  ({', '.join(failed)})")
+    final_cache_info = scan_cache_dir()
+    actual_size = final_cache_info.size_on_disk / 10**9
+    print(f"Actual cache        : {actual_size:.2f} GB, sum_repo_size {sum_repo_size / 10**9:.0f} GB")
+
+    final_cached_repos = {repo.repo_id for repo in final_cache_info.repos}
+    name_of = {repo_id: name for name, repo_id in HUB_MODEL_NAMES.items()}
+    downloaded_repo_ids = {repo_id for name, repo_id in HUB_MODEL_NAMES.items() if name in set(downloaded)}
+
+    in_cache_not_downloaded = final_cached_repos - downloaded_repo_ids
+    in_downloaded_not_in_cache = downloaded_repo_ids - final_cached_repos
+
+    print(
+        f"In cache but not in downloaded ({len(in_cache_not_downloaded)}): "
+        f"{', '.join(name_of.get(r, r) for r in sorted(in_cache_not_downloaded))}"
+    )
+    print(
+        f"In downloaded but not in cache ({len(in_downloaded_not_in_cache)}): "
+        f"{', '.join(name_of.get(r, r) for r in sorted(in_downloaded_not_in_cache))}"
+    )
 
 
 if __name__ == "__main__":

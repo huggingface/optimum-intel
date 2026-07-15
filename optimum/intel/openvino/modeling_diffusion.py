@@ -21,6 +21,7 @@ from abc import abstractmethod
 from collections import OrderedDict
 from pathlib import Path
 from tempfile import gettempdir
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -125,6 +126,11 @@ if is_diffusers_version(">=", "0.35.0"):
     from diffusers.models.cache_utils import CacheMixin
 else:
     CacheMixin = object
+
+if is_diffusers_version(">=", "0.37.0"):
+    from diffusers import Flux2KleinPipeline
+else:
+    Flux2KleinPipeline = object
 
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
 DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER = "text_encoder_3"
@@ -764,6 +770,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 batch_size *= 2
 
         is_ltx = self.__class__.__name__.startswith("OVLTX")
+        is_flux2 = self.__class__.__name__.startswith("OVFlux2")
         if is_ltx:
             height = height // self.vae_spatial_compression_ratio if height > 0 else -1
             width = width // self.vae_spatial_compression_ratio if width > 0 else -1
@@ -804,8 +811,12 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     if is_diffusers_version("<", "0.31.0")
                     else [packed_height_width, 3]
                 )
+                if is_flux2:
+                    shapes[inputs] = [batch_size, packed_height_width, 4]
             elif inputs.get_any_name() == "txt_ids":
                 shapes[inputs] = [batch_size, -1, 3] if is_diffusers_version("<", "0.31.0") else [-1, 3]
+                if is_flux2:
+                    shapes[inputs] = [batch_size, -1, 4]
             elif inputs.get_any_name() in ["height", "width", "num_frames", "rope_interpolation_scale"]:
                 shapes[inputs] = inputs.get_partial_shape()
             else:
@@ -1163,6 +1174,7 @@ class OVModelTextEncoder(OVPipelinePart):
         attention_mask: Optional[Union[np.ndarray, torch.Tensor]] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: bool = False,
+        **kwargs,
     ):
         self.compile()
         model_inputs = {"input_ids": input_ids}
@@ -1278,6 +1290,7 @@ class OVModelTransformer(OVPipelinePart):
             model_inputs["pooled_projections"] = pooled_projections
         if img_ids is not None:
             model_inputs["img_ids"] = img_ids
+
         if txt_ids is not None:
             model_inputs["txt_ids"] = txt_ids
         if guidance is not None:
@@ -1403,6 +1416,18 @@ class OVModelVae(OVModelHostMixin):
             self.latents_mean = torch.tensor(self.decoder.config.latents_mean_data)
         if hasattr(self.decoder.config, "latents_std_data"):
             self.latents_std = torch.tensor(self.decoder.config.latents_std_data)
+        # Flux2Klein compatibility: pipeline expects self.vae.bn.running_mean/running_var/eps
+        self.bn = None
+        bn_mean = getattr(self.decoder.config, "bn_running_mean_data", None)
+        bn_var = getattr(self.decoder.config, "bn_running_var_data", None)
+        bn_eps = float(getattr(self.decoder.config, "bn_eps", 1e-5))
+
+        if bn_mean is not None and bn_var is not None:
+            self.bn = SimpleNamespace(
+                running_mean=torch.tensor(bn_mean, dtype=torch.float32),
+                running_var=torch.tensor(bn_var, dtype=torch.float32),
+                eps=bn_eps,
+            )
 
     @property
     def _component_names(self) -> List[str]:
@@ -1627,6 +1652,25 @@ class OVFluxPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, FluxPip
     auto_model_class = FluxPipeline
 
 
+class OVFlux2KleinPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, Flux2KleinPipeline):
+    main_input_name = "prompt"
+    export_feature = "text-to-image"
+    auto_model_class = Flux2KleinPipeline
+
+    def __call__(self, *args, **kwargs):
+        if args and isinstance(args[0], str) and "prompt" not in kwargs:
+            user_prompt = args[0]
+            raise ValueError(
+                f"`prompt` must be passed as a keyword argument for Flux2Klein pipelines because the first positional "
+                f"argument is `image`. Use `pipeline(prompt={user_prompt!r})`."
+            )
+
+        if "guidance_scale" in kwargs and kwargs["guidance_scale"] is not None and kwargs["guidance_scale"] != 1.0:
+            kwargs["guidance_scale"] = 1.0
+
+        return super().__call__(*args, **kwargs)
+
+
 class OVFluxImg2ImgPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, FluxImg2ImgPipeline):
     main_input_name = "image"
     export_feature = "image-to-image"
@@ -1747,6 +1791,11 @@ if is_diffusers_version(">=", "0.32.0"):
 if is_diffusers_version(">=", "0.33.0"):
     SUPPORTED_OV_PIPELINES.append(OVSanaSprintPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana-sprint"] = OVSanaSprintPipeline
+
+if is_diffusers_version(">=", "0.37.0"):
+    SUPPORTED_OV_PIPELINES.append(OVFlux2KleinPipeline)
+    OV_TEXT2IMAGE_PIPELINES_MAPPING["flux2-klein"] = OVFlux2KleinPipeline
+    OV_IMAGE2IMAGE_PIPELINES_MAPPING["flux2-klein"] = OVFlux2KleinPipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,
