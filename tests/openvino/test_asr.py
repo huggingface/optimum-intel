@@ -44,8 +44,8 @@ class OVASRTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.skipif(
-        is_transformers_version("!=", "4.57.6"),
-        reason="requires transformers==4.57.6.",
+        is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
+        reason="Currently, we support Qwen3-ASR and FunASR only for transformers==4.57 since they are trust-remote-code models.",
     )
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
@@ -123,6 +123,10 @@ class OVASRTest(unittest.TestCase):
         gen_kwargs = {"max_new_tokens": 64}
 
         core.inference_prepare = _capture
+        # The funasr library prints verbose progress/debug output
+        # to stdout and stderr during inference (progress bars,
+        # per-step logs). The redirect suppresses that noise
+        # so it doesn't pollute the test output.
         with redirect_stdout(buf), redirect_stderr(buf):
             pt_result = funasr_model.generate(
                 input=[audio_tensor],
