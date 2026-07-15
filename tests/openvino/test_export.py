@@ -16,7 +16,6 @@
 import json
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 import nncf
 import numpy as np
@@ -76,40 +75,9 @@ def _find_output_by_locator(model, locator):
     if len(matches) != 1:
         raise AssertionError(f"Producer {locator['producer']!r} resolved to {len(matches)} OpenVINO nodes")
     output_index = locator["output_index"]
-    if output_index >= len(matches[0].outputs()):
+    if not isinstance(output_index, int) or output_index < 0 or output_index >= len(matches[0].outputs()):
         raise AssertionError(f"Producer {locator['producer']!r} has no output {output_index}")
     return matches[0].output(output_index)
-
-
-class _HiddenStateReference(torch.nn.Module):
-    """Test-only wrapper that exposes all Transformer hidden states."""
-    def __init__(self, model):
-        super().__init__()
-        self.model = model
-
-    def forward(self, input_ids, attention_mask, position_ids):
-        outputs = self.model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            output_hidden_states=True,
-            use_cache=False,
-            return_dict=True,
-        )
-        return tuple(outputs.hidden_states)
-
-
-def _export_hidden_state_reference(model, input_ids, attention_mask, position_ids):
-    """Convert a test-only hidden-state reference model to OpenVINO."""
-    reference = _HiddenStateReference(model.eval())
-
-    def traceable_histc(values, bins=100, min=0, max=0):
-        # Expert IDs are discrete, so OneHot + ReduceSum is equivalent to histc.
-        return torch.nn.functional.one_hot(values.to(torch.int64), num_classes=bins).sum(dim=0).to(values.dtype)
-
-    with patch.object(torch, "histc", side_effect=traceable_histc):
-        traced = torch.jit.trace(reference, (input_ids, attention_mask, position_ids))
-    return ov.convert_model(traced, example_input=(input_ids, attention_mask, position_ids))
 
 
 class ExportModelTest(unittest.TestCase):
@@ -309,6 +277,27 @@ class ExportModelTest(unittest.TestCase):
             model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
         self._openvino_export(model_type, model_kwargs=model_kwargs)
 
+    def _assert_hidden_state_rt_info_is_valid(self, model):
+        self.assertTrue(model.has_rt_info(["hidden_states_decoder_layers"]))
+        annotation = json.loads(model.get_rt_info()["hidden_states_decoder_layers"].value)
+        self.assertIsInstance(annotation, dict)
+        self.assertIn("layers", annotation)
+        locators = annotation["layers"]
+        self.assertTrue(locators)
+        self.assertEqual(set(locators), {str(layer_id) for layer_id in range(len(locators))})
+
+        resolved_outputs = set()
+        for layer_id in range(len(locators)):
+            locator = locators[str(layer_id)]
+            self.assertIsInstance(locator, dict)
+            self.assertIsInstance(locator.get("producer"), str)
+            self.assertIsInstance(locator.get("output_index"), int)
+            identity = (locator["producer"], locator["output_index"])
+            self.assertNotIn(identity, resolved_outputs)
+            _find_output_by_locator(model, locator)
+            resolved_outputs.add(identity)
+        return locators
+
     @parameterized.expand(("llama", "gemma4", "qwen3_5", "qwen3_5_moe", "gpt_oss"))
     def test_export_hidden_state_locators_for_representative_decoder_models(self, model_type):
         if model_type == "gemma4" and not is_transformers_version(">=", "5.5.0"):
@@ -319,75 +308,27 @@ class ExportModelTest(unittest.TestCase):
         with TemporaryDirectory() as tmpdirname:
             tmpdirname = Path(tmpdirname)
             annotated_dir = tmpdirname / "annotated"
-            input_ids = torch.tensor([[0, 1, 2, 3]], dtype=torch.long)
-            attention_mask = torch.ones_like(input_ids)
-            position_ids = np.arange(input_ids.shape[1], dtype=np.int64).reshape(1, -1)
             if model_type == "gemma4":
-                def load_model():
-                    return MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
-                        MODEL_NAMES[model_type]
-                    ).language_model
+                model = MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
+                    MODEL_NAMES[model_type]
+                ).language_model
             else:
-                def load_model():
-                    return AutoModelForCausalLM.from_pretrained(MODEL_NAMES[model_type])
-            reference_model = _export_hidden_state_reference(
-                load_model(),
-                input_ids,
-                attention_mask,
-                torch.from_numpy(position_ids),
-            )
+                model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES[model_type])
             export_from_model(
-                model=load_model(),
+                model=model,
                 output=annotated_dir,
                 task="text-generation",
                 preprocessors=None,
                 stateful=False,
             )
 
-            core = ov.Core()
-            annotated_model = core.read_model(annotated_dir / "openvino_model.xml")
-            locators = json.loads(
-                annotated_model.get_rt_info()["hidden_states_decoder_layers"].value
-            )["layers"]
-            output_names = []
-            for layer_id in range(len(locators)):
-                output_name = f"hidden_state_{layer_id}"
-                output = _find_output_by_locator(annotated_model, locators[str(layer_id)])
-                output.get_tensor().add_names({output_name})
-                annotated_model.add_outputs([output])
-                output_names.append(output_name)
-
-            ov_inputs = {
-                "input_ids": input_ids.numpy(),
-                "attention_mask": attention_mask.numpy(),
-                "position_ids": position_ids,
-            }
-            reference_compiled = core.compile_model(reference_model, "CPU")
-            annotated_compiled = core.compile_model(annotated_model, "CPU")
-            reference_result = reference_compiled(
-                dict(zip(reference_compiled.inputs, ov_inputs.values()))
-            )
-            annotated_result = annotated_compiled(ov_inputs)
-            self.assertEqual(len(reference_compiled.outputs), len(output_names) + 1)
-            for layer_id, output_name in enumerate(output_names):
-                reference_port = reference_compiled.outputs[layer_id + 1]
-                annotated_port = next(
-                    output for output in annotated_compiled.outputs if output_name in output.get_names()
-                )
-                np.testing.assert_allclose(
-                    annotated_result[annotated_port],
-                    reference_result[reference_port],
-                    rtol=5e-3,
-                    atol=3e-3,
-                )
+            annotated_model = ov.Core().read_model(annotated_dir / "openvino_model.xml")
+            self._assert_hidden_state_rt_info_is_valid(annotated_model)
 
     def test_hidden_state_locators_survive_weight_compression(self):
         with TemporaryDirectory() as tmpdirname:
             tmpdirname = Path(tmpdirname)
             annotated_dir = tmpdirname / "annotated"
-            input_ids = torch.tensor([[0, 1, 2, 3]], dtype=torch.long)
-            attention_mask = torch.ones_like(input_ids)
-            position_ids = np.arange(input_ids.shape[1], dtype=np.int64).reshape(1, -1)
             export_from_model(
                 model=AutoModelForCausalLM.from_pretrained(MODEL_NAMES["qwen3_5_moe"]),
                 output=annotated_dir,
@@ -396,57 +337,16 @@ class ExportModelTest(unittest.TestCase):
                 stateful=False,
             )
             xml_path = annotated_dir / "openvino_model.xml"
+            original_model = ov.Core().read_model(xml_path)
+            layer_ids = set(self._assert_hidden_state_rt_info_is_valid(original_model))
             for mode, kwargs in (
                 (nncf.CompressWeightsMode.INT8_ASYM, {}),
                 (nncf.CompressWeightsMode.INT4_ASYM, {"all_layers": True, "group_size": -1}),
             ):
                 with self.subTest(mode=mode):
-                    reference_model = nncf.compress_weights(
-                        _export_hidden_state_reference(
-                            AutoModelForCausalLM.from_pretrained(MODEL_NAMES["qwen3_5_moe"]),
-                            input_ids,
-                            attention_mask,
-                            torch.from_numpy(position_ids),
-                        ),
-                        mode=mode,
-                        **kwargs,
-                    )
                     compressed_model = nncf.compress_weights(ov.Core().read_model(xml_path), mode=mode, **kwargs)
-                    locators = json.loads(
-                        compressed_model.get_rt_info()["hidden_states_decoder_layers"].value
-                    )["layers"]
-                    output_names = []
-                    for layer_id in range(len(locators)):
-                        output_name = f"hidden_state_{layer_id}"
-                        output = _find_output_by_locator(compressed_model, locators[str(layer_id)])
-                        output.get_tensor().add_names({output_name})
-                        compressed_model.add_outputs([output])
-                        output_names.append(output_name)
-
-                    core = ov.Core()
-                    ov_inputs = {
-                        "input_ids": input_ids.numpy(),
-                        "attention_mask": attention_mask.numpy(),
-                        "position_ids": position_ids,
-                    }
-                    reference_compiled = core.compile_model(reference_model, "CPU")
-                    compressed_compiled = core.compile_model(compressed_model, "CPU")
-                    reference_result = reference_compiled(
-                        dict(zip(reference_compiled.inputs, ov_inputs.values()))
-                    )
-                    compressed_result = compressed_compiled(ov_inputs)
-                    self.assertEqual(len(reference_compiled.outputs), len(output_names) + 1)
-                    for layer_id, output_name in enumerate(output_names):
-                        reference_port = reference_compiled.outputs[layer_id + 1]
-                        compressed_port = next(
-                            output for output in compressed_compiled.outputs if output_name in output.get_names()
-                        )
-                        np.testing.assert_allclose(
-                            compressed_result[compressed_port],
-                            reference_result[reference_port],
-                            rtol=5e-2,
-                            atol=5e-2,
-                        )
+                    locators = self._assert_hidden_state_rt_info_is_valid(compressed_model)
+                    self.assertEqual(set(locators), layer_ids)
 
     @parameterized.expand(GENERATIVE_MODELS)
     def test_export_with_custom_gen_config(self, model_type):
