@@ -1293,7 +1293,13 @@ class OVWeightCompressionTest(unittest.TestCase):
             "stable-diffusion",
             {
                 "unet": {"names": ["__module.time_embedding.linear_1/aten::linear/MatMul"]},
-                "text_encoder": {"names": ["__module.encoder.layers.0.self_attn.q_proj/aten::linear/MatMul"]},
+                "text_encoder": {
+                    "names": [
+                        "__module.text_model.encoder.layers.0.self_attn.q_proj/aten::linear/MatMul"
+                        if is_transformers_version("<", "5.6")
+                        else "__module.encoder.layers.0.self_attn.q_proj/aten::linear/MatMul"
+                    ]
+                },
             },
         ),
         (

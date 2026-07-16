@@ -64,6 +64,7 @@ from utils_tests import (
     SEED,
     TENSOR_ALIAS_TO_TYPE,
     TEST_IMAGE_URL,
+    is_model_type_transformers_compatible,
 )
 
 from optimum.intel import (
@@ -1041,7 +1042,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         "sentence-transformers-bert",
         "qwen3",
     )
-    if is_transformers_version("<", "5.4") or is_transformers_version(">=", "5.6"):
+    if is_model_type_transformers_compatible("qwen3_vl"):
         SUPPORTED_ARCHITECTURES += ("qwen3_vl_embedding",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
