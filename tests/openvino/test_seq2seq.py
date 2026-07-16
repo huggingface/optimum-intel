@@ -600,12 +600,17 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5",
         "qwen3_5_moe",
         "qwen3_omni_moe",
+        "glm_edge_v",
     ]
     SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl", "qwen2_5_vl", "qwen3_vl", "videochat_flash_qwen"]
     SUPPORT_AUDIO = ["qwen3_omni_moe"]
     # "llama" is registered for image-text-to-text
     # to support VLM Eagle3 draft models (tested separately in test_genai.py).
     UNSUPPORTED_ARCHITECTURES = {"phi4_multimodal", "llama"}
+    # "glm" is registered for image-text-to-text to support GLM-Edge-V; it is tested
+    # under the "glm_edge_v" alias since its model_type ("glm") collides with the
+    # text-only GLM decoder.
+    UNSUPPORTED_ARCHITECTURES = {"phi4_multimodal", "llama", "glm"}
     SUPPORT_AUDIO_OUTPUT = ["qwen3_omni_moe"]
     OVMODEL_CLASS = OVModelForVisualCausalLM
     TASK = "image-text-to-text"
@@ -633,6 +638,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "phi4mm",
         "videochat_flash_qwen",
         "gemma3n",
+        "glm_edge_v",
     ]
     IMAGE = Image.open(
         requests.get(
@@ -1144,6 +1150,14 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             preprocessors = {"processor": None, "tokenizer": tokenizer, "config": config}
+        elif model_arch == "glm_edge_v":
+            # GLM-Edge-V keeps the image processor and tokenizer separate; the
+            # tokenizer holds the chat template that expands image placeholders.
+            from transformers import AutoImageProcessor
+
+            processor = AutoImageProcessor.from_pretrained(model_id, trust_remote_code=True)
+            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+            preprocessors = {"processor": processor, "tokenizer": tokenizer, "config": config}
         else:
             processor = AutoProcessor.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS

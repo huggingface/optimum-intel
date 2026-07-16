@@ -144,6 +144,235 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+def _patch_glm_edge_v_modeling_for_transformers(path):
+    """Align the glm-edge-v custom modeling code with the installed transformers.
+
+    The upstream `zai-org/glm-edge-v-2b` `modeling_glm.py` was written for
+    transformers ~4.47 and breaks on newer releases in two ways:
+
+      1. `GlmModel.forward` uses the truthiness of `past_key_values` to detect
+         prefill. Newer transformers pass a pre-initialized `Cache` on the first
+         forward, so the image-feature-splicing branch is wrongly skipped. Fixed
+         by detecting prefill via `get_seq_length() == 0`.
+      2. `_update_model_kwargs_for_generation` calls the removed
+         `self._extract_past_from_model_output(...)`. Fixed by delegating to the
+         installed `super()._update_model_kwargs_for_generation(...)`.
+
+    Architecture and task are unchanged; only generation-loop plumbing is aligned
+    with the installed transformers public contract.
+    """
+    with open(path) as f:
+        code = f.read()
+
+    old_prefill = (
+        '        if (input_ids is None) ^ (inputs_embeds is not None):\n'
+        '            raise ValueError("You must specify exactly one of input_ids or inputs_embeds")\n'
+        '\n'
+        '        if not past_key_values:\n'
+    )
+    new_prefill = (
+        '        if (input_ids is None) ^ (inputs_embeds is not None):\n'
+        '            raise ValueError("You must specify exactly one of input_ids or inputs_embeds")\n'
+        '\n'
+        '        # Prefill detection by seen-token count for cross-version compatibility.\n'
+        '        if isinstance(past_key_values, Cache):\n'
+        '            past_seen_tokens_for_prefill = past_key_values.get_seq_length()\n'
+        '        elif past_key_values is not None:\n'
+        '            past_seen_tokens_for_prefill = DynamicCache.from_legacy_cache(\n'
+        '                past_key_values\n'
+        '            ).get_seq_length()\n'
+        '        else:\n'
+        '            past_seen_tokens_for_prefill = 0\n'
+        '        is_prefill = past_seen_tokens_for_prefill == 0\n'
+        '\n'
+        '        if is_prefill:\n'
+    )
+    if old_prefill in code:
+        code = code.replace(old_prefill, new_prefill)
+
+    old_embed = (
+        '        if inputs_embeds is None:\n'
+        '            if past_key_values:\n'
+        '                inputs_embeds = self.embed_tokens(input_ids[:, -1:])\n'
+        '            else:\n'
+        '                inputs_embeds = self.embed_tokens(input_ids)\n'
+    )
+    new_embed = (
+        '        if inputs_embeds is None:\n'
+        '            if not is_prefill:\n'
+        '                inputs_embeds = self.embed_tokens(input_ids[:, -1:])\n'
+        '            else:\n'
+        '                inputs_embeds = self.embed_tokens(input_ids)\n'
+    )
+    if old_embed in code:
+        code = code.replace(old_embed, new_embed)
+
+    old_update = (
+        '    def _update_model_kwargs_for_generation(\n'
+        '        self,\n'
+        '        outputs: ModelOutput,\n'
+        '        model_kwargs: Dict[str, Any],\n'
+        '        is_encoder_decoder: bool = False,\n'
+        '        standardize_cache_format: bool = False,\n'
+        '    ) -> Dict[str, Any]:\n'
+        '        # update past_key_values\n'
+        '        if int(transformers_version.split(".")[1]) >= 44:\n'
+        '            assert not standardize_cache_format\n'
+        '            _, cache = self._extract_past_from_model_output(outputs)\n'
+        '            model_kwargs["past_key_values"] = cache\n'
+        '        else:\n'
+        '            cache = self._extract_past_from_model_output(outputs, standardize_cache_format)\n'
+        '\n'
+        '        # update attention mask\n'
+        '        if "attention_mask" in model_kwargs:\n'
+        '            attention_mask = model_kwargs["attention_mask"]\n'
+        '            model_kwargs["attention_mask"] = torch.cat(\n'
+        '                [attention_mask, attention_mask.new_ones((attention_mask.shape[0], 1))], dim=-1\n'
+        '            )\n'
+        '\n'
+        '        # update position ids\n'
+        '        if "position_ids" in model_kwargs:\n'
+        '            position_ids = model_kwargs["position_ids"]\n'
+        '            new_position_id = position_ids[..., -1:].clone()\n'
+        '            new_position_id += 1\n'
+        '            model_kwargs["position_ids"] = torch.cat([position_ids, new_position_id], dim=-1)\n'
+        '\n'
+        '        model_kwargs["is_first_forward"] = False\n'
+        '        return model_kwargs\n'
+    )
+    new_update = (
+        '    def _update_model_kwargs_for_generation(\n'
+        '        self,\n'
+        '        outputs: ModelOutput,\n'
+        '        model_kwargs: Dict[str, Any],\n'
+        '        is_encoder_decoder: bool = False,\n'
+        '        **kwargs,\n'
+        '    ) -> Dict[str, Any]:\n'
+        '        model_kwargs = super()._update_model_kwargs_for_generation(\n'
+        '            outputs,\n'
+        '            model_kwargs,\n'
+        '            is_encoder_decoder=is_encoder_decoder,\n'
+        '            **kwargs,\n'
+        '        )\n'
+        '        if "position_ids" in model_kwargs and model_kwargs["position_ids"] is not None:\n'
+        '            position_ids = model_kwargs["position_ids"]\n'
+        '            new_position_id = position_ids[..., -1:].clone()\n'
+        '            new_position_id += 1\n'
+        '            model_kwargs["position_ids"] = torch.cat([position_ids, new_position_id], dim=-1)\n'
+        '        model_kwargs["is_first_forward"] = False\n'
+        '        return model_kwargs\n'
+    )
+    if old_update in code:
+        code = code.replace(old_update, new_update)
+
+    with open(path, "w") as f:
+        f.write(code)
+
+
+def _create_tiny_glm_edge_v_model():
+    """Generate a tiny random GLM-Edge-V VLM for testing and return its local path.
+
+    `zai-org/glm-edge-v-2b` is a custom-remote-code image-text-to-text model whose
+    config reports `model_type="glm"` (same as the text-only GLM decoder) but carries
+    a nested SigLIP `vision_config`. The chat template hard-codes 578
+    `<|begin_of_image|>` placeholder tokens per image and `GlmModel.forward` asserts
+    that the number of image placeholders equals the number of produced image features,
+    so the vision `image_size` (672) and `patch_size` (14) MUST stay intact -- only the
+    depth/width of the text and vision towers are shrunk.
+
+    The reduced model is randomly initialized (no original weights are downloaded), the
+    required custom code / tokenizer / processor assets are copied next to it, and the
+    remote modeling code is patched for the installed transformers contract. The result
+    is cached on disk so subsequent calls are cheap.
+    """
+    import json
+    import shutil
+
+    from huggingface_hub import hf_hub_download
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+
+    original_model_id = "zai-org/glm-edge-v-2b"
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_glm_edge_v"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+    modeling_file = output_dir / "modeling_glm.py"
+    if config_file.exists() and weights_file.exists() and modeling_file.exists():
+        return str(output_dir)
+
+    orig_config = AutoConfig.from_pretrained(original_model_id, trust_remote_code=True)
+    glm_config_cls = type(orig_config)
+    cfg = orig_config.to_dict()
+
+    # ---- Text decoder: shrink depth/width, keep architecture identity ----
+    tiny_hidden = 256
+    tiny_heads = 4
+    cfg["hidden_size"] = tiny_hidden
+    cfg["intermediate_size"] = 512
+    cfg["num_hidden_layers"] = 2
+    cfg["num_attention_heads"] = tiny_heads
+    cfg["num_key_value_heads"] = 2
+    cfg["head_dim"] = tiny_hidden // tiny_heads
+    # vocab_size, special/eos/pad/boi/eoi token ids, rope, partial_rotary_factor,
+    # tie_word_embeddings, max_position_embeddings are deliberately left intact.
+
+    # ---- Vision tower: shrink depth/width, KEEP image geometry (578 tokens) ----
+    vc = dict(cfg["vision_config"])
+    vc["hidden_size"] = 128
+    vc["intermediate_size"] = 256
+    vc["num_hidden_layers"] = 2
+    vc["num_attention_heads"] = 4
+    # image_size (672), patch_size (14), model_type (siglip_vision_model) UNCHANGED.
+    cfg["vision_config"] = vc
+
+    tiny_config = glm_config_cls.from_dict(cfg)
+
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    torch.manual_seed(SEED)
+    model = AutoModelForCausalLM.from_config(tiny_config, trust_remote_code=True).to(torch.float32).eval()
+    model.save_pretrained(output_dir, safe_serialization=True)
+
+    tokenizer = AutoTokenizer.from_pretrained(original_model_id, trust_remote_code=True)
+    tokenizer.save_pretrained(output_dir)
+    try:
+        processor = AutoProcessor.from_pretrained(original_model_id, trust_remote_code=True)
+        processor.save_pretrained(output_dir)
+    except Exception:
+        pass
+
+    remote_code_files = ["configuration_glm.py", "modeling_glm.py", "siglip.py"]
+    asset_files = [
+        "generation_config.json",
+        "preprocessor_config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "chat_template.jinja",
+    ]
+    for fname in remote_code_files + asset_files:
+        try:
+            src = hf_hub_download(original_model_id, fname)
+        except Exception:
+            continue
+        dst = output_dir / fname
+        if not dst.exists():
+            shutil.copy(src, dst)
+
+    _patch_glm_edge_v_modeling_for_transformers(str(output_dir / "modeling_glm.py"))
+
+    saved_cfg_path = output_dir / "config.json"
+    with open(saved_cfg_path) as f:
+        saved_cfg = json.load(f)
+    if "auto_map" not in saved_cfg and getattr(orig_config, "auto_map", None):
+        saved_cfg["auto_map"] = orig_config.auto_map
+        with open(saved_cfg_path, "w") as f:
+            json.dump(saved_cfg, f, indent=2)
+
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -353,6 +582,7 @@ HUB_MODEL_NAMES = {
     "xverse": "optimum-intel-internal-testing/tiny-random-xverse",
     "glm4": "optimum-intel-internal-testing/tiny-random-glm4",
     "glm": "optimum-intel-internal-testing/tiny-random-glm-edge",
+    "glm_edge_v": _create_tiny_glm_edge_v_model(),
     "open-clip": "optimum-intel-internal-testing/tiny-open-clip-model",
     "open-clip-ov": "optimum-intel-internal-testing/tiny-open-clip-model",
     "st-bert": "optimum-intel-internal-testing/all-MiniLM-L6-v2",
@@ -813,6 +1043,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "codegen2": "codegen",
     "falcon-40b": "falcon",
     "gemma4_moe": "gemma4",
+    "glm_edge_v": "glm",
     "gpt_oss_mxfp4": "gpt_oss",
     "llama_awq": "llama",
     "llava_next_mistral": "llava_next",
