@@ -243,6 +243,14 @@ When Stable Diffusion models are exported to the OpenVINO format, they are decom
 * VAE encoder
 * VAE decoder
 
+For LTX-Video checkpoints with `timestep_conditioning` enabled (for example, LTX-Video 0.9.1), export now handles the VAE decoder conditioning path automatically by adding a dynamic `timestep` input when required by the checkpoint config.
+
+To export a text-to-video checkpoint such as LTX-Video:
+
+```bash
+optimum-cli export openvino --model <ltx-video-model-id> --task text-to-video ov_ltx_video/
+```
+
 To export your Stable Diffusion XL model to the OpenVINO IR format with the CLI you can do as follows:
 
 ```bash
