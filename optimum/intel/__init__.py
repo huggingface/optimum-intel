@@ -75,6 +75,7 @@ _import_structure = {
         "OVModelForTextToSpeechSeq2Seq",
         "OVModelForVision2Seq",
         "OVModelForVisualCausalLM",
+        "OVModelForMultimodalLM",
         "OVModelForSequenceClassification",
         "OVModelForTokenClassification",
         "OVConfig",

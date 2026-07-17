@@ -223,7 +223,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             elif (self.config.model_type in ["qwen2_vl", "qwen2_5_vl", "qwen3_vl"]) and position_ids.ndim == 2:
                 # Qwen2-VL and Qwen3-VL use 3D mrope (3 spatial dimensions)
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
-            elif self.config.model_type == "qwen3_omni_moe" and position_ids.ndim == 2:
+            elif self.config.model_type in ("qwen3_omni_moe", "qwen3_omni") and position_ids.ndim == 2:
                 # Qwen3-Omni uses 4D mrope (temporal + 3 spatial dimensions)
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 4, axis=0)
 
@@ -437,6 +437,7 @@ class OVTalkerDecoder(OVModelPart):
         attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple] = None,
         position_ids: Optional[torch.LongTensor] = None,
+        generation_steps: int = 0,
         **kwargs,
     ):
         self.compile()
@@ -452,6 +453,9 @@ class OVTalkerDecoder(OVModelPart):
 
         past_len = self._past_length
         inputs["inputs_embeds"] = inputs_embeds
+
+        if "generation_steps" in self.input_names:
+            inputs["generation_steps"] = np.array(generation_steps, dtype=np.int64)
 
         if attention_mask is not None:
             inputs["attention_mask"] = np.array(attention_mask)
@@ -495,7 +499,8 @@ class OVCodePredictorDecoder(OVModelPart):
     Each call runs one inner generation step and grows the hidden KV state; the Python-side loop
     in `_run_talker_generation` invokes it num_code_groups-1 times, feeding each step's `token_embed`
     back as the next step's input. Sampling stays in-graph (Gumbel-max) so a sampled code can be
-    turned into its codec embedding within the same call.
+    turned into its codec embedding within the same call — the codec embedding is baked into the
+    graph, so no separate weights file is loaded.
     """
 
     _model_name = "code_predictor"
@@ -628,6 +633,7 @@ class OVCode2Wav(OVModelPart):
         self._ensure_infer_pool(min(len(starts), 4))
         pool = self._async_infer_requests or [self.request]
 
+        # Dispatch chunks round-robin onto the pool; each request does start_async then wait.
         segments: List[np.ndarray] = []
         for i, start in enumerate(starts):
             end = min(start + chunk_size, total_t)
@@ -1194,7 +1200,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
         # Prepare additional kwargs for qwen3_vl models
         additional_kwargs = {}
-        if self.config.model_type in ("qwen3_vl", "qwen3_omni_moe") and extra_outputs:
+        if self.config.model_type in ("qwen3_vl", "qwen3_omni_moe", "qwen3_omni") and extra_outputs:
             additional_kwargs["visual_pos_masks"] = extra_outputs[0]
             additional_kwargs["deepstack_visual_embeds"] = extra_outputs[1]
 
@@ -3676,6 +3682,31 @@ if is_transformers_version(">=", "4.57"):
     _OVQwen2_5_VLForCausalLM.get_vision_position_ids = getattr(Qwen2_5_VLModel, "get_vision_position_ids", None)
 
 
+if is_transformers_version(">=", "4.57.0.dev0"):
+    # The same helper lives in the MoE and dense omni processing modules; only one of the two omni
+    # modules exists in any given transformers build, so import from whichever is available.
+    try:
+        from transformers.models.qwen3_omni_moe.processing_qwen3_omni_moe import (
+            _get_feat_extract_output_lengths,
+        )
+    except ImportError:
+        from transformers.models.qwen3_omni.processing_qwen3_omni import _get_feat_extract_output_lengths
+    from transformers.models.qwen3_vl.modeling_qwen3_vl import (
+        Qwen3VLModel,
+        Qwen3VLVisionModel,
+        Qwen3VLVisionRotaryEmbedding,
+    )
+else:
+
+    class Qwen3VLModel:
+        pass
+
+    class Qwen3VLVisionModel:
+        pass
+
+    Qwen3VLVisionRotaryEmbedding = VisionRotaryEmbedding
+
+
 class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
     additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
 
@@ -3692,7 +3723,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        if is_transformers_version("<", "4.57.0"):
+        if is_transformers_version("<", "4.57.0.dev0"):
             raise Exception("Qwen3VL is not supported in transformers versions earlier than 4.57.0.")
 
         super().__init__(
@@ -4083,7 +4114,6 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
         return final_result
 
     def generate(self, *args, **kwargs):
-        # Clear cached rope delta from previous generations
         self.rope_deltas = None
 
         return super().generate(*args, **kwargs)
@@ -4097,7 +4127,10 @@ if is_transformers_version(">=", "4.57"):
     _OVQwen3VLForCausalLM.get_vision_position_ids = getattr(Qwen3VLModel, "get_vision_position_ids", None)
 
 
-class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
+class _OVQwen3OmniBase(OVModelForVisualCausalLM):
+    # Shared Qwen3-Omni OpenVINO wrapper for both the dense and MoE variants. Subclasses set
+    # _MIN_TRANSFORMERS_VERSION / _ARCH_LABEL and override only the handful of methods that
+    # genuinely differ between the two architectures.
     additional_parts = [
         "vision_embeddings_pos",
         "audio_encoder",
@@ -4121,8 +4154,11 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        if is_transformers_version("<", "4.57.0"):
-            raise Exception("Qwen3-Omni-MoE is not supported in transformers versions earlier than 4.57.0.")
+        if is_transformers_version("<", self._MIN_TRANSFORMERS_VERSION):
+            raise Exception(
+                f"{self._ARCH_LABEL} is not supported in transformers versions earlier than "
+                f"{self._MIN_TRANSFORMERS_VERSION}."
+            )
 
         # Extract per-component device / ov_config overrides before passing ov_config to the
         # OpenVINO core. Keys of the form "<component>.device" (e.g. "audio_encoder.device") pin
@@ -4151,7 +4187,7 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
             compile=False,
             **kwargs,
         )
-        # OVQwen3OmniMoeVisionEmbeddings merges deepstack into the vision graph; swap in for the default wrapper.
+        # Qwen3-Omni merges deepstack into the vision graph; swap in for the default wrapper.
         self.vision_embeddings = OVQwen3OmniMoeVisionEmbeddings(self.vision_embeddings.model, self)
 
         self._apply_component_device_overrides()
@@ -4182,29 +4218,6 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
             self.spatial_merge_size = vision_config.spatial_merge_size
             head_dim = vision_config.hidden_size // vision_config.num_heads
             self.rotary_pos_emb = Qwen3VLVisionRotaryEmbedding(head_dim // 2)
-
-    def _set_ov_config_parameters(self):
-        super()._set_ov_config_parameters()
-        # MoE models require FP32 activation precision to avoid numerical errors from BF16
-        # inference; expert routing errors otherwise compound through layers. This governs
-        # activations only and remains compatible with INT4/INT8 weight compression.
-        if self.ov_config.get("INFERENCE_PRECISION_HINT") is None:
-            self.ov_config["INFERENCE_PRECISION_HINT"] = "f32"
-
-    def _save_pretrained(self, save_directory):
-        super()._save_pretrained(save_directory)
-
-        dest_preprocessor = Path(save_directory) / "preprocessor_config.json"
-        if not dest_preprocessor.exists():
-            source_model_path = getattr(self.config, "_name_or_path", None)
-            if source_model_path:
-                source_preprocessor = Path(source_model_path) / "preprocessor_config.json"
-                if source_preprocessor.exists():
-                    try:
-                        shutil.copy2(source_preprocessor, dest_preprocessor)
-                        logger.info("Copied preprocessor_config.json from source model")
-                    except OSError as ex:
-                        logger.warning(f"Failed to copy preprocessor_config.json: {ex}")
 
     def fast_pos_embed_interpolate(self, grid_thw):
         thinker_config = getattr(self.config, "thinker_config", self.config)
@@ -4314,66 +4327,6 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
         res = self.vision_embeddings(pixel_values, pos_embeds, causal_mask, rotary_pos_emb)
         return np.array(res[0]), np.array(res[1])
 
-    def get_multimodal_embeddings(
-        self,
-        input_ids,
-        pixel_values=None,
-        attention_mask=None,
-        position_ids=None,
-        image_grid_thw=None,
-        audio_features=None,
-        audio_feature_lens=None,
-        cache_position=None,
-        **kwargs,
-    ):
-        inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
-        thinker_config = getattr(self.config, "thinker_config", self.config)
-
-        visual_pos_masks = None
-        deepstack_visual_embeds = None
-
-        if pixel_values is not None and image_grid_thw is not None:
-            image_embeds, deepstack_image_embeds = self.get_vision_embeddings(pixel_values, image_grid_thw)
-            image_embeds = torch.from_numpy(image_embeds)
-            image_token_id = getattr(thinker_config, "image_token_id", None)
-            if image_token_id is not None:
-                image_mask = (input_ids == image_token_id).unsqueeze(-1).expand_as(inputs_embeds)
-                inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
-                visual_pos_masks = image_mask[..., 0]
-                deepstack_visual_embeds = deepstack_image_embeds
-
-        if audio_features is not None:
-            audio_embeds = (
-                torch.from_numpy(audio_features) if not isinstance(audio_features, torch.Tensor) else audio_features
-            )
-            audio_token_id = getattr(thinker_config, "audio_token_id", None)
-            if audio_token_id is not None:
-                audio_mask = (input_ids == audio_token_id).unsqueeze(-1).expand_as(inputs_embeds)
-                inputs_embeds = inputs_embeds.masked_scatter(audio_mask, audio_embeds)
-
-        if position_ids is None:
-            batch_size, seq_length, _ = inputs_embeds.shape
-            if (cache_position is not None and cache_position[0] == 0) or self.rope_deltas is None:
-                position_ids = torch.arange(seq_length, device=inputs_embeds.device)
-                position_ids = position_ids.view(1, -1).expand(batch_size, -1)
-                position_ids = position_ids.unsqueeze(0).expand(4, -1, -1)
-                max_position_ids = position_ids.max(0, keepdim=False)[0].max(-1, keepdim=True)[0]
-                self.rope_deltas = max_position_ids + 1 - seq_length
-            else:
-                delta = (
-                    (cache_position[0] + self.rope_deltas).to(inputs_embeds.device)
-                    if cache_position is not None
-                    else 0
-                )
-                position_ids = torch.arange(seq_length, device=inputs_embeds.device)
-                position_ids = position_ids.view(1, -1).expand(batch_size, -1)
-                if cache_position is not None:
-                    delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
-                position_ids = position_ids.add(delta)
-                position_ids = position_ids.unsqueeze(0).expand(4, -1, -1)
-
-        return inputs_embeds, attention_mask, position_ids, visual_pos_masks, deepstack_visual_embeds
-
     def prepare_inputs_for_generation(
         self,
         input_ids,
@@ -4421,39 +4374,6 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
             }
         )
         return model_inputs
-
-    @staticmethod
-    def preprocess_inputs(
-        text: str,
-        image: Optional["Image"] = None,
-        processor: Optional[AutoImageProcessor] = None,
-        tokenizer: Optional[PreTrainedTokenizer] = None,
-        config: Optional[PretrainedConfig] = None,
-        video: Optional["VideoInput"] = None,
-        audio: Optional[np.ndarray] = None,
-    ):
-        if processor is None:
-            raise ValueError("Processor is required.")
-        if video is not None:
-            raise ValueError("Video input is not supported")
-        if isinstance(audio, (list, tuple)) and len(audio) == 1:
-            audio = audio[0]
-        sampling_rate = None
-        if isinstance(audio, tuple) and len(audio) == 2:
-            audio, sampling_rate = audio
-
-        conversation = [{"role": "user", "content": [{"type": "text", "text": text}]}]
-        if image is not None:
-            conversation[0]["content"].insert(0, {"type": "image"})
-        if audio is not None:
-            conversation[0]["content"].insert(0, {"type": "audio"})
-
-        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
-        processor_kwargs = {}
-        if sampling_rate is not None:
-            processor_kwargs["sampling_rate"] = sampling_rate
-        inputs = processor(images=image, text=text_prompt, audio=audio, return_tensors="pt", **processor_kwargs)
-        return inputs
 
     def forward(
         self,
@@ -4807,114 +4727,6 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
         input_embeds = assistant_text_hidden + assistant_codec_hidden
         return input_embeds, trailing_text_hidden
 
-    def _run_talker_generation(
-        self,
-        talker_input_embeds,
-        trailing_text_hidden,
-        tts_pad_embed,
-        talker_kwargs,
-    ):
-        batch_size = talker_input_embeds.shape[0]
-        if batch_size != 1:
-            raise ValueError(f"Talker generation only supports batch_size=1, got {batch_size}")
-
-        talker_config = getattr(self.config, "talker_config", None)
-        if talker_config is None:
-            raise ValueError("talker_config is required for talker generation")
-        max_new_tokens = talker_kwargs.get("max_new_tokens", 4096)
-        temperature = float(talker_kwargs.get("temperature", 0.9))
-        top_k = int(talker_kwargs.get("top_k", 50))
-        eos_token_id = talker_kwargs.get("eos_token_id", talker_config.codec_eos_token_id)
-        num_code_groups = (
-            talker_config.code_predictor_config.num_code_groups
-            if hasattr(talker_config, "code_predictor_config")
-            else 16
-        )
-        num_inner_steps = max(0, num_code_groups - 1)
-        # Single numpy RNG drives all per-step seeds; caller can pin reproducibility via talker_seed.
-        rng = np.random.default_rng(talker_kwargs.get("seed"))
-
-        self.talker.reset()
-        logits, hidden_states = self.talker(inputs_embeds=talker_input_embeds)
-
-        all_codec_codes = []
-        trailing_idx = 0
-
-        for _ in range(max_new_tokens):
-            next_logits = logits[:, -1, :]
-            # Replace any non-finite logits (NaN/Inf can appear with extreme or untrained weights) so
-            # softmax/multinomial below receive a valid probability distribution instead of crashing.
-            next_logits = torch.nan_to_num(next_logits, nan=0.0, posinf=0.0, neginf=float("-inf"))
-
-            if temperature > 0:
-                scaled_logits = next_logits / temperature if temperature != 1.0 else next_logits
-                if top_k > 0:
-                    indices_to_remove = scaled_logits < torch.topk(scaled_logits, top_k)[0][..., -1, None]
-                    scaled_logits = scaled_logits.masked_fill(indices_to_remove, float("-inf"))
-                probs = torch.nn.functional.softmax(scaled_logits, dim=-1)
-                next_token = torch.multinomial(probs, num_samples=1).squeeze(-1)
-            else:
-                next_token = next_logits.argmax(dim=-1)
-
-            if next_token.item() == eos_token_id:
-                break
-
-            first_code = next_token.item()
-            next_token_tensor = next_token.unsqueeze(0)
-            first_code_embed = self.talker_text_embeddings(next_token_tensor)
-            if isinstance(first_code_embed, np.ndarray):
-                first_code_embed = torch.from_numpy(first_code_embed).float()
-
-            step_codes = [first_code]
-
-            if self.code_predictor is not None and num_inner_steps > 0:
-                # Single-step CP: loop num_inner_steps calls, feeding each step's codec embedding back
-                # as the next step's input. The prefill call sees [prefix_hidden, first_code_embed];
-                # subsequent calls see the previous step's token_embed. Accumulation mirrors the
-                # original graph: codec_hiddens_sum = first_code_embed + sum(token_embed_i).
-                cp_prefill = torch.cat([hidden_states[:, -1:, :].float(), first_code_embed.float()], dim=1)
-                seeds = rng.integers(1, np.iinfo(np.int64).max, size=num_inner_steps, dtype=np.int64)
-                cp_temperature = temperature if temperature > 0 else 1.0
-                cp_top_k = top_k if top_k > 0 else 1
-
-                codec_hiddens_sum = first_code_embed
-                cp_input = cp_prefill
-                for cp_step in range(num_inner_steps):
-                    code, token_embed = self.code_predictor(
-                        inputs_embeds=cp_input,
-                        step=int(cp_step),
-                        seed=int(seeds[cp_step]),
-                        temperature=cp_temperature,
-                        top_k=cp_top_k,
-                        is_prefill=(cp_step == 0),
-                    )
-                    step_codes.append(int(code.reshape(-1)[0]))
-                    codec_hiddens_sum = codec_hiddens_sum + token_embed
-                    cp_input = token_embed
-
-                next_embed = first_code_embed + codec_hiddens_sum
-            else:
-                next_embed = first_code_embed
-
-            all_codec_codes.append(step_codes)
-
-            if trailing_idx < trailing_text_hidden.shape[1]:
-                next_input = next_embed + trailing_text_hidden[:, trailing_idx : trailing_idx + 1, :]
-                trailing_idx += 1
-            else:
-                next_input = next_embed + tts_pad_embed
-
-            logits, hidden_states = self.talker(
-                inputs_embeds=next_input,
-                past_key_values=((),),
-            )
-
-        if not all_codec_codes:
-            return None
-
-        codes_tensor = torch.tensor(all_codec_codes, dtype=torch.long).unsqueeze(0).permute(0, 2, 1)
-        return codes_tensor
-
     def _split_talker_thinker_kwargs(self, kwargs):
         # Strip `talker_`/`thinker_` prefixes: talker_* keys go to a separate dict,
         # thinker_* keys are folded back into kwargs and thus override plain keys.
@@ -5120,11 +4932,445 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
         return thinker_result, waveform.float()
 
 
+class _OVQwen3OmniMoeForCausalLM(_OVQwen3OmniBase):
+    _MIN_TRANSFORMERS_VERSION = "4.57.0"
+    _ARCH_LABEL = "Qwen3-Omni-MoE"
+
+    def _set_ov_config_parameters(self):
+        super()._set_ov_config_parameters()
+        # MoE models require FP32 activation precision to avoid numerical errors from BF16
+        # inference; expert routing errors otherwise compound through layers. This governs
+        # activations only and remains compatible with INT4/INT8 weight compression.
+        if self.ov_config.get("INFERENCE_PRECISION_HINT") is None:
+            self.ov_config["INFERENCE_PRECISION_HINT"] = "f32"
+
+    def _save_pretrained(self, save_directory):
+        super()._save_pretrained(save_directory)
+
+        dest_preprocessor = Path(save_directory) / "preprocessor_config.json"
+        if not dest_preprocessor.exists():
+            source_model_path = getattr(self.config, "_name_or_path", None)
+            if source_model_path:
+                source_preprocessor = Path(source_model_path) / "preprocessor_config.json"
+                if source_preprocessor.exists():
+                    try:
+                        shutil.copy2(source_preprocessor, dest_preprocessor)
+                        logger.info("Copied preprocessor_config.json from source model")
+                    except OSError as ex:
+                        logger.warning(f"Failed to copy preprocessor_config.json: {ex}")
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        image_grid_thw=None,
+        audio_features=None,
+        audio_feature_lens=None,
+        cache_position=None,
+        **kwargs,
+    ):
+        inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
+        thinker_config = getattr(self.config, "thinker_config", self.config)
+
+        visual_pos_masks = None
+        deepstack_visual_embeds = None
+
+        if pixel_values is not None and image_grid_thw is not None:
+            image_embeds, deepstack_image_embeds = self.get_vision_embeddings(pixel_values, image_grid_thw)
+            image_embeds = torch.from_numpy(image_embeds)
+            image_token_id = getattr(thinker_config, "image_token_id", None)
+            if image_token_id is not None:
+                image_mask = (input_ids == image_token_id).unsqueeze(-1).expand_as(inputs_embeds)
+                inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
+                visual_pos_masks = image_mask[..., 0]
+                deepstack_visual_embeds = deepstack_image_embeds
+
+        if audio_features is not None:
+            audio_embeds = (
+                torch.from_numpy(audio_features) if not isinstance(audio_features, torch.Tensor) else audio_features
+            )
+            audio_token_id = getattr(thinker_config, "audio_token_id", None)
+            if audio_token_id is not None:
+                audio_mask = (input_ids == audio_token_id).unsqueeze(-1).expand_as(inputs_embeds)
+                inputs_embeds = inputs_embeds.masked_scatter(audio_mask, audio_embeds)
+
+        if position_ids is None:
+            batch_size, seq_length, _ = inputs_embeds.shape
+            if (cache_position is not None and cache_position[0] == 0) or self.rope_deltas is None:
+                position_ids = torch.arange(seq_length, device=inputs_embeds.device)
+                position_ids = position_ids.view(1, -1).expand(batch_size, -1)
+                position_ids = position_ids.unsqueeze(0).expand(4, -1, -1)
+                max_position_ids = position_ids.max(0, keepdim=False)[0].max(-1, keepdim=True)[0]
+                self.rope_deltas = max_position_ids + 1 - seq_length
+            else:
+                delta = (
+                    (cache_position[0] + self.rope_deltas).to(inputs_embeds.device)
+                    if cache_position is not None
+                    else 0
+                )
+                position_ids = torch.arange(seq_length, device=inputs_embeds.device)
+                position_ids = position_ids.view(1, -1).expand(batch_size, -1)
+                if cache_position is not None:
+                    delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
+                position_ids = position_ids.add(delta)
+                position_ids = position_ids.unsqueeze(0).expand(4, -1, -1)
+
+        return inputs_embeds, attention_mask, position_ids, visual_pos_masks, deepstack_visual_embeds
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if isinstance(audio, (list, tuple)) and len(audio) == 1:
+            audio = audio[0]
+        sampling_rate = None
+        if isinstance(audio, tuple) and len(audio) == 2:
+            audio, sampling_rate = audio
+
+        conversation = [{"role": "user", "content": [{"type": "text", "text": text}]}]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+        if audio is not None:
+            conversation[0]["content"].insert(0, {"type": "audio"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+        processor_kwargs = {}
+        if sampling_rate is not None:
+            processor_kwargs["sampling_rate"] = sampling_rate
+        inputs = processor(images=image, text=text_prompt, audio=audio, return_tensors="pt", **processor_kwargs)
+        return inputs
+
+    def _run_talker_generation(
+        self,
+        talker_input_embeds,
+        trailing_text_hidden,
+        tts_pad_embed,
+        talker_kwargs,
+    ):
+        batch_size = talker_input_embeds.shape[0]
+        if batch_size != 1:
+            raise ValueError(f"Talker generation only supports batch_size=1, got {batch_size}")
+
+        talker_config = getattr(self.config, "talker_config", None)
+        if talker_config is None:
+            raise ValueError("talker_config is required for talker generation")
+        max_new_tokens = talker_kwargs.get("max_new_tokens", 4096)
+        temperature = float(talker_kwargs.get("temperature", 0.9))
+        top_k = int(talker_kwargs.get("top_k", 50))
+        eos_token_id = talker_kwargs.get("eos_token_id", talker_config.codec_eos_token_id)
+        num_code_groups = (
+            talker_config.code_predictor_config.num_code_groups
+            if hasattr(talker_config, "code_predictor_config")
+            else 16
+        )
+        num_inner_steps = max(0, num_code_groups - 1)
+        # Single numpy RNG drives all per-step seeds; caller can pin reproducibility via talker_seed.
+        rng = np.random.default_rng(talker_kwargs.get("seed"))
+
+        self.talker.reset()
+        logits, hidden_states = self.talker(inputs_embeds=talker_input_embeds)
+
+        all_codec_codes = []
+        trailing_idx = 0
+
+        for _ in range(max_new_tokens):
+            next_logits = logits[:, -1, :]
+            # Replace any non-finite logits (NaN/Inf can appear with extreme or untrained weights) so
+            # softmax/multinomial below receive a valid probability distribution instead of crashing.
+            next_logits = torch.nan_to_num(next_logits, nan=0.0, posinf=0.0, neginf=float("-inf"))
+
+            if temperature > 0:
+                scaled_logits = next_logits / temperature if temperature != 1.0 else next_logits
+                if top_k > 0:
+                    indices_to_remove = scaled_logits < torch.topk(scaled_logits, top_k)[0][..., -1, None]
+                    scaled_logits = scaled_logits.masked_fill(indices_to_remove, float("-inf"))
+                probs = torch.nn.functional.softmax(scaled_logits, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1).squeeze(-1)
+            else:
+                next_token = next_logits.argmax(dim=-1)
+
+            if next_token.item() == eos_token_id:
+                break
+
+            first_code = next_token.item()
+            next_token_tensor = next_token.unsqueeze(0)
+            first_code_embed = self.talker_text_embeddings(next_token_tensor)
+            if isinstance(first_code_embed, np.ndarray):
+                first_code_embed = torch.from_numpy(first_code_embed).float()
+
+            step_codes = [first_code]
+
+            if self.code_predictor is not None and num_inner_steps > 0:
+                # Single-step CP: loop num_inner_steps calls, feeding each step's codec embedding back
+                # as the next step's input. The prefill call sees [prefix_hidden, first_code_embed];
+                # subsequent calls see the previous step's token_embed. Accumulation mirrors the
+                # original graph: codec_hiddens_sum = first_code_embed + sum(token_embed_i).
+                cp_prefill = torch.cat([hidden_states[:, -1:, :].float(), first_code_embed.float()], dim=1)
+                seeds = rng.integers(1, np.iinfo(np.int64).max, size=num_inner_steps, dtype=np.int64)
+                cp_temperature = temperature if temperature > 0 else 1.0
+                cp_top_k = top_k if top_k > 0 else 1
+
+                codec_hiddens_sum = first_code_embed
+                cp_input = cp_prefill
+                for cp_step in range(num_inner_steps):
+                    code, token_embed = self.code_predictor(
+                        inputs_embeds=cp_input,
+                        step=int(cp_step),
+                        seed=int(seeds[cp_step]),
+                        temperature=cp_temperature,
+                        top_k=cp_top_k,
+                        is_prefill=(cp_step == 0),
+                    )
+                    step_codes.append(int(code.reshape(-1)[0]))
+                    codec_hiddens_sum = codec_hiddens_sum + token_embed
+                    cp_input = token_embed
+
+                next_embed = first_code_embed + codec_hiddens_sum
+            else:
+                next_embed = first_code_embed
+
+            all_codec_codes.append(step_codes)
+
+            if trailing_idx < trailing_text_hidden.shape[1]:
+                next_input = next_embed + trailing_text_hidden[:, trailing_idx : trailing_idx + 1, :]
+                trailing_idx += 1
+            else:
+                next_input = next_embed + tts_pad_embed
+
+            logits, hidden_states = self.talker(
+                inputs_embeds=next_input,
+                past_key_values=((),),
+            )
+
+        if not all_codec_codes:
+            return None
+
+        codes_tensor = torch.tensor(all_codec_codes, dtype=torch.long).unsqueeze(0).permute(0, 2, 1)
+        return codes_tensor
+
+
+class _OVQwen3OmniForCausalLM(_OVQwen3OmniBase):
+    _MIN_TRANSFORMERS_VERSION = "4.57.0.dev0"
+    _ARCH_LABEL = "Qwen3Omni"
+
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        parent_fn = OVModelForVisualCausalLM.__dict__["_all_ov_model_paths"].fget
+        return parent_fn(cls)
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        image_grid_thw=None,
+        audio_features=None,
+        audio_feature_lens=None,
+        cache_position=None,
+        **kwargs,
+    ):
+        inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
+        thinker_config = getattr(self.config, "thinker_config", self.config)
+
+        visual_pos_masks = None
+        deepstack_visual_embeds = None
+
+        if pixel_values is not None and image_grid_thw is not None:
+            image_embeds, deepstack_image_embeds = self.get_vision_embeddings(pixel_values, image_grid_thw)
+            image_embeds = torch.from_numpy(image_embeds)
+            image_token_id = getattr(thinker_config, "image_token_id", None)
+            if image_token_id is not None:
+                image_mask = (input_ids == image_token_id).unsqueeze(-1).expand_as(inputs_embeds)
+                inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
+                visual_pos_masks = image_mask[..., 0]
+                deepstack_visual_embeds = deepstack_image_embeds
+
+        if audio_features is not None:
+            audio_embeds = (
+                torch.from_numpy(audio_features) if not isinstance(audio_features, torch.Tensor) else audio_features
+            )
+            audio_token_id = getattr(thinker_config, "audio_token_id", None)
+            if audio_token_id is not None:
+                audio_mask = (input_ids == audio_token_id).unsqueeze(-1).expand_as(inputs_embeds)
+                inputs_embeds = inputs_embeds.masked_scatter(audio_mask, audio_embeds)
+
+        if position_ids is None:
+            batch_size, seq_length, _ = inputs_embeds.shape
+            if self.rope_deltas is None:
+                position_ids = torch.arange(seq_length, device=inputs_embeds.device)
+                position_ids = position_ids.view(1, -1).expand(batch_size, -1)
+                position_ids = position_ids.unsqueeze(0).expand(4, -1, -1)
+            else:
+                delta = (
+                    (cache_position[0] + self.rope_deltas).to(inputs_embeds.device)
+                    if cache_position is not None
+                    else 0
+                )
+                position_ids = torch.arange(seq_length, device=inputs_embeds.device)
+                position_ids = position_ids.view(1, -1).expand(batch_size, -1)
+                if cache_position is not None:
+                    delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
+                position_ids = position_ids.add(delta)
+                position_ids = position_ids.unsqueeze(0).expand(4, -1, -1)
+
+        return inputs_embeds, attention_mask, position_ids, visual_pos_masks, deepstack_visual_embeds
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if isinstance(audio, (list, tuple)) and len(audio) == 1:
+            audio = audio[0]
+        if isinstance(audio, tuple):
+            audio = audio[0]
+
+        conversation = [{"role": "user", "content": [{"type": "text", "text": text}]}]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+        if audio is not None:
+            conversation[0]["content"].insert(0, {"type": "audio"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+        inputs = processor(images=image, text=text_prompt, audio=audio, return_tensors="pt")
+        return inputs
+
+    def _run_talker_generation(
+        self,
+        talker_input_embeds,
+        trailing_text_hidden,
+        tts_pad_embed,
+        talker_kwargs,
+    ):
+        batch_size = talker_input_embeds.shape[0]
+        if batch_size != 1:
+            raise ValueError(f"Talker generation only supports batch_size=1, got {batch_size}")
+
+        talker_config = getattr(self.config, "talker_config", None)
+        if talker_config is None:
+            raise ValueError("talker_config is required for talker generation")
+        max_new_tokens = talker_kwargs.get("max_new_tokens", 4096)
+        temperature = talker_kwargs.get("temperature", 0.9)
+        top_k = talker_kwargs.get("top_k", 50)
+        eos_token_id = talker_kwargs.get("eos_token_id", talker_config.codec_eos_token_id)
+        num_code_groups = (
+            talker_config.code_predictor_config.num_code_groups
+            if hasattr(talker_config, "code_predictor_config")
+            else 16
+        )
+        # Single numpy RNG drives all per-step CodePredictor seeds; caller can pin it via talker_seed.
+        rng = np.random.default_rng(talker_kwargs.get("seed"))
+
+        self.talker.reset()
+        logits, hidden_states = self.talker(inputs_embeds=talker_input_embeds)
+
+        all_codec_codes = []
+        trailing_idx = 0
+
+        for step in range(max_new_tokens):
+            next_logits = logits[:, -1, :]
+
+            if temperature > 0:
+                if temperature != 1.0:
+                    next_logits = next_logits / temperature
+                if top_k > 0:
+                    indices_to_remove = next_logits < torch.topk(next_logits, top_k)[0][..., -1, None]
+                    next_logits[indices_to_remove] = float("-inf")
+                probs = torch.nn.functional.softmax(next_logits, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1).squeeze(-1)
+            else:
+                next_token = next_logits.argmax(dim=-1)
+
+            if next_token.item() == eos_token_id:
+                break
+
+            first_code = next_token.item()
+
+            next_token_tensor = next_token.unsqueeze(0)
+            first_code_embed = self.talker_text_embeddings(next_token_tensor)
+            if isinstance(first_code_embed, np.ndarray):
+                first_code_embed = torch.from_numpy(first_code_embed).float()
+
+            step_codes = [first_code]
+            codec_hiddens = [first_code_embed]
+
+            if self.code_predictor is not None and num_code_groups > 1:
+                # Single-step CP: one call per inner step, feeding each step's codec embedding back as
+                # the next input. Sampling + codec embedding happen in-graph; the graph returns the
+                # sampled code and its embedding. The prefill call sees [prefix_hidden, first_code_embed].
+                num_inner_steps = num_code_groups - 1
+                cp_prefill = torch.cat([hidden_states[:, -1:, :].float(), first_code_embed.float()], dim=1)
+                seeds = rng.integers(1, np.iinfo(np.int64).max, size=num_inner_steps, dtype=np.int64)
+                cp_temperature = temperature if temperature > 0 else 1.0
+                cp_top_k = top_k if top_k > 0 else 1
+
+                cp_input = cp_prefill
+                for cp_step in range(num_inner_steps):
+                    code, token_embed = self.code_predictor(
+                        inputs_embeds=cp_input,
+                        step=int(cp_step),
+                        seed=int(seeds[cp_step]),
+                        temperature=cp_temperature,
+                        top_k=cp_top_k,
+                        is_prefill=(cp_step == 0),
+                    )
+                    step_codes.append(int(code.reshape(-1)[0]))
+                    codec_hiddens.append(token_embed)
+                    cp_input = token_embed
+
+            all_codec_codes.append(step_codes)
+
+            # HF: codec_hiddens.sum(1, keepdim=True) + trailing_text
+            if len(codec_hiddens) > 1:
+                next_embed = torch.cat(codec_hiddens, dim=1).sum(dim=1, keepdim=True)
+            else:
+                next_embed = codec_hiddens[0]
+
+            if trailing_idx < trailing_text_hidden.shape[1]:
+                next_input = next_embed + trailing_text_hidden[:, trailing_idx : trailing_idx + 1, :]
+                trailing_idx += 1
+            else:
+                next_input = next_embed + tts_pad_embed
+
+            logits, hidden_states = self.talker(
+                inputs_embeds=next_input,
+                past_key_values=((),),
+            )
+
+        if not all_codec_codes:
+            return None
+
+        codes_tensor = torch.tensor(all_codec_codes, dtype=torch.long).unsqueeze(0).permute(0, 2, 1)
+        return codes_tensor
+
+
 class OVModelForMultimodalLM(OVBaseModel, GenerationMixin):
     export_feature = "image-text-to-text"
     auto_model_class = transformers_auto_class
 
-    def __init__(self, *, _inner: _OVQwen3OmniMoeForCausalLM, **kwargs):
+    def __init__(self, *, _inner: _OVQwen3OmniBase, **kwargs):
         object.__setattr__(self, "_inner", _inner)
 
         self.config = _inner.config
@@ -5197,7 +5443,8 @@ class OVModelForMultimodalLM(OVBaseModel, GenerationMixin):
 
     @classproperty
     def _all_ov_model_paths(cls) -> Dict[str, str]:
-        return _OVQwen3OmniMoeForCausalLM._all_ov_model_paths.copy()
+        # Both dense and MoE variants share the same component layout via _OVQwen3OmniBase.
+        return _OVQwen3OmniBase._all_ov_model_paths.copy()
 
     @property
     def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
@@ -5209,8 +5456,8 @@ class OVModelForMultimodalLM(OVBaseModel, GenerationMixin):
     def forward(self, *args, **kwargs):
         return self._inner.forward(*args, **kwargs)
 
-    @staticmethod
     def preprocess_inputs(
+        self,
         text: str,
         image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
@@ -5219,7 +5466,9 @@ class OVModelForMultimodalLM(OVBaseModel, GenerationMixin):
         video: Optional["VideoInput"] = None,
         audio: Optional[np.ndarray] = None,
     ):
-        return _OVQwen3OmniMoeForCausalLM.preprocess_inputs(
+        # Dense and MoE differ in how audio sampling_rate is threaded through the processor, so
+        # dispatch to the concrete inner class rather than hardcoding one architecture's variant.
+        return type(self._inner).preprocess_inputs(
             text=text,
             image=image,
             processor=processor,
@@ -5269,9 +5518,9 @@ class OVModelForMultimodalLM(OVBaseModel, GenerationMixin):
         config: PretrainedConfig,
         **kwargs,
     ):
-        if getattr(config, "model_type", None) != "qwen3_omni_moe":
+        if getattr(config, "model_type", None) not in ("qwen3_omni_moe", "qwen3_omni"):
             raise ValueError(
-                f"OVModelForMultimodalLM only supports qwen3_omni_moe models, "
+                f"OVModelForMultimodalLM only supports qwen3_omni_moe and qwen3_omni models, "
                 f"but got config.model_type={getattr(config, 'model_type', None)!r}. "
                 f"Use OVModelForVisualCausalLM for other vision-language architectures."
             )
@@ -5285,9 +5534,9 @@ class OVModelForMultimodalLM(OVBaseModel, GenerationMixin):
         config: PretrainedConfig,
         **kwargs,
     ):
-        if getattr(config, "model_type", None) != "qwen3_omni_moe":
+        if getattr(config, "model_type", None) not in ("qwen3_omni_moe", "qwen3_omni"):
             raise ValueError(
-                f"OVModelForMultimodalLM only supports qwen3_omni_moe models, "
+                f"OVModelForMultimodalLM only supports qwen3_omni_moe and qwen3_omni models, "
                 f"but got config.model_type={getattr(config, 'model_type', None)!r}. "
                 f"Use OVModelForVisualCausalLM for other vision-language architectures."
             )
@@ -7375,6 +7624,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_5_moe": _OVQwen3_5ForCausalLM,
     "qwen3_5_moe_text": _OVQwen3_5ForCausalLM,
     "qwen3_omni_moe": _OVQwen3OmniMoeForCausalLM,
+    "qwen3_omni": _OVQwen3OmniForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
 }
