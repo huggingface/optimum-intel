@@ -119,64 +119,115 @@ def convert_recurrent_attention_cell(context):
 # GatedDeltaNet block, see `convert_recurrent_attention_cell` above) to the Mamba2 selective
 # state-space recurrence used by hybrid Mamba2 models such as NemotronH.
 #
-# The Mamba2 single-step recurrence over the SSM state is a linear recurrence:
-#       state_t = state_{t-1} * dA_t + dBx_t            # [B, H, P, N]
-#       y_t     = reduce_sum(state_t * C_t, axis=N)      # [B, H, P]
-# where `dA` (discretized A), `dBx` (discretized B * x) and `C` are precomputed and vectorized
-# over the sequence in the patched mixer forward. The skip connection `x_t * D` does not depend
-# on the recurrent state and is therefore added outside the loop.
+# The Mamba2 single-step recurrence follows the standard Mamba-2 discretization:
+#       dA_t    = exp(A * dt_t)                           # [B, H] (broadcast)
+#       dBx_t   = dt_t * B_t outer x_t                   # [B, H, P, N]
+#       state_t = state_{t-1} * dA_t + dBx_t             # [B, H, P, N]
+#       y_t     = reduce_sum(state_t * C_t, axis=N)       # [B, H, P]
+#
+# The raw parameters A (log-decay), dt (time steps), B, x, C are passed directly into the
+# loop; discretization (exp, outer product) happens per timestep inside the body.
+# Inputs are in [B, T, H, ...] layout; the loop slices along dim 1 (T).
+# The skip connection `x_t * D` does not depend on the recurrent state and is added outside.
 #
 # The `Mamba2RecurrentCellOp` appears in the Torch graph as a result of replacing the
 # `Mamba2RecurrentCell` `torch.nn.Module` via a registered `ModuleExtension` in the OpenVINO
 # PyTorch frontend; OpenVINO then applies this conversion rule to the resulting operation.
 def convert_recurrent_mamba2_cell(context):
-    # Inputs match the forward signature of `Mamba2RecurrentCell`.
-    # `dA` is broadcastable ([B, H, T, 1, 1]) while `dBx` carries the full state shape
-    # ([B, H, T, P, N]); shapes for the accumulator and the trip count are therefore
-    # derived from `dBx`.
-    dA = context.get_input(0)  # [B, H, T, 1, 1]
-    dBx = context.get_input(1)  # [B, H, T, P, N]
-    C = context.get_input(2)  # [B, H, T, N]
-    last_state_old = context.get_input(3)  # [B, H, P, N]
+    # Inputs match the forward signature of `Mamba2RecurrentCell`:
+    #   A          [H]          — negative log-decay rates
+    #   dt         [B, T, H]   — time steps
+    #   B          [B, T, G, N] — input matrix (G groups, expanded to H inside the loop)
+    #   x          [B, T, H, P] — input hidden states
+    #   C          [B, T, G, N] — output matrix (G groups, expanded to H inside the loop)
+    #   last_state [B, H, P, N] — initial recurrent state
+    A = context.get_input(0)  # [H]
+    dt = context.get_input(1)  # [B, T, H]
+    B = context.get_input(2)  # [B, T, G, N]
+    x = context.get_input(3)  # [B, T, H, P]
+    C = context.get_input(4)  # [B, T, G, N]
+    last_state_old = context.get_input(5)  # [B, H, P, N]
 
     const_zero_axis = ops.constant(0, dtype=np.int32)
-    const_two = ops.constant(2, dtype=np.int32)
+    const_one = ops.constant(1, dtype=np.int32)
     const_minus_one = ops.constant(-1, dtype=np.int32)
+    const_minus_two = ops.constant(-2, dtype=np.int32)
 
-    # Build the zero-initialized output accumulator with shape [B, H, T, P].
-    dBx_shape = ops.shape_of(dBx)
-    core_shape = ops.gather(dBx_shape, ops.constant([0, 1, 2, 3], dtype=np.int32), const_zero_axis)
+    # Compute heads_per_group = H / G from the shapes of dt and B.
+    dt_shape = ops.shape_of(dt)
+    B_shape = ops.shape_of(B)
+    const_two = ops.constant(2, dtype=np.int32)
+    num_heads = ops.gather(dt_shape, const_two, const_zero_axis)  # H
+    num_groups = ops.gather(B_shape, const_two, const_zero_axis)  # G
+    heads_per_group = ops.convert(ops.divide(num_heads, num_groups), "i64")
+
+    # Expand B/C from [B, T, G, N] → [B, T, H, N] by repeating each group.
+    # reshape to [B, T, G, 1, N] → tile [1, 1, 1, heads_per_group, 1] → reshape [B, T, H, N]
+    B_5d = ops.unsqueeze(B, ops.constant(3, dtype=np.int32))  # [B, T, G, 1, N]
+    C_5d = ops.unsqueeze(C, ops.constant(3, dtype=np.int32))  # [B, T, G, 1, N]
+    tile_shape = ops.concat(
+        [ops.constant([1, 1, 1], dtype=np.int64), ops.unsqueeze(heads_per_group, const_zero_axis),
+         ops.constant([1], dtype=np.int64)], 0
+    )
+    B_tiled = ops.tile(B_5d, tile_shape)  # [B, T, G, H/G, N]
+    C_tiled = ops.tile(C_5d, tile_shape)  # [B, T, G, H/G, N]
+
+    # Reshape [B, T, G, H/G, N] → [B, T, H, N]
+    x_shape = ops.shape_of(x)
+    target_4d = ops.gather(x_shape, ops.constant([0, 1], dtype=np.int32), const_zero_axis)
+    N_dim = ops.gather(B_shape, ops.constant(3, dtype=np.int32), const_zero_axis)
+    BC_shape = ops.concat([target_4d, ops.unsqueeze(num_heads, const_zero_axis),
+                           ops.unsqueeze(N_dim, const_zero_axis)], 0)
+    B_expanded = ops.reshape(B_tiled, BC_shape, False)  # [B, T, H, N]
+    C_expanded = ops.reshape(C_tiled, BC_shape, False)  # [B, T, H, N]
+
+    # Build the zero-initialized output accumulator with shape [B, T, H, P].
+    core_shape = ops.gather(x_shape, ops.constant([0, 1, 2, 3], dtype=np.int32), const_zero_axis)
     const_zero_f32 = ops.constant(0, dtype=np.float32)
     core_out = ops.broadcast(const_zero_f32, core_shape)
 
-    # Trip count for the loop equals the sequence length (dim 2).
-    seq_len = ops.gather(dBx_shape, const_two, const_zero_axis)
+    # Trip count for the loop equals the sequence length (dim 1 of x).
+    seq_len = ops.gather(x_shape, const_one, const_zero_axis)
     seq_len = ops.convert(seq_len, "i32")
 
-    # Body parameters (one timestep slice each).
+    # Body parameters (one timestep slice each along dim 1).
     timestep_param = ops.parameter([], np.int32, "timestep")
-    dA_t_param = ops.parameter([-1, -1, 1, -1, -1], np.float32, "dA_t")
-    dBx_t_param = ops.parameter([-1, -1, 1, -1, -1], np.float32, "dBx_t")
-    C_t_param = ops.parameter([-1, -1, 1, -1], np.float32, "C_t")
-    last_state_t = ops.parameter([-1, -1, -1, -1], np.float32, "last_state_t")
-    core_out_t = ops.parameter([-1, -1, -1, -1], np.float32, "core_out_t")
+    dt_t_param = ops.parameter([-1, 1, -1], np.float32, "dt_t")  # [B, 1, H]
+    B_t_param = ops.parameter([-1, 1, -1, -1], np.float32, "B_t")  # [B, 1, H, N]
+    x_t_param = ops.parameter([-1, 1, -1, -1], np.float32, "x_t")  # [B, 1, H, P]
+    C_t_param = ops.parameter([-1, 1, -1, -1], np.float32, "C_t")  # [B, 1, H, N]
+    last_state_t = ops.parameter([-1, -1, -1, -1], np.float32, "last_state_t")  # [B, H, P, N]
+    core_out_t = ops.parameter([-1, -1, -1, -1], np.float32, "core_out_t")  # [B, T, H, P]
 
     # Drop the singleton sequence dimension introduced by slicing.
-    dA_t = ops.squeeze(dA_t_param, const_two)  # [B, H, 1, 1] (broadcastable to [B, H, P, N])
-    dBx_t = ops.squeeze(dBx_t_param, const_two)  # [B, H, P, N]
-    C_t = ops.squeeze(C_t_param, const_two)  # [B, H, N]
+    dt_t = ops.squeeze(dt_t_param, const_one)  # [B, H]
+    B_t = ops.squeeze(B_t_param, const_one)  # [B, H, N]
+    x_t = ops.squeeze(x_t_param, const_one)  # [B, H, P]
+    C_t = ops.squeeze(C_t_param, const_one)  # [B, H, N]
+
+    # Discretization inside the loop body:
+    # dA_t = exp(A * dt_t)  — A is [H], dt_t is [B, H] → broadcast to [B, H]
+    A_unsqueeze = ops.unsqueeze(A, const_zero_axis)  # [1, H]
+    dA_t = ops.exp(ops.multiply(A_unsqueeze, dt_t))  # [B, H]
+    dA_t_4d = ops.unsqueeze(ops.unsqueeze(dA_t, const_minus_one), const_minus_one)  # [B, H, 1, 1]
+
+    # dBx_t = (dt_t * B_t)[:,None,:] * x_t[:,:,None]  → [B, H, P, N]
+    dt_B_t = ops.multiply(ops.unsqueeze(dt_t, const_minus_one), B_t)  # [B, H, N]
+    dBx_t = ops.multiply(
+        ops.unsqueeze(dt_B_t, const_minus_two),  # [B, H, 1, N]
+        ops.unsqueeze(x_t, const_minus_one),  # [B, H, P, 1]
+    )  # [B, H, P, N]
 
     # state_t = state_{t-1} * dA_t + dBx_t
-    last_state_new = ops.add(ops.multiply(last_state_t, dA_t), dBx_t)  # [B, H, P, N]
+    last_state_new = ops.add(ops.multiply(last_state_t, dA_t_4d), dBx_t)  # [B, H, P, N]
 
-    # y_t = reduce_sum(state_t * C_t, axis=N) -> [B, H, P]
-    const_minus_two = ops.constant(-2, dtype=np.int32)
+    # y_t = reduce_sum(state_t * C_t, axis=N) → [B, H, P]
     y_t = ops.multiply(last_state_new, ops.unsqueeze(C_t, const_minus_two))  # [B, H, P, N]
     y_t = ops.reduce_sum(y_t, const_minus_one, False)  # [B, H, P]
-    y_t = ops.unsqueeze(y_t, const_two)  # [B, H, 1, P]
+    y_t = ops.unsqueeze(y_t, const_one)  # [B, 1, H, P]
 
     timestep = ops.unsqueeze(timestep_param, const_zero_axis)
-    core_out_res = ops.scatter_update(core_out_t, timestep, y_t, const_two)
+    core_out_res = ops.scatter_update(core_out_t, timestep, y_t, const_one)
     last_state_res = last_state_new
 
     body_cond = ops.constant([True], dtype=bool)
@@ -184,8 +235,9 @@ def convert_recurrent_mamba2_cell(context):
         [body_cond, last_state_res, core_out_res],
         [
             timestep_param,
-            dA_t_param,
-            dBx_t_param,
+            dt_t_param,
+            B_t_param,
+            x_t_param,
             C_t_param,
             last_state_t,
             core_out_t,
@@ -196,9 +248,10 @@ def convert_recurrent_mamba2_cell(context):
     loop = ops.loop(seq_len, ops.constant(True, dtype="bool"))
     loop.set_function(body_model)
 
-    loop.set_sliced_input(dA_t_param, dA, 0, 1, 1, -1, 2)
-    loop.set_sliced_input(dBx_t_param, dBx, 0, 1, 1, -1, 2)
-    loop.set_sliced_input(C_t_param, C, 0, 1, 1, -1, 2)
+    loop.set_sliced_input(dt_t_param, dt, 0, 1, 1, -1, 1)
+    loop.set_sliced_input(B_t_param, B_expanded.output(0), 0, 1, 1, -1, 1)
+    loop.set_sliced_input(x_t_param, x, 0, 1, 1, -1, 1)
+    loop.set_sliced_input(C_t_param, C_expanded.output(0), 0, 1, 1, -1, 1)
     loop.set_merged_input(last_state_t, last_state_old, last_state_res.output(0))
     loop.set_merged_input(core_out_t, core_out.output(0), core_out_res.output(0))
     loop.set_special_body_ports([0, 0])

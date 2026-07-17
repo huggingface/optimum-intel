@@ -8161,25 +8161,12 @@ def granite_moe_hybrid_mamba_mixer_forward(
 
     # 3. State Space Model transformation in recurrent form
     A = -torch.exp(self.A_log.float())  # (num_heads,)
-    dt = torch.nn.functional.softplus(dt + self.dt_bias)  # (B, seq, num_heads)
-    dt = torch.clamp(dt, self.time_step_limit[0], self.time_step_limit[1])
+    dt = torch.nn.functional.softplus(dt + self.dt_bias)  # (B, T, num_heads)
+    dt = torch.clamp(dt, self.time_step_limit[0], self.time_step_limit[1]).float()
 
     x = hidden_states_ssm.reshape(batch_size, seq_len, self.num_heads, self.head_dim).float()
     B = B.reshape(batch_size, seq_len, self.n_groups, self.ssm_state_size).float()
     C = C.reshape(batch_size, seq_len, self.n_groups, self.ssm_state_size).float()
-    B = B.repeat_interleave(self.num_heads // self.n_groups, dim=2)
-    C = C.repeat_interleave(self.num_heads // self.n_groups, dim=2)
-
-    # rearrange to head-major layout: (B, H, T, ...)
-    dt = dt.transpose(1, 2).float()  # (B, H, T)
-    x = x.permute(0, 2, 1, 3)  # (B, H, T, P)
-    B = B.permute(0, 2, 1, 3)  # (B, H, T, N)
-    C = C.permute(0, 2, 1, 3)  # (B, H, T, N)
-
-    # discretize: dA (decay), dBx (input contribution)
-    dA = torch.exp(dt * A.view(1, -1, 1))  # (B, H, T)
-    dA = dA[..., None, None]  # (B, H, T, 1, 1)
-    dBx = dt[..., None, None] * B[..., None, :] * x[..., :, None]  # (B, H, T, P, N)
 
     if recurrent_state is None:
         recurrent_state = torch.zeros(
@@ -8187,17 +8174,18 @@ def granite_moe_hybrid_mamba_mixer_forward(
         )
     recurrent_state = recurrent_state.float()
 
-    output_cell = self.mamba2_recurrent_cell(dA, dBx, C, recurrent_state)
+    # A (H,), dt (B,T,H), B (B,T,G,N), x (B,T,H,P), C (B,T,G,N), state (B,H,P,N)
+    output_cell = self.mamba2_recurrent_cell(A, dt, B, x, C, recurrent_state)
 
-    num_elems = batch_size * self.num_heads * seq_len * self.head_dim
-    y = output_cell[:num_elems].reshape(batch_size, self.num_heads, seq_len, self.head_dim)
+    num_elems = batch_size * seq_len * self.num_heads * self.head_dim
+    y = output_cell[:num_elems].reshape(batch_size, seq_len, self.num_heads, self.head_dim)
     new_recurrent_state = output_cell[num_elems:].reshape(recurrent_state.shape)
 
     # D skip connection (independent of the recurrent state)
-    y = y + x * self.D.view(1, -1, 1, 1)
+    y = y + x * self.D.view(1, 1, -1, 1)
 
-    # (B, H, T, P) -> (B, T, intermediate_size)
-    y = y.permute(0, 2, 1, 3).reshape(batch_size, seq_len, -1)
+    # (B, T, H, P) -> (B, T, intermediate_size)
+    y = y.reshape(batch_size, seq_len, -1)
 
     scan_output = self.norm(y, gate)
 
@@ -9249,21 +9237,35 @@ class Mamba2RecurrentCell(torch.nn.Module):
 
     def forward(
         self,
-        dA,  # (B, H, T, 1, 1)
-        dBx,  # (B, H, T, P, N)
-        C,  # (B, H, T, N)
-        last_state,  # (B, H, P, N)
+        A,  # (H,)          — negative log-decay rates per head
+        dt,  # (B, T, H)    — time steps (after softplus + clamp)
+        B,  # (B, T, G, N)  — input-projection matrix (G groups, broadcast to H heads)
+        x,  # (B, T, H, P)  — input hidden states (P = head_dim)
+        C,  # (B, T, G, N)  — output-projection matrix (G groups, broadcast to H heads)
+        last_state,  # (B, H, P, N) — initial recurrent state
     ):
-        sequence_length = dBx.shape[2]
-        core_out = torch.zeros(dBx.shape[:4], dtype=dBx.dtype)  # (B, H, T, P)
+        # Mamba-2 selective scan in recurrent form (one step per token):
+        #   dA_t    = exp(A * dt_t)           — per-head state decay
+        #   dBx_t   = (dt_t * B_t) ⊗ x_t     — discretized input (outer product over P×N)
+        #   state_t = state_{t-1} * dA_t + dBx_t
+        #   y_t     = Σ_n (state_t * C_t)     — readout (reduce over state dim N)
+        sequence_length = dt.shape[1]
+        num_heads = dt.shape[2]
+        num_groups = B.shape[2]
+        heads_per_group = num_heads // num_groups
+        core_out = torch.zeros(x.shape, dtype=x.dtype)  # (B, T, H, P)
+
+        # Expand B/C from (B, T, G, N) → (B, T, H, N) via repeat_interleave
+        B = B.repeat_interleave(heads_per_group, dim=2)
+        C = C.repeat_interleave(heads_per_group, dim=2)
 
         for i in range(sequence_length):
-            last_state = last_state * dA[:, :, i] + dBx[:, :, i]
-            core_out[:, :, i] = (last_state * C[:, :, i].unsqueeze(-2)).sum(dim=-1)
+            dA_t = torch.exp(dt[:, i] * A.view(1, -1))  # (B, H)
+            dBx_t = dt[:, i, :, None, None] * B[:, i, :, None, :] * x[:, i, :, :, None]  # (B, H, P, N)
+            last_state = last_state * dA_t[:, :, None, None] + dBx_t
+            core_out[:, i] = (last_state * C[:, i].unsqueeze(-2)).sum(dim=-1)
 
-        # This is a workaround to ensure a single output from the torch.nn.Module.
-        # The OpenVINO ModuleExtension mechanism has a limitation and expects
-        # the module to produce only one output.
+        # Single flattened output (OpenVINO ModuleExtension expects one tensor).
         output_cell = torch.cat([core_out.flatten(), last_state.flatten()], dim=0)
         return output_cell
 
@@ -9323,25 +9325,12 @@ def nemotron_h_mamba_mixer_forward(
 
     # 3. State Space Model transformation in recurrent form
     A = -torch.exp(self.A_log.float())  # (num_heads,)
-    dt = torch.nn.functional.softplus(dt + self.dt_bias)  # (B, seq, num_heads)
-    dt = torch.clamp(dt, self.time_step_min)
+    dt = torch.nn.functional.softplus(dt + self.dt_bias)  # (B, T, num_heads)
+    dt = torch.clamp(dt, self.time_step_min).float()
 
     x = hidden_states_ssm.reshape(batch_size, seq_len, self.num_heads, self.head_dim).float()
     B = B.reshape(batch_size, seq_len, self.n_groups, self.ssm_state_size).float()
     C = C.reshape(batch_size, seq_len, self.n_groups, self.ssm_state_size).float()
-    B = B.repeat_interleave(self.num_heads // self.n_groups, dim=2)
-    C = C.repeat_interleave(self.num_heads // self.n_groups, dim=2)
-
-    # rearrange to head-major layout: (B, H, T, ...)
-    dt = dt.transpose(1, 2).float()  # (B, H, T)
-    x = x.permute(0, 2, 1, 3)  # (B, H, T, P)
-    B = B.permute(0, 2, 1, 3)  # (B, H, T, N)
-    C = C.permute(0, 2, 1, 3)  # (B, H, T, N)
-
-    # discretize: dA (decay), dBx (input contribution)
-    dA = torch.exp(dt * A.view(1, -1, 1))  # (B, H, T)
-    dA = dA[..., None, None]  # (B, H, T, 1, 1)
-    dBx = dt[..., None, None] * B[..., None, :] * x[..., :, None]  # (B, H, T, P, N)
 
     if recurrent_state is None:
         recurrent_state = torch.zeros(
@@ -9349,17 +9338,18 @@ def nemotron_h_mamba_mixer_forward(
         )
     recurrent_state = recurrent_state.float()
 
-    output_cell = self.mamba2_recurrent_cell(dA, dBx, C, recurrent_state)
+    # A (H,), dt (B,T,H), B (B,T,G,N), x (B,T,H,P), C (B,T,G,N), state (B,H,P,N)
+    output_cell = self.mamba2_recurrent_cell(A, dt, B, x, C, recurrent_state)
 
-    num_elems = batch_size * self.num_heads * seq_len * self.head_dim
-    y = output_cell[:num_elems].reshape(batch_size, self.num_heads, seq_len, self.head_dim)
+    num_elems = batch_size * seq_len * self.num_heads * self.head_dim
+    y = output_cell[:num_elems].reshape(batch_size, seq_len, self.num_heads, self.head_dim)
     new_recurrent_state = output_cell[num_elems:].reshape(recurrent_state.shape)
 
     # D skip connection (independent of the recurrent state)
-    y = y + x * self.D.view(1, -1, 1, 1)
+    y = y + x * self.D.view(1, 1, -1, 1)
 
-    # (B, H, T, P) -> (B, T, intermediate_size)
-    y = y.permute(0, 2, 1, 3).reshape(batch_size, seq_len, -1)
+    # (B, T, H, P) -> (B, T, intermediate_size)
+    y = y.reshape(batch_size, seq_len, -1)
 
     scan_output = self.norm(y, gate)
 
@@ -9369,7 +9359,7 @@ def nemotron_h_mamba_mixer_forward(
     return contextualized_states, new_conv_state, new_recurrent_state
 
 
-# Vectorized implementation of the NemotronH MoE block (`NemotronHMoE`).
+# Vectorized implementation of the NemotronH MoE block (`NemtronHMoE`).
 # The vectorized form is required to ensure correct torch.jit tracing.
 # The token routing (sigmoid scoring + grouped top-k) is kept identical to the
 # original `route_tokens_to_experts`; only the per-expert MLP loop is replaced
