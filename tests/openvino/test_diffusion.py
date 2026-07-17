@@ -1224,14 +1224,12 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
             "image": _generate_images(height=height, width=width, batch_size=batch_size),
             "prompt": ["a dog running in a field"] * batch_size,
             "negative_prompt": ["static, motionless"] * batch_size,
+            "height": height,
+            "width": width,
+            "num_inference_steps": 2,
+            "num_frames": num_frames,
+            "guidance_scale": 4.5,
         }
-
-        inputs["height"] = height
-        inputs["width"] = width
-
-        inputs["num_inference_steps"] = 2
-        inputs["num_frames"] = num_frames
-        inputs["guidance_scale"] = 4.5
 
         return inputs
 
@@ -1258,13 +1256,14 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
     def test_num_videos_per_prompt(self, model_arch: str):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
-        for batch_size in [1]:
+        # batch_size > 1 combined with num_videos_per_prompt > 1 is not supported by
+        # LTXImageToVideoPipeline itself, so those combinations are left out here.
+        for batch_size, num_videos_per_prompt in [(1, 1), (1, 3), (3, 1)]:
             for height in [64, 96]:
                 for width in [96, 128]:
-                    for num_videos_per_prompt in [1]:
-                        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-                        outputs = pipeline(**inputs, num_videos_per_prompt=num_videos_per_prompt).frames
-                        self.assertEqual(len(outputs), batch_size * num_videos_per_prompt)
+                    inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+                    outputs = pipeline(**inputs, num_videos_per_prompt=num_videos_per_prompt).frames
+                    self.assertEqual(len(outputs), batch_size * num_videos_per_prompt)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
@@ -1389,12 +1388,9 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
     def test_num_frames_validation(self, model_arch: str):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
-        # Valid LTX num_frames must satisfy (num_frames - 1) % 8 == 0
         valid_inputs = self.generate_inputs(height=64, width=96, batch_size=1, num_frames=9)
-        outputs = pipeline(**valid_inputs).frames
-        self.assertEqual(len(np.array(outputs[0])), 9)
+        self.assertEqual(len(np.array(pipeline(**valid_inputs).frames[0])), 9)
 
-        # num_frames that violates the LTX constraint should raise
+        # num_frames is floored to the nearest latent frame count, not rejected
         invalid_inputs = self.generate_inputs(height=64, width=96, batch_size=1, num_frames=10)
-        with self.assertRaises(Exception):
-            pipeline(**invalid_inputs)
+        self.assertEqual(len(np.array(pipeline(**invalid_inputs).frames[0])), 9)
