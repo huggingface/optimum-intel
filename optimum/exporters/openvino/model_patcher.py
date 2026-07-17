@@ -62,7 +62,6 @@ from optimum.intel.utils.import_utils import (
     is_transformers_version,
 )
 
-
 if is_transformers_version(">=", "4.53"):
     from transformers.masking_utils import (
         ALL_MASK_ATTENTION_FUNCTIONS,
@@ -3554,6 +3553,15 @@ def deepseek_v3_attn_forward(
         sin = sin[position_ids].unsqueeze(unsqueeze_dim)  # [bs, 1, seq_len, dim]
         q_fp32 = q.to(dtype=torch.float32, device=q.device)
         k_fp32 = k.to(dtype=torch.float32, device=k.device)
+        # DeepSeek-V3's apply_rotary_pos_emb (see e.g. modeling_deepseek.py) first re-interleaves the last
+        # dimension into (d // 2, 2) pairs and transposes them before applying rotate_half. This differs from
+        # the plain Llama-style rotate_half used elsewhere, and is required for correct MLA rope application
+        # (q_pe/k_pe). Omitting this step silently applies the wrong element pairing to the rotation and
+        # produces incoherent generation regardless of weight precision (FP16/INT8/INT4 alike).
+        b, h, s, d = q_fp32.shape
+        q_fp32 = q_fp32.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
+        b, h, s, d = k_fp32.shape
+        k_fp32 = k_fp32.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
         q_embed = (q_fp32 * cos) + (rotate_half(q_fp32) * sin)
         k_embed = (k_fp32 * cos) + (rotate_half(k_fp32) * sin)
         return q_embed.to(dtype=orig_dtype), k_embed.to(dtype=orig_dtype)
@@ -3634,6 +3642,12 @@ def deepseek_v3_attn_forward(
         dropout_p=self.attention_dropout if self.training else 0.0,
         # The q_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create a causal mask in case q_len == 1.
         is_causal=self.is_causal and attention_mask is None and q_len > 1,
+        # Deepseek MLA does not use the default 1/sqrt(head_dim) attention scale: with YaRN rope_scaling
+        # (mscale_all_dim set), self.softmax_scale additionally applies a `mscale ** 2` correction factor
+        # (see modeling_deepseek.py). Omitting `scale` here silently falls back to SDPA's default scale and
+        # produces systematically wrong (uncalibrated) attention logits for any Deepseek checkpoint that uses
+        # YaRN scaling, degrading generation quality regardless of weight precision (FP16/INT8/INT4 alike).
+        scale=self.softmax_scale,
     )
 
     attn_output = attn_output.transpose(1, 2).contiguous()
@@ -3757,6 +3771,10 @@ def deepseek_v2_attn_forward(
         dropout_p=self.attention_dropout if self.training else 0.0,
         # The q_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create a causal mask in case q_len == 1.
         is_causal=self.is_causal and attention_mask is None and q_len > 1,
+        # See identical fix/comment in deepseek_v3_attn_forward above: SDPA's default scale omits the
+        # YaRN `mscale ** 2` correction folded into self.softmax_scale, causing systematically wrong
+        # attention logits for Deepseek checkpoints using YaRN rope_scaling.
+        scale=self.softmax_scale,
     )
     attn_output = attn_output.transpose(1, 2).contiguous()
 
