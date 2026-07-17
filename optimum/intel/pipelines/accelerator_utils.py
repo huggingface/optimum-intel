@@ -89,7 +89,7 @@ def get_openvino_model_class(
             config = AutoConfig.from_pretrained(model_id, **hub_kwargs)
         if any(arch.endswith("ForCTC") for arch in config.architectures):
             ov_model_class = OV_TASKS_MAPPING[task][0]
-        elif getattr(config, "model_type", None) == "qwen3_omni_moe":
+        elif getattr(config, "model_type", None) in ("qwen3_omni_moe", "qwen3_omni"):
             ov_model_class = OV_TASKS_MAPPING[task][2]
         else:
             ov_model_class = OV_TASKS_MAPPING[task][1]
@@ -103,7 +103,7 @@ def get_openvino_model_class(
                     "token": model_kwargs.pop("token", None),
                 }
                 config = AutoConfig.from_pretrained(model_id, **hub_kwargs)
-            if getattr(config, "model_type", None) == "qwen3_omni_moe":
+            if getattr(config, "model_type", None) in ("qwen3_omni_moe", "qwen3_omni"):
                 ov_model_class = OVModelForMultimodalLM
             else:
                 ov_model_class = task_classes[0]
