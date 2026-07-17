@@ -29,12 +29,6 @@ from optimum.exporters.base import ExporterConfig
 from optimum.intel.utils.import_utils import is_transformers_version
 
 
-if is_transformers_version(">=", "4.44") and is_transformers_version("<", "4.50"):
-    from optimum.exporters.openvino._traceable_cache import TraceableCache
-
-
-if is_transformers_version(">=", "4.48"):
-    from transformers.cache_utils import DynamicCache, EncoderDecoderCache
 if is_transformers_version(">=", "4.53"):
     from transformers.masking_utils import (
         ALL_MASK_ATTENTION_FUNCTIONS,
@@ -47,18 +41,11 @@ if is_transformers_version(">=", "4.53"):
         sdpa_mask,
     )
 
-
 if is_transformers_version(">=", "4.53.1"):
     from transformers.masking_utils import find_packed_sequence_indices
 
-
 if is_transformers_version(">=", "4.54"):
-    from transformers.utils import TransformersKwargs
-
     from optimum.exporters.openvino._traceable_decorator import traceable_check_model_inputs
-else:
-    TransformersKwargs = object
-
 
 if is_transformers_version(">=", "4.56"):
     import transformers.masking_utils
@@ -93,11 +80,7 @@ def preprocess_encoder_outputs(encoder_outputs):
 
 
 def preprocess_past_key_values(past_key_values):
-    if (
-        is_transformers_version(">=", "4.48")
-        and isinstance(past_key_values, (list, tuple))
-        and isinstance(past_key_values[0], (list, tuple))
-    ):
+    if isinstance(past_key_values, (list, tuple)) and isinstance(past_key_values[0], (list, tuple)):
         if len(past_key_values[0]) == 2:
             if hasattr(DynamicCache, "from_legacy_cache"):
                 past_key_values = DynamicCache.from_legacy_cache(past_key_values)
@@ -215,38 +198,38 @@ def _orig_sdpa_mask_without_vmap(
 # Compatibility wrapper for sdpa_mask_without_vmap from optimum.
 # The installed optimum version expects (batch_size, cache_position: Tensor, kv_length, ...),
 # but transformers >= 5.5 passes (batch_size, q_length: int, kv_length: int, q_offset: int, ...).
-def sdpa_mask_without_vmap(batch_size, q_length=None, kv_length=None, q_offset=0, kv_offset=0, **kwargs):
-    import inspect
-
-    sig = inspect.signature(_orig_sdpa_mask_without_vmap)
-    if is_transformers_version(">=", "5.5") and "cache_position" in sig.parameters and q_length is not None:
-        # Old optimum signature: (batch_size, cache_position, kv_length, kv_offset, ...)
-        cache_position = torch.arange(q_length, dtype=torch.long) + q_offset
-        kwargs.pop("q_offset", None)
-        kwargs.pop("allow_is_bidirectional_skip", None)
-        kwargs.pop("allow_torch_fix", None)
-        kwargs.pop("use_vmap", None)
-        kwargs.pop("device", None)
-        return _orig_sdpa_mask_without_vmap(batch_size, cache_position, kv_length, kv_offset=kv_offset, **kwargs)
+def sdpa_mask_without_vmap(**kwargs):
+    kwargs.pop("use_vmap", None)
+    if is_transformers_version("<", "5"):
+        return _orig_sdpa_mask_without_vmap(**kwargs)
+    elif (
+        is_transformers_version(">=", "5.4")
+        and is_transformers_version("<", "5.9")
+        and isinstance(kwargs.get("q_length", None), torch.Tensor)
+    ):
+        q_length = kwargs.pop("q_length", None)
+        q_offset = kwargs.pop("q_offset", 0)
+        cache_position = torch.arange(q_offset, q_offset + q_length, device=q_length.device)
+        return sdpa_mask(q_length=cache_position, use_vmap=False, **kwargs)
     else:
-        return _orig_sdpa_mask_without_vmap(
-            batch_size, q_length=q_length, kv_length=kv_length, q_offset=q_offset, kv_offset=kv_offset, **kwargs
-        )
+        return sdpa_mask(use_vmap=False, **kwargs)
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/masking_utils.py#L433
 # Specifically for OpenVINO, we use torch.finfo(torch.float16).min instead of torch.finfo(dtype).min
-def eager_mask_without_vmap(*args, **kwargs):
+def eager_mask_without_vmap(**kwargs):
     kwargs.pop("allow_is_causal_skip", None)
-    dtype = kwargs.get("dtype", torch.float32)
-    mask = sdpa_mask_without_vmap(*args, allow_is_causal_skip=False, **kwargs)
-    # we use torch.finfo(torch.float16).min instead torch.finfo(dtype).min to avoid an overflow but not
-    # sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
-    mask = torch.where(
-        mask,
-        torch.tensor(0.0, device=mask.device, dtype=dtype),
-        torch.tensor(torch.finfo(torch.float16).min, device=mask.device, dtype=dtype),
-    )
+    kwargs.pop("allow_torch_fix", None)
+    dtype = kwargs.pop("dtype", torch.float32)
+    mask = sdpa_mask_without_vmap(allow_is_causal_skip=False, allow_torch_fix=False, **kwargs)
+    if mask is not None:
+        # we use torch.finfo(torch.float16).min instead torch.finfo(dtype).min to avoid an overflow but not
+        # sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
+        mask = torch.where(
+            mask,
+            torch.tensor(0.0, device=mask.device, dtype=dtype),
+            torch.tensor(torch.finfo(torch.float16).min, device=mask.device, dtype=dtype),
+        )
     return mask
 
 
@@ -348,7 +331,7 @@ class ModelPatcher:
             # format of outputs. It is common for the output type of a model to vary, such as tensor, list,
             # tuple, etc. For Transformers models, the output is encapsulated in a ModelOutput object that
             # contains the output names of the model. In the case of Timm classification models, the output
-            # is of type tensor. By default, it is assumed that the output names mentioned in the ONNX config
+            # is of type tensor. By default, it is assumed that the output names mentioned in the OpenVINO config
             # match the outputs in order.
             filtered_outputs = {}
             output_names = list(config.outputs.keys())
@@ -370,7 +353,7 @@ class ModelPatcher:
                     raise ValueError(
                         f"{config.__class__.__name__} expects the model to return {num_outputs} outputs: {output_names_str}, "
                         f"but the it returned a single output of type {type(outputs)}. Please make sure either that the model "
-                        "returns all the expected outputs, or that the ONNX config is correctly defined with the expected outputs."
+                        "returns all the expected outputs, or that the OpenVINO config is correctly defined with the expected outputs."
                     )
                 output_name = output_names[0]
                 filtered_outputs[output_name] = outputs
@@ -396,13 +379,6 @@ class ModelPatcher:
         self.patch_ops()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
-        # This is a workaround for the Cache class in transformers, we replace it
-        # with traceable cache is because the original one used in transformers
-        # inherited from nn.Module (for a couple versions), which can't be traced as input.
-        if is_transformers_version(">=", "4.44") and is_transformers_version("<", "4.50"):
-            self.original_cache_class = transformers.cache_utils.Cache
-            transformers.cache_utils.Cache = TraceableCache
-
         # This is a workaround for mask generation in transformers >= 4.53.
         # The masking process uses vmap which is not traceable by TorchScript.
         if is_transformers_version(">=", "4.53"):
@@ -426,9 +402,6 @@ class ModelPatcher:
     def __exit__(self, exc_type, exc_value, traceback):
         self.restore_ops()
         setattr(self._model, self.orig_forward_name, self.orig_forward)
-
-        if is_transformers_version(">=", "4.44") and is_transformers_version("<", "4.50"):
-            transformers.cache_utils.Cache = self.original_cache_class
 
         if is_transformers_version(">=", "4.53"):
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)

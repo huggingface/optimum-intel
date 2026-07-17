@@ -71,6 +71,7 @@ class OpenVINOConfig(ExporterConfig, ABC):
     DEFAULT_VARIANT = "default"
     PATCHING_SPECS: list[PatchingSpec] | None = None
     _MODEL_PATCHER = ModelPatcher
+    MIN_TRANSFORMERS_VERSION = "4.57"
 
     _TASK_TO_COMMON_OUTPUTS = {  # noqa: RUF012
         "audio-classification": OrderedDict({"logits": {0: "batch_size"}}),
