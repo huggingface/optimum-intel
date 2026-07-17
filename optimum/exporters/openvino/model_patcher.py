@@ -4825,19 +4825,21 @@ class CommonImageEmbeddingsModelPatcher(ModelPatcher):
         self.patched_forward = patched_forward
 
 
+# The patching is needed avoid usage of is_first_iteration flag. In original code this flag is set when past_key_values are not initilazed,
+# but during tracing past_key_value are always initialized which breaks initial logic making is_first_iteration always false.
 # Original code: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/gemma3/modeling_gemma3.py#L760
 def gemma3_create_causal_mask_mapping_patched(
-        config,
-        input_embeds: torch.Tensor,
-        attention_mask: torch.Tensor | None,
-        cache_position: torch.Tensor,
-        past_key_values: Cache | None,
-        position_ids: torch.Tensor | None,
-        token_type_ids: torch.Tensor | None = None,
-        pixel_values: torch.FloatTensor | None = None,
-        is_training: bool = False,
-        is_first_iteration: bool | None = None,
-        **kwargs,
+    config,
+    input_embeds: torch.Tensor,
+    attention_mask: torch.Tensor | None,
+    cache_position: torch.Tensor,
+    past_key_values: Cache | None,
+    position_ids: torch.Tensor | None,
+    token_type_ids: torch.Tensor | None = None,
+    pixel_values: torch.FloatTensor | None = None,
+    is_training: bool = False,
+    is_first_iteration: bool | None = None,
+    **kwargs,
 ) -> dict:
     """
     Overwrites the base `create_masks_for_generate` with `token_type_ids` masking to create the causal mask mapping
@@ -4845,8 +4847,8 @@ def gemma3_create_causal_mask_mapping_patched(
 
     Uses `pixel_values` as an optional input to disambiguate edge cases.
     """
-    from transformers.models.gemma3.modeling_gemma3 import token_type_ids_mask_function
     from transformers.masking_utils import create_masks_for_generate
+    from transformers.models.gemma3.modeling_gemma3 import token_type_ids_mask_function
 
     mask_kwargs = {
         "config": config.get_text_config(),
@@ -4867,9 +4869,12 @@ def gemma3_create_causal_mask_mapping_patched(
         new_image_start = is_image & ~is_previous_image
         image_group_ids = torch.cumsum(new_image_start.to(dtype=torch.int64), dim=1) - 1
         image_group_ids = torch.where(is_image, image_group_ids, -1)
-        mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
-            token_type_ids.to(cache_position.device), image_group_ids
-        )
+        if is_transformers_version(">=", "5.5"):
+            mask_kwargs["or_mask_function"] = token_type_ids_mask_function(image_group_ids)
+        else:
+            mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
+                token_type_ids.to(cache_position.device), image_group_ids
+            )
 
     return create_masks_for_generate(**mask_kwargs)
 
@@ -4881,26 +4886,31 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
+        # In original code is_prefill flag is traced incorrectly. The flag is set when past_key_values are not initialized,
+        # but during tracing past_key_value are always initialized which breaks the initial logic making is_prefill always false.
         # Original code: https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/gemma3/modeling_gemma3.py#L836
         def patched_lm_forward_4_57_6(
-                self,
-                input_ids: Optional[torch.LongTensor] = None,
-                pixel_values: Optional[torch.FloatTensor] = None,
-                attention_mask: Optional[torch.Tensor] = None,
-                position_ids: Optional[torch.LongTensor] = None,
-                past_key_values: Optional[Cache] = None,
-                token_type_ids: Optional[torch.LongTensor] = None,
-                cache_position: Optional[torch.LongTensor] = None,
-                inputs_embeds: Optional[torch.FloatTensor] = None,
-                labels: Optional[torch.LongTensor] = None,
-                use_cache: Optional[bool] = None,
-                output_attentions: Optional[bool] = None,
-                output_hidden_states: Optional[bool] = None,
-                return_dict: Optional[bool] = None,
-                **lm_kwargs,
+            self,
+            input_ids: Optional[torch.LongTensor] = None,
+            pixel_values: Optional[torch.FloatTensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            position_ids: Optional[torch.LongTensor] = None,
+            past_key_values: Optional[Cache] = None,
+            token_type_ids: Optional[torch.LongTensor] = None,
+            cache_position: Optional[torch.LongTensor] = None,
+            inputs_embeds: Optional[torch.FloatTensor] = None,
+            labels: Optional[torch.LongTensor] = None,
+            use_cache: Optional[bool] = None,
+            output_attentions: Optional[bool] = None,
+            output_hidden_states: Optional[bool] = None,
+            return_dict: Optional[bool] = None,
+            **lm_kwargs,
         ):
-            from transformers.models.gemma3.modeling_gemma3 import Gemma3ModelOutputWithPast, \
-                token_type_ids_mask_function, create_sliding_window_causal_mask
+            from transformers.models.gemma3.modeling_gemma3 import (
+                Gemma3ModelOutputWithPast,
+                create_sliding_window_causal_mask,
+                token_type_ids_mask_function,
+            )
 
             if (input_ids is None) ^ (inputs_embeds is not None):
                 raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
@@ -4948,16 +4958,6 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
                     "past_key_values": past_key_values,
                     "position_ids": position_ids,
                 }
-                # NOTE: this `is_prefill` logic is not flawless, it fails when we're using a cache eagerly initialized
-                # (e.g. compiled prefill) AND `pixel_values` are not provided. Determining prefill in that case requires
-                # checking data values, which is not compile-compatible.
-                is_prefill = (
-                        not use_cache
-                        or past_key_values is None
-                        or not past_key_values.is_initialized
-                        or pixel_values is not None
-                )
-
                 # if token_type_ids is not None and is_prefill:
                 if token_type_ids is not None and inputs_embeds.shape[1] != 1:
                     # We need to pass an additional mask function to account for token type ids, and it needs to be an `or`
@@ -5002,19 +5002,22 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
                 image_hidden_states=image_features if pixel_values is not None else None,
             )
 
+        # The patching is needed to use gemma3_create_causal_mask_mapping_patched method instead of original one
+        # to solve the tracing issue related to is_first_iteration flag.
+        # Original code: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/gemma3/modeling_gemma3.py#L879
         def patched_lm_forward_5_0(
-                self,
-                input_ids: torch.LongTensor | None = None,
-                pixel_values: torch.FloatTensor | None = None,
-                attention_mask: torch.Tensor | None = None,
-                position_ids: torch.LongTensor | None = None,
-                past_key_values: Cache | None = None,
-                token_type_ids: torch.LongTensor | None = None,
-                cache_position: torch.LongTensor | None = None,
-                inputs_embeds: torch.FloatTensor | None = None,
-                labels: torch.LongTensor | None = None,
-                use_cache: bool | None = None,
-                **lm_kwargs: Unpack[TransformersKwargs],
+            self,
+            input_ids: torch.LongTensor | None = None,
+            pixel_values: torch.FloatTensor | None = None,
+            attention_mask: torch.Tensor | None = None,
+            position_ids: torch.LongTensor | None = None,
+            past_key_values: Cache | None = None,
+            token_type_ids: torch.LongTensor | None = None,
+            cache_position: torch.LongTensor | None = None,
+            inputs_embeds: torch.FloatTensor | None = None,
+            labels: torch.LongTensor | None = None,
+            use_cache: bool | None = None,
+            **lm_kwargs: Unpack[TransformersKwargs],
         ):
             from transformers.models.gemma3.modeling_gemma3 import Gemma3ModelOutputWithPast
 
