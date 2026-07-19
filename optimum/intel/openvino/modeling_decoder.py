@@ -482,6 +482,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         **kwargs,
     ) -> Dict:
         batch_size = input_ids.shape[0]
+        is_dflash = getattr(self.config, "dflash_config", None) is not None
         model_transformers_version = get_export_transformers_version(self.model, self.config)
         if self.config.model_type == "bloom" and compare_versions(model_transformers_version, "<", "4.44"):
             batch_size *= self.config.num_attention_heads
@@ -547,17 +548,19 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if "attention_mask" in self.input_names:
             inputs["attention_mask"] = attention_mask
 
+        hidden_states = kwargs.get("hidden_states", None) if "hidden_states" in self.input_names else None
+
         if "position_ids" in self.input_names:
             if position_ids is not None:
                 position_ids = position_ids.cpu().numpy()
             else:
                 position_ids = np.cumsum(attention_mask, axis=1) - 1
                 position_ids[attention_mask == 0] = 1
-            dflash_hidden_states = kwargs.get("hidden_states", None)
-            if past_key_values and dflash_hidden_states is not None and "hidden_states" in self.input_names:
-                position_ids = position_ids[:, -(input_ids.shape[1] + dflash_hidden_states.shape[1]) :]
-            elif past_key_values:
-                position_ids = position_ids[:, -input_ids.shape[1] :]
+            if past_key_values:
+                if is_dflash and hidden_states is not None:
+                    position_ids = position_ids[:, -(input_ids.shape[1] + hidden_states.shape[1]) :]
+                else:
+                    position_ids = position_ids[:, -input_ids.shape[1] :]
 
             inputs["position_ids"] = position_ids
 
@@ -569,10 +572,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         # Eagle3 draft models have a conditional input that is a concatenated
         # list of hidden states from a target model
         if "hidden_states" in self.input_names:
-            hidden_states = kwargs.get("hidden_states", None)
             if hidden_states is None:
-                dflash_config = getattr(self.config, "dflash_config", None)
-                if dflash_config is not None:
+                if is_dflash:
                     raise ValueError("DFlash draft models require `hidden_states` to be passed to the forward call.")
                 else:
                     hidden_size = self.config.hidden_size * 3

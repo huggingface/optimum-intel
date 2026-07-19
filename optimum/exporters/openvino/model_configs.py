@@ -517,10 +517,7 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     ):
         if self.dflash and input_name in {"inputs_embeds", "hidden_states", "position_ids", "attention_mask"}:
             sequence_length = dummy_input_gen.sequence_length
-            if input_name in {"inputs_embeds", "position_ids", "attention_mask"}:
-                block_length = sequence_length + 1
-            else:
-                block_length = sequence_length
+            block_length = sequence_length + 1
             if input_name == "inputs_embeds":
                 dummy_input_gen.sequence_length = block_length
             elif input_name == "hidden_states":
@@ -528,7 +525,10 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
             elif input_name == "position_ids":
                 dummy_input_gen.sequence_length = sequence_length + block_length
             else:
-                dummy_input_gen.sequence_length = sequence_length * 2 + block_length
+                if self.use_past_in_inputs:
+                    dummy_input_gen.sequence_length = sequence_length * 2 + block_length
+                else:
+                    dummy_input_gen.sequence_length = sequence_length + block_length
             dummy_input = dummy_input_gen.generate(
                 input_name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
             )

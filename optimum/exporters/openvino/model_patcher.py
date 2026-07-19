@@ -14,13 +14,11 @@
 
 import functools
 import inspect
-import json
 import logging
 import logging as log
 import math
 import types
 from dataclasses import dataclass
-from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -77,6 +75,7 @@ if is_transformers_version(">=", "4.54"):
     from transformers.masking_utils import create_causal_mask
 if is_transformers_version(">=", "4.57"):
     from transformers.models.qwen3.modeling_qwen3 import (
+        Qwen3Attention,
         Qwen3Config,
         Qwen3MLP,
         Qwen3PreTrainedModel,
@@ -94,6 +93,7 @@ else:
             raise ImportError("DFlash export requires transformers >= 4.57.")
 
     Qwen3MLP = _UnavailableQwen3Module
+    Qwen3Attention = _UnavailableQwen3Module
     Qwen3RMSNorm = _UnavailableQwen3Module
     Qwen3RotaryEmbedding = _UnavailableQwen3Module
 
@@ -8737,26 +8737,12 @@ def _dflash_attention_mask(
     return attention_mask[:, :, :, -kv_len:] + full_mask
 
 
-class Qwen3DFlashAttention(nn.Module):
+class Qwen3DFlashAttention(Qwen3Attention):
     """Qwen3 attention variant used by DFlash, where draft tokens attend over target context and noise tokens."""
 
     def __init__(self, config: "Qwen3Config", layer_idx: int):
-        super().__init__()
-        self.config = config
-        self.layer_idx = layer_idx
-        self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
-        self.num_key_value_groups = config.num_attention_heads // config.num_key_value_heads
-        self.scaling = self.head_dim**-0.5
-        self.attention_dropout = config.attention_dropout
+        super().__init__(config, layer_idx)
         self.is_causal = False
-        self.q_proj = nn.Linear(config.hidden_size, config.num_attention_heads * self.head_dim, bias=config.attention_bias)
-        self.k_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * self.head_dim, bias=config.attention_bias)
-        self.v_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * self.head_dim, bias=config.attention_bias)
-        self.o_proj = nn.Linear(config.num_attention_heads * self.head_dim, config.hidden_size, bias=config.attention_bias)
-        self.q_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
-        self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
-        self.attention_type = config.layer_types[layer_idx]
-        self.sliding_window = config.sliding_window if self.attention_type == "sliding_attention" else None
 
     def forward(
         self,

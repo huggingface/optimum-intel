@@ -149,8 +149,6 @@ def _save_model(
     gc.collect()
 
 
-
-
 def export(
     model: Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"],
     config: "OnnxConfig",
@@ -425,10 +423,10 @@ def export_pytorch(
         if allow_skip_tracing_check(library_name, model_type):
             ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
 
-        torch_export = os.getenv("OPENVINO_DYNAMO_EXPORT", "false").lower() == "true"
         with patcher:
             check_dummy_inputs_are_allowed(model, dummy_inputs)
             input_info = _get_input_info(model, config, dummy_inputs)
+            torch_export = os.getenv("OPENVINO_DYNAMO_EXPORT", "false").lower() == "true"
             if torch_export:
                 if hasattr(torch.ops, "_prepare_4d_causal_attention_mask_for_sdpa"):
                     # patch_everywhere breaks torch.ops namespace
@@ -472,7 +470,7 @@ def export_pytorch(
         if stateful:
             patch_stateful(model.config, ov_model)
 
-        _add_hidden_states_rt_info(model, ov_model, config, torch_export)
+        _add_hidden_states_rt_info(model, ov_model, config)
 
         library_name = _infer_library_from_model_or_model_class(model=model, library_name=library_name)
 
@@ -1783,13 +1781,13 @@ def discover_hidden_state_rt_info(source_model, ov_model) -> Dict[str, Any]:
     }
 
 
-def _add_hidden_states_rt_info(source_model, ov_model, config: "OnnxConfig", torch_export: bool):
+def _add_hidden_states_rt_info(source_model, ov_model, config: "OnnxConfig"):
     """Best-effort hidden-state locator annotation that leaves the graph untouched."""
     hidden_states_rt_info_key = "hidden_states_decoder_layers"
 
     if "text-generation" not in getattr(config, "task", ""):
         return
-    if torch_export:
+    if os.getenv("OPENVINO_DYNAMO_EXPORT", "false").lower() == "true":
         logger.warning(
             "Skipping hidden-state RT-info annotation for Dynamo export; "
             "the locator discovery supports only the TorchScript conversion path."
