@@ -360,6 +360,7 @@ HUB_MODEL_NAMES = {
     "sana": "optimum-intel-internal-testing/tiny-random-sana",
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
+    "ltx2": "optimum-intel-internal-testing/tiny-random-ltx2",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
     "flux.2-klein": "optimum-intel-internal-testing/tiny-random-flux.2-klein",
@@ -556,6 +557,13 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vae_decoder": 28,
         "vae_encoder": 28,
         "text_encoder": 64,
+    },
+    "ltx2": {
+        "transformer": 34,
+        "vae_decoder": 28,
+        "vae_encoder": 28,
+        "text_encoder": 64,
+        "connectors": 10,
     },
     "sam": {
         "vision_encoder": 150,

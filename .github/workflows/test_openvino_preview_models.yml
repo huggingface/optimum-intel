@@ -64,3 +64,9 @@ jobs:
         run: |
           uv pip install "transformers>=5.10,<5.11"
           pytest tests/openvino/${{ matrix.test-pattern }} -k gemma4_unified --durations=0
+
+      - name: LTX2 Export and Diffusion Validation
+        if: ${{ matrix.test-pattern == '*export*' }}
+        run: |
+          uv pip install "diffusers==0.38.0"
+          pytest tests/openvino/test_diffusion.py -k ltx2 --durations=0
