@@ -1951,6 +1951,7 @@ class OVLTX2Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTX2Pip
     main_input_name = "prompt"
     export_feature = "text-to-video"
     auto_model_class = LTX2Pipeline
+    _is_ltx_pipeline = True
 
     def __init__(
         self,
