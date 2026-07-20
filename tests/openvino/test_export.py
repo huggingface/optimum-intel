@@ -18,7 +18,6 @@ import unittest
 from pathlib import Path
 
 import nncf
-import numpy as np
 import openvino as ov
 import torch
 from parameterized import parameterized
@@ -68,16 +67,6 @@ from optimum.utils.save_utils import maybe_load_preprocessors
 
 
 logger = logging.get_logger()
-
-
-def _find_output_by_locator(model, locator):
-    matches = [op for op in model.get_ops() if op.get_friendly_name() == locator["producer"]]
-    if len(matches) != 1:
-        raise AssertionError(f"Producer {locator['producer']!r} resolved to {len(matches)} OpenVINO nodes")
-    output_index = locator["output_index"]
-    if not isinstance(output_index, int) or output_index < 0 or output_index >= len(matches[0].outputs()):
-        raise AssertionError(f"Producer {locator['producer']!r} has no output {output_index}")
-    return matches[0].output(output_index)
 
 
 class ExportModelTest(unittest.TestCase):
@@ -278,6 +267,15 @@ class ExportModelTest(unittest.TestCase):
         self._openvino_export(model_type, model_kwargs=model_kwargs)
 
     def _assert_hidden_state_rt_info_is_valid(self, model):
+        def find_output_by_locator(model, locator):
+            matches = [op for op in model.get_ops() if op.get_friendly_name() == locator["producer"]]
+            if len(matches) != 1:
+                raise AssertionError(f"Producer {locator['producer']!r} resolved to {len(matches)} OpenVINO nodes")
+            output_index = locator["output_index"]
+            if not isinstance(output_index, int) or output_index < 0 or output_index >= len(matches[0].outputs()):
+                raise AssertionError(f"Producer {locator['producer']!r} has no output {output_index}")
+            return matches[0].output(output_index)
+
         self.assertTrue(model.has_rt_info(["hidden_states_decoder_layers"]))
         annotation = json.loads(model.get_rt_info()["hidden_states_decoder_layers"].value)
         self.assertIsInstance(annotation, dict)
@@ -294,7 +292,7 @@ class ExportModelTest(unittest.TestCase):
             self.assertIsInstance(locator.get("output_index"), int)
             identity = (locator["producer"], locator["output_index"])
             self.assertNotIn(identity, resolved_outputs)
-            _find_output_by_locator(model, locator)
+            find_output_by_locator(model, locator)
             resolved_outputs.add(identity)
         return locators
 
