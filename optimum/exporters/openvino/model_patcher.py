@@ -4846,37 +4846,67 @@ def gemma3_create_causal_mask_mapping_patched(
     for all kinds of forward passes. Gemma3 uses a bidirectional mask for images.
 
     Uses `pixel_values` as an optional input to disambiguate edge cases.
+
+    Instead of relying on `create_masks_for_generate` (which returns trace-unfriendly `is_causal` skips
+    or vmap-based masks depending on the attention implementation), the causal, padding, sliding-window
+    and bidirectional-image masks are built explicitly with plain tensor ops, mirroring
+    `_create_gemma4_unified_bidirectional_mask_dict`. The bidirectional un-masking of image tokens is
+    applied to BOTH the full-attention and sliding-attention masks, matching the `or_mask_function`
+    behaviour of the original implementation.
     """
-    from transformers.masking_utils import create_masks_for_generate
-    from transformers.models.gemma3.modeling_gemma3 import token_type_ids_mask_function
+    text_config = config.get_text_config()
+    dtype = input_embeds.dtype
+    device = input_embeds.device
+    min_dtype = torch.finfo(dtype).min
 
-    mask_kwargs = {
-        "config": config.get_text_config(),
-        "input_embeds": input_embeds,
-        "attention_mask": attention_mask,
-        "cache_position": cache_position,
-        "past_key_values": past_key_values,
-        "position_ids": position_ids,
+    batch_size = input_embeds.shape[0]
+    seq_len = input_embeds.shape[1]
+    target_len = attention_mask.shape[-1]
+    past_len = target_len - seq_len
+
+    # Standard causal mask [seq_len, target_len]
+    causal_mask = torch.full((seq_len, target_len), min_dtype, dtype=dtype, device=device)
+    causal_mask = torch.triu(causal_mask, diagonal=past_len + 1)
+
+    # Apply padding from the 2D attention mask
+    padding_mask = (1.0 - attention_mask[:, None, None, :].to(dtype=dtype, device=device)) * min_dtype
+    full_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1) + padding_mask
+
+    # Sliding window causal mask
+    sliding_mask = full_mask.clone()
+    sliding_window = getattr(text_config, "sliding_window", None)
+    if sliding_window is not None:
+        row_pos = torch.arange(seq_len, device=device).unsqueeze(1) + past_len
+        col_pos = torch.arange(target_len, device=device).unsqueeze(0)
+        beyond_window = (row_pos - col_pos) >= sliding_window
+        sliding_mask = sliding_mask.masked_fill(beyond_window[None, None, :, :], min_dtype)
+
+    # The images cannot attend to future images, but can attend to all prev images and to itself
+    # bidirectionally. First find where a new image block starts: 1 if image and previous not image.
+    token_type_ids = torch.nn.functional.pad(
+        token_type_ids, (0, target_len - token_type_ids.shape[-1]), value=0
+    )
+    is_image = (token_type_ids == 1).to(device)
+    is_previous_image = torch.nn.functional.pad(is_image[:, :-1].to(dtype=torch.int64), (1, 0), value=0).bool()
+    new_image_start = is_image & ~is_previous_image
+    image_group_ids = torch.cumsum(new_image_start.to(dtype=torch.int64), dim=1) - 1
+    image_group_ids = torch.where(
+        is_image, image_group_ids, torch.tensor(-1, dtype=torch.int64, device=device)
+    )
+
+    query_groups = image_group_ids[:, past_len : past_len + seq_len]  # [batch, seq_len]
+    key_groups = image_group_ids  # [batch, target_len]
+    same_group = (query_groups.unsqueeze(2) == key_groups.unsqueeze(1)) & (key_groups.unsqueeze(1) >= 0)
+    same_group = same_group.unsqueeze(1)  # [batch, 1, seq_len, target_len]
+
+    # Un-mask same-group image tokens in both masks (bidirectional attention within an image).
+    full_mask = full_mask.masked_fill(same_group, 0.0)
+    sliding_mask = sliding_mask.masked_fill(same_group, 0.0)
+
+    return {
+        "full_attention": full_mask,
+        "sliding_attention": sliding_mask,
     }
-    if token_type_ids is not None and input_embeds.shape[1] != 1:
-        # We need to pass an additional mask function to account for token type ids, and it needs to be an `or` (to
-        # undo the causal masking)
-
-        # First find where a new image block starts: 1 if image and previous not image
-        # The images cannot attend to future images, but can attend to all prev images and to itself bidirectionally
-        is_image = (token_type_ids == 1).to(cache_position.device)
-        is_previous_image = torch.nn.functional.pad(is_image[:, :-1].to(dtype=torch.int64), (1, 0), value=0).bool()
-        new_image_start = is_image & ~is_previous_image
-        image_group_ids = torch.cumsum(new_image_start.to(dtype=torch.int64), dim=1) - 1
-        image_group_ids = torch.where(is_image, image_group_ids, -1)
-        if is_transformers_version(">=", "5.5"):
-            mask_kwargs["or_mask_function"] = token_type_ids_mask_function(image_group_ids)
-        else:
-            mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
-                token_type_ids.to(cache_position.device), image_group_ids
-            )
-
-    return create_masks_for_generate(**mask_kwargs)
 
 
 class Gemma3LMModelPatcher(OVDecoderModelPatcher):
@@ -4886,255 +4916,34 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        # In original code is_prefill flag is traced incorrectly. The flag is set when past_key_values are not initialized,
-        # but during tracing past_key_value are always initialized which breaks the initial logic making is_prefill always false.
-        # Original code: https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/gemma3/modeling_gemma3.py#L836
-        def patched_lm_forward_4_57_6(
-            self,
-            input_ids: Optional[torch.LongTensor] = None,
-            pixel_values: Optional[torch.FloatTensor] = None,
-            attention_mask: Optional[torch.Tensor] = None,
-            position_ids: Optional[torch.LongTensor] = None,
-            past_key_values: Optional[Cache] = None,
-            token_type_ids: Optional[torch.LongTensor] = None,
-            cache_position: Optional[torch.LongTensor] = None,
-            inputs_embeds: Optional[torch.FloatTensor] = None,
-            labels: Optional[torch.LongTensor] = None,
-            use_cache: Optional[bool] = None,
-            output_attentions: Optional[bool] = None,
-            output_hidden_states: Optional[bool] = None,
-            return_dict: Optional[bool] = None,
-            **lm_kwargs,
-        ):
-            from transformers.models.gemma3.modeling_gemma3 import (
-                Gemma3ModelOutputWithPast,
-                create_sliding_window_causal_mask,
-                token_type_ids_mask_function,
-            )
-
-            if (input_ids is None) ^ (inputs_embeds is not None):
-                raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
-
-            output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-            output_hidden_states = (
-                output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-            )
-            return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-            # Replace image id with PAD if the image token if OOV, to avoid index-errors
-            if input_ids is not None and self.config.image_token_id >= self.vocab_size:
-                special_image_mask = input_ids == self.config.image_token_id
-                llm_input_ids = input_ids.clone()
-                llm_input_ids[special_image_mask] = 0
-            else:
-                llm_input_ids = input_ids
-
-            if inputs_embeds is None:
-                inputs_embeds = self.get_input_embeddings()(llm_input_ids)
-
-            if cache_position is None:
-                past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-                cache_position = torch.arange(
-                    past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
-                )
-
-            # Merge text and images
-            if pixel_values is not None:
-                image_features = self.get_image_features(pixel_values)
-                image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
-                special_image_mask = self.get_placeholder_mask(
-                    input_ids, inputs_embeds=inputs_embeds, image_features=image_features
-                )
-                inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
-
-            # It may already have been prepared by e.g. `generate`
-            if not isinstance(causal_mask_mapping := attention_mask, dict):
-                # Prepare mask arguments
-                mask_kwargs = {
-                    "config": self.config.get_text_config(),
-                    "input_embeds": inputs_embeds,
-                    "attention_mask": attention_mask,
-                    "cache_position": cache_position,
-                    "past_key_values": past_key_values,
-                    "position_ids": position_ids,
-                }
-                # if token_type_ids is not None and is_prefill:
-                if token_type_ids is not None and inputs_embeds.shape[1] != 1:
-                    # We need to pass an additional mask function to account for token type ids, and it needs to be an `or`
-
-                    # First find where a new image block starts: 1 if image and previous not image
-                    # The images cannot attend to future images, but can attend to all prev images and to itself
-                    # bidirectionally
-                    is_image = (token_type_ids == 1).to(cache_position.device)
-                    new_image_start = is_image & ~nn.functional.pad(is_image, (1, 0), value=0)[:, :-1]
-                    image_group_ids = torch.cumsum(new_image_start.int(), dim=1) - 1
-                    image_group_ids = torch.where(
-                        is_image, image_group_ids, torch.full_like(token_type_ids, -1, device=is_image.device)
-                    )
-                    mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
-                        token_type_ids.to(cache_position.device), image_group_ids, self.config.mm_tokens_per_image
-                    )
-
-                # Create the masks
-                causal_mask_mapping = {
-                    "full_attention": create_causal_mask(**mask_kwargs),
-                    "sliding_attention": create_sliding_window_causal_mask(**mask_kwargs),
-                }
-
-            outputs = self.language_model(
-                attention_mask=causal_mask_mapping,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=True,
-                cache_position=cache_position,
-                **lm_kwargs,
-            )
-
-            return Gemma3ModelOutputWithPast(
-                last_hidden_state=outputs.last_hidden_state,
-                past_key_values=outputs.past_key_values if use_cache else None,
-                hidden_states=outputs.hidden_states,
-                attentions=outputs.attentions,
-                image_hidden_states=image_features if pixel_values is not None else None,
-            )
-
-        # The patching is needed to use gemma3_create_causal_mask_mapping_patched method instead of original one
-        # to solve the tracing issue related to is_first_iteration flag.
-        # Original code: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/gemma3/modeling_gemma3.py#L879
-        def patched_lm_forward_5_0(
-            self,
-            input_ids: torch.LongTensor | None = None,
-            pixel_values: torch.FloatTensor | None = None,
-            attention_mask: torch.Tensor | None = None,
-            position_ids: torch.LongTensor | None = None,
-            past_key_values: Cache | None = None,
-            token_type_ids: torch.LongTensor | None = None,
-            cache_position: torch.LongTensor | None = None,
-            inputs_embeds: torch.FloatTensor | None = None,
-            labels: torch.LongTensor | None = None,
-            use_cache: bool | None = None,
-            **lm_kwargs: Unpack[TransformersKwargs],
-        ):
-            from transformers.models.gemma3.modeling_gemma3 import Gemma3ModelOutputWithPast
-
-            if (input_ids is None) ^ (inputs_embeds is not None):
-                raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
-
-            # Replace image id with PAD if the image token if OOV, to avoid index-errors
-            if input_ids is not None and self.config.image_token_id >= self.vocab_size:
-                special_image_mask = input_ids == self.config.image_token_id
-                llm_input_ids = input_ids.clone()
-                llm_input_ids[special_image_mask] = 0
-            else:
-                llm_input_ids = input_ids
-
-            if inputs_embeds is None:
-                inputs_embeds = self.get_input_embeddings()(llm_input_ids)
-
-            if cache_position is None:
-                past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-                cache_position = torch.arange(
-                    past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
-                )
-
-            # Merge text and images
-            if pixel_values is not None:
-                image_features = self.get_image_features(pixel_values, return_dict=True).pooler_output
-                image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
-                special_image_mask = self.get_placeholder_mask(
-                    input_ids, inputs_embeds=inputs_embeds, image_features=image_features
-                )
-                inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
-
-            # It may already have been prepared by e.g. `generate`
-            if not isinstance(causal_mask_mapping := attention_mask, dict):
-                causal_mask_mapping = gemma3_create_causal_mask_mapping_patched(
-                    self.config,
-                    inputs_embeds,
-                    attention_mask,
-                    cache_position,
-                    past_key_values,
-                    position_ids,
-                    token_type_ids,
-                    pixel_values,
-                    is_training=self.training,
-                )
-
-            outputs = self.language_model(
-                attention_mask=causal_mask_mapping,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                return_dict=True,
-                cache_position=cache_position,
-                **lm_kwargs,
-            )
-
-            return Gemma3ModelOutputWithPast(
-                last_hidden_state=outputs.last_hidden_state,
-                past_key_values=outputs.past_key_values,
-                hidden_states=outputs.hidden_states,
-                attentions=outputs.attentions,
-                image_hidden_states=image_features if pixel_values is not None else None,
-            )
-
-        # Difference from original:
-        # uses Dynamic cache from legacy cache instead of HybridCache
-        # calculate causal mask from multimodal
-
-        def forward(
-            self, attention_mask, position_ids, past_key_values, token_type_ids, inputs_embeds, use_cache=True
-        ):
-            if is_transformers_version("<", "5"):
-                pkv = DynamicCache.from_legacy_cache(past_key_values)
-            else:
-                pkv = DynamicCache(past_key_values)
-
-            past_seen_tokens = past_key_values[0][0].shape[-2]
-            cache_position = torch.arange(
-                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
-            )
-            forward_kwargs = {}
-
-            forward_kwargs["token_type_ids"] = token_type_ids
-
-            result = self.__orig_forward(
-                input_ids=None,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                cache_position=cache_position,
-                past_key_values=pkv,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                **forward_kwargs,
-            )
-            upd_pkv = result["past_key_values"]
-            result["past_key_values"] = postprocess_past_key_values(upd_pkv)
-            return result
-
-        if is_transformers_version("==", "4.57.6"):
-            model.orig_lm_forward = model.model.forward
-            model.model.forward = types.MethodType(patched_lm_forward_4_57_6, model.model)
-
-        if is_transformers_version(">=", "5.0"):
-            model.orig_lm_forward = model.model.forward
-            model.model.forward = types.MethodType(patched_lm_forward_5_0, model.model)
-
         super().__init__(config, model, model_kwargs)
+
+        model_forward = self.orig_forward
+
+        # precompute the token_type_ids bidirectional (image) mask since transformers v5.6
+        # (https://github.com/huggingface/transformers/pull/45454) is_first_iteration removed
+        # in create_causal_mask_mapping
+        @functools.wraps(model_forward)
+        def forward_with_precomputed_mask(*args, **kwargs):
+            bound_args = inspect.signature(model_forward).bind(*args, **kwargs)
+            bound_args.apply_defaults()
+            inputs_embeds = bound_args.arguments.get("inputs_embeds")
+            token_type_ids = bound_args.arguments.get("token_type_ids")
+            attention_mask = bound_args.arguments.get("attention_mask")
+            if token_type_ids is not None and isinstance(attention_mask, torch.Tensor):
+                sliding_window = self._model.config.get_text_config().sliding_window
+                bound_args.arguments["attention_mask"] = _create_gemma4_unified_bidirectional_mask_dict(
+                    attention_mask, token_type_ids, inputs_embeds, sliding_window
+                )
+            return model_forward(*bound_args.args, **bound_args.kwargs)
+
+        self.orig_forward = forward_with_precomputed_mask
 
     def __enter__(self):
         super().__enter__()
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-
-        if is_transformers_version(">=", "4.57.6"):
-            self._model.model.forward = self._model.orig_lm_forward
 
 
 # Forward method of the language model of Gemma3n, needs to be patched to pass 'per_layer_inputs',
