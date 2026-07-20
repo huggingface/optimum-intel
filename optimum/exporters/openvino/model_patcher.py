@@ -4938,9 +4938,8 @@ def gemma3n_language_model_forward(
 
 
 # Creates a dict of causal masks with bidirectional attention for vision tokens,
-# matching the behavior of transformers create_masks_for_generate with
-# block_sequence_ids when use_bidirectional_attention == "vision" (the bidirectional
-# overlay applies to both the full-attention and sliding-attention masks).
+# on sliding_attention layers, matching the behavior of transformers
+# create_causal_mask_mapping when use_bidirectional_attention == "vision".
 # Needs to be patched to pass proper 'sliding_mask' for prefill stage.
 # Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/gemma4/modeling_gemma4.py#L1986
 def _create_gemma4_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids, inputs_embeds, sliding_window):
