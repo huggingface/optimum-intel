@@ -88,6 +88,7 @@ from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     check_compression_state_per_model,
     get_supported_model_for_library,
+    is_model_type_transformers_compatible,
     TEST_NAME_TO_MODEL_TYPE,
     OPENVINO_DEVICE,
     HUB_MODEL_NAMES,
@@ -121,11 +122,7 @@ _TASK_TO_DATASET = {
     },
 }
 
-pattern_prefix = (
-    "^__module.model.model"
-    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "4.51")
-    else "^__module.model"
-)
+pattern_prefix = "^__module.model"
 
 
 class OVQuantizerTest(unittest.TestCase):
@@ -136,8 +133,18 @@ class OVQuantizerTest(unittest.TestCase):
         (OVModelForSequenceClassification, "bert", 32, 35),
         (OVModelForCausalLM, "gpt2", 31, 22),
         (OVSentenceTransformer, "sentence-transformers-bert", 12, 15),
-        (OVModelForFeatureExtraction, "blenderbot", 33, 35 if is_transformers_version("<", "5") else 36),
-        (OVModelForMaskedLM, "roberta", 32, 34 if is_transformers_version("<", "5") else 35),
+        (
+            OVModelForFeatureExtraction,
+            "blenderbot",
+            33,
+            35 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 36,
+        ),
+        (
+            OVModelForMaskedLM,
+            "roberta",
+            32,
+            34 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 35,
+        ),
         (OVModelForZeroShotImageClassification, "clip", 65, 65),
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET = [
@@ -270,7 +277,9 @@ class OVQuantizerTest(unittest.TestCase):
                 "model": 33,
             },
             {
-                "model": {"int8": 35 if is_transformers_version("<", "5") else 36},
+                "model": {
+                    "int8": 35 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 36
+                },
             },
         ),
         (
@@ -300,7 +309,9 @@ class OVQuantizerTest(unittest.TestCase):
                 "model": 32,
             },
             {
-                "model": {"int8": 34 if is_transformers_version("<", "5") else 35},
+                "model": {
+                    "int8": 34 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 35
+                },
             },
         ),
         (
@@ -341,14 +352,13 @@ class OVQuantizerTest(unittest.TestCase):
                 dataset="wikitext2:seq_len=64",
                 num_samples=1,
             ),
-            {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
-            if is_transformers_version("<=", "4.45")
-            else {"encoder": 30, "decoder": 52},
-            (
-                {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
-                if is_transformers_version("<=", "4.45")
-                else {"encoder": {"int8": 32}, "decoder": {"int8": 52 if is_transformers_version("<", "5") else 53}}
-            ),
+            {"encoder": 30, "decoder": 52},
+            {
+                "encoder": {"int8": 32},
+                "decoder": {
+                    "int8": 52 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 53
+                },
+            },
         ),
         (
             OVSamModel,
@@ -406,36 +416,92 @@ class OVQuantizerTest(unittest.TestCase):
                 "vision_embeddings_merger_model": {"f8e4m3": 5, "int4": 10},
             },
         ),
+        (
+            OVModelForVisualCausalLM,
+            "qwen3_vl",
+            OVQuantizationConfig(
+                bits=8,
+                dataset="textvqa",
+                num_samples=1,
+            ),
+            {
+                "lm_model": 14,
+                "text_embeddings_model": 0,
+                "vision_embeddings_model": 1,
+                "vision_embeddings_merger_model": 44,
+                "vision_embeddings_pos_model": 0,
+            },
+            {
+                "lm_model": {"int8": 15},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 32},
+                "vision_embeddings_pos_model": {"int8": 1},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "qwen3_vl",
+            OVQuantizationConfig(
+                bits=8,
+                dataset="textvqa",
+                num_samples=1,
+            ),
+            {
+                "lm_model": 14,
+                "text_embeddings_model": 0,
+                "vision_embeddings_model": 1,
+                "vision_embeddings_merger_model": 44,
+                "vision_embeddings_pos_model": 0,
+            },
+            {
+                "lm_model": {"int8": 15},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 32},
+                "vision_embeddings_pos_model": {"int8": 1},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "qwen3_omni_moe",
+            OVQuantizationConfig(
+                bits=8,
+                dataset="textvqa",
+                num_samples=1,
+            ),
+            {
+                "lm_model": 16,
+                "text_embeddings_model": 0,
+                "vision_embeddings_model": 0,
+                "vision_embeddings_pos_model": 0,
+                "audio_encoder_model": 0,
+                "talker_model": 0,
+                "talker_text_embeddings_model": 0,
+                "talker_projections_model": 0,
+                "code_predictor_model": 0,
+                "code2wav_model": 0,
+            },
+            {
+                "lm_model": {"int8": 17},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 13},
+                "vision_embeddings_pos_model": {"int8": 1},
+                "audio_encoder_model": {"int8": 18},
+                "talker_model": {"int8": 35},
+                "talker_text_embeddings_model": {"int8": 1},
+                "talker_projections_model": {"int8": 4},
+                "code_predictor_model": {"int8": 16},
+                "code2wav_model": {"int8": 53},
+            },
+        ),
     ]
-
-    if is_transformers_version(">=", "4.57.0"):
-        SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET.extend(
-            [
-                (
-                    OVModelForVisualCausalLM,
-                    "qwen3_vl",
-                    OVQuantizationConfig(
-                        bits=8,
-                        dataset="textvqa",
-                        num_samples=1,
-                    ),
-                    {
-                        "lm_model": 14,
-                        "text_embeddings_model": 0,
-                        "vision_embeddings_model": 1,
-                        "vision_embeddings_merger_model": 44,
-                        "vision_embeddings_pos_model": 0,
-                    },
-                    {
-                        "lm_model": {"int8": 15},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 1},
-                        "vision_embeddings_merger_model": {"int8": 32},
-                        "vision_embeddings_pos_model": {"int8": 1},
-                    },
-                ),
-            ]
-        )
+    # filter models type depending on min max transformers version
+    SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET = [
+        config
+        for config in SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET
+        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
+    ]
 
     @staticmethod
     def get_calibration_dataset(
@@ -595,7 +661,12 @@ class OVWeightCompressionTest(unittest.TestCase):
     )
 
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = (
-        (OVModelForCausalLM, "opt125m", 62 if is_transformers_version("<", "5") else 64, 43),
+        (
+            OVModelForCausalLM,
+            "opt125m",
+            62 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 64,
+            43,
+        ),
     )
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 74),)
     SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "gpt2", 44, 44),)
@@ -639,9 +710,11 @@ class OVWeightCompressionTest(unittest.TestCase):
                 group_size=32,
                 ignored_scope={
                     "names": [
-                        "__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
-                        if is_transformers_version("<", "4.57")
-                        else "__module.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
+                        (
+                            "__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
+                            if is_transformers_version("<", "4.57")
+                            else "__module.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"
+                        )
                     ]
                 },
             ),
@@ -930,6 +1003,31 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForVisualCausalLM,
+            "qwen3_omni_moe",
+            False,
+            dict(
+                bits=4,
+                group_size=8,
+                dataset="textvqa",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+            ),
+            {
+                "lm_model": {"int8": 10, "int4": 24},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 13},
+                "vision_embeddings_pos_model": {"int8": 1},
+                "audio_encoder_model": {"int8": 18},
+                "talker_model": {"int8": 35},
+                "talker_text_embeddings_model": {"int8": 1},
+                "talker_projections_model": {"int8": 4},
+                "code_predictor_model": {"int8": 16},
+                "code2wav_model": {"int8": 53},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
             "phi3_v",
             True,
             dict(
@@ -1066,58 +1164,35 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelOpenCLIPForZeroShotImageClassification, "open-clip", False),
         (OVModelForVisualCausalLM, "llava", False),
         (OVModelForVisualCausalLM, "qwen2_vl", False),
+        (OVModelForCausalLM, "cohere2", False),
+        (OVModelForVisualCausalLM, "qwen3_vl", False),
+        (OVModelForCausalLM, "hunyuan_v1_dense", False),
+        (OVModelForCausalLM, "smollm3", False),
+        (OVModelForFeatureExtraction, "qwen3_vl_embedding", False),
+        (OVModelForVisualCausalLM, "qwen3_omni_moe", False),
+        (OVModelForCausalLM, "exaone4", True),
+        (OVModelForVisualCausalLM, "llava_next_video", False),
+        (OVModelForVisualCausalLM, "minicpmv", True),
+        (OVModelForSpeechSeq2Seq, "qwen3_asr", True),
+        (OVModelForSpeechSeq2Seq, "fun_asr", True),
+        (OVModelForVisualCausalLM, "videochat_flash_qwen", True),
+        (OVModelForVisualCausalLM, "qwen3_5", False),
+        (OVModelForVisualCausalLM, "qwen3_5_moe", False),
+        (OVModelForVisualCausalLM, "gemma4", False),
+        (OVModelForVisualCausalLM, "gemma4_moe", False),
     ]
 
-    if is_transformers_version("<", "4.54.0"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "llava-qwen2", True))
-
-    if is_transformers_version("<", "4.52.0"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "minicpmo", True))
-
-    if is_transformers_version(">=", "4.48.0"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "cohere2", False))
-
-    # gemma3n openvino>=2026.2.0 bequse it needs erfinv operation,
+    # gemma3n openvino>=2026.2.0 because it needs erfinv operation,
     # quantization tests will be moved to openvino==2026.2.0 in CVS-189051
-    if is_transformers_version(">=", "5.0") and is_openvino_version(">=", "2026.2.0"):
+    if is_openvino_version(">=", "2026.2.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "gemma3n", False))
 
-    if is_transformers_version(">=", "4.53.0"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "smollm3", False))
-
-    if is_transformers_version(">=", "4.54.0") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "exaone4", True))
-
-    if is_transformers_version(">=", "4.57.0"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen3_vl", False))
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "hunyuan_v1_dense", False))
-
-    if is_transformers_version(">=", "4.57"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append(
-            (OVModelForFeatureExtraction, "qwen3_vl_embedding", False)
-        )
-
-    if is_transformers_version("==", "4.57.6"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForSpeechSeq2Seq, "qwen3_asr", True))
-
-    if is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.extend(
-            [
-                (OVModelForVisualCausalLM, "llava_next_video", False),
-                (OVModelForVisualCausalLM, "minicpmv", True),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.49.0") and is_transformers_version("<=", "4.57.6"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "videochat_flash_qwen", True))
-
-    if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen3_5", False))
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen3_5_moe", False))
-
-    if is_transformers_version(">=", "5.5.0"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "gemma4", False))
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "gemma4_moe", False))
+    # filter models type depending on min max transformers version
+    SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = [
+        config
+        for config in SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION
+        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
+    ]
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
@@ -1254,17 +1329,19 @@ class OVWeightCompressionTest(unittest.TestCase):
     ]
 
     def test_filtered_architectures(cls):
-        expected = set()
-        if is_transformers_version("<", "4.49"):
-            expected.add("qwen2_5_vl")
-        if is_transformers_version("<", "4.51"):
-            expected.add("llama4")
-        if is_transformers_version("<", "4.54"):
-            expected.add("exaone4")
-        if is_transformers_version("<", "4.57"):
-            expected.add("qwen3_vl")
-        if is_transformers_version(">=", "4.54"):
-            expected.update({"llava-qwen2", "phi3_v", "minicpmo"})
+        expected = {
+            model_type
+            for model_type in (
+                "llava-qwen2",
+                "phi3_v",
+                "minicpmo",
+                "qwen3_omni_moe",
+                "qwen2_vl",
+                "qwen2_5_vl",
+                "qwen3_vl",
+            )
+            if not is_model_type_transformers_compatible(model_type)
+        }
         if is_transformers_version(">=", "5"):
             expected.update({"llama4", "llava_next_video", "minicpmv", "internvl_chat", "exaone4"})
 
@@ -1908,63 +1985,6 @@ class OVPipelineQuantizationTest(unittest.TestCase):
             ),
         )
 
-    if is_transformers_version(">=", "4.49.0") and is_transformers_version("<", "4.54.0"):
-        PIPELINE_QUANTIZATION_SCOPE.extend(
-            [
-                (
-                    OVModelForVisualCausalLM,
-                    "phi4mm",
-                    True,
-                    dict(
-                        quantization_configs={
-                            "lm_model": dict(
-                                bits=4,
-                                group_size=16,
-                                dataset="textvqa",
-                                num_samples=1,
-                                ratio=0.8,
-                                sensitivity_metric="mean_activation_magnitude",
-                                quant_method=OVQuantizationMethod.AWQ,
-                                scale_estimation=True,
-                                lora_correction=True,
-                                ignored_scope={
-                                    "patterns": [
-                                        "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\."
-                                        "(qkv_proj|o_proj))\\.lora_B\\.speech/aten::linear/MatMul",
-                                    ],
-                                },
-                            ),
-                            "text_embeddings_model": dict(bits=8, sym=True, weight_only=True),
-                            "audio_encoder_model": dict(bits=8, sym=True, weight_only=True),
-                            "vision_embeddings_model": dict(bits=8, sym=True, weight_only=True),
-                        },
-                    ),
-                    {
-                        "lm_model": 0,
-                        "text_embeddings_model": 0,
-                        "audio_encoder_model": 0,
-                        "vision_embeddings_model": 0,
-                        "vision_projection_model": 0,
-                        "audio_embeddings_model": 0,
-                        "audio_forward_embeddings_model": 0,
-                        "audio_vision_projection_model": 0,
-                        "audio_speech_projection_model": 0,
-                    },
-                    {
-                        "lm_model": {"int8": 60, "int4": 26},
-                        "text_embeddings_model": {"int8": 1},
-                        "audio_encoder_model": {"int8": 25},
-                        "vision_embeddings_model": {"int8": 8},
-                        "vision_projection_model": {},
-                        "audio_embeddings_model": {},
-                        "audio_forward_embeddings_model": {},
-                        "audio_vision_projection_model": {},
-                        "audio_speech_projection_model": {},
-                    },
-                ),
-            ]
-        )
-
     @parameterized.expand(PIPELINE_QUANTIZATION_SCOPE)
     def test_ovmodel_pipeline_quantization(
         self,
@@ -2579,7 +2599,7 @@ def check_model_inference(ov_model, model_id, trust_remote_code):
         if isinstance(ov_model, OVModelForSpeechSeq2Seq):
             input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
             generate_kwrgs = {}
-            if is_transformers_version(">=", "4.50") and is_transformers_version("<", "5"):
+            if is_transformers_version("<", "5"):
                 generate_kwrgs = {"use_model_defaults": False}
             ov_model.generate(input_features, generation_config=gen_config, **generate_kwrgs)
         else:

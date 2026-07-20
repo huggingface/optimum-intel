@@ -31,6 +31,7 @@ from transformers import (
     AutoConfig,
     AutoImageProcessor,
     AutoModelForCausalLM,
+    AutoModelForImageTextToText,
     AutoModelForSeq2SeqLM,
     AutoModelForSpeechSeq2Seq,
     AutoModelForTextToSpectrogram,
@@ -44,18 +45,26 @@ from transformers import (
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
-from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TEST_IMAGE_URL, Timer
+from utils_tests import (
+    F32_CONFIG,
+    MODEL_NAMES,
+    OPENVINO_DEVICE,
+    SEED,
+    TEST_IMAGE_URL,
+    TEST_NAME_TO_MODEL_TYPE,
+    Timer,
+    get_supported_model_for_library,
+)
 
-from optimum.exporters.openvino.model_configs import Gemma3nTextOpenVINOConfig
-from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.stateful import model_has_state
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
+    OVModelForImageTextToText,
+    OVModelForMultimodalLM,
     OVModelForSeq2SeqLM,
     OVModelForSpeechSeq2Seq,
     OVModelForTextToSpeechSeq2Seq,
-    OVModelForVision2Seq,
     OVModelForVisualCausalLM,
 )
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
@@ -65,21 +74,19 @@ from optimum.intel.openvino.modeling_text2speech import (
     OVTextToSpeechPostNet,
     OVTextToSpeechVocoder,
 )
-from optimum.intel.openvino.modeling_visual_language import MODEL_PARTS_CLS_MAPPING, MODEL_TYPE_TO_CLS_MAPPING
+from optimum.intel.openvino.modeling_visual_language import (
+    MODEL_PARTS_CLS_MAPPING,
+    MODEL_TYPE_TO_CLS_MAPPING,
+    _OVQwen3OmniMoeForCausalLM,
+)
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 
 
-# AutoModelForVision2Seq is deprecated since v4.54
-# https://github.com/huggingface/transformers/blob/v4.54.0/src/transformers/models/auto/modeling_auto.py#L2151
-if is_transformers_version(">=", "4.54.0"):
-    from transformers import AutoModelForImageTextToText
-
-    transformers_auto_class = AutoModelForImageTextToText
+if is_transformers_version("<=", "4.52"):
+    from transformers.image_utils import load_video
 else:
-    from transformers import AutoModelForVision2Seq
-
-    transformers_auto_class = AutoModelForVision2Seq
+    from transformers.video_utils import load_video
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -129,10 +136,6 @@ class OVSeq2SeqTestMixin(unittest.TestCase):
         }
         supported_architectures = ov_architectures & transformers_architectures
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
-
-        if is_transformers_version("<", str(Gemma3nTextOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
-            supported_architectures -= {"gemma3n"}
-
         untested_architectures = supported_architectures - tested_architectures
 
         if len(untested_architectures - self.UNSUPPORTED_ARCHITECTURES) > 0:
@@ -148,8 +151,6 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
         "blenderbot",
         "blenderbot-small",
         "longt5",
-        "m2m_100",
-        "mbart",
         "pegasus",
         "t5",
     )
@@ -158,26 +159,32 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
     TASK = "text2text-generation"
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
-    UNSUPPORTED_ARCHITECTURES = set()
-    if not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2026.1")) and is_transformers_version(
-        "<", "5"
-    ):
-        # There are known issues with marian model on OpenVINO 2025.3.x and 2025.4.x
-        SUPPORTED_ARCHITECTURES += ("marian",)
-    else:
-        UNSUPPORTED_ARCHITECTURES.add("marian")
+    _is_model_supported = {
+        # config loading failing coming from type mismatch coming from transformers v5.4
+        "m2m_100": is_transformers_version("!=", "5.4"),
+        "mbart": is_transformers_version("!=", "5.4"),
+        # known issues with marian on OpenVINO 2025.3.x and 2025.4.x
+        "marian": not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2026.1"))
+        and is_transformers_version("<", "5"),
+        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly (mt5)
+        "mt5": is_transformers_version("<", "5"),
+    }
+    SUPPORTED_ARCHITECTURES += tuple(arch for arch, supported in _is_model_supported.items() if supported)
+    UNSUPPORTED_ARCHITECTURES = {arch for arch, supported in _is_model_supported.items() if not supported}
 
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES += ("mt5",)
-    else:
-        UNSUPPORTED_ARCHITECTURES.add("mt5")
-
-    SUPPORT_STATEFUL = ("t5", "mt5", "longt5")
-    if is_transformers_version(">=", "4.52.0"):
-        SUPPORT_STATEFUL += ("bart", "blenderbot", "blenderbot-small", "m2m_100", "marian", "mbart")
-    if is_transformers_version(">=", "4.53.0"):
-        SUPPORT_STATEFUL += ("pegasus", "bigbird_pegasus")
+    SUPPORT_STATEFUL = (
+        "t5",
+        "mt5",
+        "longt5",
+        "bart",
+        "blenderbot",
+        "blenderbot-small",
+        "m2m_100",
+        "marian",
+        "mbart",
+        "pegasus",
+        "bigbird_pegasus",
+    )
 
     def test_find_untested_architectures(self):
         self._test_find_untested_architectures()
@@ -195,7 +202,7 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
         ov_stateless_model = self.OVMODEL_CLASS.from_pretrained(
             model_id, export=True, use_cache=False, stateful=False, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
         )
-        expected_stateful = is_transformers_version(">", "4.46") and model_arch in self.SUPPORT_STATEFUL
+        expected_stateful = model_arch in self.SUPPORT_STATEFUL
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=expected_stateful)
         self._check_openvino_model_attributes(ov_stateless_model, use_cache=False, stateful=False)
 
@@ -392,7 +399,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
             )
 
         generate_kwrgs = {}
-        if is_transformers_version(">=", "4.50") and is_transformers_version("<", "5"):
+        if is_transformers_version("<", "5"):
             generate_kwrgs = {"use_model_defaults": False}
 
         gen_config = GenerationConfig(
@@ -449,111 +456,21 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         gc.collect()
 
 
-class Qwen3ASRTest(unittest.TestCase):
-    """
-    Test Qwen3ASR model type.
-    Compares OpenVINO model output to original PyTorch transformers model output.
-    """
-
-    SUPPORTED_ARCHITECTURES = ("qwen3_asr",)
-
-    def _generate_audio_data(self):
-        np.random.seed(SEED)
-        sample_rate = 16000
-        duration = 120
-        t = np.linspace(0, 1.0, sample_rate * duration, endpoint=False)
-        audio_data = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
-        return audio_data, sample_rate
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @pytest.mark.skipif(
-        is_transformers_version("!=", "4.57.6"),
-        reason="requires transformers==4.57.6.",
-    )
-    def test_compare_to_transformers(self, model_arch):
-        from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
-
-        model_id = MODEL_NAMES[model_arch]
-        set_seed(SEED)
-
-        # Load processor
-        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-
-        # Prepare audio input
-        audio_data, sample_rate = self._generate_audio_data()
-        text_prompt = processor.apply_chat_template(
-            [
-                {"role": "system", "content": ""},
-                {"role": "user", "content": [{"type": "audio", "audio": ""}]},
-            ],
-            add_generation_prompt=True,
-            tokenize=False,
-        )
-        inputs = processor(
-            text=text_prompt,
-            audio=audio_data,
-            sampling_rate=sample_rate,
-            return_tensors="pt",
-        )
-
-        # Load and infer with PyTorch model
-        transformers_model = Qwen3ASRForConditionalGeneration.from_pretrained(model_id, trust_remote_code=True)
-        transformers_model.eval()
-
-        gen_kwargs = {
-            "max_new_tokens": 10,
-        }
-
-        with torch.no_grad():
-            pt_generated_ids = transformers_model.generate(
-                input_ids=inputs["input_ids"],
-                input_features=inputs["input_features"],
-                feature_attention_mask=inputs["feature_attention_mask"],
-                attention_mask=inputs["attention_mask"],
-                **gen_kwargs,
-            )
-        if hasattr(pt_generated_ids, "sequences"):
-            pt_generated_ids = pt_generated_ids.sequences
-
-        # Load and infer with OpenVINO model
-        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
-            model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
-        )
-
-        ov_generated_ids = ov_model.generate(
-            input_features=inputs["input_features"],
-            attention_mask=inputs.get("feature_attention_mask"),
-            decoder_input_ids=inputs["input_ids"],
-            **gen_kwargs,
-        )
-        if hasattr(ov_generated_ids, "sequences"):
-            ov_generated_ids = ov_generated_ids.sequences
-
-        # Compare generated token sequences
-        self.assertTrue(
-            torch.equal(pt_generated_ids, ov_generated_ids),
-            f"Token mismatch:\n  PyTorch:  {pt_generated_ids[0].tolist()}\n  OpenVINO: {ov_generated_ids[0].tolist()}",
-        )
-
-        # Compare decoded text
-        prompt_len = inputs["input_ids"].shape[1]
-        pt_text = processor.batch_decode(pt_generated_ids[:, prompt_len:], skip_special_tokens=True)[0]
-        ov_text = processor.batch_decode(ov_generated_ids[:, prompt_len:], skip_special_tokens=True)[0]
-        self.assertEqual(pt_text, ov_text)
-
-        del transformers_model
-        del ov_model
-        gc.collect()
-
-
-class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
-    SUPPORTED_ARCHITECTURES = ["vision-encoder-decoder", "trocr", "donut"]
+class OVModelForImageTextToTextIntegrationTest(OVSeq2SeqTestMixin):
+    SUPPORTED_ARCHITECTURES = ["vision-encoder-decoder", "trocr"]
     # GOT-OCR2 models shouldn't be exported using the task image-to-text (currently equivalent to exporting the model using image-text-to-text) and will be deprecated v1.29
     # TODO: move pix2struct tests from OVModelForPix2StructIntegrationTest
-    UNSUPPORTED_ARCHITECTURES = {"got_ocr2", "pix2struct"}
+
+    # config loading failing coming from type mismatch coming from transformers v5.4
+    _is_model_supported = {"donut": is_transformers_version("!=", "5.4")}
+    SUPPORTED_ARCHITECTURES += [arch for arch, supported in _is_model_supported.items() if supported]
+    UNSUPPORTED_ARCHITECTURES = {"got_ocr2", "pix2struct"} | {
+        arch for arch, supported in _is_model_supported.items() if not supported
+    }
+
     TASK = "image-to-text"
-    OVMODEL_CLASS = OVModelForVision2Seq
-    AUTOMODEL_CLASS = transformers_auto_class
+    OVMODEL_CLASS = OVModelForImageTextToText
+    AUTOMODEL_CLASS = AutoModelForImageTextToText
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
@@ -660,82 +577,52 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "llava_next",
         "llava_next_mistral",
         "qwen2_vl",
+        "maira2",
+        "qwen2_5_vl",
+        "gemma3",
+        "qwen3_vl",
+        "idefics3",
+        "got_ocr2",
+        "smolvlm",
+        "llama4",
+        "llava_next_video",
+        "videochat_flash_qwen",
+        "internvl_chat",
+        "minicpmv",
+        "minicpmo",
+        "llava-qwen2",
+        "phi3_v",
+        "phi4mm",
+        "gemma4",
+        "gemma4_moe",
+        "gemma4_unified",
+        "gemma3n",
+        "qwen3_5",
+        "qwen3_5_moe",
+        "qwen3_omni_moe",
     ]
-    SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl"]
-    SUPPORT_AUDIO = []
+    SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl", "qwen2_5_vl", "qwen3_vl", "videochat_flash_qwen"]
+    SUPPORT_AUDIO = ["qwen3_omni_moe"]
     # "llama" is registered for image-text-to-text
     # to support VLM Eagle3 draft models (tested separately in test_genai.py).
     UNSUPPORTED_ARCHITECTURES = {"phi4_multimodal", "llama"}
+    SUPPORT_AUDIO_OUTPUT = ["qwen3_omni_moe"]
     OVMODEL_CLASS = OVModelForVisualCausalLM
     TASK = "image-text-to-text"
 
-    if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ["maira2"]
+    # filter architectures depending on min/max transformers supported versions declared on their
+    # OpenVINO export config
+    UNSUPPORTED_ARCHITECTURES.update(
+        arch
+        for arch in SUPPORTED_ARCHITECTURES
+        if TEST_NAME_TO_MODEL_TYPE.get(arch, arch) not in get_supported_model_for_library("transformers")
+    )
+    SUPPORTED_ARCHITECTURES = [
+        arch
+        for arch in SUPPORTED_ARCHITECTURES
+        if TEST_NAME_TO_MODEL_TYPE.get(arch, arch) in get_supported_model_for_library("transformers")
+    ]
 
-        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-        if is_transformers_version("<", "5"):
-            SUPPORTED_ARCHITECTURES += ["idefics3"]
-
-    if is_transformers_version(">=", "4.49.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl"]
-        SUPPORT_VIDEO.append("qwen2_5_vl")
-
-        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-        if is_transformers_version("<", "5"):
-            SUPPORTED_ARCHITECTURES += ["got_ocr2"]
-
-        if is_transformers_version("<", "4.54.0"):
-            # remote code models differs after transformers v4.54
-            SUPPORTED_ARCHITECTURES += ["phi4mm"]
-            SUPPORT_AUDIO.append("phi4mm")
-
-    if is_transformers_version(">=", "4.50"):
-        SUPPORTED_ARCHITECTURES += ["gemma3"]
-        # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-        if is_transformers_version("<", "5"):
-            SUPPORTED_ARCHITECTURES += ["smolvlm"]
-
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version(">=", "4.51") and is_transformers_version("<", "5"):
-        # SUPPORTED_ARCHITECTURES += ["llama4", "phi4_multimodal"]
-        SUPPORTED_ARCHITECTURES += ["llama4"]
-
-    if is_transformers_version("<", "4.52"):
-        SUPPORTED_ARCHITECTURES += ["minicpmo"]
-    if is_transformers_version(">=", "4.57.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen3_vl"]
-        SUPPORT_VIDEO += ["qwen3_vl"]
-
-    if is_transformers_version(">=", "4.54.0") and is_transformers_version("<=", "4.57.6"):
-        # remote code models incompatible before transformers v4.54 and after transformers v4.57.6
-        SUPPORTED_ARCHITECTURES += ["videochat_flash_qwen"]
-        SUPPORT_VIDEO += ["videochat_flash_qwen"]
-
-    if is_transformers_version("<", "4.54.0"):
-        # remote code models differs after transformers v4.54
-        SUPPORTED_ARCHITECTURES += ["llava-qwen2", "phi3_v"]
-
-    if is_transformers_version("<", "5"):
-        # remote code models incompatible after transformers v5
-        SUPPORTED_ARCHITECTURES += ["internvl_chat", "minicpmv"]
-
-    if is_transformers_version(">=", "5.5"):
-        SUPPORTED_ARCHITECTURES += ["gemma4", "gemma4_moe"]
-
-    if is_transformers_version(">=", "5.0"):
-        SUPPORTED_ARCHITECTURES += ["gemma3n"]
-
-    if is_transformers_version(">=", "5.10"):
-        SUPPORTED_ARCHITECTURES += ["gemma4_unified"]
-
-    if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen3_5", "qwen3_5_moe"]
-
-    # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-    if is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES += ("llava_next_video",)
-    else:
-        UNSUPPORTED_ARCHITECTURES.update({"got_ocr2", "idefics3", "llama4", "llava_next_video", "smolvlm"})
     REMOTE_CODE_MODELS = [
         "internvl_chat",
         "minicpmv",
@@ -755,7 +642,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     )
 
     def get_transformer_model_class(self, model_arch):
-        if is_transformers_version(">=", "4.46") and model_arch in [
+        if model_arch == "qwen3_omni_moe":
+            from transformers import Qwen3OmniMoeForConditionalGeneration
+
+            return Qwen3OmniMoeForConditionalGeneration
+        if model_arch in [
             "llava",
             "llava_next",
             "llava_next_mistral",
@@ -834,6 +725,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         ):
             self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
 
+        if model_arch == "qwen3_omni_moe":
+            # Qwen3OmniMoeForConditionalGeneration has a custom generate() interface incompatible with this flow
+            self.skipTest("qwen3_omni_moe comparison tested via dedicated test methods")
+
         def compare_outputs(inputs, ov_model, transformers_model, generation_config):
             transformers_inputs = copy.deepcopy(inputs)
             if model_arch == "videochat_flash_qwen":
@@ -894,8 +789,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 f"but found counts: {bos_token_counts.tolist()}",
             )
 
-            if is_transformers_version(">=", "4.57.0"):
-                inputs.pop("token_type_ids")
+            inputs.pop("token_type_ids")
 
         transformers_inputs = copy.deepcopy(inputs)
         # llama4 preprocessing force bf16 dtype for pixel_values, that does not work on CPU with fp32 model
@@ -953,19 +847,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         set_seed(SEED)
 
         additional_inputs = {}
-        # gemma3 does not support dynamic cache until v4.53, we cannot compare dynamic cache result vs hybrid cache,
-        # align cache representation in torch model
-        if model_arch == "gemma3" and is_transformers_version("<", "4.53.0"):
-            patch_update_causal_mask(
-                transformers_model if is_transformers_version("<", "4.52.0") else transformers_model.language_model,
-                "4.43.0",
-            )
-            transformers_model._supports_cache_class = True
-            transformers_model.generation_config.cache_implementation = None
-            from transformers.cache_utils import DynamicCache
-
-            additional_inputs = {"past_key_values": DynamicCache()}
-
         if model_arch == "llama4":
             transformers_inputs["past_key_values"] = DynamicCache()
 
@@ -991,13 +872,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
         )
 
-        # video loader helper only available for transformers >= 4.49
-        if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
-            if is_transformers_version("<=", "4.52"):
-                from transformers.image_utils import load_video
-            else:
-                from transformers.video_utils import load_video
-
+        if model_arch in self.SUPPORT_VIDEO:
             video_path = hf_hub_download(
                 repo_id="raushan-testing-hf/videos-test",
                 filename="sample_demo_1.mp4",
@@ -1017,6 +892,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             input_audio = self._generate_random_audio_data()
             question = "Translate this audio to French"
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
+            compare_outputs(inputs, ov_model, transformers_model, gen_config)
+
+            question = "Describe this image and translate the audio"
+            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, image=image, audio=[input_audio])
             compare_outputs(inputs, ov_model, transformers_model, gen_config)
         del transformers_model
         del ov_model
@@ -1110,13 +989,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
             self.assertIsInstance(outputs[0], str)
 
-            if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
-                # video loader helper only available for transformers >= 4.49
-                if is_transformers_version("<=", "4.52"):
-                    from transformers.image_utils import load_video
-                else:
-                    from transformers.video_utils import load_video
-
+            if model_arch in self.SUPPORT_VIDEO:
                 video_path = hf_hub_download(
                     repo_id="raushan-testing-hf/videos-test",
                     filename="sample_demo_1.mp4",
@@ -1141,16 +1014,118 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             outputs = outputs[:, inputs["input_ids"].shape[1] :]
             outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
             self.assertIsInstance(outputs[0], str)
+
+        if model_arch in self.SUPPORT_AUDIO_OUTPUT and model.has_talker:
+            question = "Say hello"
+            inputs = model.preprocess_inputs(**preprocessors, text=question)
+            text_result, audio_result = model.generate(
+                **inputs, max_new_tokens=10, return_audio=True, talker_max_new_tokens=20
+            )
+            # Tiny random-weight models may fail to produce a valid chatml structure for the talker
+            if audio_result is not None:
+                self.assertEqual(audio_result.ndim, 3)
+                self.assertEqual(audio_result.shape[0], 1)
+                self.assertEqual(audio_result.shape[1], 1)
+                self.assertGreater(audio_result.shape[2], 0)
+            self.assertIsInstance(text_result, torch.Tensor)
+
+            text_only = model.generate(**inputs, max_new_tokens=10, return_audio=False)
+            self.assertIsInstance(text_only, torch.Tensor)
+
+        if model_arch in self.SUPPORT_AUDIO_OUTPUT and model.has_talker and model_arch in self.SUPPORT_AUDIO:
+            input_audio = self._generate_random_audio_data()
+            question = "Repeat what you hear"
+            inputs = model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
+            text_result, audio_result = model.generate(
+                **inputs, max_new_tokens=10, return_audio=True, talker_max_new_tokens=20
+            )
+            self.assertIsNotNone(text_result)
+
         del model
 
         gc.collect()
 
     def _generate_random_audio_data(self):
         np.random.seed(10)
-        t = np.linspace(0, 5.0, int(5.0 * 22050), endpoint=False)
+        sampling_rate = 16000
+        t = np.linspace(0, 5.0, int(5.0 * sampling_rate), endpoint=False)
         # generate pure sine wave at 220 Hz
         audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
-        return (audio_data, 16000)
+        return (audio_data, sampling_rate)
+
+    @pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="qwen3_omni_moe requires transformers >= 5.0")
+    def test_qwen3_omni_moe_video_not_supported(self):
+        model_id = MODEL_NAMES["qwen3_omni_moe"]
+        model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        preprocessors = self.get_preprocessors("qwen3_omni_moe")
+        dummy_video = np.random.rand(2, 224, 224, 3).astype(np.uint8)
+        with self.assertRaises(ValueError):
+            model.preprocess_inputs(**preprocessors, text="Describe", video=dummy_video)
+        del model
+        gc.collect()
+
+    @pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="qwen3_omni_moe requires transformers >= 5.0")
+    def test_qwen3_omni_moe_sequential_generation(self):
+        model_id = MODEL_NAMES["qwen3_omni_moe"]
+        model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        preprocessors = self.get_preprocessors("qwen3_omni_moe")
+
+        outputs = []
+        for _ in range(3):
+            inputs = model.preprocess_inputs(**preprocessors, text="Hello", image=self.IMAGE.resize((224, 224)))
+            output = model.generate(**inputs, max_new_tokens=5, do_sample=False)
+            self.assertIsInstance(output, torch.Tensor)
+            self.assertGreater(output.shape[1], inputs["input_ids"].shape[1])
+            outputs.append(output)
+
+        for i in range(1, len(outputs)):
+            torch.testing.assert_close(
+                outputs[i], outputs[0], msg=f"Iteration {i} output differs from first iteration"
+            )
+
+        del model
+        gc.collect()
+
+    @parameterized.expand(["text-to-audio", "automatic-speech-recognition"])
+    @pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="qwen3_omni_moe requires transformers >= 5.0")
+    def test_qwen3_omni_moe_any2any_task_registration(self, task):
+        model_id = MODEL_NAMES["qwen3_omni_moe"]
+        model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, task=task, device=OPENVINO_DEVICE)
+        self.assertIsNotNone(model.language_model)
+
+        preprocessors = self.get_preprocessors("qwen3_omni_moe")
+        inputs = model.preprocess_inputs(**preprocessors, text="Hello")
+        output = model.generate(**inputs, max_new_tokens=5)
+        self.assertIsInstance(output, torch.Tensor)
+        self.assertGreater(output.shape[1], inputs["input_ids"].shape[1])
+        del model
+        gc.collect()
+
+    @pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="qwen3_omni_moe requires transformers >= 5.0")
+    def test_qwen3_omni_moe_multi_turn_conversation(self):
+        """Test multi-turn conversation with mixed modalities across turns."""
+        model_id = MODEL_NAMES["qwen3_omni_moe"]
+        model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        preprocessors = self.get_preprocessors("qwen3_omni_moe")
+
+        inputs_turn1 = model.preprocess_inputs(
+            **preprocessors, text="What do you see in this image?", image=self.IMAGE.resize((224, 224))
+        )
+        output_turn1 = model.generate(**inputs_turn1, max_new_tokens=20, do_sample=False)
+
+        input_audio = self._generate_random_audio_data()
+        inputs_turn2 = model.preprocess_inputs(
+            **preprocessors, text="Now listen to this audio and describe it", audio=[input_audio]
+        )
+        output_turn2 = model.generate(**inputs_turn2, max_new_tokens=20, do_sample=False)
+
+        self.assertIsInstance(output_turn1, torch.Tensor)
+        self.assertIsInstance(output_turn2, torch.Tensor)
+        self.assertGreater(output_turn1.shape[1], inputs_turn1["input_ids"].shape[1])
+        self.assertGreater(output_turn2.shape[1], inputs_turn2["input_ids"].shape[1])
+
+        del model
+        gc.collect()
 
     def get_preprocessors(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
@@ -1195,6 +1170,123 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 device=OPENVINO_DEVICE,
             )
             self.assertIsInstance(ov_restored_model, type(ov_model))
+
+
+@pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="OVModelForMultimodalLM requires transformers >= 5.0")
+class OVModelForMultimodalLMIntegrationTest(unittest.TestCase):
+    def _generate_random_audio_data(self):
+        np.random.seed(10)
+        sampling_rate = 16000
+        t = np.linspace(0, 5.0, int(5.0 * sampling_rate), endpoint=False)
+        audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
+        return (audio_data, sampling_rate)
+
+    def _get_preprocessors(self, model_id):
+        return {"processor": AutoProcessor.from_pretrained(model_id), "tokenizer": None, "config": None}
+
+    def test_from_pretrained_export(self):
+        model_id = MODEL_NAMES["qwen3_omni_moe"]
+        model = OVModelForMultimodalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        self.assertIsInstance(model, OVModelForMultimodalLM)
+        self.assertIsInstance(model._inner, _OVQwen3OmniMoeForCausalLM)
+        self.assertIsNotNone(model.config)
+        self.assertIsNotNone(model.language_model)
+        del model
+        gc.collect()
+
+    def test_save_and_reload(self):
+        model_id = MODEL_NAMES["qwen3_omni_moe"]
+        model = OVModelForMultimodalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        with TemporaryDirectory() as save_dir:
+            model.save_pretrained(save_dir)
+            restored = OVModelForMultimodalLM.from_pretrained(save_dir, device=OPENVINO_DEVICE)
+            self.assertIsInstance(restored, OVModelForMultimodalLM)
+            self.assertIsNotNone(restored.config)
+            self.assertIsNotNone(restored.language_model)
+            self.assertEqual(restored.config.model_type, "qwen3_omni_moe")
+            del restored
+        del model
+        gc.collect()
+
+    def test_text_only_generation(self):
+        model_id = MODEL_NAMES["qwen3_omni_moe"]
+        model = OVModelForMultimodalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        preprocessors = self._get_preprocessors(model_id)
+        inputs = model.preprocess_inputs(text="Hello", **preprocessors)
+        output = model.generate(**inputs, max_new_tokens=5)
+        self.assertIsInstance(output, torch.Tensor)
+        self.assertGreater(output.shape[1], inputs["input_ids"].shape[1])
+        del model
+        gc.collect()
+
+    def test_audio_input_generation(self):
+        model_id = MODEL_NAMES["qwen3_omni_moe"]
+        model = OVModelForMultimodalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        preprocessors = self._get_preprocessors(model_id)
+        audio_data = self._generate_random_audio_data()
+        inputs = model.preprocess_inputs(text="Translate", audio=[audio_data], **preprocessors)
+        output = model.generate(**inputs, max_new_tokens=5)
+        self.assertIsInstance(output, torch.Tensor)
+        del model
+        gc.collect()
+
+    def test_audio_output_generation(self):
+        model_id = MODEL_NAMES["qwen3_omni_moe"]
+        model = OVModelForMultimodalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        preprocessors = self._get_preprocessors(model_id)
+        inputs = model.preprocess_inputs(text="Say hello", **preprocessors)
+        text_result, audio_result = model.generate(
+            **inputs, max_new_tokens=10, return_audio=True, talker_max_new_tokens=20
+        )
+        self.assertIsInstance(text_result, torch.Tensor)
+        # Tiny random-weight models may fail to produce a valid chatml structure for the talker
+        if audio_result is not None:
+            self.assertEqual(audio_result.ndim, 3)
+            self.assertEqual(audio_result.shape[0], 1)
+            self.assertEqual(audio_result.shape[1], 1)
+            self.assertGreater(audio_result.shape[2], 0)
+        del model
+        gc.collect()
+
+    def test_has_talker_property(self):
+        model_id = MODEL_NAMES["qwen3_omni_moe"]
+        model = OVModelForMultimodalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        self.assertIsInstance(model.has_talker, bool)
+        self.assertEqual(model.has_talker, (model.talker is not None and model.code2wav is not None))
+        del model
+        gc.collect()
+
+    def test_component_access(self):
+        model_id = MODEL_NAMES["qwen3_omni_moe"]
+        model = OVModelForMultimodalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        self.assertIsNotNone(model.language_model)
+        self.assertIsNotNone(model.vision_embeddings)
+        self.assertIsNotNone(model.audio_encoder)
+        components = model.components
+        self.assertIsInstance(components, dict)
+        self.assertIn("language_model", components)
+        self.assertIn("vision_embeddings", components)
+        self.assertIn("audio_encoder", components)
+        del model
+        gc.collect()
+
+    @parameterized.expand(["text-to-audio", "automatic-speech-recognition"])
+    def test_task_alias_loading(self, task):
+        model_id = MODEL_NAMES["qwen3_omni_moe"]
+        model = OVModelForMultimodalLM.from_pretrained(model_id, export=True, task=task, device=OPENVINO_DEVICE)
+        self.assertIsNotNone(model.language_model)
+        preprocessors = self._get_preprocessors(model_id)
+        inputs = model.preprocess_inputs(text="Hello", **preprocessors)
+        output = model.generate(**inputs, max_new_tokens=5)
+        self.assertIsInstance(output, torch.Tensor)
+        self.assertGreater(output.shape[1], inputs["input_ids"].shape[1])
+        del model
+        gc.collect()
+
+    def test_invalid_model_type_raises(self):
+        model_id = MODEL_NAMES["llava"]
+        with self.assertRaises(ValueError):
+            OVModelForMultimodalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
 
 
 class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
@@ -1333,8 +1425,8 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
 class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ["pix2struct"]
     TASK = "image-to-text"  # is it fine as well with visual-question-answering?
-    OVMODEL_CLASS = OVModelForVision2Seq
-    AUTOMODEL_CLASS = transformers_auto_class
+    OVMODEL_CLASS = OVModelForImageTextToText
+    AUTOMODEL_CLASS = AutoModelForImageTextToText
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 

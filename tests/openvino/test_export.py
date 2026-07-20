@@ -25,15 +25,18 @@ from utils_tests import (
     OPENVINO_DEVICE,
     REMOTE_CODE_MODELS,
     SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED,
+    TEST_NAME_TO_MODEL_TYPE,
+    get_supported_model_for_library,
 )
 
 from optimum.exporters.openvino import export_from_model, main_export
-from optimum.exporters.openvino.model_configs import BertOpenVINOConfig
+from optimum.exporters.openvino.model_configs import BertOpenVINOConfig, Qwen3OmniMoeConfigBehavior
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVFlux2KleinPipeline,
     OVFluxPipeline,
     OVLatentConsistencyModelPipeline,
+    OVLTX2Pipeline,
     OVLTXPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
@@ -41,6 +44,7 @@ from optimum.intel import (
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
+    OVModelForMultimodalLM,
     OVModelForPix2Struct,
     OVModelForQuestionAnswering,
     OVModelForSeq2SeqLM,
@@ -59,7 +63,7 @@ from optimum.intel import (
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import _transformers_version, is_diffusers_version, is_transformers_version
+from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version
 from optimum.utils import logging
 from optimum.utils.save_utils import maybe_load_preprocessors
 
@@ -89,58 +93,43 @@ class ExportModelTest(unittest.TestCase):
         "sam": OVSamModel,
         "speecht5": OVModelForTextToSpeechSeq2Seq,
         "clip": OVModelForZeroShotImageClassification,
-        "mamba": OVModelForCausalLM,
-        "falcon_mamba": OVModelForCausalLM,
         "stable-diffusion-3": OVStableDiffusion3Pipeline,
         "flux": OVFluxPipeline,
         "ltx-video": OVLTXPipeline,
+        "ltx2": OVLTX2Pipeline,
         "kokoro": OVModelForTextToSpeechSeq2Seq,
+        "cohere2": OVModelForCausalLM,
+        "granitemoehybrid": OVModelForCausalLM,
+        "smollm3": OVModelForCausalLM,
+        "hunyuan_v1_dense": OVModelForCausalLM,
+        "qwen3": OVModelForFeatureExtraction,
+        "zamba2": OVModelForCausalLM,
+        "exaone4": OVModelForCausalLM,
+        "lfm2": OVModelForCausalLM,
+        "afmoe": OVModelForCausalLM,
+        "qwen3_next": OVModelForCausalLM,
+        "videochat_flash_qwen": OVModelForVisualCausalLM,
+        "lfm2_moe": OVModelForCausalLM,
+        "qwen3_asr": OVModelForSpeechSeq2Seq,
+        "fun_asr": OVModelForSpeechSeq2Seq,
+        "mamba": OVModelForCausalLM,
+        "falcon_mamba": OVModelForCausalLM,
+        "gemma4": OVModelForVisualCausalLM,
+        "gemma4_moe": OVModelForVisualCausalLM,
+        "qwen3_5": OVModelForVisualCausalLM,
+        "qwen3_5_moe": OVModelForVisualCausalLM,
+        "gemma4_unified": OVModelForVisualCausalLM,
+        "gemma3n": OVModelForVisualCausalLM,
+        "flux.2-klein": OVFlux2KleinPipeline,
+        "qwen3_omni_moe": OVModelForMultimodalLM,
     }
-
-    if is_diffusers_version(">=", "0.37.0"):
-        SUPPORTED_ARCHITECTURES.update({"flux.2-klein": OVFlux2KleinPipeline})
-
-    if is_transformers_version(">=", "4.48.0"):
-        SUPPORTED_ARCHITECTURES.update({"cohere2": OVModelForCausalLM})
-
-    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
-
-    if is_transformers_version(">=", "4.53.0"):
-        SUPPORTED_ARCHITECTURES.update({"granitemoehybrid": OVModelForCausalLM, "smollm3": OVModelForCausalLM})
-
-    if is_transformers_version(">=", "4.54") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES.update({"exaone4": OVModelForCausalLM, "lfm2": OVModelForCausalLM})
-
-    if is_transformers_version(">=", "4.55.0") and is_transformers_version("<", "4.58.0"):
-        SUPPORTED_ARCHITECTURES.update({"afmoe": OVModelForCausalLM})
-
-    if is_transformers_version("==", "4.57.6"):
-        SUPPORTED_ARCHITECTURES.update({"qwen3_asr": OVModelForSpeechSeq2Seq})
-
-    if is_transformers_version(">=", "5.5.0"):
-        SUPPORTED_ARCHITECTURES.update({"gemma4": OVModelForVisualCausalLM})
-        SUPPORTED_ARCHITECTURES.update({"gemma4_moe": OVModelForVisualCausalLM})
-
-    if is_transformers_version(">=", "5.10.0"):
-        SUPPORTED_ARCHITECTURES.update({"gemma4_unified": OVModelForVisualCausalLM})
-
-    if is_transformers_version(">=", "5.2.0") and is_transformers_version("<", "5.3.0"):
-        SUPPORTED_ARCHITECTURES.update({"qwen3_5": OVModelForVisualCausalLM})
-        SUPPORTED_ARCHITECTURES.update({"qwen3_5_moe": OVModelForVisualCausalLM})
-
-    if is_transformers_version(">=", "4.57.0"):
-        SUPPORTED_ARCHITECTURES.update({"hunyuan_v1_dense": OVModelForCausalLM})
-
-    if is_transformers_version(">=", "4.57.0") and is_transformers_version("<", "5"):
-        SUPPORTED_ARCHITECTURES.update({"qwen3_next": OVModelForCausalLM})
-
-    if is_transformers_version(">=", "4.49") and is_transformers_version("<=", "4.57.6"):
-        SUPPORTED_ARCHITECTURES.update({"videochat_flash_qwen": OVModelForVisualCausalLM})
-
-    if is_transformers_version(">=", "5.0"):
-        SUPPORTED_ARCHITECTURES.update({"lfm2_moe": OVModelForCausalLM})
-        SUPPORTED_ARCHITECTURES.update({"gemma3n": OVModelForVisualCausalLM})
+    # filter architectures depending on min/max transformers supported versions
+    SUPPORTED_ARCHITECTURES = {
+        model_type: model_cls
+        for model_type, model_cls in SUPPORTED_ARCHITECTURES.items()
+        if TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type)
+        in get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
+    }
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
@@ -149,10 +138,8 @@ class ExportModelTest(unittest.TestCase):
         "flux.2-klein": {"transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "stable-diffusion-xl-refiner": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "ltx-video": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
+        "ltx2": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
     }
-
-    if is_transformers_version(">=", "4.51"):
-        SUPPORTED_ARCHITECTURES.update({"qwen3": OVModelForFeatureExtraction})
 
     GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
 
@@ -166,7 +153,10 @@ class ExportModelTest(unittest.TestCase):
         auto_model = self.SUPPORTED_ARCHITECTURES[model_type]
         task = auto_model.export_feature
         model_name = MODEL_NAMES[model_type]
-        library_name = TasksManager.infer_library_from_model(model_name)
+        if model_type == "fun_asr":
+            library_name = "funasr"
+        else:
+            library_name = TasksManager.infer_library_from_model(model_name)
         loading_kwargs = {"attn_implementation": "eager"} if model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED else {}
 
         if model_type in REMOTE_CODE_MODELS:
@@ -184,6 +174,10 @@ class ExportModelTest(unittest.TestCase):
             from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
 
             model = Qwen3ASRForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
+        elif model_type == "fun_asr":
+            from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
+
+            model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name, **loading_kwargs)
         elif model_type == "kokoro":
             model = TasksManager.get_model_from_task(
                 task=task,
@@ -191,6 +185,15 @@ class ExportModelTest(unittest.TestCase):
                 framework="pt",
                 library_name="kokoro",
             )
+        elif model_type == "qwen3_omni_moe":
+            from transformers import AutoConfig, Qwen3OmniMoeForConditionalGeneration
+
+            from optimum.exporters.openvino.__main__ import _ensure_qwen3_omni_rope_scaling
+
+            # Tiny test checkpoints omit rope_scaling, which transformers >= 4.57 requires to build the
+            # rotary embedding. The CLI export backfills it; mirror that here for the direct model load.
+            loading_kwargs["config"] = _ensure_qwen3_omni_rope_scaling(AutoConfig.from_pretrained(model_name))
+            model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
         else:
             model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
 
@@ -350,6 +353,28 @@ class ExportModelTest(unittest.TestCase):
                 self.assertEqual(
                     ov_model.model.get_rt_info()["optimum"]["transformers_version"], _transformers_version
                 )
+
+    @parameterized.expand(["text-to-audio", "automatic-speech-recognition"])
+    @unittest.skipUnless(is_transformers_version(">=", "5.0"), "qwen3_omni_moe requires transformers >= 5.0")
+    def test_qwen3_omni_moe_export_task(self, task):
+        model_name = MODEL_NAMES["qwen3_omni_moe"]
+        from transformers import AutoConfig, Qwen3OmniMoeForConditionalGeneration
+
+        from optimum.exporters.openvino.__main__ import _ensure_qwen3_omni_rope_scaling
+
+        # Tiny test checkpoints omit rope_scaling, which transformers >= 4.57 requires to build the
+        # rotary embedding. The CLI export backfills it; mirror that here for the direct model load.
+        config = _ensure_qwen3_omni_rope_scaling(AutoConfig.from_pretrained(model_name))
+        model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
+            model_name, config=config, attn_implementation="eager"
+        )
+        self.assertGreater(getattr(model.config.thinker_config.text_config, "num_experts", 0), 1)
+        self.assertGreater(getattr(model.config.talker_config.text_config, "shared_expert_intermediate_size", 0), 0)
+        with TemporaryDirectory() as tmpdir:
+            export_from_model(model, tmpdir, task=task, stateful=True)
+            for behavior in Qwen3OmniMoeConfigBehavior:
+                model_path = Path(tmpdir) / f"openvino_{behavior.value}_model.xml"
+                self.assertTrue(model_path.exists(), f"Missing {behavior.value}_model for task={task}")
 
     def test_compare_openvino_onnx_supported_architectures(self):
         onnx_architectures = set()
