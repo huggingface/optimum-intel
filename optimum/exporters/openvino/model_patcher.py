@@ -84,9 +84,6 @@ if is_transformers_version(">=", "4.56"):
 
 
 if is_transformers_version(">=", "4.57"):
-    from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
-        Qwen3OmniMoeTalkerTextExperts,
-    )
     from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLTextRotaryEmbedding
 
 
@@ -4430,6 +4427,10 @@ class Qwen3OmniMoeTalkerLanguageModelPatcher(_Qwen3OmniMoeLMPatcherMixin, OVDeco
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
+        from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
+            Qwen3OmniMoeTalkerTextExperts,
+        )
+
         self._moe_block_cls = Qwen3OmniMoeTalkerTextExperts
         self._patched_moe_forward = lfm2_moe_experts_forward
 
