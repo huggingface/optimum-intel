@@ -4942,7 +4942,7 @@ def gemma3n_language_model_forward(
 # block_sequence_ids when use_bidirectional_attention == "vision" (the bidirectional
 # overlay applies to both the full-attention and sliding-attention masks).
 # Needs to be patched to pass proper 'sliding_mask' for prefill stage.
-# Original code: https://github.com/huggingface/transformers/blob/v5.10.0/src/transformers/models/gemma4/modeling_gemma4.py#L2320
+# Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/gemma4/modeling_gemma4.py#L1986
 def _create_gemma4_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids, inputs_embeds, sliding_window):
     dtype = inputs_embeds.dtype
     device = inputs_embeds.device
@@ -8701,9 +8701,8 @@ def _create_gemma4_unified_bidirectional_mask_dict(
     same_group = (query_groups.unsqueeze(2) == key_groups.unsqueeze(1)) & (key_groups.unsqueeze(1) >= 0)
     same_group = same_group.unsqueeze(1)  # [batch, 1, seq_len, total_len]
 
-    # Un-mask same-group vision tokens in both masks (bidirectional attention within an image)
-    if is_transformers_version(">=", "5.9"):
-        full_mask = full_mask.masked_fill(same_group, 0.0)
+    # Un-mask same-group vision tokens in both masks (bidirectional attention within an image).
+    full_mask = full_mask.masked_fill(same_group, 0.0)
     sliding_mask = sliding_mask.masked_fill(same_group, 0.0)
 
     return {
