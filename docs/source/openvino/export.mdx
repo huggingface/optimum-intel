@@ -9,7 +9,12 @@ specific language governing permissions and limitations under the License.
 
 # Export your model
 
-To export a [model](https://huggingface.co/docs/optimum/main/en/intel/openvino/models) hosted on the [Hub](https://huggingface.co/models) you can use our [space](https://huggingface.co/spaces/echarlaix/openvino-export). After conversion, a repository will be pushed under your namespace, this repository can be either public or private.
+To export a model hosted on the Hub you can use our [space](https://huggingface.co/spaces/echarlaix/openvino-export). After conversion, a repository will be pushed under your namespace, this repository can be either public or private.
+
+<h3 align="center">
+    <img src="https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/documentation/export_space.png"/>
+</h3>
+
 
 ## Using the CLI
 
@@ -21,7 +26,7 @@ optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B ov_model/
 
 To export a private model or a model that requires access, you can either run `huggingface-cli login` to log in permanently, or set the environment variable `HF_TOKEN` to a [token](https://huggingface.co/settings/tokens) with access to the model. See the [authentication documentation](https://huggingface.co/docs/huggingface_hub/quick-start#authentication) for more information.
 
-The model argument can either be the model ID of a model hosted on the [Hub](https://huggingface.co/models) or a path to a model hosted locally. For local models, you need to specify the task for which the model should be loaded before export, among the list of the [supported tasks](https://huggingface.co/docs/optimum/main/en/exporters/task_manager).
+The model argument can either be the model ID of a model hosted on the Hub or a path to a model hosted locally. For local models, you need to specify the task for which the model should be loaded before export, among the list of the [supported tasks](https://huggingface.co/docs/optimum/main/en/exporters/task_manager).
 
 ```bash
 optimum-cli export openvino --model local_llama --task text-generation-with-past ov_model/
