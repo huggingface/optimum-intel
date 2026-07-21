@@ -329,7 +329,6 @@ def export_pytorch(
 
         dummy_inputs = config.rename_ambiguous_inputs(dummy_inputs)
         dummy_inputs, dict_inputs = remove_none_from_dummy_inputs(dummy_inputs)
-
         # TorchScript used behind OpenVINO conversion. Optimum supports only return_dict=True models for patching,
         # while TorchScript do not support dictionary with values of mixed types (e.g. Tensor and None) in model input/output
         # To handle it, additional wrapper on patcher forward applied.
