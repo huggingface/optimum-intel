@@ -87,22 +87,32 @@ from .modeling_open_clip import (
     OVModelOpenCLIPVisual,
 )
 from .modeling_sam import OVSamModel
-from .modeling_seq2seq import OVModelForPix2Struct, OVModelForSeq2SeqLM, OVModelForSpeechSeq2Seq, OVModelForVision2Seq
+from .modeling_seq2seq import (
+    OVModelForImageTextToText,
+    OVModelForPix2Struct,
+    OVModelForSeq2SeqLM,
+    OVModelForSpeechSeq2Seq,
+    OVModelForVision2Seq,
+)
 from .modeling_text2speech import OVModelForTextToSpeechSeq2Seq
-from .modeling_visual_language import OVModelForVisualCausalLM
+from .modeling_visual_language import OVModelForMultimodalLM, OVModelForVisualCausalLM
 
 
 if is_diffusers_available():
     from .modeling_diffusion import (
         OVDiffusionPipeline,
+        OVFlux2KleinPipeline,
         OVFluxFillPipeline,
         OVFluxImg2ImgPipeline,
         OVFluxInpaintPipeline,
         OVFluxPipeline,
         OVLatentConsistencyModelImg2ImgPipeline,
         OVLatentConsistencyModelPipeline,
+        OVLTX2Pipeline,
+        OVLTXImageToVideoPipeline,
         OVLTXPipeline,
         OVPipelineForImage2Image,
+        OVPipelineForImage2Video,
         OVPipelineForInpainting,
         OVPipelineForText2Image,
         OVPipelineForText2Video,

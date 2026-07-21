@@ -679,7 +679,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             outputs=outputs, model_kwargs=model_kwargs, is_encoder_decoder=is_encoder_decoder, **kwargs
         )
 
-        if "position_ids" in model_kwargs:
+        # _prepare_position_ids_for_generation will infer position ids since transformers v5.2
+        if "position_ids" in model_kwargs and not hasattr(self, "_prepare_position_ids_for_generation"):
             position_ids = model_kwargs["position_ids"]
             new_position_id = position_ids[..., -1:].clone()
             new_position_id += 1
@@ -898,6 +899,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = OVBloomForCausalLM
         elif model_type == "gpt_bigcode":
             init_cls = OVGPTBigCodeForCausalLM
+        elif model_type == "phi3":
+            init_cls = OVPhi3ForCausalLM
         elif model_type in SSM_MODELS:
             init_cls = OVModelWithMambaForCausalLM
         else:
@@ -948,6 +951,48 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             )
 
         return causal_model
+
+
+class OVPhi3ForCausalLM(OVModelForCausalLM):
+    # Adapted from https://github.com/huggingface/transformers/blob/v4.57.0/src/transformers/models/phi3/modeling_phi3.py#L493
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        cache_position=None,
+        position_ids=None,
+        use_cache=True,
+        logits_to_keep=None,
+        **kwargs,
+    ):
+        # Overwritten -- this model may need to switch between short and long rope, invalidating the cache in the
+        # process
+
+        # When the first time input length reached long and short factor switching point, enforce re-compute cache
+        # The downside is slower inference at this single token position, however, this is better than wrong results
+        if (
+            past_key_values
+            and self.config.rope_scaling
+            and input_ids.shape[1] >= self.config.original_max_position_embeddings + 1
+        ):
+            past_length = cache_position[0]
+            if past_length <= self.config.original_max_position_embeddings:
+                past_key_values = None
+
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+            cache_position=cache_position,
+            position_ids=position_ids,
+            use_cache=use_cache,
+            logits_to_keep=logits_to_keep,
+            **kwargs,
+        )
+        return model_inputs
 
 
 class OVBloomForCausalLM(OVModelForCausalLM):
@@ -1164,26 +1209,25 @@ class OVCacheWithMambaStates(MambaCache):
         self.ssm_states = ssm_states
         if self.ssm_states is None:
             self.ssm_states: List[torch.Tensor] = []
-            if config.model_type in ["lfm2_moe", "lfm2"]:
-                for _ in range(self.num_mamba_layers):
-                    if self.n_mamba_heads and self.mamba_headdim:
-                        # Mamba2 block
-                        ssm_state_shape = (
-                            self.max_batch_size,
-                            self.n_mamba_heads,
-                            self.mamba_headdim,
-                            self.ssm_state_size,
-                        )
-                    else:
-                        # Mamba block
-                        ssm_state_shape = (self.max_batch_size, self.intermediate_size, self.ssm_state_size)
-
-                    ssm_state: torch.Tensor = torch.zeros(
-                        ssm_state_shape,
-                        device=self.device,
-                        dtype=dtype,
+            for _ in range(self.num_mamba_layers):
+                if self.n_mamba_heads and self.mamba_headdim:
+                    # Mamba2 block
+                    ssm_state_shape = (
+                        self.max_batch_size,
+                        self.n_mamba_heads,
+                        self.mamba_headdim,
+                        self.ssm_state_size,
                     )
-                    self.ssm_states.append(ssm_state)
+                else:
+                    # Mamba block
+                    ssm_state_shape = (self.max_batch_size, self.intermediate_size, self.ssm_state_size)
+
+                ssm_state: torch.Tensor = torch.zeros(
+                    ssm_state_shape,
+                    device=self.device,
+                    dtype=dtype,
+                )
+                self.ssm_states.append(ssm_state)
 
         self.key_cache = key_cache
         if self.key_cache is None:
@@ -1429,12 +1473,11 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         self, outputs: ModelOutput, model_kwargs: Dict[str, Any], num_new_tokens: int = 1, **kwargs
     ) -> Dict[str, Any]:
         model_kwargs["cache_params"] = outputs.get("cache_params", None)
-        if (
-            model_kwargs.get("use_cache", True)
-            and "cache_position" in model_kwargs
-            and model_kwargs["cache_position"] is not None
-        ):
-            model_kwargs["cache_position"] = model_kwargs["cache_position"][-1:] + num_new_tokens
+        if model_kwargs.get("use_cache", True):
+            if "cache_position" in model_kwargs and model_kwargs["cache_position"] is not None:
+                model_kwargs["cache_position"] = model_kwargs["cache_position"][-1:] + num_new_tokens
+            elif model_kwargs.get("cache_params") is not None:
+                model_kwargs["cache_position"] = torch.tensor([num_new_tokens], dtype=torch.long)
 
         if "attention_mask" in model_kwargs:
             attention_mask = model_kwargs["attention_mask"]
@@ -1457,12 +1500,16 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         # Overwitten -- uses `cache_params` as opposed to `past_key_values`
 
         if self.use_cache:
-            # `cache_position` should have been initialized in `generate`
             if cache_position is None:
-                raise ValueError(
-                    "`cache_position` should not be None as it should have been initialized in "
-                    "`model.generate`, you are responsible for passing in a valid `cache_position` if "
-                    "you are calling `prepare_inputs_for_generation` directly with `use_cache=True`"
+                if is_transformers_version("<", "5.4"):
+                    raise ValueError(
+                        "`cache_position` should not be None as it should have been initialized in "
+                        "`model.generate`, you are responsible for passing in a valid `cache_position` if "
+                        "you are calling `prepare_inputs_for_generation` directly with `use_cache=True`"
+                    )
+                # infer from cache_params: None means prefill (0), otherwise means decoding stage
+                cache_position = torch.tensor(
+                    [0 if cache_params is None else 1], device=input_ids.device, dtype=torch.long
                 )
             if cache_position[0] > 0:
                 # decoding stage so it takes the last token

@@ -28,10 +28,11 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=2.1",
-    "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git@transformers-v5",
-    "transformers>=4.45,<5.1",
+    "safetensors<0.8.0",
+    "optimum@git+https://github.com/huggingface/optimum.git",
+    "transformers>=4.51,<5.6",
     "setuptools",
-    "huggingface-hub>=0.23.2,<2.0",
+    "huggingface-hub>=0.23.2,<1.22",
     "nncf>=2.19.0",
     "openvino>=2026.0",
     "openvino-tokenizers>=2026.0",
@@ -59,7 +60,6 @@ TESTS_REQUIRE = [
     "peft",
     "datasets>=1.4.0,<4.0.0",
     "tbb",
-    "langchain-huggingface",
     "hf_xet",
     "num2words",
     "vocos",
@@ -69,6 +69,7 @@ TESTS_REQUIRE = [
     "decord",
     "imageio",
     "kokoro",
+    "protobuf",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]

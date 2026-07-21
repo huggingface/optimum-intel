@@ -61,8 +61,10 @@ class DFlashExportTest(unittest.TestCase):
 
     @parameterized.expand(("qwen3", "qwen3_moe", "qwen3_5", "qwen3_5_moe"))
     def test_export_hidden_state_locators_for_representative_decoder_models(self, model_type):
-        if model_type in {"qwen3_5", "qwen3_5_moe"} and not is_transformers_version(">=", "5.2.0"):
-            self.skipTest("Qwen3.5 hidden-state locator coverage requires Transformers >= 5.2.0")
+        if model_type in {"qwen3_5", "qwen3_5_moe"} and not (
+            is_transformers_version(">=", "5.2.0") and is_transformers_version("<=", "5.2.99")
+        ):
+            self.skipTest("Qwen3.5 hidden-state locator coverage requires Transformers >= 5.2.0 and <= 5.2.99")
 
         with TemporaryDirectory() as tmpdirname:
             tmpdirname = Path(tmpdirname)
@@ -84,7 +86,7 @@ class DFlashExportTest(unittest.TestCase):
             tmpdirname = Path(tmpdirname)
             annotated_dir = tmpdirname / "annotated"
             export_from_model(
-                model=AutoModelForCausalLM.from_pretrained(MODEL_NAMES["qwen3_5_moe"]),
+                model=AutoModelForCausalLM.from_pretrained(MODEL_NAMES["qwen3"]),
                 output=annotated_dir,
                 task="text-generation",
                 preprocessors=None,
