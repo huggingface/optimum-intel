@@ -87,21 +87,10 @@ if is_transformers_version(">=", "4.57"):
 else:
     Qwen3Config = PretrainedConfig
     Qwen3PreTrainedModel = PreTrainedModel
-
-    class _UnavailableQwen3Module(nn.Module):
-        def __init__(self, *args, **kwargs):
-            raise ImportError("DFlash export requires transformers >= 4.57.")
-
-    Qwen3MLP = _UnavailableQwen3Module
-    Qwen3Attention = _UnavailableQwen3Module
-    Qwen3RMSNorm = _UnavailableQwen3Module
-    Qwen3RotaryEmbedding = _UnavailableQwen3Module
-
-    def qwen3_eager_attention_forward(*args, **kwargs):
-        raise ImportError("DFlash export requires transformers >= 4.57.")
-
-    def qwen3_rotate_half(*args, **kwargs):
-        raise ImportError("DFlash export requires transformers >= 4.57.")
+    Qwen3MLP = object
+    Qwen3Attention = object
+    Qwen3RMSNorm = object
+    Qwen3RotaryEmbedding = object
 
 if is_transformers_version(">=", "4.56"):
     import transformers.masking_utils
@@ -8737,6 +8726,7 @@ def _dflash_attention_mask(
     return attention_mask[:, :, :, -kv_len:] + full_mask
 
 
+# adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L185
 class Qwen3DFlashAttention(Qwen3Attention):
     """Qwen3 attention variant used by DFlash, where draft tokens attend over target context and noise tokens."""
 
@@ -8832,6 +8822,7 @@ class Qwen3DFlashAttention(Qwen3Attention):
         return attn_output, attn_weights
 
 
+# adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L258
 class Qwen3DFlashDecoderLayer(nn.Module):
     def __init__(self, config: "Qwen3Config", layer_idx: int):
         super().__init__()
@@ -8951,6 +8942,7 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         )
 
 
+# adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L302
 class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
     """DFlash draft head exported as embeddings-in / hidden-states-out.
 

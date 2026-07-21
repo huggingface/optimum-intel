@@ -17,11 +17,7 @@ import logging
 import os
 import re
 from collections import Counter, defaultdict
-from typing import TYPE_CHECKING, Any, Dict, Iterable, Sequence
-
-
-if TYPE_CHECKING:
-    from optimum.exporters.onnx.base import OnnxConfig
+from typing import Any, Dict, Iterable, Sequence
 
 
 logger = logging.getLogger(__name__)
@@ -211,17 +207,11 @@ def discover_hidden_state_rt_info(source_model, ov_model) -> Dict[str, Any]:
     }
 
 
-def add_hidden_states_rt_info(source_model, ov_model, config: "OnnxConfig"):
+def add_hidden_states_rt_info(source_model, ov_model, config: Any):
     """Best-effort hidden-state locator annotation that leaves the graph untouched."""
     hidden_states_rt_info_key = "hidden_states_decoder_layers"
 
     if "text-generation" not in getattr(config, "task", ""):
-        return
-    if os.getenv("OPENVINO_DYNAMO_EXPORT", "false").lower() == "true":
-        logger.warning(
-            "Skipping hidden-state RT-info annotation for Dynamo export; "
-            "the locator discovery supports only the TorchScript conversion path."
-        )
         return
 
     try:
