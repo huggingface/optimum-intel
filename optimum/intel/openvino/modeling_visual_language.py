@@ -29,6 +29,7 @@ from transformers import (
     AutoConfig,
     AutoImageProcessor,
     AutoModel,
+    AutoModelForCausalLM,
     AutoModelForImageTextToText,
     GenerationConfig,
     GenerationMixin,
@@ -331,6 +332,8 @@ class OVVisionEmbedding(OVModelPart):
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         if model_has_input_output_name(self.model, "images"):
             self._main_input = "images"
+        elif model_has_input_output_name(self.model, "image"):
+            self._main_input = "image"
         elif model_has_input_output_name(self.model, "hidden_states"):
             self._main_input = "hidden_states"
         else:
@@ -7346,6 +7349,173 @@ if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.rot_pos_emb = Qwen3_5VisionModel.rot_pos_emb
 
 
+class _OVGlmForCausalLM(OVModelForVisualCausalLM):
+    """
+    OVModelForVisualCausalLM subclass for GLM-Edge-V models (model_type='glm').
+
+    GLM encodes images via a SigLIP vision encoder. Each image produces 578
+    <|begin_of_image|> placeholder tokens. pixel_values shape expected by the
+    model: [batch, num_concurrent_media, num_tiles, channels, height, width].
+    """
+
+    # GLM uses AutoModelForCausalLM (trust_remote_code), not AutoModelForImageTextToText.
+    auto_model_class = AutoModelForCausalLM
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        """
+        Encode pixel_values through the exported OpenVINO vision encoder.
+
+        Args:
+            pixel_values: ``[batch, num_concurrent_media, num_tiles, C, H, W]`` tensor,
+                as produced by :meth:`preprocess_inputs`.  The outer three dims are
+                collapsed to a flat batch before forwarding to the vision sub-model.
+            input_ids: when shape ``[*, 1]`` we are in the decode step — skip vision.
+
+        Returns:
+            ``np.ndarray`` of shape ``[N_images, num_vision_tokens, hidden_size]``, or
+            ``None`` during the decode step.
+        """
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        if pixel_values is None:
+            return None
+
+        # pixel_values: [1, num_imgs, 1, C, H, W]  →  [num_imgs, C, H, W]
+        if isinstance(pixel_values, torch.Tensor):
+            pv = pixel_values
+        else:
+            pv = torch.from_numpy(pixel_values)
+
+        # Collapse batch / media / tile dimensions
+        batch_size, num_concurrent_media, num_tiles, C, H, W = pv.shape
+        flat_images = pv.reshape(batch_size * num_concurrent_media * num_tiles, C, H, W)
+
+        image_features = self.vision_embeddings(flat_images).last_hidden_state
+        return image_features
+
+    def merge_vision_text_embeddings(
+        self,
+        vision_embeds,
+        inputs_embeds,
+        input_ids,
+        attention_mask,
+        position_ids=None,
+        **kwargs,
+    ):
+        """
+        Replace the ``boi_token_id`` placeholder spans in ``inputs_embeds``
+        with the corresponding image feature vectors.
+
+        The GLM tokenizer inserts ``num_vision_tokens`` copies of ``boi_token_id``
+        per image.  This method overwrites those positions with the vision encoder
+        output — mirroring ``GlmModel.forward``.
+        """
+        if isinstance(inputs_embeds, np.ndarray):
+            inputs_embeds = torch.from_numpy(inputs_embeds)
+        if isinstance(vision_embeds, np.ndarray):
+            vision_embeds = torch.from_numpy(vision_embeds)
+
+        boi_token_id = getattr(self.config, "boi_token_id", None)
+        if boi_token_id is None:
+            # No image-token merging needed (text-only forward)
+            return inputs_embeds, attention_mask, position_ids
+
+        B, N, C = inputs_embeds.shape
+        new_embeds = inputs_embeds.clone()
+
+        image_idx = 0
+        for i in range(B):
+            ids = input_ids[i].tolist()
+            if boi_token_id not in ids:
+                continue
+            # Find the start position of the boi-token span
+            boi_pos = ids.index(boi_token_id)
+            num_img_tokens = ids.count(boi_token_id)
+            # vision_embeds[image_idx]: [num_img_tokens, C]
+            new_embeds[i, boi_pos: boi_pos + num_img_tokens, :] = vision_embeds[image_idx].to(inputs_embeds.dtype)
+            image_idx += 1
+
+        return new_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        # Treat NaN (from CSV columns) and empty string as no-input
+        _has_video = (video is not None and video != "" and
+                      not (isinstance(video, float) and math.isnan(video)))
+        _has_audio = (audio is not None and not (isinstance(audio, float) and math.isnan(audio)))
+        if _has_video:
+            raise ValueError("Video input is not supported for GLM-Edge-V.")
+        if _has_audio:
+            raise ValueError("Audio input is not supported for GLM-Edge-V.")
+
+        # For GLM, AutoProcessor resolves to the tokenizer which carries the
+        # chat_template that inserts 578 <|begin_of_image|> tokens per image.
+        tok = processor if processor is not None else tokenizer
+        if tok is None:
+            raise ValueError("Either processor or tokenizer must be provided.")
+
+        from transformers import SiglipImageProcessor
+
+        if image is not None and not isinstance(image, list):
+            image = [image]
+
+        # Build content items for the chat template
+        content = []
+        if image is not None:
+            for _ in image:
+                content.append({"type": "image"})
+        content.append({"type": "text", "text": text})
+
+        messages = [{"role": "user", "content": content}]
+        prompt = tok.apply_chat_template(
+            messages, add_generation_prompt=True, tokenize=False
+        )
+
+        input_ids = tok(prompt, return_tensors="pt").input_ids
+        attention_mask = torch.ones_like(input_ids, dtype=torch.long)
+        inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
+
+        if image is not None and len(image) > 0:
+            image_size = 672
+            if config is not None:
+                vc = getattr(config, "vision_config", None)
+                if isinstance(vc, dict):
+                    image_size = vc.get("image_size", image_size)
+                elif vc is not None:
+                    image_size = getattr(vc, "image_size", image_size)
+            img_proc = SiglipImageProcessor(
+                size={"height": image_size, "width": image_size}
+            )
+            pixel_values_list = []
+            for img in image:
+                pv = img_proc(images=img, return_tensors="pt").pixel_values  # [1,C,H,W]
+                pixel_values_list.append(pv.unsqueeze(0))  # [1, 1, C, H, W]
+            # [1, N_imgs, 1, C, H, W]
+            pixel_values = torch.cat(pixel_values_list, dim=0).unsqueeze(0)
+            inputs["pixel_values"] = pixel_values
+        else:
+            image_size = 672
+            if config is not None:
+                vc = getattr(config, "vision_config", None)
+                if isinstance(vc, dict):
+                    image_size = vc.get("image_size", image_size)
+                elif vc is not None:
+                    image_size = getattr(vc, "image_size", image_size)
+            inputs["pixel_values"] = torch.zeros(
+                [1, 1, 1, 3, image_size, image_size], dtype=torch.float32
+            )
+
+        return inputs
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
@@ -7377,4 +7547,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_omni_moe": _OVQwen3OmniMoeForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
+    "glm": _OVGlmForCausalLM,
 }

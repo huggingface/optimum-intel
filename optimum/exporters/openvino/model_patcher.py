@@ -10399,3 +10399,62 @@ class LTX2TransformerPatcher(ModelPatcher):
         for name, module in self._model.named_modules():
             if name in self._orig_processors and hasattr(module, "set_processor"):
                 module.set_processor(self._orig_processors[name])
+
+
+# Adopted from qwen3_moe_forward_patched above, extended with shared expert computation.
+# https://github.com/huggingface/transformers/blob/v4.57.0/src/transformers/models/qwen3_omni_moe/modeling_qwen3_omni_moe.py#L2696
+def qwen3_omni_moe_talker_sparse_forward_patched(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    batch_size, sequence_length, hidden_dim = hidden_states.shape
+    hidden_states = hidden_states.view(-1, hidden_dim)
+    _, routing_weights, selected_experts = self.gate(hidden_states)
+
+    final_hidden_states = torch.zeros_like(hidden_states)
+    expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.gate.num_experts)
+    expert_mask = expert_mask.permute(2, 1, 0)
+
+    # Static expert processing for torch.jit.trace compatibility: process all tokens through
+    # every expert, then zero out non-selected tokens via the routing weights.
+    for expert_idx in range(self.gate.num_experts):
+        gate, up = torch.nn.functional.linear(hidden_states, self.experts.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+        expert_output = self.experts.act_fn(gate) * up
+        expert_output = torch.nn.functional.linear(expert_output, self.experts.down_proj[expert_idx])
+
+        expert_mask_for_expert = expert_mask[expert_idx].float()  # (top_k, num_tokens)
+        weighted_mask = expert_mask_for_expert * routing_weights.t()  # (top_k, num_tokens)
+        token_weights = weighted_mask.sum(dim=0)  # (num_tokens,) - sum over top_k positions
+
+        weighted_output = expert_output * token_weights.unsqueeze(-1)
+        final_hidden_states = final_hidden_states + weighted_output
+
+    shared_expert_output = self.shared_expert(hidden_states)
+    shared_expert_output = torch.nn.functional.sigmoid(self.shared_expert_gate(hidden_states)) * shared_expert_output
+    final_hidden_states = final_hidden_states + shared_expert_output
+
+    return final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
+
+
+class GLMVisionEmbeddingsModelPatcher(ModelPatcher):
+    """
+    Patcher for the GLM-Edge-V vision encoder sub-module (``GlmForCausalLM.model.vision``).
+
+    The ``VisionModel.forward`` method takes a single ``image`` argument with shape
+    ``[batch_size, num_channels, height, width]``.  This patcher wraps the forward call
+    so that it can be traced and exported cleanly.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        orig_forward = self.orig_forward
+
+        @functools.wraps(orig_forward)
+        def patched_forward(image):
+            out = orig_forward(image)
+            return {"last_hidden_state": out}
+
+        self.patched_forward = patched_forward

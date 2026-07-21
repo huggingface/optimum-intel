@@ -30,6 +30,115 @@ from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import is_transformers_version
 
 
+def _create_tiny_glm_model():
+    """Generate a tiny random GLM-Edge-V (image-text-to-text) model for testing.
+
+    Builds a minimal ``GlmForCausalLM`` with a ``vision_config`` sub-config so
+    that the VLM exporter (``GLMVLOpenVINOConfig``) can split the model into
+    the three sub-graphs (vision_embeddings, text_embeddings, language).
+
+    Result is cached under the system temp dir; subsequent calls are cheap.
+    """
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_glm_vlm"
+    cache_marker = output_dir / ".cache_version_v1"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+
+    if cache_marker.exists() and config_file.exists() and weights_file.exists():
+        return str(output_dir)
+
+    import torch
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Minimal vision config (SigLIP-like)
+    # image_size=672 matches the chat template which inserts 578 boi_token_id tokens
+    # (672/14)^2 / 4 + 2 = 576 + 2 = 578
+    vision_config = {
+        "hidden_size": 64,
+        "image_size": 672,
+        "intermediate_size": 128,
+        "model_type": "siglip_vision_model",
+        "num_attention_heads": 4,
+        "num_hidden_layers": 2,
+        "patch_size": 14,
+        "torch_dtype": "float32",
+    }
+    config = {
+        "architectures": ["GlmForCausalLM"],
+        "attention_bias": False,
+        "attention_dropout": 0.0,
+        "boi_token_id": 59256,
+        "dtype": "float32",
+        "eoi_token_id": 59257,
+        "eos_token_id": [59246, 59253, 59255],
+        "head_dim": 64,
+        "hidden_act": "silu",
+        "hidden_size": 128,
+        "initializer_range": 0.02,
+        "intermediate_size": 256,
+        "max_position_embeddings": 512,
+        "model_type": "glm",
+        "num_attention_heads": 2,
+        "num_hidden_layers": 1,
+        "num_key_value_heads": 1,
+        "pad_token_id": 59246,
+        "partial_rotary_factor": 1.0,
+        "rms_norm_eps": 1e-5,
+        "rope_theta": 10000.0,
+        "tie_word_embeddings": True,
+        "transformers_version": "4.57.6",
+        "use_cache": True,
+        "vision_config": vision_config,
+        "vocab_size": 59264,
+        "auto_map": {
+            "AutoConfig": "configuration_glm.GlmConfig",
+            "AutoModel": "modeling_glm.GlmModel",
+            "AutoModelForCausalLM": "modeling_glm.GlmForCausalLM",
+            "AutoModelForSequenceClassification": "modeling_glm.GlmForSequenceClassification",
+        },
+    }
+
+    with open(output_dir / "config.json", "w") as f:
+        json.dump(config, f, indent=2)
+
+    # Copy remote-code files from the workspace tiny model if available
+    import os
+
+    workspace_tiny = Path("/home/mohamed-ashraf/Desktop/projects/GSoC26/auto-openvino-bot/workspace/tiny-glm-edge-v-2b")
+    remote_files = [
+        "configuration_glm.py",
+        "modeling_glm.py",
+        "siglip.py",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "chat_template.jinja",
+        "generation_config.json",
+    ]
+    if workspace_tiny.exists():
+        for fname in remote_files:
+            src = workspace_tiny / fname
+            if src.exists():
+                import shutil
+                shutil.copy2(str(src), str(output_dir / fname))
+
+    # Instantiate the model with random weights
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    cfg = AutoConfig.from_pretrained(str(output_dir), trust_remote_code=True)
+    model = AutoModelForCausalLM.from_config(cfg, trust_remote_code=True)
+    model.eval()
+
+    # Save with safetensors
+    model.save_pretrained(str(output_dir))
+
+    # Write cache marker
+    cache_marker.write_text("v1")
+
+    return str(output_dir)
+
+
 def _create_tiny_kokoro_model():
     """Generate a tiny random Kokoro TTS model for testing and return its local path.
 
@@ -353,6 +462,7 @@ HUB_MODEL_NAMES = {
     "xverse": "optimum-intel-internal-testing/tiny-random-xverse",
     "glm4": "optimum-intel-internal-testing/tiny-random-glm4",
     "glm": "optimum-intel-internal-testing/tiny-random-glm-edge",
+    "glm": _create_tiny_glm_model(),
     "open-clip": "optimum-intel-internal-testing/tiny-open-clip-model",
     "open-clip-ov": "optimum-intel-internal-testing/tiny-open-clip-model",
     "st-bert": "optimum-intel-internal-testing/all-MiniLM-L6-v2",
@@ -470,6 +580,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "lm_model": 30,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 9,
+    },
+    "glm": {
+        "lm_model": 14,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 18,
     },
     "llava_next": {
         "lm_model": 30,
@@ -657,6 +772,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_asr",
     "fun_asr",
     "videochat_flash_qwen",
+    "glm",
 )
 
 if is_transformers_version("<", "5"):
@@ -675,6 +791,7 @@ ARCH_TO_MODEL_CLASS = {
     "qwen3_moe": "OVModelForCausalLM",
     "llama4": "OVModelForCausalLM",
     "llava": "OVModelForVisualCausalLM",
+    "glm": "OVModelForVisualCausalLM",
     "qwen3_5_moe": "OVModelForVisualCausalLM",
     "gemma4_moe": "OVModelForVisualCausalLM",
     "gemma4_unified": "OVModelForVisualCausalLM",

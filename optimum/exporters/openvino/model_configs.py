@@ -45,6 +45,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyFluxTransformerInputGenerator,
     DummyGemma4UnifiedVisionInputGenerator,
     DummyGemma4VisionInputGenerator,
+    DummyGLMVisionInputGenerator,
     DummyKokoroInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMVImageInputGenerator,
@@ -122,6 +123,7 @@ from optimum.exporters.openvino.model_patcher import (
     GptJModelPatcher,
     GptNeoModelPatcher,
     GptOssModelPatcher,
+    GLMVisionEmbeddingsModelPatcher,
     GraniteMoeHybridModelPatcher,
     GraniteMoEModelPatcher,
     IBertModelPatcher,
@@ -314,6 +316,9 @@ def init_model_configs():
         "transformers",
         "AutoModelForCausalLM",
     )
+
+    # GLM-Edge-V uses trust_remote_code and AutoModelForCausalLM for image-text-to-text
+    TasksManager._CUSTOM_CLASSES[("pt", "glm", "image-text-to-text")] = ("transformers", "AutoModelForCausalLM")
 
     # since transformers v4.52, model can be loaded using default AutoModelForImageTextToText
     # https://github.com/huggingface/transformers/blob/v4.52.0/src/transformers/models/auto/modeling_auto.py#L899
@@ -4021,6 +4026,127 @@ class Qwen3OmniMoeOpenVINOConfig(BaseVLMOpenVINOConfig):
 )
 class GLMOpenVINOConfig(LlamaOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "5.0"
+
+
+@register_in_tasks_manager("glm", *["image-text-to-text"], library_name="transformers")
+class GLMVLOpenVINOConfig(BaseVLMOpenVINOConfig):
+    """
+    Export configuration for GLM-Edge-V (model_type='glm') image-text-to-text task.
+
+    The model exports as three sub-graphs:
+
+    - ``vision_embeddings``:  ``GlmForCausalLM.model.vision``  (SigLIP encoder +
+      adapter); takes a flat batch of images ``[N, 3, H, W]`` and returns
+      ``[N, tokens, hidden_size]``.
+    - ``text_embeddings``:  ``GlmForCausalLM.model.embed_tokens``.
+    - ``language``:  the full causal-LM backbone that accepts ``inputs_embeds``
+      instead of pixel_values (normal text-generation-with-past mode).
+    """
+
+    MIN_TRANSFORMERS_VERSION = "4.46.0"
+    MAX_TRANSFORMERS_VERSION = "5.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyGLMVisionInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            # Use vision_config to drive the normalized config for dummy generation
+            from optimum.utils.normalized_config import NormalizedVisionConfig as _NVC
+
+            # Build a temporary object that carries the vision sub-config
+            class _VisionSubConfig:
+                def __init__(self, vcfg):
+                    if isinstance(vcfg, dict):
+                        for k, v in vcfg.items():
+                            setattr(self, k, v)
+                    else:
+                        for k in vars(vcfg):
+                            setattr(self, k, getattr(vcfg, k))
+
+            vc = config.vision_config
+            if isinstance(vc, dict):
+                vision_sub = _VisionSubConfig(vc)
+            else:
+                vision_sub = vc
+            self._config = vision_sub
+            self._normalized_config = _NVC(vision_sub)
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VLMConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config("glm", self._orig_config, self.int_dtype, self.float_dtype)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config("glm", self._orig_config, self.int_dtype, self.float_dtype)
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            # The full GlmForCausalLM accepts inputs_embeds for text generation
+            return model
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            # Extract the VisionModel sub-module and attach config for dummy gen
+            vision = model.model.vision
+            vision.config = model.config
+            return vision
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.model.embed_tokens
+            text_embedding.config = model.config
+            return text_embedding
+
+    def patch_model_for_export(self, model: "PreTrainedModel", model_kwargs=None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return GLMVisionEmbeddingsModelPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {"image": {0: "batch_size"}}
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "batch_size"}}
+        return {}
 
 
 @register_in_tasks_manager(

@@ -1951,6 +1951,45 @@ class Qwen3_5DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         return cache_params
 
 
+class DummyGLMVisionInputGenerator(DummyVisionInputGenerator):
+    """
+    Generates dummy inputs for the GLM-Edge-V vision encoder (model.model.vision).
+
+    The vision sub-module of GlmForCausalLM takes a flat batch of images with
+    shape ``[batch_size, num_channels, height, width]`` — the outer
+    ``(num_concurrent_media, num_tiles)`` dimensions are already collapsed by
+    ``GlmForCausalLM.forward`` before calling the vision encoder.
+
+    batch_size is fixed at 1 to avoid the TracerWarning from the siglip.py
+    ``int(s**0.5)`` grid-size computation baking in a constant batch dimension.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("image",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 1,
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        **kwargs,
+    ):
+        self.batch_size = 1  # always 1 to avoid baking the batch dim into the trace
+        self.num_channels = num_channels if not normalized_config.has_attribute("num_channels") else normalized_config.num_channels
+        image_size = normalized_config.image_size if normalized_config.has_attribute("image_size") else height
+        if not isinstance(image_size, (tuple, list)):
+            image_size = (image_size, image_size)
+        self.height, self.width = image_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "image":
+            shape = [self.batch_size, self.num_channels, self.height, self.width]
+            return self.random_float_tensor(shape=shape, framework=framework, dtype=float_dtype)
+        raise ValueError(f"Unsupported input {input_name} for DummyGLMVisionInputGenerator")
+
+
 class DummyKokoroInputGenerator(DummyInputGenerator):
     """Generates dummy inputs for the Kokoro TTS model."""
 

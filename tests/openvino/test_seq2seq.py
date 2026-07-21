@@ -600,6 +600,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5",
         "qwen3_5_moe",
         "qwen3_omni_moe",
+        "glm",
     ]
     SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl", "qwen2_5_vl", "qwen3_vl", "videochat_flash_qwen"]
     SUPPORT_AUDIO = ["qwen3_omni_moe"]
@@ -633,6 +634,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "phi4mm",
         "videochat_flash_qwen",
         "gemma3n",
+        "glm",
     ]
     IMAGE = Image.open(
         requests.get(
@@ -814,7 +816,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         self._check_device_and_request(ov_model, test_device, False)
 
         # pytorch minicpmv and internvl_chat are not designed to be used via forward
-        if model_arch not in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
+        if model_arch not in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen", "glm"]:
             set_seed(SEED)
             ov_outputs = ov_model(**inputs)
             set_seed(SEED)
@@ -1139,7 +1141,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             preprocessors = {"processor": processor, "tokenizer": tokenizer, "config": config}
-        elif model_arch in ["internvl_chat", "videochat_flash_qwen"]:
+        elif model_arch in ["internvl_chat", "videochat_flash_qwen", "glm"]:
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )

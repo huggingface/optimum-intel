@@ -1180,6 +1180,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "qwen3_5_moe", False),
         (OVModelForVisualCausalLM, "gemma4", False),
         (OVModelForVisualCausalLM, "gemma4_moe", False),
+        (OVModelForVisualCausalLM, "glm", True),
     ]
 
     # gemma3n openvino>=2026.2.0 because it needs erfinv operation,
