@@ -4832,41 +4832,28 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        # Difference from original:
-        # uses Dynamic cache from legacy cache instead of HybridCache
-        # calculate causal mask from multimodal
-
-        def forward(
-            self, attention_mask, position_ids, past_key_values, token_type_ids, inputs_embeds, use_cache=True
-        ):
-            if is_transformers_version("<", "5"):
-                pkv = DynamicCache.from_legacy_cache(past_key_values)
-            else:
-                pkv = DynamicCache(past_key_values)
-
-            past_seen_tokens = past_key_values[0][0].shape[-2]
-            cache_position = torch.arange(
-                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
-            )
-            forward_kwargs = {}
-
-            forward_kwargs["token_type_ids"] = token_type_ids
-
-            result = self.__orig_forward(
-                input_ids=None,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                cache_position=cache_position,
-                past_key_values=pkv,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                **forward_kwargs,
-            )
-            upd_pkv = result["past_key_values"]
-            result["past_key_values"] = postprocess_past_key_values(upd_pkv)
-            return result
-
         super().__init__(config, model, model_kwargs)
+
+        model_forward = self.orig_forward
+
+        # precompute the token_type_ids bidirectional (image) mask since transformers v5.6
+        # (https://github.com/huggingface/transformers/pull/45454) is_first_iteration removed
+        # in create_causal_mask_mapping
+        @functools.wraps(model_forward)
+        def forward_with_precomputed_mask(*args, **kwargs):
+            bound_args = inspect.signature(model_forward).bind(*args, **kwargs)
+            bound_args.apply_defaults()
+            inputs_embeds = bound_args.arguments.get("inputs_embeds")
+            token_type_ids = bound_args.arguments.get("token_type_ids")
+            attention_mask = bound_args.arguments.get("attention_mask")
+            if token_type_ids is not None and isinstance(attention_mask, torch.Tensor):
+                sliding_window = self._model.config.get_text_config().sliding_window
+                bound_args.arguments["attention_mask"] = _create_gemma4_unified_bidirectional_mask_dict(
+                    attention_mask, token_type_ids, inputs_embeds, sliding_window
+                )
+            return model_forward(*bound_args.args, **bound_args.kwargs)
+
+        self.orig_forward = forward_with_precomputed_mask
 
     def __enter__(self):
         super().__enter__()
