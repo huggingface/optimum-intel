@@ -448,7 +448,9 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         if self.dflash:
             model_type = getattr(config, "model_type", "")
             if model_type != "qwen3":
-                raise ValueError(f"DFlash export supports only Qwen3-based draft models, got model_type={model_type!r}.")
+                raise ValueError(
+                    f"DFlash export supports only Qwen3-based draft models, got model_type={model_type!r}."
+                )
             dflash_config = getattr(config, "dflash_config", {}) or {}
             if not dflash_config.get("target_layer_ids", []):
                 raise ValueError("DFlash export requires non-empty dflash_config['target_layer_ids'].")

@@ -74,13 +74,13 @@ from optimum.intel.utils.import_utils import (
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 
 from ...intel.utils.modeling_utils import _infer_library_from_model_or_model_class
-from .utils_annotations import add_hidden_states_rt_info
 from .stateful import (
     ensure_export_task_support_stateful,
     ensure_model_type_support_stateful,
     ensure_stateful_is_available,
     patch_stateful,
 )
+from .utils_annotations import add_hidden_states_rt_info
 
 
 logger = logging.getLogger(__name__)
@@ -146,18 +146,14 @@ def _save_model(
         model = _add_eagle3_mode_to_rt_info(model)
     if getattr(config, "dflash", False):
         model = _add_dflash_mode_to_rt_info(model, config._config)
-    if (
-        source_model is not None
-        and getattr(getattr(source_model, "config", None), "model_type", None)
-        in {
-            "qwen3",
-            "qwen3_moe",
-            "qwen3_5",
-            "qwen3_5_moe",
-            "qwen3_5_text",
-            "qwen3_5_moe_text",
-        }
-    ):
+    if source_model is not None and getattr(getattr(source_model, "config", None), "model_type", None) in {
+        "qwen3",
+        "qwen3_moe",
+        "qwen3_5",
+        "qwen3_5_moe",
+        "qwen3_5_text",
+        "qwen3_5_moe_text",
+    }:
         add_hidden_states_rt_info(source_model, model, config)
 
     save_model(model, path, compress_to_fp16)
@@ -942,7 +938,7 @@ def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig") -> 
     """
     Add DFlash metadata to DFlash draft model.
 
-    Marks model as DFlash draft model and adds DFlash configuration to the model including 
+    Marks model as DFlash draft model and adds DFlash configuration to the model including
     mask token id and target layer ids.
     """
     try:

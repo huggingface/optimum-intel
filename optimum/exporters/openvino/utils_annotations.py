@@ -14,7 +14,6 @@
 
 import json
 import logging
-import os
 import re
 from collections import Counter, defaultdict
 from typing import Any, Dict, Iterable, Sequence
@@ -59,17 +58,14 @@ def _discover_decoder_stack(source_model) -> Sequence[str]:
 
     if len(candidates) != 1:
         raise ValueError(
-            "Expected one contiguous decoder-layer stack, "
-            f"found {len(candidates)}: {sorted(candidates)}."
+            "Expected one contiguous decoder-layer stack, " f"found {len(candidates)}: {sorted(candidates)}."
         )
     return next(iter(candidates.values()))
 
 
 def _infer_scope_prefix(ops: Iterable[Any], decoder_stack: str, num_layers: int) -> str:
     """Find the activation scope prefix that covers every decoder layer."""
-    pattern = re.compile(
-        rf"^(?P<prefix>__module(?:\.[^./]+)*)\.{re.escape(decoder_stack)}\.(?P<index>\d+)(?=[./]|$)"
-    )
+    pattern = re.compile(rf"^(?P<prefix>__module(?:\.[^./]+)*)\.{re.escape(decoder_stack)}\.(?P<index>\d+)(?=[./]|$)")
     prefix_indices = defaultdict(set)
     for op in ops:
         match = pattern.match(op.get_friendly_name())

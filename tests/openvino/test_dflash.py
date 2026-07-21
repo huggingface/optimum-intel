@@ -103,4 +103,3 @@ class DFlashExportTest(unittest.TestCase):
                     compressed_model = nncf.compress_weights(ov.Core().read_model(xml_path), mode=mode, **kwargs)
                     locators = self._assert_hidden_state_rt_info_is_valid(compressed_model)
                     self.assertEqual(set(locators), layer_ids)
-

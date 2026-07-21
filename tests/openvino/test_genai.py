@@ -580,12 +580,8 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         "num_beams": 1,
     }
     SPECULATIVE_DECODING_MODELS = [
-        (model_arch, model_pair, "Eagle3", None, "2026.0")
-        for model_arch, model_pair in EAGLE3_MODELS.items()
-    ] + [
-        (model_arch, model_pair, "DFlash", "4.57", "2026.3")
-        for model_arch, model_pair in DFLASH_MODELS.items()
-    ]
+        (model_arch, model_pair, "Eagle3", None, "2026.0") for model_arch, model_pair in EAGLE3_MODELS.items()
+    ] + [(model_arch, model_pair, "DFlash", "4.57", "2026.3") for model_arch, model_pair in DFLASH_MODELS.items()]
 
     @parameterized.expand(SPECULATIVE_DECODING_MODELS)
     def test_compare_outputs(
@@ -627,7 +623,9 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         ov_draft_model = draft_model(draft_model_path, "CPU")
         ov_speculative_pipe = LLMPipeline(main_model_path, OPENVINO_DEVICE, draft_model=ov_draft_model, **TEST_CONFIG)
         genai_speculative_output = str(
-            ov_speculative_pipe.generate(prompt, echo=True, apply_chat_template=False, ignore_eos=True, **self.GEN_KWARGS)
+            ov_speculative_pipe.generate(
+                prompt, echo=True, apply_chat_template=False, ignore_eos=True, **self.GEN_KWARGS
+            )
         )
         del ov_speculative_pipe
         del ov_draft_model

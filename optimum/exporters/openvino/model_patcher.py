@@ -88,7 +88,11 @@ if is_transformers_version(">=", "4.57"):
         Qwen3PreTrainedModel,
         Qwen3RMSNorm,
         Qwen3RotaryEmbedding,
+    )
+    from transformers.models.qwen3.modeling_qwen3 import (
         eager_attention_forward as qwen3_eager_attention_forward,
+    )
+    from transformers.models.qwen3.modeling_qwen3 import (
         rotate_half as qwen3_rotate_half,
     )
 else:
@@ -8248,8 +8252,12 @@ class Qwen3DFlashAttention(Qwen3Attention):
         query_states = self.q_norm(query_states).transpose(1, 2)
 
         kv_hidden_states = torch.cat([target_hidden, hidden_states], dim=1)
-        key_states = self.k_proj(kv_hidden_states).view(bsz, ctx_len + q_len, self.config.num_key_value_heads, self.head_dim)
-        value_states = self.v_proj(kv_hidden_states).view(bsz, ctx_len + q_len, self.config.num_key_value_heads, self.head_dim)
+        key_states = self.k_proj(kv_hidden_states).view(
+            bsz, ctx_len + q_len, self.config.num_key_value_heads, self.head_dim
+        )
+        value_states = self.v_proj(kv_hidden_states).view(
+            bsz, ctx_len + q_len, self.config.num_key_value_heads, self.head_dim
+        )
         key_states = self.k_norm(key_states).transpose(1, 2)
         value_states = value_states.transpose(1, 2)
 
