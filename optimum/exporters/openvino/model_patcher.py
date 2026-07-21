@@ -3362,6 +3362,33 @@ class Phi3VisionImageEmbeddingsPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
+def glm_edge_v_vision_embeddings_forward(self, pixel_values: torch.FloatTensor):
+    # `pixel_values` here is a 4D tensor (batch, channels, height, width); the
+    # GLM-Edge-V `VisionModel.forward` expects the same layout and returns the
+    # projected image features (already including the boi/eoi separator tokens).
+    return self(pixel_values)
+
+
+class GlmEdgeVImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+
+        def forward(self, pixel_values):
+            return self.__orig_forward(pixel_values)
+
+        model.forward = types.MethodType(forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
 def minicpm3_attn_forward(
     self,
     hidden_states: torch.Tensor,

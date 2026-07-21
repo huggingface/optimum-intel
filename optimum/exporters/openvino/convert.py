@@ -1029,6 +1029,11 @@ def _get_submodels_and_export_configs(
         not custom_architecture
         and library_name == "transformers"
         and model.config.model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
+        # `model_type="glm"` is shared by the text-only GLM decoder and the
+        # GLM-Edge-V multimodal model. Only the image-text-to-text task should
+        # be decomposed into vision/text/language submodels; text tasks keep
+        # using the standard text-generation export config.
+        and (model.config.model_type != "glm" or task == "image-text-to-text")
     ):
         return _get_multi_modal_submodels_and_export_configs(
             model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful

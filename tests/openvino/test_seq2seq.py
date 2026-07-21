@@ -600,6 +600,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5",
         "qwen3_5_moe",
         "qwen3_omni_moe",
+        "glm_edge_v",
     ]
     SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl", "qwen2_5_vl", "qwen3_vl", "videochat_flash_qwen"]
     SUPPORT_AUDIO = ["qwen3_omni_moe"]
@@ -633,6 +634,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "phi4mm",
         "videochat_flash_qwen",
         "gemma3n",
+        "glm_edge_v",
     ]
     IMAGE = Image.open(
         requests.get(
@@ -1045,6 +1047,44 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
         gc.collect()
 
+    def test_glm_edge_v_preprocess_inputs_with_tokenizer_as_processor(self):
+        # Regression test for WWB visual-text evaluation: `AutoProcessor.from_pretrained`
+        # resolves to a `PreTrainedTokenizerFast` for GLM-Edge-V (no combined processor
+        # class is registered), so callers hand that tokenizer to `preprocess_inputs`
+        # as the `processor` argument. `preprocess_inputs` must resolve the real
+        # `MllamaImageProcessor` instead of calling `processor(image)` positionally,
+        # which previously raised "ValueError: text input must be of type str".
+        model_arch = "glm_edge_v"
+        model_id = MODEL_NAMES[model_arch]
+        trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
+        model = self.OVMODEL_CLASS.from_pretrained(
+            model_id, export=True, trust_remote_code=trust_remote_code, device=OPENVINO_DEVICE
+        )
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+        # Mirror the WWB harness: AutoProcessor -> tokenizer for GLM-Edge-V.
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+        self.assertFalse(hasattr(processor, "image_processor"))
+
+        inputs = model.preprocess_inputs(
+            text="Describe image",
+            image=self.IMAGE.resize((224, 224)),
+            processor=processor,
+            tokenizer=tokenizer,
+            config=config,
+        )
+        self.assertIn("pixel_values", inputs)
+        self.assertIn("input_ids", inputs)
+        outputs = model.generate(**inputs, max_new_tokens=10)
+        self.assertGreater(outputs.shape[1], inputs["input_ids"].shape[1])
+        decoded = tokenizer.batch_decode(
+            outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True
+        )
+        self.assertIsInstance(decoded[0], str)
+
+        del model
+        gc.collect()
+
     def _generate_random_audio_data(self):
         np.random.seed(10)
         sampling_rate = 16000
@@ -1144,6 +1184,16 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             preprocessors = {"processor": None, "tokenizer": tokenizer, "config": config}
+        elif model_arch == "glm_edge_v":
+            # GLM-Edge-V uses an image-only processor (MllamaImageProcessor) plus a
+            # separate tokenizer that owns the chat template / image placeholders.
+            processor = AutoImageProcessor.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            preprocessors = {"processor": processor, "tokenizer": tokenizer, "config": config}
         else:
             processor = AutoProcessor.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS

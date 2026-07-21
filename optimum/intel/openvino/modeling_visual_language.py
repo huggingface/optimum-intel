@@ -7346,6 +7346,107 @@ if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.rot_pos_emb = Qwen3_5VisionModel.rot_pos_emb
 
 
+class _OVGlmEdgeVForCausalLM(OVModelForVisualCausalLM):
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        # Skip the vision tower during autoregressive decoding steps.
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        pixel_values = (
+            torch.from_numpy(pixel_values) if isinstance(pixel_values, np.ndarray) else pixel_values
+        )
+        # GLM-Edge-V's MllamaImageProcessor produces a 6D tensor
+        # (batch, num_concurrent_media, num_tiles, channels, height, width);
+        # the exported vision submodel consumes a 4D (n, channels, height, width)
+        # tensor, matching `GlmForCausalLM.forward` which flattens the leading dims.
+        if pixel_values.ndim == 6:
+            b, ncm, nt, c, h, w = pixel_values.shape
+            pixel_values = pixel_values.reshape(b * ncm * nt, c, h, w)
+        image_features = self.vision_embeddings(pixel_values).last_hidden_state
+        return image_features
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids, attention_mask, position_ids=None, **kwargs
+    ):
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        vision_embeds = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        vision_embeds = vision_embeds.to(inputs_embeds.dtype)
+
+        boi_token_id = self.config.boi_token_id
+        # `vision_embeds` has shape (num_images, num_image_tokens, hidden_size)
+        # and already includes the boi/eoi separator embeddings produced by the
+        # adapter. Splice each image feature block into the positions occupied by
+        # the `boi_token_id` placeholders (the chat template inserts exactly one
+        # placeholder per produced image token).
+        B, N, C = inputs_embeds.shape
+        flat_embeds = inputs_embeds.reshape(B * N, C)
+        flat_ids = input_ids.reshape(B * N)
+        selected = flat_ids == boi_token_id
+        num_selected = int(selected.sum().item())
+        if num_selected > 0:
+            flat_embeds[selected] = vision_embeds.reshape(-1, C)[:num_selected]
+        inputs_embeds = flat_embeds.reshape(B, N, C)
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if tokenizer is None:
+            raise ValueError("Tokenizer is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+
+        if image is not None:
+            content = [{"type": "image"}, {"type": "text", "text": text}]
+        else:
+            content = [{"type": "text", "text": text}]
+        messages = [{"role": "user", "content": content}]
+        inputs = tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, return_dict=True, tokenize=True, return_tensors="pt"
+        )
+        if image is not None:
+            if processor is None:
+                raise ValueError("Processor is required for image inputs.")
+            # GLM-Edge-V has no combined processor class registered, so callers
+            # (e.g. `AutoProcessor.from_pretrained`) may hand us the tokenizer,
+            # the standalone `MllamaImageProcessor`, or a processor wrapping it.
+            # Resolve the actual image processor instead of calling
+            # `processor(image)` positionally, which would bind the PIL image to
+            # the tokenizer's `text` argument and raise
+            # "text input must be of type str".
+            image_processor = getattr(processor, "image_processor", None)
+            if image_processor is None:
+                if hasattr(processor, "pixel_values") or (
+                    callable(processor) and not hasattr(processor, "tokenize")
+                ):
+                    # `processor` is already an image processor.
+                    image_processor = processor
+            if image_processor is None:
+                name_or_path = None
+                if config is not None:
+                    name_or_path = getattr(config, "_name_or_path", None) or getattr(
+                        config, "name_or_path", None
+                    )
+                if name_or_path is None:
+                    raise ValueError(
+                        "Could not resolve an image processor for GLM-Edge-V. Provide the "
+                        "MllamaImageProcessor via the `processor` argument or a config with a "
+                        "valid `_name_or_path`."
+                    )
+                image_processor = AutoImageProcessor.from_pretrained(name_or_path, trust_remote_code=True)
+            pixel_values = torch.tensor(image_processor(image).pixel_values)
+            inputs["pixel_values"] = pixel_values
+        return inputs
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
@@ -7377,4 +7478,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_omni_moe": _OVQwen3OmniMoeForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
+    "glm": _OVGlmEdgeVForCausalLM,
 }

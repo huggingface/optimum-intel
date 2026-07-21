@@ -144,6 +144,274 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+_GLM_EDGE_V_ORIGINAL_MODEL_ID = "zai-org/glm-edge-v-2b"
+_GLM_EDGE_V_CACHE_MARKER = "tiny_glm_edge_v.v1"
+_GLM_EDGE_V_REMOTE_CODE_FILES = ["configuration_glm.py", "modeling_glm.py", "siglip.py"]
+_GLM_EDGE_V_ASSET_FILES = [
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "preprocessor_config.json",
+    "generation_config.json",
+]
+
+
+def _glm_edge_v_num_image_tokens(image_size: int, patch_size: int) -> int:
+    """Vision tokens = stride-2-conv patch grid squared + boi + eoi (see siglip.Adapter)."""
+    side = image_size // patch_size  # SigLIP patch grid side
+    side = side // 2  # adapter conv kernel=2 stride=2
+    return side * side + 2
+
+
+def _glm_edge_v_patch_remote_code(modeling_path: str) -> None:
+    """Repair transformers>=4.48 generation-plumbing incompatibilities in the
+    shipped GLM-Edge-V remote code.
+
+    The original remote code detects the prefill step via `if not past_key_values:`
+    (an empty `DynamicCache` is truthy in transformers>=4.48) and uses the legacy
+    `prepare_inputs_for_generation` protocol. These are generation-plumbing fixes
+    only; the architecture (model_type, GlmForCausalLM, SigLIP vision tower,
+    adapter, weights, forward math) is unchanged.
+    """
+    with open(modeling_path) as f:
+        src = f.read()
+
+    old_prefill = (
+        '        if (input_ids is None) ^ (inputs_embeds is not None):\n'
+        '            raise ValueError("You must specify exactly one of input_ids or inputs_embeds")\n'
+        "\n"
+        "        if not past_key_values:\n"
+    )
+    new_prefill = (
+        '        if (input_ids is None) ^ (inputs_embeds is not None):\n'
+        '            raise ValueError("You must specify exactly one of input_ids or inputs_embeds")\n'
+        "\n"
+        "        _past_len = past_key_values.get_seq_length() if isinstance(past_key_values, Cache) else (\n"
+        "            len(past_key_values) if past_key_values else 0\n"
+        "        )\n"
+        "        _is_prefill = _past_len == 0\n"
+        "\n"
+        "        if _is_prefill:\n"
+    )
+    if old_prefill in src:
+        src = src.replace(old_prefill, new_prefill, 1)
+
+        old_embed = (
+            "        if inputs_embeds is None:\n"
+            "            if past_key_values:\n"
+            "                inputs_embeds = self.embed_tokens(input_ids[:, -1:])\n"
+            "            else:\n"
+            "                inputs_embeds = self.embed_tokens(input_ids)\n"
+        )
+        new_embed = (
+            "        if inputs_embeds is None:\n"
+            "            if not _is_prefill:\n"
+            "                inputs_embeds = self.embed_tokens(input_ids[:, -1:])\n"
+            "            else:\n"
+            "                inputs_embeds = self.embed_tokens(input_ids)\n"
+        )
+        if old_embed in src:
+            src = src.replace(old_embed, new_embed, 1)
+
+        old_prep_start = "    def prepare_inputs_for_generation(\n"
+        old_prep_end = '            "use_cache": use_cache,\n        }\n'
+        if old_prep_start in src and old_prep_end in src:
+            p0 = src.index(old_prep_start)
+            p1 = src.index(old_prep_end, p0) + len(old_prep_end)
+            new_prep = (
+                "    def prepare_inputs_for_generation(\n"
+                "        self,\n"
+                "        input_ids: torch.LongTensor,\n"
+                "        pixel_values: Optional[torch.Tensor] = torch.zeros([1, 1, 1, 3, 672, 672]),\n"
+                "        past_key_values: Optional[torch.Tensor] = None,\n"
+                "        attention_mask: Optional[torch.Tensor] = None,\n"
+                "        position_ids: Optional[torch.Tensor] = None,\n"
+                "        use_cache: Optional[bool] = None,\n"
+                "        cache_position: Optional[torch.Tensor] = None,\n"
+                "        **kwargs,\n"
+                "    ) -> dict:\n"
+                "        model_inputs = GenerationMixin.prepare_inputs_for_generation(\n"
+                "            self,\n"
+                "            input_ids,\n"
+                "            past_key_values=past_key_values,\n"
+                "            attention_mask=attention_mask,\n"
+                "            position_ids=position_ids,\n"
+                "            use_cache=use_cache,\n"
+                "            cache_position=cache_position,\n"
+                "            **kwargs,\n"
+                "        )\n"
+                '        model_inputs["pixel_values"] = pixel_values\n'
+                "        return model_inputs\n"
+            )
+            src = src[:p0] + new_prep + src[p1:]
+
+        upd_start = "    def _update_model_kwargs_for_generation(\n"
+        if upd_start in src:
+            u0 = src.index(upd_start)
+            after = src.index("\n    def ", u0 + 1)
+            src = src[:u0] + src[after + 1 :]
+
+    with open(modeling_path, "w") as f:
+        f.write(src)
+
+
+def _create_tiny_glm_edge_v_model():
+    """Build a tiny, architecture-faithful random GLM-Edge-V model for testing.
+
+    GLM-Edge-V (`zai-org/glm-edge-v-2b`) is an image-text-to-text VLM shipped with
+    trust-remote-code: model_type "glm", architectures ["GlmForCausalLM"], a SigLIP
+    vision tower + GLU adapter bridged into a GLM text decoder. Only the config,
+    remote code and processor/tokenizer assets are downloaded (never the original
+    weights); random weights are instantiated through the real architecture. The
+    vision->text image-token contract is preserved by rewriting the chat template
+    to insert exactly `num_image_tokens` `<|begin_of_image|>` placeholders.
+
+    The result is cached on disk under the system temp dir, so subsequent calls are
+    cheap. Falls back to the Hub id when the assets cannot be fetched.
+    """
+    import copy
+    import shutil
+
+    from huggingface_hub import snapshot_download
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_glm_edge_v"
+    marker_file = output_dir / "_tiny_marker.json"
+
+    hidden_size = 64
+    image_size = 56
+    vision_hidden_size = 64
+
+    def _cache_is_valid():
+        if not (marker_file.exists() and (output_dir / "config.json").exists()):
+            return False
+        try:
+            with open(marker_file) as f:
+                m = json.load(f)
+            with open(output_dir / "config.json") as f:
+                cfg = json.load(f)
+        except Exception:
+            return False
+        if m.get("marker") != _GLM_EDGE_V_CACHE_MARKER:
+            return False
+        if cfg.get("model_type") != "glm" or cfg.get("architectures") != ["GlmForCausalLM"]:
+            return False
+        if cfg.get("hidden_size") != hidden_size:
+            return False
+        if cfg.get("vision_config", {}).get("image_size") != image_size:
+            return False
+        if not any(fn.endswith((".safetensors", ".bin")) for fn in os.listdir(output_dir)):
+            return False
+        return True
+
+    if _cache_is_valid():
+        return str(output_dir)
+
+    try:
+        src_dir = snapshot_download(
+            _GLM_EDGE_V_ORIGINAL_MODEL_ID,
+            allow_patterns=["config.json"] + _GLM_EDGE_V_REMOTE_CODE_FILES + _GLM_EDGE_V_ASSET_FILES,
+        )
+    except Exception:
+        # No network / gated access: fall back to the Hub id (test may be skipped).
+        return _GLM_EDGE_V_ORIGINAL_MODEL_ID
+
+    with open(os.path.join(src_dir, "config.json")) as f:
+        orig_cfg = json.load(f)
+    orig_vc = orig_cfg["vision_config"]
+
+    patch_size = orig_vc["patch_size"]
+    num_image_tokens = _glm_edge_v_num_image_tokens(image_size, patch_size)
+
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    tiny = copy.deepcopy(orig_cfg)
+    tiny.update(
+        dict(
+            hidden_size=hidden_size,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            head_dim=16,
+            partial_rotary_factor=orig_cfg["partial_rotary_factor"],
+            vocab_size=orig_cfg["vocab_size"],
+            max_position_embeddings=orig_cfg["max_position_embeddings"],
+            torch_dtype="float32",
+        )
+    )
+    tiny["vision_config"] = dict(
+        hidden_size=vision_hidden_size,
+        image_size=image_size,
+        intermediate_size=128,
+        model_type="siglip_vision_model",
+        num_attention_heads=4,
+        num_hidden_layers=2,
+        patch_size=patch_size,
+        torch_dtype="float32",
+    )
+
+    with open(output_dir / "config.json", "w") as f:
+        json.dump(tiny, f, indent=2)
+
+    for fn in _GLM_EDGE_V_REMOTE_CODE_FILES + _GLM_EDGE_V_ASSET_FILES:
+        s = os.path.join(src_dir, fn)
+        if os.path.exists(s):
+            shutil.copy(s, output_dir / fn)
+
+    _glm_edge_v_patch_remote_code(str(output_dir / "modeling_glm.py"))
+
+    prep_path = output_dir / "preprocessor_config.json"
+    with open(prep_path) as f:
+        prep = json.load(f)
+    prep["size"] = {"height": image_size, "width": image_size}
+    prep["image_size"] = image_size
+    with open(prep_path, "w") as f:
+        json.dump(prep, f, indent=2)
+
+    tok_cfg_path = output_dir / "tokenizer_config.json"
+    with open(tok_cfg_path) as f:
+        tok_cfg = json.load(f)
+    tmpl = tok_cfg.get("chat_template", "")
+    if "range(578)" in tmpl:
+        tmpl = tmpl.replace("range(578)", f"range({num_image_tokens})")
+    tok_cfg["chat_template"] = tmpl
+    tok_cfg["image_size"] = image_size
+    with open(tok_cfg_path, "w") as f:
+        json.dump(tok_cfg, f, indent=2)
+
+    torch.manual_seed(SEED)
+    config = AutoConfig.from_pretrained(output_dir, trust_remote_code=True)
+    model = AutoModelForCausalLM.from_config(config, trust_remote_code=True).to(torch.float32)
+
+    # Widen weight variance so the tiny random model does not collapse to a single
+    # repeated output token (needed for meaningful HF-vs-OpenVINO comparison).
+    with torch.no_grad():
+        for name, p in model.named_parameters():
+            if p.ndim >= 2:
+                p.normal_(mean=0.0, std=0.6)
+            elif "norm" in name:
+                p.fill_(1.0)
+
+    model.save_pretrained(output_dir, safe_serialization=True)
+
+    with open(marker_file, "w") as f:
+        json.dump(
+            {
+                "marker": _GLM_EDGE_V_CACHE_MARKER,
+                "num_image_tokens": num_image_tokens,
+                "hidden_size": hidden_size,
+                "image_size": image_size,
+            },
+            f,
+            indent=2,
+        )
+
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -353,6 +621,7 @@ HUB_MODEL_NAMES = {
     "xverse": "optimum-intel-internal-testing/tiny-random-xverse",
     "glm4": "optimum-intel-internal-testing/tiny-random-glm4",
     "glm": "optimum-intel-internal-testing/tiny-random-glm-edge",
+    "glm_edge_v": _create_tiny_glm_edge_v_model(),
     "open-clip": "optimum-intel-internal-testing/tiny-open-clip-model",
     "open-clip-ov": "optimum-intel-internal-testing/tiny-open-clip-model",
     "st-bert": "optimum-intel-internal-testing/all-MiniLM-L6-v2",
@@ -470,6 +739,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "lm_model": 30,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 9,
+    },
+    "glm_edge_v": {
+        "lm_model": 26,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 18,
     },
     "llava_next": {
         "lm_model": 30,
@@ -657,6 +931,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_asr",
     "fun_asr",
     "videochat_flash_qwen",
+    "glm_edge_v",
 )
 
 if is_transformers_version("<", "5"):
@@ -822,6 +1097,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "codegen2": "codegen",
     "falcon-40b": "falcon",
     "gemma4_moe": "gemma4",
+    "glm_edge_v": "glm",
     "gpt_oss_mxfp4": "gpt_oss",
     "llama_awq": "llama",
     "llava_next_mistral": "llava_next",

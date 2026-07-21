@@ -415,7 +415,13 @@ class OVModelForFeatureExtraction(OVModel):
 
         if config.model_type == "sam":
             return OVSamModel._from_pretrained(model_id, config, *args, **kwargs)
-        if config.model_type in MODEL_TYPE_TO_CLS_MAPPING.keys():
+        if config.model_type in MODEL_TYPE_TO_CLS_MAPPING.keys() and not (
+            # `model_type="glm"` covers both the text-only GLM decoder and the
+            # GLM-Edge-V multimodal model; only the latter (which carries a
+            # `vision_config`) should be routed to the visual-language model.
+            config.model_type == "glm"
+            and not hasattr(config, "vision_config")
+        ):
             from .modeling_visual_language import OVModelForVisualCausalLM
 
             return OVModelForVisualCausalLM.from_pretrained(
