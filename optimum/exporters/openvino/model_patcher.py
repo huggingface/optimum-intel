@@ -8226,6 +8226,7 @@ def _dflash_attention_mask(
 
 
 # adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L185
+# and https://github.com/huggingface/transformers/blob/v5.14.0/src/transformers/models/qwen3/modeling_qwen3.py#L222
 class Qwen3DFlashAttention(Qwen3Attention):
     """Qwen3 attention variant used by DFlash, where draft tokens attend over target context and noise tokens."""
 
@@ -8373,6 +8374,7 @@ class Qwen3DFlashDecoderLayer(nn.Module):
         return hidden_states
 
 
+# adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L302
 class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
     config_class = Qwen3Config
     _no_split_modules = ["Qwen3DFlashDecoderLayer"]
