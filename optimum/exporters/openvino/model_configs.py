@@ -462,7 +462,6 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
                 Eagle3DummyGenerator,
                 GemmaDummyPastKeyValuesGenerator,
             )
-            self.MIN_TRANSFORMERS_VERSION = "4.57.0"
             self.PAD_ATTENTION_MASK_TO_PAST = False
 
     @property
