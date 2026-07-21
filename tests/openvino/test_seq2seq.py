@@ -885,7 +885,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 f"Each batch of input_ids must contain exactly one BOS token, "
                 f"but found counts: {bos_token_counts.tolist()}",
             )
-
             if model_arch in ["gemma3n"]:
                 inputs.pop("token_type_ids")
 
