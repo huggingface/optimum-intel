@@ -24,7 +24,6 @@ from transformers import AutoModelForCausalLM
 from utils_tests import MODEL_NAMES
 
 from optimum.exporters.openvino import export_from_model
-from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.openvino.utils import TemporaryDirectory
 from optimum.intel.utils.import_utils import is_transformers_version
 
@@ -60,22 +59,15 @@ class DFlashExportTest(unittest.TestCase):
             resolved_outputs.add(identity)
         return locators
 
-    @parameterized.expand(("llama", "gemma4", "qwen3_5", "qwen3_5_moe", "gpt_oss"))
+    @parameterized.expand(("qwen3", "qwen3_moe", "qwen3_5", "qwen3_5_moe"))
     def test_export_hidden_state_locators_for_representative_decoder_models(self, model_type):
-        if model_type == "gemma4" and not is_transformers_version(">=", "5.5.0"):
-            self.skipTest("Gemma4 hidden-state locator coverage requires Transformers >= 5.5.0")
         if model_type in {"qwen3_5", "qwen3_5_moe"} and not is_transformers_version(">=", "5.2.0"):
             self.skipTest("Qwen3.5 hidden-state locator coverage requires Transformers >= 5.2.0")
 
         with TemporaryDirectory() as tmpdirname:
             tmpdirname = Path(tmpdirname)
             annotated_dir = tmpdirname / "annotated"
-            if model_type == "gemma4":
-                model = MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
-                    MODEL_NAMES[model_type]
-                ).language_model
-            else:
-                model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES[model_type])
+            model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES[model_type])
             export_from_model(
                 model=model,
                 output=annotated_dir,

@@ -132,6 +132,7 @@ def _save_model(
     ov_config: Optional["OVConfig"] = None,
     library_name: Optional[str] = None,
     config: "OnnxConfig" = None,
+    source_model=None,
 ):
     compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
     model = _add_version_info_to_model(model, library_name)
@@ -143,6 +144,19 @@ def _save_model(
         model = _add_eagle3_mode_to_rt_info(model)
     if getattr(config, "dflash", False):
         model = _add_dflash_mode_to_rt_info(model, config._config)
+    if (
+        source_model is not None
+        and getattr(getattr(source_model, "config", None), "model_type", None)
+        in {
+            "qwen3",
+            "qwen3_moe",
+            "qwen3_5",
+            "qwen3_5_moe",
+            "qwen3_5_text",
+            "qwen3_5_moe_text",
+        }
+    ):
+        add_hidden_states_rt_info(source_model, model, config)
 
     save_model(model, path, compress_to_fp16)
     del model
@@ -470,8 +484,6 @@ def export_pytorch(
         if stateful:
             patch_stateful(model.config, ov_model)
 
-        add_hidden_states_rt_info(model, ov_model, config)
-
         library_name = _infer_library_from_model_or_model_class(model=model, library_name=library_name)
 
         _save_model(
@@ -480,6 +492,7 @@ def export_pytorch(
             ov_config=ov_config,
             library_name=library_name,
             config=config,
+            source_model=model,
         )
         clear_class_registry()
         del ov_model
