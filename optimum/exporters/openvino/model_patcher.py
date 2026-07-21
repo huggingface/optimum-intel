@@ -9739,6 +9739,170 @@ class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
             del self._model._orig_forward
 
 
+class FunASRModelPatcher(OVSeq2SeqModelPatcher):
+    """
+    Model patcher for FunASR (e.g. Fun-ASR-Nano) encoder-decoder export.
+
+    Encoder: SenseVoice audio encoder + adaptor. All frames are assumed valid (no masking)
+    because funasr's native mask ops use .tolist() which bakes trace-time constants.
+
+    Decoder: a standard Qwen3 LLM. The audio embeddings produced by the encoder are spliced into the
+    decoder input embeddings at audio placeholder positions (token id == audio_token_id, which is 0
+    for FunASR), then the Qwen3 LM runs with self-attention KV cache only (no cross-attention).
+    """
+
+    def __enter__(self):
+        super().__enter__()
+
+        if self.real_config._behavior == "encoder":
+            self._patch_audio_encoder()
+        elif self.real_config._behavior == "decoder":
+            self._patch_decoder()
+
+    def _patch_audio_encoder(self):
+        # self._model is the _FunASRAudioEncoder wrapper (audio_encoder + audio_adaptor)
+        encoder_wrap = self._model
+        sense_voice = encoder_wrap.audio_encoder
+        adaptor = encoder_wrap.audio_adaptor
+
+        # Patch SANM encoder self-attention layers to skip masking during trace.
+        # The native mask computation uses `lengths.tolist()` which bakes trace-time values as constants,
+        # making the graph incompatible with different sequence lengths at inference time.
+        self._sanm_layers = list(sense_voice.encoders0) + list(sense_voice.encoders) + list(sense_voice.tp_encoders)
+        self._adaptor_blocks = getattr(adaptor, "blocks", None)
+
+        def _sanm_forward_no_mask(self, x, mask=None, mask_shfit_chunk=None, mask_att_chunk_encoder=None):
+            return self._orig_forward(x, mask=None, mask_shfit_chunk=None, mask_att_chunk_encoder=None)
+
+        for layer in self._sanm_layers:
+            attn = layer.self_attn
+            attn._orig_forward = attn.forward
+            attn.forward = types.MethodType(_sanm_forward_no_mask, attn)
+
+        # Patch adaptor transformer attention layers similarly.
+        def _adaptor_forward_no_mask(self, query, key, value, mask=None):
+            return self._orig_forward(query, key, value, mask=None)
+
+        if self._adaptor_blocks is not None:
+            for block in self._adaptor_blocks:
+                attn = block.self_attn
+                attn._orig_forward = attn.forward
+                attn.forward = types.MethodType(_adaptor_forward_no_mask, attn)
+
+        encoder_wrap._orig_forward = encoder_wrap.forward
+
+        def patched_encoder_forward(input_features):
+            speech_lengths = torch.tensor([input_features.shape[1]] * input_features.shape[0], dtype=torch.int32)
+            encoder_out, encoder_out_lens = sense_voice(input_features, speech_lengths)
+            adaptor_out, _ = adaptor(encoder_out, encoder_out_lens)
+            return BaseModelOutput(last_hidden_state=adaptor_out)
+
+        encoder_wrap.forward = patched_encoder_forward
+
+    def _patch_decoder(self):
+        # self._model is the _FunASRForSpeechSeq2Seq wrapper
+        model = self._model
+        self._llm = model.llm
+        llm = self._llm
+        audio_token_id = getattr(model.config, "audio_token_id", 0)
+
+        # Force eager attention for stable OpenVINO tracing.
+        self._orig_attn_implementation = llm.config._attn_implementation
+        llm.set_attn_implementation("eager")
+
+        model._orig_forward = model.forward
+
+        def patched_decoder_forward(
+            encoder_outputs=None,
+            decoder_input_ids=None,
+            attention_mask=None,
+            past_key_values=None,
+            cache_position=None,
+            **kwargs,
+        ):
+            if past_key_values is not None and isinstance(past_key_values, (list, tuple)):
+                cache = DynamicCache()
+                for layer_past in past_key_values:
+                    if len(layer_past) >= 2:
+                        cache.update(layer_past[0], layer_past[1], len(cache))
+                past_key_values = cache
+            elif past_key_values is None:
+                past_key_values = DynamicCache()
+
+            input_ids = decoder_input_ids
+            inputs_embeds = llm.get_input_embeddings()(input_ids)
+
+            # Splice audio embeddings into placeholder positions (token id == audio_token_id).
+            if encoder_outputs is not None:
+                if isinstance(encoder_outputs, (tuple, list)):
+                    encoder_hidden_states = encoder_outputs[0]
+                else:
+                    encoder_hidden_states = encoder_outputs
+                audio_features = encoder_hidden_states.reshape(-1, encoder_hidden_states.shape[-1])
+                audio_features = audio_features.to(inputs_embeds.device, inputs_embeds.dtype)
+
+                special_audio_mask = input_ids == audio_token_id  # [batch, seq]
+                audio_cumsum = special_audio_mask.long().cumsum(dim=-1) - 1
+                audio_cumsum = audio_cumsum.clamp(min=0)
+                gather_indices = audio_cumsum.unsqueeze(-1).expand(-1, -1, inputs_embeds.shape[-1])
+                audio_features_expanded = audio_features.unsqueeze(0).expand(inputs_embeds.shape[0], -1, -1)
+                gathered_audio = torch.gather(audio_features_expanded, 1, gather_indices)
+                mask_3d = special_audio_mask.unsqueeze(-1)
+                inputs_embeds = torch.where(mask_3d, gathered_audio, inputs_embeds)
+
+            outputs = llm.model(
+                attention_mask=attention_mask,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                use_cache=True,
+                cache_position=cache_position,
+            )
+
+            logits = llm.lm_head(outputs[0])
+
+            past_kv = outputs.past_key_values
+            flat_output = [logits]
+            if isinstance(past_kv, DynamicCache):
+                for layer in past_kv.layers:
+                    flat_output.append(layer.keys)
+                    flat_output.append(layer.values)
+            elif past_kv is not None:
+                legacy = past_kv if isinstance(past_kv, (list, tuple)) else past_kv.to_legacy_cache()
+                for layer_kv in legacy:
+                    flat_output.append(layer_kv[0])
+                    flat_output.append(layer_kv[1])
+
+            return tuple(flat_output)
+
+        model.forward = patched_decoder_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        if hasattr(self._model, "_orig_forward"):
+            self._model.forward = self._model._orig_forward
+            del self._model._orig_forward
+
+        # Restore attention implementation on the LLM.
+        if getattr(self, "_llm", None) is not None and getattr(self, "_orig_attn_implementation", None) is not None:
+            self._llm.set_attn_implementation(self._orig_attn_implementation)
+
+        # Unpatch SANM and adaptor attention layers.
+        if getattr(self, "_sanm_layers", None) is not None:
+            for layer in self._sanm_layers:
+                attn = layer.self_attn
+                if hasattr(attn, "_orig_forward"):
+                    attn.forward = attn._orig_forward
+                    del attn._orig_forward
+
+        if getattr(self, "_adaptor_blocks", None) is not None:
+            for block in self._adaptor_blocks:
+                attn = block.self_attn
+                if hasattr(attn, "_orig_forward"):
+                    attn.forward = attn._orig_forward
+                    del attn._orig_forward
+
+
 class KokoroModelPatcher(ModelPatcher):
     """
     Patches the Kokoro TTS model for OpenVINO export by redirecting forward
@@ -9754,6 +9918,498 @@ class KokoroModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model._orig_forward
+
+
+def _ltx2_connector_forward_patched(self, hidden_states, attention_mask=None, attn_mask_binarize_threshold=-9000.0):
+    """
+    Patched forward for LTX2ConnectorTransformer1d.
+
+    Original does boolean-mask indexing `hidden_states[i, mask[i].bool(), :]`, whose output
+    length depends on mask values and cannot be traced. Rewritten with fixed-shape sort +
+    gather + arange mask (valid tokens left, registers right).
+
+    Reference (diffusers==0.38.0): pipelines/ltx2/connectors.py,
+    LTX2ConnectorTransformer1d.forward L279-330 (data-dependent indexing at L304).
+    """
+    batch_size, seq_len, hidden_dim = hidden_states.shape
+
+    if self.learnable_registers is not None:
+        if attention_mask is None:
+            raise ValueError("attention_mask is required when learnable_registers are present")
+        num_register_repeats = seq_len // self.num_learnable_registers
+        registers = torch.tile(self.learnable_registers, (num_register_repeats, 1))  # [seq_len, dim]
+        registers = registers.unsqueeze(0).expand(batch_size, -1, -1)  # [B, seq_len, dim]
+
+        binary_attn_mask = (attention_mask >= attn_mask_binarize_threshold).to(torch.int64)
+        if binary_attn_mask.ndim == 4:
+            binary_attn_mask = binary_attn_mask.squeeze(1).squeeze(1)  # [B, L]
+
+        # Sort mask descending to left-align valid tokens (preserving relative order via stable sort)
+        _, sort_indices = binary_attn_mask.sort(dim=1, descending=True, stable=True)
+        gather_indices = sort_indices.unsqueeze(-1).expand(-1, -1, hidden_dim)
+        padded_hidden_states = torch.gather(hidden_states, dim=1, index=gather_indices)  # [B, L, D] valid left-aligned
+
+        # Create mask: 1s for valid token positions (left), 0s for register positions (right)
+        valid_counts = binary_attn_mask.sum(dim=1)  # [B]
+        pos_indices = torch.arange(seq_len, device=hidden_states.device).unsqueeze(0)
+        valid_mask = (
+            (pos_indices < valid_counts.unsqueeze(1)).unsqueeze(-1).to(padded_hidden_states.dtype)
+        )  # [B, L, 1]
+
+        # Valid tokens at left positions, registers at right positions (matches original behavior)
+        hidden_states = valid_mask * padded_hidden_states + (1 - valid_mask) * registers
+
+        attention_mask = torch.zeros_like(attention_mask)
+
+    rotary_emb = self.rope(batch_size, seq_len, device=hidden_states.device)
+
+    for block in self.transformer_blocks:
+        hidden_states = block(hidden_states, attention_mask=attention_mask, rotary_emb=rotary_emb)
+
+    hidden_states = self.norm_out(hidden_states)
+    return hidden_states, attention_mask
+
+
+def _ltx2_connectors_top_level_forward_patched(
+    self, text_encoder_hidden_states, attention_mask, padding_side="left", scale_factor=8
+):
+    """
+    Patched top-level forward for LTX2TextConnectors: inlines per_layer_masked_mean_norm
+    (masked_fill/arange/amin/amax, all fixed-shape) and hardcodes padding_side="left" so the
+    connectors stack traces cleanly as a single graph.
+
+    Reference (diffusers==0.38.0): pipelines/ltx2/connectors.py,
+    LTX2TextConnectors.forward L397-476 and per_layer_masked_mean_norm L14-78.
+    """
+    import torch
+
+    if text_encoder_hidden_states.ndim == 3:
+        text_encoder_hidden_states = text_encoder_hidden_states.unflatten(2, (self.config.caption_channels, -1))
+
+    if self.config.get("per_modality_projections", False):
+        import math
+
+        from diffusers.pipelines.ltx2.connectors import per_token_rms_norm
+
+        norm_text_encoder_hidden_states = per_token_rms_norm(text_encoder_hidden_states)
+        norm_text_encoder_hidden_states = norm_text_encoder_hidden_states.flatten(2, 3)
+        bool_mask = attention_mask.bool().unsqueeze(-1)
+        norm_text_encoder_hidden_states = torch.where(
+            bool_mask, norm_text_encoder_hidden_states, torch.zeros_like(norm_text_encoder_hidden_states)
+        )
+        video_scale_factor = math.sqrt(self.config.video_hidden_dim / self.config.caption_channels)
+        video_norm_text_emb = norm_text_encoder_hidden_states * video_scale_factor
+        audio_scale_factor = math.sqrt(self.config.audio_hidden_dim / self.config.caption_channels)
+        audio_norm_text_emb = norm_text_encoder_hidden_states * audio_scale_factor
+        video_text_emb_proj = self.video_text_proj_in(video_norm_text_emb)
+        audio_text_emb_proj = self.audio_text_proj_in(audio_norm_text_emb)
+    else:
+        # Traceable version of per_layer_masked_mean_norm
+        # text_encoder_hidden_states: [batch, seq, hidden_dim, num_layers]
+        # attention_mask: [batch, seq] binary (1=valid, 0=pad)
+        eps = 1e-6
+        batch_size, seq_len, hidden_dim, num_layers = text_encoder_hidden_states.shape
+        original_dtype = text_encoder_hidden_states.dtype
+
+        # Create mask [batch, seq, 1, 1] from binary attention_mask
+        mask = attention_mask[:, :, None, None].bool()
+
+        # Compute masked mean
+        masked_text_hidden_states = text_encoder_hidden_states.masked_fill(~mask, 0.0)
+        num_valid_positions = (attention_mask.sum(dim=-1) * hidden_dim).view(batch_size, 1, 1, 1)
+        masked_mean = masked_text_hidden_states.sum(dim=(1, 2), keepdim=True) / (num_valid_positions + eps)
+
+        # Compute min/max
+        x_min = text_encoder_hidden_states.masked_fill(~mask, float("inf")).amin(dim=(1, 2), keepdim=True)
+        x_max = text_encoder_hidden_states.masked_fill(~mask, float("-inf")).amax(dim=(1, 2), keepdim=True)
+
+        # Normalize
+        normalized_hidden_states = (text_encoder_hidden_states - masked_mean) / (x_max - x_min + eps)
+        normalized_hidden_states = normalized_hidden_states * scale_factor
+
+        # Pack to 3D
+        normalized_hidden_states = normalized_hidden_states.flatten(2)
+        mask_flat = mask.squeeze(-1).expand(-1, -1, hidden_dim * num_layers)
+        normalized_hidden_states = normalized_hidden_states.masked_fill(~mask_flat, 0.0)
+        norm_text_encoder_hidden_states = normalized_hidden_states.to(dtype=original_dtype)
+
+        text_emb_proj = self.text_proj_in(norm_text_encoder_hidden_states)
+        video_text_emb_proj = text_emb_proj
+        audio_text_emb_proj = text_emb_proj
+
+    # Convert to additive attention mask for sub-connectors
+    text_dtype = video_text_emb_proj.dtype
+    add_attn_mask = (attention_mask.to(torch.int64) - 1).to(text_dtype)
+    add_attn_mask = add_attn_mask.reshape(attention_mask.shape[0], 1, 1, attention_mask.shape[-1])
+    add_attn_mask = add_attn_mask * torch.finfo(text_dtype).max
+
+    video_text_embedding, video_attn_mask = self.video_connector(video_text_emb_proj, add_attn_mask)
+
+    # Convert video attn mask to binary
+    binary_attn_mask = (video_attn_mask < 1e-6).to(torch.int64)
+    binary_attn_mask = binary_attn_mask.reshape(video_text_embedding.shape[0], video_text_embedding.shape[1], 1)
+    video_text_embedding = video_text_embedding * binary_attn_mask
+
+    audio_text_embedding, _ = self.audio_connector(audio_text_emb_proj, add_attn_mask)
+
+    return video_text_embedding, audio_text_embedding, binary_attn_mask.squeeze(-1)
+
+
+class _LTX2AttnProcessorWithEps:
+    """
+    Connector attention processor: replaces SDPA with manual attention and adds eps=1e-30
+    before softmax to avoid an OpenVINO CPU plugin numerical issue with all-zero attention rows.
+
+    Reference (diffusers==0.38.0): models/transformers/transformer_ltx2.py,
+    LTX2AudioVideoAttnProcessor.__call__ L161-228 (SDPA via dispatch_attention_fn at L206).
+
+
+    """
+
+    def __call__(
+        self,
+        attn,
+        hidden_states,
+        encoder_hidden_states=None,
+        attention_mask=None,
+        query_rotary_emb=None,
+        key_rotary_emb=None,
+    ):
+        batch_size, sequence_length, _ = (
+            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+        )
+
+        if attention_mask is not None:
+            attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+            attention_mask = attention_mask.view(batch_size, attn.heads, -1, attention_mask.shape[-1])
+
+        if encoder_hidden_states is None:
+            encoder_hidden_states = hidden_states
+
+        query = attn.to_q(hidden_states)
+        key = attn.to_k(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
+
+        query = attn.norm_q(query)
+        key = attn.norm_k(key)
+
+        if query_rotary_emb is not None:
+            query = _ltx2_apply_split_rotary_emb(query, query_rotary_emb)
+            key = _ltx2_apply_split_rotary_emb(key, key_rotary_emb if key_rotary_emb is not None else query_rotary_emb)
+
+        query = query.unflatten(2, (attn.heads, -1))
+        key = key.unflatten(2, (attn.heads, -1))
+        value = value.unflatten(2, (attn.heads, -1))
+
+        # Manual attention with epsilon to avoid CPU plugin issue
+        query = query.transpose(1, 2)
+        key = key.transpose(1, 2)
+        value = value.transpose(1, 2)
+
+        scale = 1.0 / (query.shape[-1] ** 0.5)
+        attn_weights = torch.matmul(query, key.transpose(-2, -1)) * scale
+
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask
+
+        # epsilon to avoid CPU plugin issue with zero attention weights
+        eps = 1e-30
+
+        attn_weights = torch.nn.functional.softmax(attn_weights + eps, dim=-1)
+
+        hidden_states = torch.matmul(attn_weights, value)
+
+        hidden_states = hidden_states.transpose(1, 2).flatten(2, 3)
+        hidden_states = hidden_states.to(query.dtype)
+
+        hidden_states = attn.to_out[0](hidden_states)
+        hidden_states = attn.to_out[1](hidden_states)
+
+        return hidden_states
+
+
+class LTX2ConnectorsPatcher(ModelPatcher):
+    """
+    Export patcher for LTX2TextConnectors: swaps in the trace-safe top-level and
+    sub-connector forwards and the eps attention processor for the duration of the export.
+    """
+
+    def __enter__(self):
+        super().__enter__()
+
+        # Patch the top-level forward of LTX2TextConnectors
+        self._model._orig_forward = self._model.forward
+        self._model.forward = types.MethodType(_ltx2_connectors_top_level_forward_patched, self._model)
+
+        # Patch both video_connector and audio_connector
+        for connector_name in ["video_connector", "audio_connector"]:
+            connector = getattr(self._model, connector_name, None)
+            if connector is not None:
+                connector._orig_forward = connector.forward
+                connector.forward = types.MethodType(_ltx2_connector_forward_patched, connector)
+
+        # Replace attention processors with epsilon-patched version
+        self._orig_processors = {}
+        for connector_name in ["video_connector", "audio_connector"]:
+            connector = getattr(self._model, connector_name, None)
+            if connector is not None:
+                for block in connector.transformer_blocks:
+                    attn = block.attn1
+                    self._orig_processors[id(attn)] = attn.processor
+                    attn.set_processor(_LTX2AttnProcessorWithEps())
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        # Restore top-level forward
+        if hasattr(self._model, "_orig_forward"):
+            self._model.forward = self._model._orig_forward
+
+        for connector_name in ["video_connector", "audio_connector"]:
+            connector = getattr(self._model, connector_name, None)
+            if connector is not None and hasattr(connector, "_orig_forward"):
+                connector.forward = connector._orig_forward
+
+        # Restore original attention processors
+        for connector_name in ["video_connector", "audio_connector"]:
+            connector = getattr(self._model, connector_name, None)
+            if connector is not None:
+                for block in connector.transformer_blocks:
+                    attn = block.attn1
+                    orig = self._orig_processors.get(id(attn))
+                    if orig is not None:
+                        attn.set_processor(orig)
+
+
+def _ltx2_apply_split_rotary_emb(x, freqs):
+    """
+    Patched apply_split_rotary_emb. Original does in-place `addcmul_` on views of a slice
+    (first_out/second_out), which produces an incorrect/unstable trace. Rewritten with pure
+    out-of-place ops.
+
+    Reference (diffusers==0.38.0): models/transformers/transformer_ltx2.py,
+    apply_split_rotary_emb L46-84 (in-place addcmul_ on views at L75-76).
+    """
+    cos, sin = freqs
+    x_dtype = x.dtype
+
+    if x.ndim == 3 and cos.ndim == 4:
+        b, h, t, _ = cos.shape
+        x = x.reshape(b, t, h, -1).swapaxes(1, 2)
+        needs_reshape = True
+    else:
+        needs_reshape = False
+
+    last = x.shape[-1]
+    r = last // 2
+
+    split_x = x.reshape(*x.shape[:-1], 2, r).float()
+    first_x = split_x[..., :1, :]
+    second_x = split_x[..., 1:, :]
+
+    cos_u = cos.unsqueeze(-2)
+    sin_u = sin.unsqueeze(-2)
+
+    first_out = first_x * cos_u - sin_u * second_x
+    second_out = second_x * cos_u + sin_u * first_x
+
+    out = torch.cat([first_out, second_out], dim=-2).reshape(*split_x.shape[:-2], last)
+
+    if needs_reshape:
+        out = out.swapaxes(1, 2).reshape(b, t, -1)
+
+    out = out.to(dtype=x_dtype)
+    return out
+
+
+class _LTX2TraceSafeAttnProcessor:
+    """
+    Transformer attention processor made trace-safe: replaces `prepare_attention_mask`
+    (data-dependent branches) and SDPA with a fixed-shape mask reshape + manual attention,
+    and uses the out-of-place RoPE above instead of the in-place `addcmul_` original.
+
+    Reference (diffusers==0.38.0): models/transformers/transformer_ltx2.py,
+    LTX2AudioVideoAttnProcessor.__call__ L161-228 (prepare_attention_mask at L175).
+    """
+
+    def __call__(
+        self,
+        attn,
+        hidden_states,
+        encoder_hidden_states=None,
+        attention_mask=None,
+        query_rotary_emb=None,
+        key_rotary_emb=None,
+    ):
+        # Use trace-safe RoPE — original has in-place addcmul_ on views which can break tracing
+        apply_rotary = _ltx2_apply_split_rotary_emb
+
+        batch_size, sequence_length, _ = (
+            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+        )
+
+        if attention_mask is not None:
+            # Trace-safe: reshape mask to [batch, heads, 1, seq_len] without data-dependent branches.
+            # Incoming mask is [batch, 1, seq_len] (additive bias from transformer forward).
+            # Simply expand to heads dimension — no padding or repeat_interleave needed.
+            attention_mask = attention_mask.unsqueeze(1)  # [batch, 1, 1, seq_len]
+
+        if encoder_hidden_states is None:
+            encoder_hidden_states = hidden_states
+
+        if attn.to_gate_logits is not None:
+            gate_logits = attn.to_gate_logits(hidden_states)
+
+        query = attn.to_q(hidden_states)
+        key = attn.to_k(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
+
+        query = attn.norm_q(query)
+        key = attn.norm_k(key)
+
+        if query_rotary_emb is not None:
+            query = apply_rotary(query, query_rotary_emb)
+            key = apply_rotary(key, key_rotary_emb if key_rotary_emb is not None else query_rotary_emb)
+
+        query = query.unflatten(2, (attn.heads, -1))
+        key = key.unflatten(2, (attn.heads, -1))
+        value = value.unflatten(2, (attn.heads, -1))
+
+        # Manual attention with epsilon (avoids SDPA op in IR)
+        query = query.transpose(1, 2)
+        key = key.transpose(1, 2)
+        value = value.transpose(1, 2)
+
+        scale = 1.0 / (query.shape[-1] ** 0.5)
+        attn_weights = torch.matmul(query, key.transpose(-2, -1)) * scale
+
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask
+
+        attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1)
+
+        eps = 1e-30
+        hidden_states = torch.matmul(attn_weights + eps, value)
+
+        hidden_states = hidden_states.transpose(1, 2).flatten(2, 3)
+        hidden_states = hidden_states.to(query.dtype)
+
+        if attn.to_gate_logits is not None:
+            hidden_states = hidden_states.unflatten(2, (attn.heads, -1))
+            gates = 2.0 * torch.sigmoid(gate_logits)
+            hidden_states = hidden_states * gates.unsqueeze(-1)
+            hidden_states = hidden_states.flatten(2, 3)
+
+        hidden_states = attn.to_out[0](hidden_states)
+        hidden_states = attn.to_out[1](hidden_states)
+        return hidden_states
+
+
+class LTX2TextEncoderPatcher(ModelPatcher):
+    """
+    Export patcher for the text encoder. Forces output_hidden_states, builds an explicit
+    causal mask (the connectors consume every hidden-state layer), and returns a flat dict so
+    each `hidden_states.{i}` becomes a named export output.
+    """
+
+    def __init__(self, config, model, model_kwargs=None):
+        model.config.output_hidden_states = True
+        super().__init__(config, model, model_kwargs)
+
+        orig_forward = self.orig_forward
+
+        def patched_forward(input_ids, attention_mask=None, **kwargs):
+            if attention_mask is not None and attention_mask.dim() == 2:
+                bsz, seq_len = attention_mask.shape
+                causal_mask = attention_mask[:, None, None, :].to(dtype=torch.float32)
+                causal_mask = causal_mask.expand(bsz, 1, seq_len, seq_len).clone()
+                causal_positions = torch.tril(
+                    torch.ones(seq_len, seq_len, dtype=torch.float32, device=attention_mask.device)
+                )
+                causal_mask = causal_mask * causal_positions[None, None, :, :]
+                causal_mask = (1.0 - causal_mask) * torch.finfo(torch.float32).min
+                attention_mask = {"full_attention": causal_mask, "sliding_attention": causal_mask}
+            outputs = orig_forward(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
+            result = {"last_hidden_state": outputs.hidden_states[-1]}
+            for i, hs in enumerate(outputs.hidden_states):
+                result[f"hidden_states.{i}"] = hs
+            return result
+
+        self.patched_forward = patched_forward
+
+
+class LTX2TransformerPatcher(ModelPatcher):
+    """
+    Export patcher for the LTX2 transformer: installs the trace-safe attention processor and
+    wraps forward to force return_dict=False and emit a named-output dict.
+    """
+
+    def __enter__(self):
+        super().__enter__()
+
+        # Replace attention processors with trace-safe version
+        # (original prepare_attention_mask has data-dependent branches that break tracing)
+        self._orig_processors = {}
+        for name, module in self._model.named_modules():
+            if hasattr(module, "processor") and hasattr(module, "set_processor"):
+                self._orig_processors[name] = module.processor
+                module.set_processor(_LTX2TraceSafeAttnProcessor())
+
+        # Wrap forward to return dict (needed for output naming) and force return_dict=False internally
+        self._orig_model_forward = self._model.forward
+
+        import functools
+
+        @functools.wraps(self._orig_model_forward)
+        def patched_forward(
+            hidden_states,
+            audio_hidden_states,
+            encoder_hidden_states,
+            audio_encoder_hidden_states,
+            timestep,
+            encoder_attention_mask=None,
+            audio_encoder_attention_mask=None,
+            num_frames=None,
+            height=None,
+            width=None,
+            fps=24.0,
+            audio_num_frames=None,
+            video_coords=None,
+            audio_coords=None,
+            **kwargs,
+        ):
+            result = self._orig_model_forward(
+                hidden_states=hidden_states,
+                audio_hidden_states=audio_hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+                audio_encoder_hidden_states=audio_encoder_hidden_states,
+                timestep=timestep,
+                encoder_attention_mask=encoder_attention_mask,
+                audio_encoder_attention_mask=audio_encoder_attention_mask,
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                fps=fps,
+                audio_num_frames=audio_num_frames,
+                video_coords=video_coords,
+                audio_coords=audio_coords,
+                return_dict=False,
+                **kwargs,
+            )
+            if isinstance(result, tuple):
+                return {"out_sample": result[0], "audio_out_sample": result[1]}
+            return result
+
+        self._model.forward = patched_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._orig_model_forward
+
+        # Restore original attention processors
+        for name, module in self._model.named_modules():
+            if name in self._orig_processors and hasattr(module, "set_processor"):
+                module.set_processor(self._orig_processors[name])
 
 
 # Adopted from qwen3_moe_forward_patched above, extended with shared expert computation.

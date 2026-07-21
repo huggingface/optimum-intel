@@ -1174,6 +1174,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "llava_next_video", False),
         (OVModelForVisualCausalLM, "minicpmv", True),
         (OVModelForSpeechSeq2Seq, "qwen3_asr", True),
+        (OVModelForSpeechSeq2Seq, "fun_asr", True),
         (OVModelForVisualCausalLM, "videochat_flash_qwen", True),
         (OVModelForVisualCausalLM, "qwen3_5", False),
         (OVModelForVisualCausalLM, "qwen3_5_moe", False),
