@@ -177,6 +177,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("image-text-to-text", "qwen3_vl_eagle3"),
+                ("text-generation-with-past", "qwen3_dflash"),
             ]
         )
 
