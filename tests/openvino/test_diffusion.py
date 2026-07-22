@@ -1215,6 +1215,8 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = []
     if is_diffusers_version(">=", "0.32"):
         SUPPORTED_ARCHITECTURES.extend(["ltx-video"])
+    if is_diffusers_version(">=", "0.38.0"):
+        SUPPORTED_ARCHITECTURES.extend(["ltx2"])
 
     OVMODEL_CLASS = OVPipelineForImage2Video
     AUTOMODEL_CLASS = DiffusionPipeline
@@ -1242,12 +1244,20 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
 
         self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 
+    @staticmethod
+    def _auto_cls(model_arch: str):
+        if model_arch == "ltx2":
+            from diffusers import LTX2ImageToVideoPipeline
+
+            return LTX2ImageToVideoPipeline
+        from diffusers import LTXImageToVideoPipeline
+
+        return LTXImageToVideoPipeline
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_ov_pipeline_class_dispatch(self, model_arch: str):
-        from diffusers import LTXImageToVideoPipeline
-
-        auto_cls = LTXImageToVideoPipeline
+        auto_cls = self._auto_cls(model_arch)
         auto_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
@@ -1270,12 +1280,10 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
-        from diffusers import LTXImageToVideoPipeline
-
         height, width, batch_size = 64, 96, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
-        diffusers_pipeline = LTXImageToVideoPipeline.from_pretrained(MODEL_NAMES[model_arch])
+        diffusers_pipeline = self._auto_cls(model_arch).from_pretrained(MODEL_NAMES[model_arch])
 
         for output_type in ["np", "pt"]:
             inputs["output_type"] = output_type

@@ -93,9 +93,10 @@ else:
     LTXImageToVideoPipeline = object
 
 if is_diffusers_version(">=", "0.38.0"):
-    from diffusers import LTX2Pipeline
+    from diffusers import LTX2ImageToVideoPipeline, LTX2Pipeline
 else:
     LTX2Pipeline = object
+    LTX2ImageToVideoPipeline = object
 
 if is_diffusers_version(">=", "0.29.0"):
     from diffusers import StableDiffusion3Img2ImgPipeline, StableDiffusion3Pipeline
@@ -1386,11 +1387,29 @@ class OVModelTransformerLTX2(OVPipelinePart):
     ):
         self.compile()
 
+        # T2V leaves audio_timestep None; mirror the diffusers fallback before `timestep` is broadcast.
+        if audio_timestep is None:
+            audio_timestep = timestep if timestep is None or timestep.ndim == 1 else timestep[:, 0]
+
+        # T2V passes a scalar timestep [B]; the IR expects [B, S]. Broadcast to match.
+        if timestep is not None and timestep.ndim == 1 and self._timestep_rank == 2:
+            timestep = timestep.unsqueeze(-1).expand(-1, hidden_states.shape[1]).contiguous()
+
+        # `share_inputs=True` reads raw buffers, so stride-0 views (e.g. `t.expand(batch)`) must be materialized.
+        if timestep is not None:
+            timestep = timestep.contiguous()
+        if audio_timestep is not None:
+            audio_timestep = audio_timestep.contiguous()
+
         model_inputs = {
             "hidden_states": hidden_states,
             "timestep": timestep,
             "encoder_hidden_states": encoder_hidden_states,
         }
+
+        # Older t2v exports have no `audio_timestep` input; only pass it when the IR declares it.
+        if audio_timestep is not None and "audio_timestep" in self._ov_input_names:
+            model_inputs["audio_timestep"] = audio_timestep
 
         if audio_hidden_states is not None:
             model_inputs["audio_hidden_states"] = audio_hidden_states
@@ -1427,6 +1446,18 @@ class OVModelTransformerLTX2(OVPipelinePart):
             return model_outputs
 
         return (model_outputs.get("out_sample"), model_outputs.get("audio_out_sample"))
+
+    @property
+    def _ov_input_names(self):
+        return {inp.get_any_name() for inp in self.model.inputs}
+
+    @property
+    def _timestep_rank(self):
+        # Exact match: "timestep" also matches "audio_timestep" (rank 1), which would break the T2V broadcast.
+        for inp in self.model.inputs:
+            if inp.get_any_name() == "timestep":
+                return len(inp.partial_shape)
+        return 1
 
 
 class OVModelConnectors(OVPipelinePart):
@@ -1947,11 +1978,32 @@ class OVLTXImageToVideoPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMix
         return super().__call__(image=image, **kwargs)
 
 
-class OVLTX2Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTX2Pipeline):
-    main_input_name = "prompt"
-    export_feature = "text-to-video"
-    auto_model_class = LTX2Pipeline
+class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
+    # Shared base rather than i2v subclassing t2v: LTX2ImageToVideoPipeline does not subclass
+    # LTX2Pipeline, so subclassing would resolve `prepare_latents` to the text-to-video version.
     _is_ltx_pipeline = True
+
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        models_paths = {
+            "transformer": os.path.join(DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER, OV_XML_FILE_NAME),
+            "vae_decoder": os.path.join(DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER, OV_XML_FILE_NAME),
+            "text_encoder": os.path.join(DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER, OV_XML_FILE_NAME),
+            "connectors": os.path.join(DIFFUSION_MODEL_CONNECTORS_SUBFOLDER, OV_XML_FILE_NAME),
+            "audio_vae_decoder": os.path.join(DIFFUSION_MODEL_AUDIO_VAE_DECODER_SUBFOLDER, OV_XML_FILE_NAME),
+            "vocoder": os.path.join(DIFFUSION_MODEL_VOCODER_SUBFOLDER, OV_XML_FILE_NAME),
+        }
+        return models_paths
+
+    @property
+    def _ov_model_names(self) -> List[str]:
+        """Return list of OV submodel names for quantization."""
+        return list(self._all_ov_model_paths.keys())
+
+    @property
+    def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
+        """Return dict mapping submodel names to their OV models for quantization."""
+        return {name: component.model for name, component in self.components.items()}
 
     def __init__(
         self,
@@ -1962,6 +2014,7 @@ class OVLTX2Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTX2Pip
         connectors: Optional[openvino.Model] = None,
         audio_vae_decoder: Optional[openvino.Model] = None,
         vocoder: Optional[openvino.Model] = None,
+        vae_encoder: Optional[openvino.Model] = None,
         tokenizer: Optional[CLIPTokenizer] = None,
         device: str = "CPU",
         compile: bool = True,
@@ -2031,7 +2084,12 @@ class OVLTX2Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTX2Pip
         )
 
         self.vae_decoder = OVModelVaeDecoder(vae_decoder, self, DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER)
-        self.vae_encoder = None
+        # vae_encoder is only exported/loaded for image-to-video; text-to-video leaves it as None.
+        self.vae_encoder = (
+            OVModelVaeEncoder(vae_encoder, self, DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER)
+            if isinstance(vae_encoder, openvino.Model)
+            else None
+        )
         self.text_encoder = (
             OVModelTextEncoder(text_encoder, self, DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER)
             if text_encoder is not None
@@ -2089,7 +2147,7 @@ class OVLTX2Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTX2Pip
             "transformer": self.transformer,
             "vocoder": vocoder,
         }
-        LTX2Pipeline.__init__(self, **diffusers_pipeline_args)
+        self.auto_model_class.__init__(self, **diffusers_pipeline_args)
 
         # This must exist because properties like batch_size check them
         self.unet = None
@@ -2120,6 +2178,8 @@ class OVLTX2Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTX2Pip
             comp["transformer"] = self.transformer
         if self.vae_decoder is not None:
             comp["vae_decoder"] = self.vae_decoder
+        if self.vae_encoder is not None:
+            comp["vae_encoder"] = self.vae_encoder
         if self.text_encoder is not None:
             comp["text_encoder"] = self.text_encoder
         if self.connectors is not None:
@@ -2164,6 +2224,12 @@ class OVLTX2Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTX2Pip
         self.vae_decoder.model = self._reshape_vae_decoder(
             self.vae_decoder.model, height, width, num_images_per_prompt, num_frames=num_frames
         )
+        # Reshape vae_encoder (image-to-video only) with pixel-space height/width; the encoder
+        # treats the conditioning image as a single frame (num_frames handled inside).
+        if self.vae_encoder is not None:
+            self.vae_encoder.model = self._reshape_vae_encoder(
+                self.vae_encoder.model, batch_size, height, width, num_frames=num_frames
+            )
         # Reshape text_encoder with batch_size only (tokenizer_max_length stays dynamic for Gemma)
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(self.text_encoder.model, batch_size, -1)
@@ -2183,6 +2249,26 @@ class OVLTX2Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTX2Pip
                         shapes[inputs][i] = -1
                 ov_model_attr.model.reshape(shapes)
         self.clear_requests()
+
+
+class OVLTX2Pipeline(_OVLTX2Base, LTX2Pipeline):
+    main_input_name = "prompt"
+    export_feature = "text-to-video"
+    auto_model_class = LTX2Pipeline
+
+
+class OVLTX2ImageToVideoPipeline(_OVLTX2Base, LTX2ImageToVideoPipeline):
+    main_input_name = "image"
+    export_feature = "image-to-video"
+    auto_model_class = LTX2ImageToVideoPipeline
+    _vae_encoder_single_frame = True
+
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        # Same submodels as text-to-video, plus the VAE encoder used to encode the input image.
+        models_paths = _OVLTX2Base._all_ov_model_paths
+        models_paths["vae_encoder"] = os.path.join(DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER, OV_XML_FILE_NAME)
+        return models_paths
 
 
 SUPPORTED_OV_PIPELINES = [
@@ -2243,7 +2329,9 @@ if is_diffusers_version(">=", "0.32"):
 
 if is_diffusers_version(">=", "0.38.0"):
     OV_TEXT2VIDEO_PIPELINES_MAPPING["ltx2"] = OVLTX2Pipeline
+    OV_IMAGE2VIDEO_PIPELINES_MAPPING["ltx2"] = OVLTX2ImageToVideoPipeline
     SUPPORTED_OV_PIPELINES.append(OVLTX2Pipeline)
+    SUPPORTED_OV_PIPELINES.append(OVLTX2ImageToVideoPipeline)
 
 if is_diffusers_version(">=", "0.29.0"):
     SUPPORTED_OV_PIPELINES.extend(

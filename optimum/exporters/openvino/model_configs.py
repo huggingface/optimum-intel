@@ -363,6 +363,10 @@ def init_model_configs():
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"] = {}
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx-video"] = "LTXPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx2"] = "LTX2Pipeline"
+    if is_diffusers_available() and "image-to-video" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS:
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["image-to-video"] = {}
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["image-to-video"]["ltx-video"] = "LTXImageToVideoPipeline"
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["image-to-video"]["ltx2"] = "LTX2ImageToVideoPipeline"
 
 
 init_model_configs()
@@ -2735,7 +2739,8 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
             "num_frames": {},
             "fps": {},
             "audio_num_frames": {},
-            "timestep": {0: "batch_size"},
+            "timestep": {0: "batch_size", 1: "video_sequence_length"},
+            "audio_timestep": {0: "batch_size"},
             "video_coords": {0: "batch_size", 2: "video_sequence_length"},
             "audio_coords": {0: "batch_size", 2: "audio_sequence_length"},
         }

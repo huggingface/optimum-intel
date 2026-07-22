@@ -1256,6 +1256,22 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
 
+    # VAE Encoder (needed for image-to-video conditioning; harmless for text-to-video, which won't load it)
+    vae_encoder = copy.deepcopy(pipeline.vae)
+    vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
+    vae_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="ltx2-vae-encoder",
+    )
+    vae_encoder_export_config = vae_encoder_config_constructor(
+        vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
+
     # Audio VAE decoder and vocoder
     if hasattr(pipeline, "audio_vae") and pipeline.audio_vae is not None:
         # Audio VAE decoder

@@ -113,6 +113,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-image", "sana"),
         ("text-to-video", "ltx-video"),
         ("text-to-video", "ltx2"),
+        ("image-to-video", "ltx2"),
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
