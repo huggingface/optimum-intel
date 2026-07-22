@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import importlib.util
 import json
 import subprocess
 import unittest
@@ -581,15 +580,6 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     TRANSFORMERS_4BIT_CONFIGURATIONS = [
         (
-            # Pre-quantized compressed-tensors (AWQ pack-quantized) model. It is already
-            # quantized, so it is exported without a `--weight-format`: the OpenVINO PyTorch
-            # frontend converts the packed weights directly into int4 constants.
-            "text-generation-with-past",
-            "llama_compressed_tensors",
-            None,
-            {"model": {"int4": 14}},
-        ),
-        (
             "text-generation-with-past",
             "opt125m",
             "int4 --sym --group-size 128",
@@ -887,6 +877,22 @@ class OVCLIExportTestCase(unittest.TestCase):
             },
         ),
     ]
+
+    # Pre-quantized compressed-tensors (AWQ pack-quantized) model. It is already quantized, so
+    # it is exported without a `--weight-format`: the OpenVINO PyTorch frontend converts the
+    # packed weights directly into int4 constants. This relies on the frontend compressed-tensors
+    # patcher (OpenVINO 2026.3+) and on the `compressed_tensors` package, which CI installs for
+    # transformers 4.57.6+. Both conditions gate the config so it is only exercised where the
+    # dependency is guaranteed present -- a missing package then surfaces as a hard failure.
+    if is_openvino_version(">=", "2026.3") and is_transformers_version(">=", "4.57.6"):
+        TRANSFORMERS_4BIT_CONFIGURATIONS.append(
+            (
+                "text-generation-with-past",
+                "llama_compressed_tensors",
+                None,
+                {"model": {"int4": 14}},
+            )
+        )
 
     # filter models type depending on min max transformers version
     SUPPORTED_4BIT_CONFIGURATIONS = [
@@ -1217,11 +1223,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         # option=None means the model is already quantized (e.g. compressed-tensors) and is
         # exported as-is, without an NNCF weight-compression `--weight-format`.
         is_prequantized = option is None
-        if model_type == "llama_compressed_tensors":
-            if is_openvino_version("<", "2026.3"):
-                self.skipTest("compressed-tensors export requires OpenVINO 2026.3 or newer")
-            if importlib.util.find_spec("compressed_tensors") is None:
-                self.skipTest("compressed_tensors is not installed")
         with TemporaryDirectory() as tmpdir:
             weight_format = "" if is_prequantized else f"--weight-format {option}"
             result = subprocess.run(
