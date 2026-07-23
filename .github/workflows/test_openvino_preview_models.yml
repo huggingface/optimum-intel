@@ -68,5 +68,5 @@ jobs:
       - name: LTX2 Export and Diffusion Validation
         if: ${{ matrix.test-pattern == '*export*' }}
         run: |
-          uv pip install "diffusers==0.38.0"
+          uv pip install "diffusers==0.39.0"
           pytest tests/openvino/test_diffusion.py -k ltx2 --durations=0
