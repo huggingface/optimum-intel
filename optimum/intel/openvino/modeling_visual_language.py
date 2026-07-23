@@ -5598,12 +5598,13 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
             raise ValueError("Video input is not supported")
         if audio is not None:
             raise ValueError("Audio input is not supported")
-        # The gemma4_unified processor has no chat template, so build the prompt directly.
-        # An image is referenced by the processor's image token placeholder.
-        if image is not None:
-            image_token = getattr(processor, "image_token", "<|image|>")
-            text = f"{image_token}{text}"
-        return processor(images=image, text=text, return_tensors="pt")
+        # The base (non-instruction-tuned) checkpoint has no chat template, so build the prompt directly.
+        if getattr(processor, "chat_template", None) is None:
+            if image is not None:
+                image_token = getattr(processor, "image_token", "<|image|>")
+                text = f"{image_token}{text}"
+            return processor(images=image, text=text, return_tensors="pt")
+        return _OVGemma3ForCausalLM.preprocess_inputs(text, image, processor, tokenizer, config, video, audio)
 
     def _update_model_kwargs_for_generation(
         self,

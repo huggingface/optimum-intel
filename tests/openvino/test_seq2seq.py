@@ -791,6 +791,31 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             if model_arch in ["gemma3n"]:
                 inputs.pop("token_type_ids")
 
+        if model_arch == "gemma4_unified":
+            # preprocess_inputs must actually apply the processor's chat_template, not silently skip it
+            conversation = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]}]
+            expected_text = preprocessors["processor"].apply_chat_template(
+                conversation, add_generation_prompt=True, tokenize=False
+            )
+            expected_inputs = preprocessors["processor"](images=image, text=expected_text, return_tensors="pt")
+            self.assertTrue(
+                torch.equal(inputs["input_ids"], expected_inputs["input_ids"]),
+                "preprocess_inputs must apply the processor's chat_template when one is configured",
+            )
+
+            # also cover the raw, no-chat-template fallback branch (non -it variant)
+            processor_without_template = copy.deepcopy(preprocessors["processor"])
+            processor_without_template.chat_template = None
+            no_template_inputs = ov_model.preprocess_inputs(
+                text=prompt, image=image, processor=processor_without_template
+            )
+            self.assertTrue(torch.is_tensor(no_template_inputs["input_ids"]))
+            self.assertGreater(no_template_inputs["input_ids"].shape[1], 0)
+            self.assertFalse(
+                torch.equal(no_template_inputs["input_ids"], inputs["input_ids"]),
+                "the no-chat-template fallback should not coincidentally match the chat-template output",
+            )
+
         transformers_inputs = copy.deepcopy(inputs)
         # llama4 preprocessing force bf16 dtype for pixel_values, that does not work on CPU with fp32 model
         # if past key values are not initialized, llama4 creates HybridCache with bf16 precision
