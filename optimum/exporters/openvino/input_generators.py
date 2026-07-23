@@ -1396,6 +1396,103 @@ class DummyQwen3VLVisionEmbedInputGenerator(DummyQwen2VLVisionEmbedInputGenerato
             )
 
 
+class YoutuVLDummyVisionEmbedInputGenerator(DummyVisionInputGenerator):
+    """Dummy input generator for the youtu_vl vision embeddings submodel.
+
+    The youtu_vl vision tower is a siglip2-based encoder that consumes already-patchified pixel
+    values of shape (batch_size, num_patches, num_channels * patch_size * patch_size).
+    """
+
+    SUPPORTED_INPUT_NAMES = ("pixel_values",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 1,
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = 64,
+        height: int = 64,
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        self.num_channels = normalized_config.config.num_channels
+        self.patch_size = normalized_config.config.patch_size
+        in_features = getattr(normalized_config.config, "in_features", -1)
+        if in_features is not None and in_features > 0:
+            self.in_features = in_features
+        else:
+            self.in_features = self.num_channels * self.patch_size * self.patch_size
+        spatial_merge_size = getattr(normalized_config.config, "spatial_merge_size", 2)
+        grid = max(spatial_merge_size * 2, 4)
+        self.num_patches = grid * grid
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            return self.random_float_tensor(
+                [self.batch_size, self.num_patches, self.in_features], framework=framework, dtype=float_dtype
+            )
+
+
+class YoutuVLDummyVisionMergerInputGenerator(DummyVisionInputGenerator):
+    """Dummy input generator for the youtu_vl vision embeddings merger submodel.
+
+    Mirrors the Qwen2.5-VL windowed-attention merger inputs: encoder hidden states plus the
+    precomputed full/window attention masks, window index and rotary position embeddings.
+    """
+
+    SUPPORTED_INPUT_NAMES = (
+        "hidden_states",
+        "attention_mask",
+        "window_attention_mask",
+        "window_index",
+        "rotary_pos_emb",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 1,
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = 64,
+        height: int = 64,
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        self.hidden_size = normalized_config.config.hidden_size
+        self.num_heads = normalized_config.config.num_attention_heads
+        self.spatial_merge_size = getattr(normalized_config.config, "spatial_merge_size", 2)
+        grid = max(self.spatial_merge_size * 2, 4)
+        self.seq_len = grid * grid
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "hidden_states":
+            return self.random_float_tensor([self.seq_len, self.hidden_size], framework=framework, dtype=float_dtype)
+
+        if input_name in ["attention_mask", "window_attention_mask"]:
+            return self.random_mask_tensor([1, self.seq_len, self.seq_len], framework=framework, dtype=float_dtype)
+
+        if input_name == "rotary_pos_emb":
+            dim = self.hidden_size // self.num_heads // 2
+            return self.random_float_tensor([self.seq_len, dim], framework=framework, dtype=float_dtype)
+
+        if input_name == "window_index":
+            spatial_merge_unit = self.spatial_merge_size * self.spatial_merge_size
+            length = self.seq_len // spatial_merge_unit
+            return self.random_int_tensor([length], max_value=length)
+
+
+class YoutuVLDummyPastKeyValuesGenerator(OVMiniCPM3DummyPastKeyValuesGenerator):
+    """Past-key-values generator for the youtu_vl MLA (multi-head latent attention) language model.
+
+    The cache stores per-head keys of dim (qk_nope_head_dim + qk_rope_head_dim) and values of
+    dim v_head_dim, identical in layout to the MiniCPM3/DeepSeek-V2 MLA cache.
+    """
+
+
 class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummySeq2SeqPastKeyValuesGenerator):
     """Custom KV cache generator for Qwen3-ASR with GQA (num_key_value_heads != num_attention_heads).
     Qwen3-ASR has no cross-attention, so only self-attention KV cache is generated (2 per layer)."""

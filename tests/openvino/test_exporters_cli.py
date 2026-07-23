@@ -136,6 +136,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
+        ("image-text-to-text", "youtu_vl"),
     ]
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = [
@@ -184,6 +185,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "smollm3": 2,
         "qwen3_vl_eagle3": 0,
         "qwen3_vl_embedding": 2,
+        "youtu_vl": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -751,6 +753,17 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 1},
                 "vision_embeddings_merger_model": {"int8": 12},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "youtu_vl",
+            "int4 --group-size 16 --ratio 0.8 --trust-remote-code",
+            {
+                "lm_model": {"int8": 12, "int4": 22},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 26},
             },
         ),
         (

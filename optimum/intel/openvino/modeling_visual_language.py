@@ -3676,6 +3676,280 @@ if is_transformers_version(">=", "4.57"):
     _OVQwen2_5_VLForCausalLM.get_vision_position_ids = getattr(Qwen2_5_VLModel, "get_vision_position_ids", None)
 
 
+class _OVYoutuVLForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = ["vision_embeddings_merger"]
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = None,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        if is_transformers_version("<", "4.57"):
+            raise Exception("YoutuVL is not supported in transformers versions earlier than 4.57.")
+
+        super().__init__(
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+
+        class VisionRotaryEmbedding(torch.nn.Module):
+            def __init__(self, dim: int, theta: float = 10000.0) -> None:
+                super().__init__()
+                inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float) / dim))
+                self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+            def forward(self, seqlen: int) -> torch.Tensor:
+                seq = torch.arange(seqlen, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
+                freqs = torch.outer(seq, self.inv_freq)
+                return freqs
+
+        vision_config = config.vision_config
+        head_dim = vision_config.hidden_size // vision_config.num_attention_heads
+        self._rotary_pos_emb = VisionRotaryEmbedding(head_dim // 2)
+        self._spatial_merge_size = 2
+        self._patch_size = vision_config.patch_size
+        # window_size = patch_size * 2 * 8 in Siglip2Encoder
+        self._window_size = self._patch_size * 2 * 8
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        cache_position=None,
+        position_ids=None,
+        use_cache=True,
+        pixel_values=None,
+        pixel_attention_mask=None,
+        spatial_shapes=None,
+        is_first_iteration=False,
+        next_sequence_length=None,
+        **kwargs,
+    ):
+        if is_transformers_version(">=", "5.3") and (
+            cache_position is None or (not is_first_iteration and cache_position[0] == 0)
+        ):
+            if next_sequence_length is not None:
+                past_len = input_ids.shape[1] - next_sequence_length
+                cache_position = torch.arange(past_len, past_len + next_sequence_length, device=input_ids.device)
+            elif not is_first_iteration and attention_mask is not None:
+                past_len = attention_mask.shape[1] - 1
+                cache_position = torch.tensor([past_len], device=input_ids.device)
+            else:
+                cache_position = torch.arange(input_ids.shape[1], device=input_ids.device)
+
+        if past_key_values is not None:
+            if inputs_embeds is not None and input_ids.shape[1] == 0:
+                inputs_embeds = inputs_embeds[:, -cache_position.shape[0] :]
+            elif inputs_embeds is not None:
+                input_ids = input_ids[:, -cache_position.shape[0] :]
+            elif input_ids.shape[1] != cache_position.shape[0]:
+                input_ids = input_ids[:, cache_position]
+
+        if cache_position[0] != 0:
+            pixel_values = None
+
+        if inputs_embeds is not None and len(cache_position) == inputs_embeds.shape[1]:
+            model_inputs = {"inputs_embeds": inputs_embeds, "input_ids": None}
+        else:
+            model_inputs = {"input_ids": input_ids, "inputs_embeds": None}
+
+        model_inputs.update(
+            {
+                "position_ids": position_ids,
+                "past_key_values": past_key_values,
+                "use_cache": use_cache,
+                "attention_mask": attention_mask,
+                "pixel_values": pixel_values,
+                "pixel_attention_mask": pixel_attention_mask,
+                "spatial_shapes": spatial_shapes,
+                "cache_position": cache_position,
+            }
+        )
+        return model_inputs
+
+    def rot_pos_emb(self, spatial_shapes):
+        pos_ids = []
+        merge = self._spatial_merge_size
+        for h, w in spatial_shapes:
+            h = int(h)
+            w = int(w)
+            hpos_ids = torch.arange(h).unsqueeze(1).expand(-1, w)
+            hpos_ids = hpos_ids.reshape(h // merge, merge, w // merge, merge)
+            hpos_ids = hpos_ids.permute(0, 2, 1, 3).flatten()
+            wpos_ids = torch.arange(w).unsqueeze(0).expand(h, -1)
+            wpos_ids = wpos_ids.reshape(h // merge, merge, w // merge, merge)
+            wpos_ids = wpos_ids.permute(0, 2, 1, 3).flatten()
+            pos_ids.append(torch.stack([hpos_ids, wpos_ids], dim=-1))
+        pos_ids = torch.cat(pos_ids, dim=0)
+        max_grid_size = int(spatial_shapes.max())
+        rotary_pos_emb_full = self._rotary_pos_emb(max_grid_size)
+        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+        return rotary_pos_emb
+
+    def get_window_index(self, spatial_shapes):
+        window_index: list = []
+        cu_window_seqlens: list = [0]
+        window_index_id = 0
+        merge = self._spatial_merge_size
+        spatial_merge_unit = merge * merge
+        vit_merger_window_size = self._window_size // merge // self._patch_size
+
+        for grid_h, grid_w in spatial_shapes:
+            grid_h = int(grid_h)
+            grid_w = int(grid_w)
+            grid_t = 1
+            llm_grid_h, llm_grid_w = grid_h // merge, grid_w // merge
+            index = torch.arange(grid_t * llm_grid_h * llm_grid_w).reshape(grid_t, llm_grid_h, llm_grid_w)
+            pad_h = (vit_merger_window_size - llm_grid_h % vit_merger_window_size) % vit_merger_window_size
+            pad_w = (vit_merger_window_size - llm_grid_w % vit_merger_window_size) % vit_merger_window_size
+            num_windows_h = (llm_grid_h + pad_h) // vit_merger_window_size
+            num_windows_w = (llm_grid_w + pad_w) // vit_merger_window_size
+            index_padded = torch.nn.functional.pad(index, (0, pad_w, 0, pad_h), "constant", -100)
+            index_padded = index_padded.reshape(
+                grid_t, num_windows_h, vit_merger_window_size, num_windows_w, vit_merger_window_size
+            )
+            index_padded = index_padded.permute(0, 1, 3, 2, 4).reshape(
+                grid_t, num_windows_h * num_windows_w, vit_merger_window_size, vit_merger_window_size
+            )
+            seqlens = (index_padded != -100).sum([2, 3]).reshape(-1)
+            index_padded = index_padded.reshape(-1)
+            index_new = index_padded[index_padded != -100]
+            window_index.append(index_new + window_index_id)
+            cu_seqlens_tmp = seqlens.cumsum(0) * spatial_merge_unit + cu_window_seqlens[-1]
+            cu_window_seqlens.extend(cu_seqlens_tmp.tolist())
+            window_index_id += grid_t * llm_grid_h * llm_grid_w
+        window_index = torch.cat(window_index, dim=0)
+        return window_index, cu_window_seqlens
+
+    def get_vision_embeddings(self, pixel_values, spatial_shapes=None, **kwargs):
+        if not isinstance(spatial_shapes, torch.Tensor):
+            spatial_shapes = torch.as_tensor(spatial_shapes)
+        spatial_shapes = spatial_shapes.to(torch.long)
+
+        hidden_states = torch.from_numpy(self.vision_embeddings(pixel_values=pixel_values)[0])
+        rotary_pos_emb = self.rot_pos_emb(spatial_shapes)
+        window_index, cu_window_seqlens = self.get_window_index(spatial_shapes)
+        cu_window_seqlens = torch.tensor(cu_window_seqlens, dtype=torch.int32)
+        cu_window_seqlens = torch.unique_consecutive(cu_window_seqlens)
+
+        cu_seqlens = torch.repeat_interleave(spatial_shapes[:, 0] * spatial_shapes[:, 1], 1).cumsum(
+            dim=0, dtype=torch.int32
+        )
+        cu_seqlens = torch.nn.functional.pad(cu_seqlens, (1, 0), value=0)
+
+        seq_len = hidden_states.shape[0]
+        attention_bool = torch.zeros((1, seq_len, seq_len), dtype=torch.bool)
+        for i in range(1, len(cu_seqlens)):
+            attention_bool[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = True
+        causal_mask = torch.zeros((1, seq_len, seq_len), dtype=torch.float32)
+        causal_mask.masked_fill_(torch.logical_not(attention_bool), float("-inf"))
+
+        window_bool = torch.zeros((1, seq_len, seq_len), dtype=torch.bool)
+        for i in range(1, len(cu_window_seqlens)):
+            window_bool[
+                ..., cu_window_seqlens[i - 1] : cu_window_seqlens[i], cu_window_seqlens[i - 1] : cu_window_seqlens[i]
+            ] = True
+        window_causal_mask = torch.zeros((1, seq_len, seq_len), dtype=torch.float32)
+        window_causal_mask.masked_fill_(torch.logical_not(window_bool), float("-inf"))
+
+        res = self.vision_embeddings_merger(
+            pixel_values=hidden_states,
+            attention_mask=causal_mask,
+            window_attention_mask=window_causal_mask,
+            window_index=window_index,
+            rotary_pos_emb=rotary_pos_emb,
+        )[0]
+        return res
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        spatial_shapes=None,
+        cache_position=None,
+        **kwargs,
+    ):
+        inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
+        if pixel_values is not None and input_ids.shape[1] != 1:
+            image_embeds = torch.from_numpy(
+                np.asarray(self.get_vision_embeddings(pixel_values, spatial_shapes=spatial_shapes))
+            )
+            n_image_tokens = (input_ids == self.config.image_token_id).sum().item()
+            n_image_features = image_embeds.shape[0]
+            if n_image_tokens != n_image_features:
+                raise ValueError(
+                    f"Image features and image tokens do not match: tokens: {n_image_tokens}, features {n_image_features}"
+                )
+            mask = input_ids == self.config.image_token_id
+            mask_unsqueezed = mask.unsqueeze(-1)
+            mask_expanded = mask_unsqueezed.expand_as(inputs_embeds)
+            image_mask = mask_expanded.to(inputs_embeds.device)
+            image_embeds = image_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+            inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
+
+        # youtu_vl language model uses plain 1D position ids (no mRoPE).
+        if position_ids is None:
+            batch_size, seq_length = inputs_embeds.shape[:2]
+            if cache_position is not None:
+                position_ids = cache_position.view(1, -1).expand(batch_size, -1)
+            else:
+                position_ids = torch.arange(seq_length, device=inputs_embeds.device)
+                position_ids = position_ids.view(1, -1).expand(batch_size, -1)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+        if video is not None:
+            conversation[0]["content"].insert(0, {"type": "video"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+        inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
+        return inputs
+
+
 class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
     additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
 
@@ -7377,4 +7651,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_omni_moe": _OVQwen3OmniMoeForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
+    "youtu_vl": _OVYoutuVLForCausalLM,
 }

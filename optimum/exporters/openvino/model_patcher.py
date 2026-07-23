@@ -4125,6 +4125,202 @@ class Qwen2_5_VLVisionEmbMergerPatcher(ModelPatcher):
             block.attn.forward = block.attn._orig_forward
 
 
+def patch_youtu_vl_vision_blocks(model):
+    # youtu_vl reuses a Qwen2.5-VL-style windowed vision encoder built on top of siglip2.
+    # The per-layer attention (`Vision_SDPAAttention` / `Vision_EagerAttention`) builds its
+    # attention mask internally from `cu_seqlens` with a python loop, which is not traceable.
+    # We replace it with an attention that consumes a precomputed `attention_mask`.
+    def sdpa_attn_forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: torch.Tensor,
+        cu_seqlens: torch.Tensor = None,
+        rotary_pos_emb: torch.Tensor = None,
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ):
+        def rotate_half(x):
+            x1 = x[..., : x.shape[-1] // 2]
+            x2 = x[..., x.shape[-1] // 2 :]
+            return torch.cat((-x2, x1), dim=-1)
+
+        def apply_rotary_pos_emb_vision(q, k, cos, sin):
+            orig_q_dtype = q.dtype
+            orig_k_dtype = k.dtype
+            q, k = q.float(), k.float()
+            cos, sin = cos.unsqueeze(-2).float(), sin.unsqueeze(-2).float()
+            q_embed = (q * cos) + (rotate_half(q) * sin)
+            k_embed = (k * cos) + (rotate_half(k) * sin)
+            q_embed = q_embed.to(orig_q_dtype)
+            k_embed = k_embed.to(orig_k_dtype)
+            return q_embed, k_embed
+
+        seq_length = hidden_states.shape[0]
+        q = self.q_proj(hidden_states).reshape(seq_length, self.num_heads, -1)
+        k = self.k_proj(hidden_states).reshape(seq_length, self.num_heads, -1)
+        v = self.v_proj(hidden_states).reshape(seq_length, self.num_heads, -1)
+        if position_embeddings is None:
+            emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+            cos = emb.cos()
+            sin = emb.sin()
+        else:
+            cos, sin = position_embeddings
+        q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
+        q = q.transpose(0, 1).unsqueeze(0)
+        k = k.transpose(0, 1).unsqueeze(0)
+        v = v.transpose(0, 1).unsqueeze(0)
+        attn_output = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attention_mask)
+        attn_output = attn_output.squeeze(0).transpose(0, 1).reshape(seq_length, -1).to(hidden_states.dtype)
+        attn_output = self.out_proj(attn_output)
+        return attn_output, None
+
+    def layer_forward(
+        self,
+        hidden_states,
+        attention_mask,
+        cu_seqlens=None,
+        rotary_pos_emb=None,
+        position_embeddings=None,
+        output_attentions=False,
+    ):
+        residual = hidden_states
+        hidden_states = self.layer_norm1(hidden_states)
+        hidden_states, _ = self.self_attn(
+            hidden_states=hidden_states,
+            attention_mask=attention_mask,
+            rotary_pos_emb=rotary_pos_emb,
+            position_embeddings=position_embeddings,
+        )
+        hidden_states = residual + hidden_states
+        residual = hidden_states
+        hidden_states = self.layer_norm2(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = residual + hidden_states
+        return (hidden_states,)
+
+    for layer in model.layers:
+        layer._orig_forward = layer.forward
+        layer.forward = types.MethodType(layer_forward, layer)
+        layer.self_attn._orig_forward = layer.self_attn.forward
+        layer.self_attn.forward = types.MethodType(sdpa_attn_forward, layer.self_attn)
+
+
+class YoutuVLVisionEmbMergerPatcher(ModelPatcher):
+    # The model wrapped here is the top-level YoutuVLForConditionalGeneration; we patch its forward
+    # to run the siglip2 vision encoder (windowed attention) + post_layernorm + patch merger with
+    # precomputed attention masks / window index / rotary pos emb (all data-dependent parts are
+    # computed at runtime in the OpenVINO model class, outside the traced graph).
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+        encoder = model.siglip2.vision_model.encoder
+        spatial_merge_unit = encoder.spatial_merge_unit
+        num_layers = len(encoder.layers)
+        # Reproduces the block-level full-vs-window attention selection in Siglip2Encoder.forward:
+        # every 8th layer (1-indexed) and the last layer use full attention.
+        fullatt_block_indexes = [i for i in range(num_layers) if ((i + 1) % 8 == 0 or i == num_layers - 1)]
+
+        def image_embed_forward(
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: torch.Tensor,
+            window_attention_mask: torch.Tensor,
+            window_index: torch.Tensor,
+            rotary_pos_emb: torch.Tensor,
+        ) -> torch.Tensor:
+            enc = self.siglip2.vision_model.encoder
+            seq_len = hidden_states.shape[0]
+            hidden_states = hidden_states.reshape(seq_len // spatial_merge_unit, spatial_merge_unit, -1)
+            hidden_states = hidden_states[window_index, :, :]
+            hidden_states = hidden_states.reshape(seq_len, -1)
+            rotary_pos_emb = rotary_pos_emb.reshape(seq_len // spatial_merge_unit, spatial_merge_unit, -1)
+            rotary_pos_emb = rotary_pos_emb[window_index, :, :]
+            rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
+            emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+            position_embeddings = (emb.cos(), emb.sin())
+            for layer_num, blk in enumerate(enc.layers):
+                attention_mask_now = attention_mask if layer_num in fullatt_block_indexes else window_attention_mask
+                hidden_states = blk(
+                    hidden_states, attention_mask=attention_mask_now, position_embeddings=position_embeddings
+                )[0]
+            reverse_indices = torch.argsort(window_index)
+            hidden_states = hidden_states.reshape(seq_len // spatial_merge_unit, spatial_merge_unit, -1)
+            hidden_states = hidden_states[reverse_indices, :, :]
+            hidden_states = hidden_states.reshape(seq_len, -1)
+            hidden_states = self.siglip2.vision_model.post_layernorm(hidden_states)
+            hidden_states = self.merger(hidden_states, None)
+            return hidden_states
+
+        model.forward = types.MethodType(image_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        patch_youtu_vl_vision_blocks(self._model.siglip2.vision_model.encoder)
+        super().__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        for layer in self._model.siglip2.vision_model.encoder.layers:
+            layer.forward = layer._orig_forward
+            layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+class YoutuVLModelPatcher(OVDecoderModelPatcher):
+    # Text-generation patcher for the youtu_vl MLA (multi-head latent attention) language model.
+    # The stock YoutuMLAttention forward already traces with standard tensor ops, so we only rely
+    # on the common decoder patching (stateful cache handling) from OVDecoderModelPatcher.
+    pass
+
+
+class YoutuVLLanguageModelPatcher(OVDecoderModelPatcher):
+    # Wraps the youtu_vl language model forward to accept `inputs_embeds` produced by the vision
+    # merge step, converting the legacy cache to a DynamicCache like the Qwen2-VL LM patcher.
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def forward_wrap(
+            self,
+            attention_mask,
+            position_ids=None,
+            past_key_values=None,
+            inputs_embeds=None,
+            input_ids=None,
+            use_cache=True,
+        ):
+            if is_transformers_version("<", "5"):
+                new_past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                new_past_key_values = DynamicCache(past_key_values)
+
+            result = self.__orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=new_past_key_values,
+                inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+            )
+            if past_key_values is not None:
+                result["past_key_values"] = postprocess_past_key_values(result["past_key_values"])
+            return result
+
+        model.forward = types.MethodType(forward_wrap, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
 class Qwen3VLVisionEmbMergerPatcher(ModelPatcher):
     def __init__(
         self,

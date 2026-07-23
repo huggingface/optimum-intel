@@ -13,6 +13,7 @@
 #  limitations under the License.
 import json
 import os
+import shutil
 import tempfile
 import time
 import unittest
@@ -141,6 +142,128 @@ def _create_tiny_kokoro_model():
     voices_dir.mkdir(parents=True, exist_ok=True)
     torch.save(torch.randn(256, dtype=torch.float32), voice_file)
 
+    return str(output_dir)
+
+
+def _create_tiny_youtu_vl_model():
+    """Create (or reuse) a tiny, architecture-preserving random youtu_vl model and return its path.
+
+    The youtu_vl architecture is a remote-code VLM (`YoutuVLForConditionalGeneration`) that combines
+    a siglip2 window-attention vision tower + VLPatchMerger bridge with a DeepSeek-V2-style
+    multi-head latent attention (MLA) language decoder. Only the original config and lightweight
+    remote-code / processor assets are downloaded (no original weights); random weights are
+    instantiated through the real architecture class. The result is cached on disk so subsequent
+    calls (and test collection) are cheap.
+    """
+    original_model_id = "tencent/Youtu-VL-4B-Instruct"
+    cache_marker = "tiny_youtu_vl_v4"
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_youtu_vl"
+
+    remote_code_files = [
+        "configuration_youtu_vl.py",
+        "modeling_youtu_vl.py",
+        "processing_youtu_vl.py",
+        "configuration_siglip2.py",
+        "modeling_siglip2.py",
+        "image_processing_siglip2_fast.py",
+        "__init__.py",
+    ]
+    asset_files = [
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "chat_template.json",
+        "preprocessor_config.json",
+        "generation_config.json",
+    ]
+
+    marker_file = output_dir / ".tiny_cache_marker"
+    config_file = output_dir / "config.json"
+    if marker_file.exists() and config_file.exists():
+        try:
+            if marker_file.read_text().strip() == cache_marker:
+                cfg = json.loads(config_file.read_text())
+                if (
+                    cfg.get("model_type") == "youtu_vl"
+                    and cfg.get("architectures") == ["YoutuVLForConditionalGeneration"]
+                    and cfg.get("vision_config", {}).get("model_type") == "siglip2_vision_model"
+                    and any((output_dir / w).exists() for w in ("model.safetensors", "pytorch_model.bin"))
+                ):
+                    return str(output_dir)
+        except Exception:
+            pass
+
+    from huggingface_hub import hf_hub_download
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    torch.manual_seed(0)
+
+    config = AutoConfig.from_pretrained(original_model_id, trust_remote_code=True)
+
+    # LLM decoder (MLA) reductions.
+    config.num_hidden_layers = 2
+    config.hidden_size = 32
+    config.intermediate_size = 64
+    config.num_attention_heads = 4
+    config.num_key_value_heads = 4
+    # MLA head-dim contract: qk_head_dim = qk_nope_head_dim + qk_rope_head_dim, head_dim = qk_rope_head_dim.
+    config.qk_nope_head_dim = 16
+    config.qk_rope_head_dim = 16
+    config.v_head_dim = 16
+    config.qk_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
+    config.head_dim = config.qk_rope_head_dim
+    config.q_lora_rank = 32
+    config.kv_lora_rank = 32
+    config.max_position_embeddings = 2048
+    config.torch_dtype = "float32"
+    if hasattr(config, "dtype"):
+        config.dtype = "float32"
+
+    # Vision tower (siglip2) reductions, preserving hidden_size % (num_heads*2) == 0,
+    # a perfect-square num_patches, and out_hidden_size coupled to the LLM hidden size.
+    vc = config.vision_config
+    vc.num_hidden_layers = 4
+    vc.hidden_size = 32
+    vc.intermediate_size = 64
+    vc.num_attention_heads = 4
+    vc.out_hidden_size = config.hidden_size
+    vc.num_patches = 256
+    vc.torch_dtype = "float32"
+    if hasattr(vc, "dtype"):
+        vc.dtype = "float32"
+    if hasattr(vc, "fullatt_block_indexes"):
+        vc.fullatt_block_indexes = [i for i in [1, 3] if i < vc.num_hidden_layers]
+
+    config.use_cache = True
+
+    model = AutoModelForCausalLM.from_config(config, trust_remote_code=True).to(torch.float32)
+
+    # Reinitialize the tied embedding/lm_head with equalized row norms and perturb the MLP layers
+    # so greedy decoding produces diverse (non-collapsed) tokens for HF-vs-OpenVINO comparison.
+    with torch.no_grad():
+        emb = model.get_input_embeddings()
+        emb.weight.normal_(mean=0.0, std=0.2)
+        norms = emb.weight.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+        emb.weight.div_(norms)
+        for name, p in model.named_parameters():
+            if "mlp" in name and p.dim() == 2:
+                p.normal_(mean=0.0, std=0.5)
+    model.tie_weights()
+    model.eval()
+
+    model.save_pretrained(output_dir, safe_serialization=True)
+    for fname in remote_code_files + asset_files:
+        try:
+            src = hf_hub_download(original_model_id, fname)
+            shutil.copy(src, output_dir / os.path.basename(fname))
+        except Exception:
+            pass
+
+    marker_file.write_text(cache_marker)
     return str(output_dir)
 
 
@@ -367,6 +490,7 @@ HUB_MODEL_NAMES = {
     "flux.2-klein": "optimum-intel-internal-testing/tiny-random-flux.2-klein",
     "qwen3_vl_eagle3": "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
     "videochat_flash_qwen": "optimum-intel-internal-testing/tiny-videochat-flash-qwen",
+    "youtu_vl": _create_tiny_youtu_vl_model(),
 }
 
 
@@ -554,6 +678,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "code_predictor_model": 16,
         "code2wav_model": 53,
     },
+    "youtu_vl": {
+        "lm_model": 34,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 26,
+    },
     "sana": {
         "transformer": 58,
         "vae_decoder": 28,
@@ -667,6 +797,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_asr",
     "fun_asr",
     "videochat_flash_qwen",
+    "youtu_vl",
 )
 
 if is_transformers_version("<", "5"):
