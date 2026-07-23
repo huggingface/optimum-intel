@@ -1853,7 +1853,7 @@ def get_vlm_text_generation_config(
     model_patcher=None,
     dummy_input_generator=None,
     inputs_update=None,
-    task=None,
+    task="text-generation",
     min_transformers_version=None,
     max_transformers_version=None,
 ):
