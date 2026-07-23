@@ -75,3 +75,9 @@ jobs:
       - name: Test Qwen3-ASR and FunASR
         run: |
           pytest tests/openvino/${{ matrix.test-pattern }} -k "qwen3_asr or fun_asr" --durations=0
+
+      - if: ${{ matrix.test-pattern == '*export*' }}
+        name: Test DFlash
+        run: |
+          uv pip install transformers==5.2.0
+          pytest tests/openvino/test_dflash.py --durations=0

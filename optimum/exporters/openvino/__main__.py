@@ -214,14 +214,23 @@ def _ensure_qwen3_omni_rope_scaling(config):
     return config
 
 
-def update_config_for_eagle3(config):
+# Maps config.architectures[0] to the (AutoModel, AutoModelForCausalLM) classes in
+# model_patcher used to load custom draft models for speculative decoding.
+_CUSTOM_DRAFT_MODEL_MAP = {
+    "LlamaForCausalLMEagle3": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
+    "Eagle3LlamaForCausalLM": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
+    "DFlashDraftModel": ("Qwen3DFlashDraftModel", "Qwen3DFlashForCausalLM"),
+}
+
+
+def update_config_for_custom_draft_model(config, auto_model, auto_model_for_causal_lm):
     moduler_name = "optimum.exporters.openvino.model_patcher"
     spec = importlib.util.find_spec(moduler_name)
     if spec and spec.origin:
         moduler_path = os.path.dirname(spec.origin)
         config.auto_map = {
-            "AutoModel": moduler_path + "--model_patcher.LlamaEagle3Model",
-            "AutoModelForCausalLM": moduler_path + "--model_patcher.LlamaEagle3ForCausalLM",
+            "AutoModel": f"{moduler_path}--model_patcher.{auto_model}",
+            "AutoModelForCausalLM": f"{moduler_path}--model_patcher.{auto_model_for_causal_lm}",
         }
     config.tie_word_embeddings = False
     return config
@@ -391,11 +400,12 @@ def main_export(
         quantization_config = getattr(config, "quantization_config", None)
         quant_method = quantization_config.get("quant_method", None) if quantization_config else None
 
-        # update config to load eagle3 models (both text-only and VLM variants)
+        # update config to load custom draft models (eagle3 text-only/VLM variants, dflash)
         archs = getattr(config, "architectures", None)
-        _eagle3_archs = {"LlamaForCausalLMEagle3", "Eagle3LlamaForCausalLM"}
-        if isinstance(archs, list) and len(archs) > 0 and archs[0] in _eagle3_archs:
-            loading_kwargs["config"] = update_config_for_eagle3(config)
+        if isinstance(archs, list) and archs:
+            draft_classes = _CUSTOM_DRAFT_MODEL_MAP.get(archs[0])
+            if draft_classes is not None:
+                loading_kwargs["config"] = update_config_for_custom_draft_model(config, *draft_classes)
 
         # mxfp4 quantized model will be dequantized to bf16
         if quant_method == "mxfp4" and is_transformers_version(">=", "4.55"):
