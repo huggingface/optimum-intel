@@ -207,7 +207,7 @@ def add_hidden_states_rt_info(source_model, ov_model, config: Any):
     """Best-effort hidden-state locator annotation that leaves the graph untouched."""
     hidden_states_rt_info_key = "hidden_states_decoder_layers"
 
-    if "text-generation" not in getattr(config, "task", ""):
+    if "text-generation" not in (getattr(config, "task", "") or ""):
         return
 
     try:
