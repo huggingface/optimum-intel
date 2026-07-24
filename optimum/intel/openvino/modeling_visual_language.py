@@ -5602,7 +5602,7 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
             if image is not None:
                 image_token = getattr(processor, "image_token", "<|image|>")
                 text = f"{image_token}{text}"
-                return processor(images=image, text=text, return_tensors="pt")
+            return processor(images=image, text=text, return_tensors="pt")
 
         conversation = [
             {
