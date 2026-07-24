@@ -5601,7 +5601,7 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         if getattr(tokenizer, "chat_template", None) is None:
             if image is not None:
                 # If chat template is not available we need to add image token manually, as there's a requirement
-                # that image token number should match the number ofprovided images:
+                # that image token number should match the number of provided images:
                 # https://github.com/huggingface/transformers/blob/v5.10.0/src/transformers/models/gemma4_unified/processing_gemma4_unified.py#L187
                 image_token = getattr(processor, "image_token", "<|image|>")
                 if image_token not in text:
