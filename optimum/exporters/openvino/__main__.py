@@ -517,9 +517,7 @@ def main_export(
                 # Skip decompression so that weight_packed buffers remain intact for
                 # the OV PT frontend compressed-tensors patcher (quantized.py) to
                 # convert them to u4 constants during tracing.
-                CompressedTensorsHfQuantizer._process_model_after_weight_loading = (
-                    lambda self, model, **kwargs: model
-                )
+                CompressedTensorsHfQuantizer._process_model_after_weight_loading = lambda self, model, **kwargs: model
 
                 # In compressed-tensors >= 0.17, compress_model() installs a forward
                 # pre-hook (ct_decompress_hook) that lazily decompresses weights on
