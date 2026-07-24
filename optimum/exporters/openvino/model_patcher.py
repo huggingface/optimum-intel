@@ -4643,29 +4643,33 @@ class GraniteMoEModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        for layer in self._model.model.layers:
-            block_sparse_moe = layer.block_sparse_moe
-            block_sparse_moe.router._orig_forward = block_sparse_moe.router.forward
-            block_sparse_moe.router.forward = types.MethodType(
-                _granite_moe_topk_gating_forward, block_sparse_moe.router
-            )
-            block_sparse_moe.input_linear._orig_forward = block_sparse_moe.input_linear.forward
-            block_sparse_moe.input_linear.forward = types.MethodType(
-                _granite_moe_parallel_experts_forward, block_sparse_moe.input_linear
-            )
-            block_sparse_moe.output_linear._orig_forward = block_sparse_moe.output_linear.forward
-            block_sparse_moe.output_linear.forward = types.MethodType(
-                _granite_moe_parallel_experts_forward, block_sparse_moe.output_linear
-            )
+        if is_transformers_version("<", "5.13"):
+            for layer in self._model.model.layers:
+                block_sparse_moe = layer.block_sparse_moe
+                block_sparse_moe.router._orig_forward = block_sparse_moe.router.forward
+                block_sparse_moe.router.forward = types.MethodType(
+                    _granite_moe_topk_gating_forward, block_sparse_moe.router
+                )
+                block_sparse_moe.input_linear._orig_forward = block_sparse_moe.input_linear.forward
+                block_sparse_moe.input_linear.forward = types.MethodType(
+                    _granite_moe_parallel_experts_forward, block_sparse_moe.input_linear
+                )
+                block_sparse_moe.output_linear._orig_forward = block_sparse_moe.output_linear.forward
+                block_sparse_moe.output_linear.forward = types.MethodType(
+                    _granite_moe_parallel_experts_forward, block_sparse_moe.output_linear
+                )
+        else:
+            register_ov_batched_mm(self)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        for layer in self._model.model.layers:
-            block_sparse_moe = layer.block_sparse_moe
-            block_sparse_moe.router.forward = block_sparse_moe.router._orig_forward
-            block_sparse_moe.input_linear.forward = block_sparse_moe.input_linear._orig_forward
-            block_sparse_moe.output_linear.forward = block_sparse_moe.output_linear._orig_forward
+        if is_transformers_version("<", "5.13"):
+            for layer in self._model.model.layers:
+                block_sparse_moe = layer.block_sparse_moe
+                block_sparse_moe.router.forward = block_sparse_moe.router._orig_forward
+                block_sparse_moe.input_linear.forward = block_sparse_moe.input_linear._orig_forward
+                block_sparse_moe.output_linear.forward = block_sparse_moe.output_linear._orig_forward
 
 
 class OVSeq2SeqModelPatcher(ModelPatcher):
@@ -7679,7 +7683,7 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             )
 
         for idx, layer in enumerate(self._model.model.layers):
-            if getattr(layer, "block_sparse_moe", None) is not None:
+            if getattr(layer, "block_sparse_moe", None) is not None and is_transformers_version("<", "5.13"):
                 patch_sparse_moe(layer.block_sparse_moe)
             if self.real_config._config.layers_block_type[idx] == "mamba":
                 mamba_layer = layer.mamba
@@ -7687,6 +7691,9 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
                 continue
             mamba_layer._orig_forward = mamba_layer.forward
             mamba_layer.forward = types.MethodType(zamba2_mamba_mixer, mamba_layer)
+
+        if is_transformers_version(">=", "5.13"):
+            register_ov_batched_mm(self)
 
     def __exit__(self, exc_type, exc_value, traceback):
         def unpatch_sparse_moe(sparse_moe_layer):
@@ -7701,7 +7708,7 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
 
         for idx, layer in enumerate(self._model.model.layers):
-            if getattr(layer, "block_sparse_moe", None) is not None:
+            if getattr(layer, "block_sparse_moe", None) is not None and is_transformers_version("<", "5.13"):
                 unpatch_sparse_moe(layer.block_sparse_moe)
             if self.real_config._config.layers_block_type[idx] == "mamba":
                 mamba_layer = layer.mamba
