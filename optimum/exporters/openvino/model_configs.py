@@ -2872,6 +2872,7 @@ class LTX2VaeEncoderOpenVINOConfig(VaeEncoderOpenVINOConfig):
             "latent_parameters": {0: "batch_size", 2: "num_frames", 3: "height_latent", 4: "width_latent"},
         }
 
+
 @register_in_tasks_manager("qwenimage-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
 class QwenImageVaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(num_channels="z_dim", allow_new=True)
