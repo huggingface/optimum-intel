@@ -605,6 +605,10 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         # now we use model_kwargs only for text-to-speech models to specify vocoder
         model_kwargs = kwargs if cls.export_feature == "text-to-audio" else None
 
+        # FunASR has no transformers processor, so its tokenizer/detokenizer IR is needed at inference
+        # time (e.g. by preprocess_input). Always export them for this model type.
+        convert_tokenizer = getattr(config, "model_type", None) == "fun_asr"
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -620,6 +624,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             stateful=stateful,
             variant=variant,
             model_kwargs=model_kwargs,
+            convert_tokenizer=convert_tokenizer,
         )
 
         # Reload the config from the export output directory, as the export process
@@ -627,7 +632,16 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         exported_config_path = save_dir_path / "config.json"
         if exported_config_path.exists():
             original_name_or_path = getattr(config, "_name_or_path", None) or model_id
-            config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
+            try:
+                config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
+            except (KeyError, ValueError):
+                # Custom model types not registered with transformers AutoConfig (e.g. `fun_asr`,
+                # loaded via the funasr library) are stored as a plain PretrainedConfig.
+                config = PretrainedConfig.from_pretrained(save_dir_path)
+            # PretrainedConfig does not serialize the instance-level `model_type`; restore it
+            # from `export_model_type` so downstream model_type-based dispatch keeps working.
+            if not getattr(config, "model_type", None) and getattr(config, "export_model_type", None):
+                config.model_type = config.export_model_type
             # Preserve the original model identifier so that default quantization
             # config lookup based on the model id keeps working.
             config._name_or_path = original_name_or_path
@@ -1307,6 +1321,16 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
     main_input_name = "input_features"
     export_feature = "automatic-speech-recognition"
 
+    @classmethod
+    def from_pretrained(cls, model_id, export: bool = False, config: Optional["PretrainedConfig"] = None, **kwargs):
+        from .modeling_funasr import _is_funasr_source, _OVModelForFunAsr
+
+        # the original FunASR model has no config file, so _from_pretrained() dispatch does not work
+        if config is None and _is_funasr_source(model_id, **kwargs):
+            return _OVModelForFunAsr._from_pretrained_funasr(model_id, export=export, **kwargs)
+
+        return super().from_pretrained(model_id, export=export, config=config, **kwargs)
+
     def _prepare_decoder_input_ids_for_generation(
         self, batch_size, model_input_name, model_kwargs, decoder_start_token_id, device=None
     ):
@@ -1470,14 +1494,16 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
         config: "PretrainedConfig",
         **kwargs,
     ):
-        if "WhisperForConditionalGeneration" in getattr(config, "architectures", []):
+        if "WhisperForConditionalGeneration" in (getattr(config, "architectures", None) or []):
             return _OVModelForWhisper._from_pretrained(model_id, config, **kwargs)
-        elif getattr(config, "model_type", None) == "qwen3_asr":
-            # Ensure is_encoder_decoder is set for proper model loading
+        if getattr(config, "model_type", None) == "fun_asr":
+            from .modeling_funasr import _OVModelForFunAsr
+
             config.is_encoder_decoder = True
-            return super()._from_pretrained(model_id, config, **kwargs)
-        else:
-            return super()._from_pretrained(model_id, config, **kwargs)
+            return _OVModelForFunAsr._from_pretrained(model_id, config, **kwargs)
+        if getattr(config, "model_type", None) == "qwen3_asr":
+            config.is_encoder_decoder = True
+        return super()._from_pretrained(model_id, config, **kwargs)
 
 
 class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneration):

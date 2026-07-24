@@ -59,10 +59,11 @@ jobs:
         env:
           HF_DOC_BUILD_TOKEN: ${{ secrets.HF_DOC_BUILD_PUSH }}
           HF_TOKEN: ${{ secrets.HF_DOC_BUILD_PUSH }}
+          COMMIT_MSG: "Updated with commit ${{ env.COMMIT_SHA }} See: https://github.com/huggingface/optimum-intel/commit/${{ env.COMMIT_SHA }}"
         run: |
           make doc BUILD_DIR=./doc-build VERSION=${{ env.VERSION }}
           mv ./doc-build/optimum.intel optimum-intel
           doc-builder push optimum-intel \
             --doc_build_repo_id "hf-doc-build/doc-build" \
-            --commit_msg "Updated with commit ${COMMIT_SHA} See: https://github.com/huggingface/optimum-intel/commit/${COMMIT_SHA}" \
+            --commit_msg "${COMMIT_MSG}" \
             --n_retries 5

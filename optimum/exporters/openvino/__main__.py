@@ -90,6 +90,11 @@ def infer_task(
             task = "zero-shot-image-classification"
         elif library_name == "kokoro":
             task = "text-to-audio"
+        elif library_name == "funasr":
+            # Use the with-past task so the encoder-decoder export is stateful (KV cache hidden in
+            # OpenVINO state). Without the `-with-past` suffix the decoder is exported stateless and
+            # incremental generation breaks (only the first token is correct).
+            task = "automatic-speech-recognition-with-past"
         else:
             try:
                 task = TasksManager._infer_task_from_model_name_or_path(
@@ -209,14 +214,23 @@ def _ensure_qwen3_omni_rope_scaling(config):
     return config
 
 
-def update_config_for_eagle3(config):
+# Maps config.architectures[0] to the (AutoModel, AutoModelForCausalLM) classes in
+# model_patcher used to load custom draft models for speculative decoding.
+_CUSTOM_DRAFT_MODEL_MAP = {
+    "LlamaForCausalLMEagle3": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
+    "Eagle3LlamaForCausalLM": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
+    "DFlashDraftModel": ("Qwen3DFlashDraftModel", "Qwen3DFlashForCausalLM"),
+}
+
+
+def update_config_for_custom_draft_model(config, auto_model, auto_model_for_causal_lm):
     moduler_name = "optimum.exporters.openvino.model_patcher"
     spec = importlib.util.find_spec(moduler_name)
     if spec and spec.origin:
         moduler_path = os.path.dirname(spec.origin)
         config.auto_map = {
-            "AutoModel": moduler_path + "--model_patcher.LlamaEagle3Model",
-            "AutoModelForCausalLM": moduler_path + "--model_patcher.LlamaEagle3ForCausalLM",
+            "AutoModel": f"{moduler_path}--model_patcher.{auto_model}",
+            "AutoModelForCausalLM": f"{moduler_path}--model_patcher.{auto_model_for_causal_lm}",
         }
     config.tie_word_embeddings = False
     return config
@@ -386,11 +400,12 @@ def main_export(
         quantization_config = getattr(config, "quantization_config", None)
         quant_method = quantization_config.get("quant_method", None) if quantization_config else None
 
-        # update config to load eagle3 models (both text-only and VLM variants)
+        # update config to load custom draft models (eagle3 text-only/VLM variants, dflash)
         archs = getattr(config, "architectures", None)
-        _eagle3_archs = {"LlamaForCausalLMEagle3", "Eagle3LlamaForCausalLM"}
-        if isinstance(archs, list) and len(archs) > 0 and archs[0] in _eagle3_archs:
-            loading_kwargs["config"] = update_config_for_eagle3(config)
+        if isinstance(archs, list) and archs:
+            draft_classes = _CUSTOM_DRAFT_MODEL_MAP.get(archs[0])
+            if draft_classes is not None:
+                loading_kwargs["config"] = update_config_for_custom_draft_model(config, *draft_classes)
 
         # mxfp4 quantized model will be dequantized to bf16
         if quant_method == "mxfp4" and is_transformers_version(">=", "4.55"):
@@ -565,6 +580,10 @@ def main_export(
             model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
         elif library_name == "kokoro":
             model = _KokoroForTextToSpeech.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+        elif library_name == "funasr":
+            from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
+
+            model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         else:
             # remote code models like phi3_v internvl2, minicpmv, internvl2, nanollava, maira2 should be loaded using AutoModelForCausalLM and not AutoModelForImageTextToText
             # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)

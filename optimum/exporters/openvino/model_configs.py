@@ -77,9 +77,15 @@ from optimum.exporters.openvino.input_generators import (
     DummyVisionPositionIdsPhi4InputGenerator,
     Eagle3DummyGenerator,
     Eagle3VLMDummyGenerator,
+    FunASRDummyAudioInputGenerator,
     Gemma4DummyPastKeyValuesGenerator,
     GPTBigCodeDummyPastKeyValuesGenerator,
     Lfm2DummyPastKeyValuesGenerator,
+    LTX2AudioVaeDecoderDummyInputGenerator,
+    LTX2ConnectorsDummyInputGenerator,
+    LTX2TransformerDummyInputGenerator,
+    LTX2VaeDummyInputGenerator,
+    LTX2VocoderDummyInputGenerator,
     LTXTransformerDummyInputGenerator,
     LTXVaeDummyInputGenerator,
     MambaCacheDummyInputGenerator,
@@ -107,6 +113,7 @@ from optimum.exporters.openvino.model_patcher import (
     DeepseekPatcher,
     FalconModelPatcher,
     FluxTransformerModelPatcher,
+    FunASRModelPatcher,
     Gemma2ModelPatcher,
     Gemma3LMModelPatcher,
     Gemma3nImageEmbeddingsModelPatcher,
@@ -136,6 +143,9 @@ from optimum.exporters.openvino.model_patcher import (
     LlavaImageEmbeddingModelPatcher,
     LlavaNextVideoImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
+    LTX2ConnectorsPatcher,
+    LTX2TextEncoderPatcher,
+    LTX2TransformerPatcher,
     MairaImageEmbeddingModelPatcher,
     MambaPatcher,
     MiniCPM3Patcher,
@@ -280,6 +290,23 @@ def init_model_configs():
         except ImportError:
             pass
 
+    if "funasr" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
+        TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["funasr"] = {}
+    if "funasr" not in TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP:
+        try:
+            import importlib
+
+            import funasr as _funasr_module
+
+            if not hasattr(_funasr_module, "_FunASRForSpeechSeq2Seq"):
+                _funasr_mod = importlib.import_module("optimum.intel.openvino.modeling_funasr")
+                _funasr_module._FunASRForSpeechSeq2Seq = _funasr_mod._FunASRForSpeechSeq2Seq
+            TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP["funasr"] = {
+                "automatic-speech-recognition": "_FunASRForSpeechSeq2Seq",
+            }
+        except ImportError:
+            pass
+
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "image-text-to-text")] = ("transformers", "AutoModelForCausalLM")
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "automatic-speech-recognition")] = (
         "transformers",
@@ -341,6 +368,7 @@ def init_model_configs():
     if is_diffusers_available() and "text-to-video" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"] = {}
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx-video"] = "LTXPipeline"
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx2"] = "LTX2Pipeline"
 
 
 init_model_configs()
@@ -402,8 +430,58 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = OVDecoderModelPatcher
 
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        use_past: bool = False,
+        use_past_in_inputs: bool = False,
+        preprocessors: list[Any] | None = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            use_past=use_past,
+            use_past_in_inputs=use_past_in_inputs,
+            preprocessors=preprocessors,
+        )
+        archs = getattr(config, "architectures", None)
+        self.dflash = isinstance(archs, list) and len(archs) > 0 and archs[0] == "DFlashDraftModel"
+        if self.dflash:
+            model_type = getattr(config, "model_type", "")
+            if model_type != "qwen3":
+                raise ValueError(f"DFlash export supports only Qwen3-based draft models, got model_type={model_type}.")
+            dflash_config = getattr(config, "dflash_config", {}) or {}
+            if not dflash_config.get("target_layer_ids", []):
+                raise ValueError("DFlash export requires non-empty dflash_config['target_layer_ids'].")
+            # DFlash draft checkpoints still advertise model_type="qwen3"; the
+            # architecture and dflash_config fields identify the draft variant.
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (
+                DummyTextInputGenerator,
+                Eagle3VLMDummyGenerator,
+                Eagle3DummyGenerator,
+                GemmaDummyPastKeyValuesGenerator,
+            )
+            self.PAD_ATTENTION_MASK_TO_PAST = False
+
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self.dflash:
+            common_inputs = super().inputs
+            common_inputs.pop("input_ids", None)
+            common_inputs["inputs_embeds"] = {0: "batch_size", 1: "block_size"}
+            common_inputs["hidden_states"] = {0: "batch_size", 1: "context_length"}
+            common_inputs["position_ids"] = {0: "batch_size", 1: "context_length + block_size"}
+            if self.use_past_in_inputs:
+                mask_length = "past_sequence_length + context_length + block_size"
+            else:
+                mask_length = "context_length + block_size"
+            common_inputs["attention_mask"] = {0: "batch_size", 1: mask_length}
+            return common_inputs
         if self.task in ["feature-extraction"]:
             common_inputs = {
                 "input_ids": {0: "batch_size", 1: "sequence_length"},
@@ -412,6 +490,49 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         else:
             common_inputs = super().inputs
         return common_inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self.dflash:
+            common_outputs = super().outputs
+            common_outputs.pop("logits", None)
+            return {
+                "last_hidden_state": {0: "batch_size", 1: "draft_sequence_length"},
+                **common_outputs,
+            }
+        return super().outputs
+
+    def overwrite_shape_and_generate_input(
+        self, dummy_input_gen: DummyInputGenerator, input_name: str, framework: str, input_shapes: dict
+    ):
+        if self.dflash and input_name in {"inputs_embeds", "hidden_states", "position_ids", "attention_mask"}:
+            sequence_length = dummy_input_gen.sequence_length
+            block_length = sequence_length + 1
+            if input_name == "inputs_embeds":
+                dummy_input_gen.sequence_length = block_length
+            elif input_name == "hidden_states":
+                dummy_input_gen.sequence_length = sequence_length
+            elif input_name == "position_ids":
+                dummy_input_gen.sequence_length = sequence_length + block_length
+            else:
+                if self.use_past_in_inputs:
+                    dummy_input_gen.sequence_length = sequence_length * 2 + block_length
+                else:
+                    dummy_input_gen.sequence_length = sequence_length + block_length
+            dummy_input = dummy_input_gen.generate(
+                input_name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
+            )
+            dummy_input_gen.sequence_length = sequence_length
+            return dummy_input
+        return super().overwrite_shape_and_generate_input(dummy_input_gen, input_name, framework, input_shapes)
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        super().add_past_key_values(inputs_or_outputs, direction)
+        if self.dflash and direction == "outputs":
+            for axes in inputs_or_outputs.values():
+                for axis, name in axes.items():
+                    if name == "past_sequence_length + sequence_length":
+                        axes[axis] = "past_sequence_length + context_length"
 
 
 @register_in_tasks_manager(
@@ -2371,6 +2492,32 @@ class Qwen3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
         return values
 
 
+@register_in_tasks_manager("gemma3-text-encoder", *["feature-extraction"], library_name="diffusers")
+class Gemma3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        allow_new=True,
+        vocab_size="text_config.vocab_size",
+        sequence_length="text_config.max_position_embeddings",
+        num_layers="text_config.num_hidden_layers",
+    )
+    _MODEL_PATCHER = LTX2TextEncoderPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        outputs = {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
+        num_layers = getattr(self._normalized_config, "num_hidden_layers", 48)
+        for i in range(num_layers + 1):
+            outputs[f"hidden_states.{i}"] = {0: "batch_size", 1: "sequence_length"}
+        return outputs
+
+
 @register_in_tasks_manager("sana-transformer", *["semantic-segmentation"], library_name="diffusers")
 class SanaTransformerOpenVINOConfig(UNetOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
@@ -2580,7 +2727,6 @@ class LTXVideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (
         LTXTransformerDummyInputGenerator,
         DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator,
-        DummySanaTimestepInputGenerator,
     )
 
     @property
@@ -2592,7 +2738,7 @@ class LTXVideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
             "width": {},
             "height": {},
             "num_frames": {},
-            "timestep": {0: "batch_size"},
+            "timestep": {0: "batch_size", 1: "video_sequence_length"},
             "rope_interpolation_scale": {},
         }
 
@@ -2710,6 +2856,22 @@ class QwenImageVaeEncoderOpenVINOConfig(VisionOpenVINOConfig):
         }
 
 
+@register_in_tasks_manager("ltx2-vae-encoder", *["semantic-segmentation"], library_name="diffusers")
+class LTX2VaeEncoderOpenVINOConfig(VaeEncoderOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTX2VaeDummyInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_parameters": {0: "batch_size", 2: "num_frames", 3: "height_latent", 4: "width_latent"},
+        }
+
 @register_in_tasks_manager("qwenimage-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
 class QwenImageVaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(num_channels="z_dim", allow_new=True)
@@ -2726,6 +2888,121 @@ class QwenImageVaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {
             "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+        }
+
+
+@register_in_tasks_manager("ltx2-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
+class LTX2VaeDecoderOpenVINOConfig(VaeDecoderOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTX2VaeDummyInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+        }
+
+
+@register_in_tasks_manager("ltx2-connectors", *["semantic-segmentation"], library_name="diffusers")
+class LTX2ConnectorsOpenVINOConfig(VaeEncoderOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTX2ConnectorsDummyInputGenerator,)
+    _MODEL_PATCHER = LTX2ConnectorsPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "text_encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "video_text_embedding": {0: "batch_size", 1: "connector_sequence_length"},
+            "audio_text_embedding": {0: "batch_size", 1: "connector_sequence_length"},
+            "connector_attention_mask": {0: "batch_size", 1: "connector_sequence_length"},
+        }
+
+
+@register_in_tasks_manager("ltx2-video-transformer", *["semantic-segmentation"], library_name="diffusers")
+class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
+    _MODEL_PATCHER = LTX2TransformerPatcher
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        image_size="sample_size",
+        num_channels="in_channels",
+        hidden_size="caption_channels",
+        vocab_size="attention_head_dim",
+        allow_new=True,
+    )
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        LTX2TransformerDummyInputGenerator,
+        DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator,
+        DummySanaTimestepInputGenerator,
+    )
+
+    @property
+    def inputs(self):
+        return {
+            "hidden_states": {0: "batch_size", 1: "video_sequence_length"},
+            "audio_hidden_states": {0: "batch_size", 1: "audio_sequence_length"},
+            "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+            "audio_encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+            "encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
+            "audio_encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
+            "width": {},
+            "height": {},
+            "num_frames": {},
+            "fps": {},
+            "audio_num_frames": {},
+            "timestep": {0: "batch_size"},
+            "video_coords": {0: "batch_size", 2: "video_sequence_length"},
+            "audio_coords": {0: "batch_size", 2: "audio_sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "out_sample": {0: "batch_size", 1: "video_sequence_length"},
+            "audio_out_sample": {0: "batch_size", 1: "audio_sequence_length"},
+        }
+
+
+@register_in_tasks_manager("ltx2-audio-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
+class LTX2AudioVaeDecoderOpenVINOConfig(VaeDecoderOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTX2AudioVaeDecoderDummyInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_mel_bins"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "mel_bins"},
+        }
+
+
+@register_in_tasks_manager("ltx2-vocoder", *["semantic-segmentation"], library_name="diffusers")
+class LTX2VocoderOpenVINOConfig(VaeDecoderOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTX2VocoderDummyInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "hidden_states": {0: "batch_size", 2: "num_frames", 3: "mel_bins"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "audio_length"},
         }
 
 
@@ -4131,6 +4408,72 @@ class Qwen3ASROpenVINOConfig(AudioToTextOpenVINOConfig):
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         """Override to exclude encoder KV cache since Qwen3-ASR has no cross-attention."""
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_decoder_sequence_length"
+            name = "past_key_values"
+        else:
+            decoder_sequence_name = "past_decoder_sequence_length + decoder_sequence_length"
+            name = "present"
+
+        for i in range(self._normalized_config.decoder_num_layers):
+            inputs_or_outputs[f"{name}.{i}.decoder.key"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
+
+
+@register_in_tasks_manager(
+    "fun_asr",
+    *[
+        "automatic-speech-recognition",
+        "automatic-speech-recognition-with-past",
+    ],
+    library_name="funasr",
+)
+class FunASROpenVINOConfig(AudioToTextOpenVINOConfig):
+    """OpenVINO export config for FunASR models (e.g. Fun-ASR-Nano).
+
+    FunASR is an encoder-decoder ASR model: a SenseVoice audio encoder + adaptor produces audio
+    embeddings (in the LLM hidden size) that are spliced into the Qwen3 decoder input embeddings at
+    audio placeholder positions. There is no cross-attention, so only self-attention KV cache is used.
+    """
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        FunASRDummyAudioInputGenerator,
+        DummySeq2SeqDecoderTextInputGenerator,
+        Qwen3ASRDummySeq2SeqPastKeyValuesGenerator,
+    )
+
+    NORMALIZED_CONFIG_CLASS = NormalizedSeq2SeqConfig.with_args(
+        decoder_num_layers="num_hidden_layers",
+        num_attention_heads="num_attention_heads",
+        # Use num_key_value_heads for KV cache shape generation (GQA)
+        decoder_num_attention_heads="num_key_value_heads",
+        feature_size="num_mel_bins",
+        allow_new=True,
+    )
+    _MODEL_PATCHER = FunASRModelPatcher
+    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {}
+        if self._behavior in {ConfigBehavior.ENCODER, ConfigBehavior.MONOLITH}:
+            # FunASR encoder consumes fbank features laid out as (batch, num_frames, feature_size).
+            common_inputs["input_features"] = {0: "batch_size", 1: "encoder_sequence_length"}
+        else:
+            common_inputs["encoder_outputs"] = {0: "batch_size", 1: "encoder_sequence_length"}
+
+        if self._behavior in {ConfigBehavior.DECODER, ConfigBehavior.MONOLITH}:
+            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
+            if self.use_past_in_inputs:
+                self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        """Override to exclude encoder KV cache since FunASR has no cross-attention."""
         if direction not in ["inputs", "outputs"]:
             raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
 
