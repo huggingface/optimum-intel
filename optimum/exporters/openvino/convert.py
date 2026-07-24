@@ -1137,7 +1137,6 @@ def get_diffusion_models_for_export_ext(
     elif is_qwen_image:
         models_for_export = get_qwen_image_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_ltx_video:
-        models_for_export = get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
         is_ltx2 = pipeline.__class__.__name__.startswith("LTX2")
         if is_ltx2:
             models_for_export = get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
