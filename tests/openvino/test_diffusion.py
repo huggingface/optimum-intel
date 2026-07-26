@@ -1313,7 +1313,9 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         height, width, batch_size = 64, 96, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        # I2V keeps the first latent frame as image conditioning, so use a generated frame too.
+        num_frames = getattr(pipeline, "vae_temporal_compression_ratio", 1) + 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, num_frames=num_frames)
 
         for generator_framework in ["np", "pt"]:
             ov_outputs_1 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
