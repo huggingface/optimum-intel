@@ -502,9 +502,14 @@ class OVHfSeq2SeqTest(_ExportMixin, unittest.TestCase):
 
             self.assertEqual(reference_ids, ov_ids, "Transformers and OVModelForSeq2SeqLM tokens differ")
 
-    def test_ovmodel_speech_seq2seq(self):
-        # Whisper: audio encoder (no padding mask) + stateful decoder, driven by OVModelForSpeechSeq2Seq.
-        model_id = MODEL_NAMES["whisper"]
+    # Speech seq2seq: an audio encoder + stateful text decoder, driven by OVModelForSpeechSeq2Seq.
+    # whisper's encoder takes no padding mask; speech_to_text adds one. Both feed log-mel `input_features`
+    # from the feature extractor.
+    SPEECH_SEQ2SEQ_ARCHITECTURES = ["whisper", "speech_to_text"]
+
+    @parameterized.expand(SPEECH_SEQ2SEQ_ARCHITECTURES)
+    def test_ovmodel_speech_seq2seq(self, model_type):
+        model_id = MODEL_NAMES[model_type]
         with tempfile.TemporaryDirectory() as tmp:
             export_openvino_hf(model_id, tmp, task="automatic-speech-recognition", fp16=False)
 

@@ -304,19 +304,24 @@ def export_openvino_hf(
         except Exception as exception:
             logger.warning("Generation config not saved, saving failed with: %s", exception)
     elif generative:
-        # Decompose into prefill/decode (+ modality encoders) and export each. A dynamic export also
-        # yields a `decode_multi_token` component whose sequence axis stays dynamic.
-        components = exporter.export_for_generation(model, sample_inputs, config=config, multi_token=dynamic)
+        # GenAI-compatible text layout keeps ONLY the unified decode (`decode_multi_token` when dynamic,
+        # else the single-token `decode`) and discards prefill — so export just that one component
+        # instead of tracing+converting all three (the dominant export cost). Other generative
+        # modalities keep every component.
+        kept = ("decode_multi_token" if dynamic else "decode") if modality == "text" else None
+        components = exporter.export_for_generation(
+            model, sample_inputs, config=config, multi_token=dynamic, only={kept} if kept else None
+        )
         if modality == "text":
-            # GenAI-compatible layout: the unified multi-token decode is a single stateful model that
-            # OpenVINO GenAI's `LLMPipeline` drives (empty state == prefill, then step-by-step decode).
-            # Save it as `openvino_model.xml` + the OpenVINO tokenizer + the generation config.
-            if "decode_multi_token" not in components:
+            # The unified multi-token decode is a single stateful model that OpenVINO GenAI's
+            # `LLMPipeline` drives (empty state == prefill, then step-by-step decode). Save it as
+            # `openvino_model.xml` + the OpenVINO tokenizer + the generation config.
+            if not dynamic:
                 logger.warning(
                     "A static text-generation export (dynamic=False) produces a single-token decoder that "
                     "OpenVINO GenAI can't drive (it can't prefill). Export with dynamic=True for GenAI."
                 )
-            components = {"model": components.get("decode_multi_token") or components["decode"]}
+            components = {"model": components[kept]}
             _save_openvino_tokenizer(model_id, processor, output, trust_remote_code)
             try:
                 model.generation_config.save_pretrained(output)
