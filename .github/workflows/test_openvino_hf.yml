@@ -1,0 +1,58 @@
+name: OpenVINO HF Exporter (experimental) - Test
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "optimum/exporters/openvino_hf/**"
+      - "optimum/commands/export/openvino.py"
+      - "tests/openvino/test_export_hf.py"
+      - ".github/workflows/test_openvino_hf.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  UV_TORCH_BACKEND: cpu
+  UV_SYSTEM_PYTHON: true
+  TRANSFORMERS_IS_CI: true
+  HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7.0.0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip uv
+          uv pip install .[tests] pillow librosa openvino-genai openvino-tokenizers
+
+      # The `openvino-hf` path relies on `transformers.exporters.OpenVINOExporter` (+ multi-token
+      # decode), which isn't in a release yet — pin Transformers to the branch here (not in setup.py,
+      # so the rest of optimum-intel's CI keeps using the released Transformers).
+      - name: Install Transformers (openvino-exporter branch)
+        run: |
+          uv pip install "git+https://github.com/huggingface/transformers.git@openvino-exporter"
+
+      - name: Login with fork PRs CI token
+        if: ${{ env.HF_TOKEN == '' }}
+        run: |
+          python tests/scripts/login_with_ci_token.py
+
+      - name: Test with Pytest
+        run: |
+          pytest tests/openvino/test_export_hf.py --durations=0 -v

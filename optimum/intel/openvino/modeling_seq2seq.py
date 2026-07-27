@@ -1200,8 +1200,12 @@ class OVModelForImageTextToText(OVModelForSeq2SeqLM):
             if is_decoder:
                 if inputs.get_any_name().startswith("past_key_values"):
                     shapes[inputs][2] = -1
-                elif not inputs.get_any_name().startswith("encoder") and not inputs.get_any_name().startswith(
-                    "beam_idx"
+                elif (
+                    not inputs.get_any_name().startswith("encoder")
+                    and not inputs.get_any_name().startswith("beam_idx")
+                    # cache_position is a 1-D [sequence] input; its batch/sequence axis is dim 0, so
+                    # leave it dynamic there rather than indexing a (missing) dim 1.
+                    and not inputs.get_any_name().startswith("cache_position")
                 ):
                     shapes[inputs][1] = -1
         model.reshape(shapes)
@@ -1290,8 +1294,12 @@ class OVModelForPix2Struct(OVModelForImageTextToText):
             if is_decoder:
                 if inputs.get_any_name().startswith("past_key_values"):
                     shapes[inputs][2] = -1
-                elif not inputs.get_any_name().startswith("encoder") and not inputs.get_any_name().startswith(
-                    "beam_idx"
+                elif (
+                    not inputs.get_any_name().startswith("encoder")
+                    and not inputs.get_any_name().startswith("beam_idx")
+                    # cache_position is a 1-D [sequence] input; its batch/sequence axis is dim 0, so
+                    # leave it dynamic there rather than indexing a (missing) dim 1.
+                    and not inputs.get_any_name().startswith("cache_position")
                 ):
                     shapes[inputs][1] = -1
         model.reshape(shapes)

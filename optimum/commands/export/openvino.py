@@ -532,3 +532,42 @@ def prepare_q_config(args):
         "num_samples": args.num_samples,
         "smooth_quant_alpha": args.smooth_quant_alpha,
     }
+
+
+class OVHfExportCommand(BaseOptimumCLICommand):
+    COMMAND = CommandInfo(
+        name="openvino-hf",
+        help="[Experimental] Export PyTorch models to OpenVINO IR via the Transformers (HF) exporter.",
+    )
+
+    @staticmethod
+    def parse_args(parser: "ArgumentParser"):
+        # Reuse the `openvino` argument surface so the two paths feel identical on the CLI; this
+        # experimental path only honors a subset (see `run` — no quantization yet).
+        return parse_args_openvino(parser)
+
+    def run(self):
+        from ...exporters.openvino_hf import export_openvino_hf
+
+        if self.args.framework != "pt":
+            raise ValueError("`optimum-cli export openvino-hf` only supports `--framework pt`.")
+
+        # No quantization on this path yet — warn instead of silently ignoring compression options.
+        if self.args.weight_format not in (None, "fp16", "fp32") or self.args.quant_mode is not None:
+            logger.warning(
+                "`export openvino-hf` is experimental and does not support quantization yet; "
+                "`--weight-format`/`--quant-mode` are ignored (weights exported in %s).",
+                "fp32" if self.args.weight_format == "fp32" else "fp16",
+            )
+
+        # `export_openvino_hf` infers `auto` itself; just strip the `openvino`-style `-with-past` suffix.
+        task = "auto" if self.args.task == "auto" else self.args.task.replace("-with-past", "")
+
+        export_openvino_hf(
+            model_id=self.args.model,
+            output=self.args.output,
+            task=task,
+            stateful=not self.args.disable_stateful,
+            fp16=self.args.weight_format != "fp32",
+            trust_remote_code=self.args.trust_remote_code,
+        )
