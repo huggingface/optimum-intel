@@ -305,11 +305,14 @@ def export_openvino_hf(
         except Exception as exception:
             logger.warning("Generation config not saved, saving failed with: %s", exception)
     elif generative and modality == "text":
-        # GenAI text layout keeps ONLY the unified decode: `decode_multi_token` (dynamic seq axis — one
-        # stateful model OpenVINO GenAI's `LLMPipeline` drives: empty state == prefill, then step-by-step
-        # decode) or the single-token `decode` when static. Decompose (cheap) and export just that one
-        # component — the discarded prefill/decode graphs are the dominant, wasted export cost. Save it
-        # as `openvino_model.xml` + the OpenVINO tokenizer + the generation config.
+        # OpenVINO text generation needs exactly ONE graph: the unified stateful multi-token decode
+        # (`decode_multi_token`, dynamic sequence axis). Both OVModelForCausalLM and OpenVINO GenAI's
+        # LLMPipeline drive it for the whole loop — empty state == prefill, then step-by-step decode, and
+        # its dynamic query axis also covers chunked prefill / continuation. The separate `prefill` and
+        # single-token `decode` graphs the decomposition produces are never used by any OV runtime, so
+        # decompose (cheap) and export ONLY the one we keep — tracing + converting the other two is the
+        # dominant, wasted export cost. (Static export has no multi-token graph; fall back to `decode`.)
+        # Saved as `openvino_model.xml` + the OpenVINO tokenizer + the generation config.
         kept = "decode_multi_token" if dynamic else "decode"
         if not dynamic:
             logger.warning(
