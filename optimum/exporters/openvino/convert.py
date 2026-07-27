@@ -80,6 +80,7 @@ from .stateful import (
     ensure_stateful_is_available,
     patch_stateful,
 )
+from .utils_annotations import add_hidden_states_rt_info
 
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,8 @@ if is_diffusers_available():
 
 
 if TYPE_CHECKING:
+    from transformers.configuration_utils import PretrainedConfig
+
     from optimum.exporters.openvino.base import OpenVINOConfig
     from optimum.intel.openvino.configuration import OVConfig
 
@@ -131,6 +134,7 @@ def _save_model(
     library_name: Optional[str] = None,
     config: "OpenVINOConfig" = None,
     patch_16bit_model: bool = False,
+    source_model=None,
 ):
     compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16" and not patch_16bit_model
     model = _add_version_info_to_model(model, library_name)
@@ -140,6 +144,17 @@ def _save_model(
 
     if getattr(config, "eagle3", False):
         model = _add_eagle3_mode_to_rt_info(model)
+    if getattr(config, "dflash", False):
+        model = _add_dflash_mode_to_rt_info(model, config._config)
+    if source_model is not None and getattr(getattr(source_model, "config", None), "model_type", None) in {
+        "qwen3",
+        "qwen3_moe",
+        "qwen3_5",
+        "qwen3_5_moe",
+        "qwen3_5_text",
+        "qwen3_5_moe_text",
+    }:
+        add_hidden_states_rt_info(source_model, model, config)
 
     save_model(model, path, compress_to_fp16)
     del model
@@ -406,6 +421,7 @@ def export_pytorch(
             library_name=library_name,
             config=config,
             patch_16bit_model=patch_16bit_model,
+            source_model=model,
         )
         clear_class_registry()
         del ov_model
@@ -912,6 +928,26 @@ def _add_eagle3_mode_to_rt_info(model: Model):
     """
     try:
         model.set_rt_info("True", ["eagle3_mode"])
+    except Exception:
+        pass
+
+    return model
+
+
+def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig") -> Model:
+    """
+    Add DFlash metadata to DFlash draft model.
+
+    Marks model as DFlash draft model and adds DFlash configuration to the model including
+    mask token id and target layer ids.
+    """
+    try:
+        model.set_rt_info("True", ["dflash_mode"])
+        dflash_config = getattr(hf_config, "dflash_config", {})
+        if "mask_token_id" in dflash_config:
+            model.set_rt_info(str(dflash_config["mask_token_id"]), ["dflash", "mask_token_id"])
+        if "target_layer_ids" in dflash_config:
+            model.set_rt_info(",".join(map(str, dflash_config["target_layer_ids"])), ["dflash", "target_layer_ids"])
     except Exception:
         pass
 
