@@ -217,6 +217,14 @@ def _save_openvino_tokenizer(model_id: str, processor, output: Path, trust_remot
         logger.warning("Could not convert the tokenizer to OpenVINO (GenAI needs it): %s", exc)
 
 
+def _try_save_generation_config(model, output: Path) -> None:
+    """Best-effort save of the model's generation config next to the IR (needed by the OV runtimes)."""
+    try:
+        model.generation_config.save_pretrained(output)
+    except Exception as exception:  # noqa: BLE001 — best-effort; a missing/invalid config only skips defaults
+        logger.warning("Generation config not saved, saving failed with: %s", exception)
+
+
 def export_openvino_hf(
     model_id: str,
     output: Union[str, Path],
@@ -270,6 +278,8 @@ def export_openvino_hf(
     exporter = OpenVINOExporter()
     config = OpenVINOConfig(dynamic=dynamic, stateful=stateful and generative)
 
+    # Each branch produces just the `components` mapping (name -> ov.Model); the shared tail below saves
+    # them and, for generative models, the OpenVINO tokenizer + generation config.
     if generative and getattr(model.config, "is_encoder_decoder", False):
         # OpenVINO seq2seq layout: a stateless encoder + a stateful decoder, the pair
         # `OVModelForSeq2SeqLM` / `OVModelForSpeechSeq2Seq` load. Decomposed here (not via the
@@ -283,11 +293,6 @@ def export_openvino_hf(
                 *parts["decoder"], config=OpenVINOConfig(dynamic=dynamic, stateful=stateful)
             ),
         }
-        _save_openvino_tokenizer(model_id, processor, output, trust_remote_code)
-        try:
-            model.generation_config.save_pretrained(output)
-        except Exception as exception:
-            logger.warning("Generation config not saved, saving failed with: %s", exception)
     elif generative and modality == "multimodal":
         # VLM (llava-family): the text-embeddings + vision-embeddings + stateful language-model layout
         # `OVModelForVisualCausalLM` loads. Decomposed here (not via the Transformers exporter) because
@@ -299,11 +304,6 @@ def export_openvino_hf(
             )
             for name, (module, inputs, part_stateful) in parts.items()
         }
-        _save_openvino_tokenizer(model_id, processor, output, trust_remote_code)
-        try:
-            model.generation_config.save_pretrained(output)
-        except Exception as exception:
-            logger.warning("Generation config not saved, saving failed with: %s", exception)
     elif generative and modality == "text":
         # OpenVINO text generation needs exactly ONE graph: the unified stateful multi-token decode
         # (`decode_multi_token`, dynamic sequence axis). Both OVModelForCausalLM and OpenVINO GenAI's
@@ -312,7 +312,6 @@ def export_openvino_hf(
         # single-token `decode` graphs the decomposition produces are never used by any OV runtime, so
         # decompose (cheap) and export ONLY the one we keep — tracing + converting the other two is the
         # dominant, wasted export cost. (Static export has no multi-token graph; fall back to `decode`.)
-        # Saved as `openvino_model.xml` + the OpenVINO tokenizer + the generation config.
         kept = "decode_multi_token" if dynamic else "decode"
         if not dynamic:
             logger.warning(
@@ -321,11 +320,6 @@ def export_openvino_hf(
             )
         submodel, subinputs = decompose_for_generation(model, sample_inputs, multi_token=dynamic)[kept]
         components = {"model": exporter.export(submodel, subinputs, config=config)}
-        _save_openvino_tokenizer(model_id, processor, output, trust_remote_code)
-        try:
-            model.generation_config.save_pretrained(output)
-        except Exception as exception:
-            logger.warning("Generation config not saved, saving failed with: %s", exception)
     elif generative:
         # Other generative modalities: decompose and export every component.
         components = exporter.export_for_generation(model, sample_inputs, config=config, multi_token=dynamic)
@@ -336,6 +330,11 @@ def export_openvino_hf(
         path = output / f"openvino_{name}.xml"
         save_model(ov_model, str(path), compress_to_fp16=fp16)
         logger.info("Saved %s", path)
+
+    if generative:
+        # Generative models decode to text: save the OpenVINO tokenizer + generation config alongside the IR.
+        _save_openvino_tokenizer(model_id, processor, output, trust_remote_code)
+        _try_save_generation_config(model, output)
 
     processor.save_pretrained(output)
     # OpenVINO GenAI's image preprocessing reads the legacy `preprocessor_config.json`, which the

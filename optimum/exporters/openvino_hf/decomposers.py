@@ -228,6 +228,23 @@ _VLM_VISION_CAPTURE: dict[str, str] = {
 }
 
 
+def _base_language_inputs(decode: dict, past_length: int, batch: int, mrope: bool = False) -> dict:
+    """The stateful language-model decode inputs shared by every VLM decomposer: the query widened to 2
+    (``torch.export`` specializes size-1 axes, so widening keeps the sequence axis dynamic), a full
+    attention mask, and the captured cache. ``position_ids`` is 3-section M-RoPE ``[3, batch, 2]`` for the
+    qwen family, else 2-D ``[batch, 2]``. Callers merge (``| {...}``) any per-architecture extras."""
+    if mrope:
+        position_ids = torch.arange(past_length, past_length + 2).view(1, 1, 2).expand(3, batch, 2).contiguous()
+    else:
+        position_ids = torch.arange(past_length, past_length + 2).unsqueeze(0).expand(batch, -1)
+    return {
+        "inputs_embeds": decode["inputs_embeds"].repeat(1, 2, 1),
+        "attention_mask": torch.ones(batch, past_length + 2, dtype=torch.long),
+        "position_ids": position_ids,
+        "past_key_values": decode["past_key_values"],
+    }
+
+
 def decompose_vlm(model, inputs: dict[str, Any]) -> dict[str, tuple]:
     """Split a VLM into the components ``OVModelForVisualCausalLM`` loads, each as
     ``(nn.Module, forward_inputs, stateful)`` keyed by its ``openvino_<name>.xml`` file stem.
@@ -283,12 +300,7 @@ def _decompose_vlm_generic(model, inputs: dict[str, Any]) -> dict[str, tuple]:
     decode = decoder_calls[-1]  # self-attention past length is >= 2 by this step
     past_length = decode["past_key_values"].get_seq_length()
     batch = decode["inputs_embeds"].shape[0]
-    language_inputs = {
-        "inputs_embeds": decode["inputs_embeds"].repeat(1, 2, 1),  # widen query to 2 (keeps the axis dynamic)
-        "attention_mask": torch.ones(batch, past_length + 2, dtype=torch.long),
-        "position_ids": torch.arange(past_length, past_length + 2).unsqueeze(0).expand(batch, -1),
-        "past_key_values": decode["past_key_values"],
-    }
+    language_inputs = _base_language_inputs(decode, past_length, batch)
 
     return {
         "text_embeddings_model": (_TextEmbeddings(model), {"input_ids": inputs["input_ids"]}, False),
@@ -399,12 +411,7 @@ def _decompose_qwen2_vl(model, inputs: dict[str, Any]) -> dict[str, tuple]:
     # 3-section M-RoPE ``position_ids`` [sections, batch, query], matching what the runtime feeds (the
     # rotary embedding uses 3 sections; a 4-row position_ids is reduced to 3 inside the decoder, so we
     # trace the 3-row form the runtime supplies directly). Query widened to 2 to keep the axis dynamic.
-    language_inputs = {
-        "inputs_embeds": decode["inputs_embeds"].repeat(1, 2, 1),
-        "attention_mask": torch.ones(batch, past_length + 2, dtype=torch.long),
-        "position_ids": torch.arange(past_length, past_length + 2).view(1, 1, 2).expand(3, batch, 2).contiguous(),
-        "past_key_values": decode["past_key_values"],
-    }
+    language_inputs = _base_language_inputs(decode, past_length, batch, mrope=True)
 
     # Vision: patch-embed produces the merger's hidden-states input; rotary_pos_emb + a full (single
     # image) attention mask are computed here for the trace and supplied by the runtime at inference.
@@ -479,12 +486,7 @@ def _decompose_qwen2_5_vl(model, inputs: dict[str, Any]) -> dict[str, tuple]:
     decode = decoder_calls[-1]  # self-attention past length is >= 2 by this step
     past_length = decode["past_key_values"].get_seq_length()
     batch = decode["inputs_embeds"].shape[0]
-    language_inputs = {
-        "inputs_embeds": decode["inputs_embeds"].repeat(1, 2, 1),
-        "attention_mask": torch.ones(batch, past_length + 2, dtype=torch.long),
-        "position_ids": torch.arange(past_length, past_length + 2).view(1, 1, 2).expand(3, batch, 2).contiguous(),
-        "past_key_values": decode["past_key_values"],
-    }
+    language_inputs = _base_language_inputs(decode, past_length, batch, mrope=True)
 
     pixel_values = inputs["pixel_values"]
     grid_thw = inputs["image_grid_thw"]
@@ -559,15 +561,11 @@ class _Qwen3VLVisionMerger(_Qwen2VLVisionMerger):
         }
 
 
-class _Qwen3VLLanguageModel(torch.nn.Module):
-    """qwen3_vl language model: like ``_Qwen2VLLanguageModel`` but also takes ``visual_pos_masks`` and
-    stacked ``deepstack_visual_embeds`` the runtime injects at the deepstack layers (see the exporter's
-    ``_patch_qwen3vl_deepstack``, which makes that injection export-safe)."""
-
-    def __init__(self, model):
-        super().__init__()
-        self.decoder = model.get_decoder()
-        self.lm_head = model.lm_head
+class _Qwen3VLLanguageModel(_Qwen2VLLanguageModel):
+    """qwen3_vl language model: like ``_Qwen2VLLanguageModel`` (same decoder + ``lm_head`` wrapping) but
+    also takes ``visual_pos_masks`` and stacked ``deepstack_visual_embeds`` the runtime injects at the
+    deepstack layers (see the exporter's ``_patch_qwen3vl_deepstack``, which makes that injection
+    export-safe)."""
 
     def forward(
         self,
@@ -616,11 +614,7 @@ def _decompose_qwen3_vl(model, inputs: dict[str, Any]) -> dict[str, tuple]:
     batch = decode["inputs_embeds"].shape[0]
     # Deepstack features (all-True mask + full-width embeds keep the deepstack axes dynamic; the runtime
     # feeds real features at prefill and zero placeholders at decode). 3-section M-RoPE as in qwen2_vl.
-    language_inputs = {
-        "inputs_embeds": decode["inputs_embeds"].repeat(1, 2, 1),
-        "attention_mask": torch.ones(batch, past_length + 2, dtype=torch.long),
-        "position_ids": torch.arange(past_length, past_length + 2).view(1, 1, 2).expand(3, batch, 2).contiguous(),
-        "past_key_values": decode["past_key_values"],
+    language_inputs = _base_language_inputs(decode, past_length, batch, mrope=True) | {
         "visual_pos_masks": torch.ones(batch, 2, dtype=torch.bool),
         "deepstack_visual_embeds": torch.zeros(n_deepstack, batch * 2, hidden_size),
     }
@@ -688,12 +682,8 @@ def _decompose_gemma3(model, inputs: dict[str, Any]) -> dict[str, tuple]:
     decode = decoder_calls[-1]  # self-attention past length is >= 2 by this step
     past_length = decode["past_key_values"].get_seq_length()
     batch = decode["inputs_embeds"].shape[0]
-    language_inputs = {
-        "inputs_embeds": decode["inputs_embeds"].repeat(1, 2, 1),
-        "attention_mask": torch.ones(batch, past_length + 2, dtype=torch.long),
-        "position_ids": torch.arange(past_length, past_length + 2).unsqueeze(0).expand(batch, -1),
+    language_inputs = _base_language_inputs(decode, past_length, batch) | {
         "token_type_ids": torch.zeros(batch, 2, dtype=torch.long),
-        "past_key_values": decode["past_key_values"],
     }
 
     return {

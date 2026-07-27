@@ -64,21 +64,25 @@ def _got_ocr2_inputs(processor, model) -> dict:
     return dict(processor(Image.new("RGB", (64, 64)), return_tensors="pt"))
 
 
-def _chat_template_inputs(processor, model) -> dict:
-    """Build the prompt via the processor's chat template with one image — the reliable way to get the
-    right image-token expansion for families whose bare image token isn't recognised in raw text
-    (idefics3, smolvlm)."""
+def _chat_template_inputs(processor, model, size: int = 64) -> dict:
+    """Build the prompt via the processor's chat template with one ``size``x``size`` image — the reliable
+    way to get the right image-token expansion for families whose bare image token isn't recognised in raw
+    text (idefics3, smolvlm)."""
     messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": _EXAMPLE_PROMPT}]}]
     text = processor.apply_chat_template(messages, add_generation_prompt=True)
-    return dict(processor(text=[text], images=[Image.new("RGB", (64, 64))], return_tensors="pt"))
+    return dict(processor(text=[text], images=[Image.new("RGB", (size, size))], return_tensors="pt"))
 
 
-def _qwen2_vl_inputs(processor, model) -> dict:
-    """qwen2_vl / qwen2_5_vl chat-template sample. The 56x56 image is a whole number of patch*merge
-    blocks (unlike the generic 64x64), so the image-token count matches the pixel features."""
-    messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": _EXAMPLE_PROMPT}]}]
-    text = processor.apply_chat_template(messages, add_generation_prompt=True)
-    return dict(processor(text=[text], images=[Image.new("RGB", (56, 56))], return_tensors="pt"))
+def _qwen_vl_inputs(processor, model) -> dict:
+    """qwen VLMs need the image side to be a whole number of patch*merge blocks, or the image-token count
+    won't match the pixel features. Derive that block unit from the vision config (patch_size *
+    spatial_merge_size) rather than hardcoding a size — it differs per family (28 for qwen2/2.5-VL, 32 for
+    qwen3-VL); two blocks per side is a safe small sample."""
+    return _chat_template_inputs(
+        processor,
+        model,
+        size=2 * model.config.vision_config.patch_size * model.config.vision_config.spatial_merge_size,
+    )
 
 
 # model_type -> builder for the sample generate-inputs. Per architecture because the image-token count
@@ -87,9 +91,9 @@ _VLM_INPUT_BUILDERS: dict[str, Callable] = {
     "got_ocr2": _got_ocr2_inputs,
     "idefics3": _chat_template_inputs,
     "smolvlm": _chat_template_inputs,
-    "qwen2_vl": _qwen2_vl_inputs,
-    "qwen2_5_vl": _qwen2_vl_inputs,
-    "qwen3_vl": _qwen2_vl_inputs,
+    "qwen2_vl": _qwen_vl_inputs,
+    "qwen2_5_vl": _qwen_vl_inputs,
+    "qwen3_vl": _qwen_vl_inputs,
     "gemma3": _chat_template_inputs,
     "llava_next": _llava_next_inputs,
 }
