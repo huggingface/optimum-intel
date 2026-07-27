@@ -46,6 +46,7 @@ import transformers
 from openvino import save_model
 from transformers import AutoConfig, AutoTokenizer
 from transformers.exporters import OpenVINOConfig, OpenVINOExporter
+from transformers.exporters.utils import decompose_for_generation
 from transformers.models.auto.modeling_auto import MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES
 
 from optimum.exporters.openvino.convert import export_tokenizer
@@ -303,30 +304,28 @@ def export_openvino_hf(
             model.generation_config.save_pretrained(output)
         except Exception as exception:
             logger.warning("Generation config not saved, saving failed with: %s", exception)
+    elif generative and modality == "text":
+        # GenAI text layout keeps ONLY the unified decode: `decode_multi_token` (dynamic seq axis — one
+        # stateful model OpenVINO GenAI's `LLMPipeline` drives: empty state == prefill, then step-by-step
+        # decode) or the single-token `decode` when static. Decompose (cheap) and export just that one
+        # component — the discarded prefill/decode graphs are the dominant, wasted export cost. Save it
+        # as `openvino_model.xml` + the OpenVINO tokenizer + the generation config.
+        kept = "decode_multi_token" if dynamic else "decode"
+        if not dynamic:
+            logger.warning(
+                "A static text-generation export (dynamic=False) produces a single-token decoder that "
+                "OpenVINO GenAI can't drive (it can't prefill). Export with dynamic=True for GenAI."
+            )
+        submodel, subinputs = decompose_for_generation(model, sample_inputs, multi_token=dynamic)[kept]
+        components = {"model": exporter.export(submodel, subinputs, config=config)}
+        _save_openvino_tokenizer(model_id, processor, output, trust_remote_code)
+        try:
+            model.generation_config.save_pretrained(output)
+        except Exception as exception:
+            logger.warning("Generation config not saved, saving failed with: %s", exception)
     elif generative:
-        # GenAI-compatible text layout keeps ONLY the unified decode (`decode_multi_token` when dynamic,
-        # else the single-token `decode`) and discards prefill — so export just that one component
-        # instead of tracing+converting all three (the dominant export cost). Other generative
-        # modalities keep every component.
-        kept = ("decode_multi_token" if dynamic else "decode") if modality == "text" else None
-        components = exporter.export_for_generation(
-            model, sample_inputs, config=config, multi_token=dynamic, only={kept} if kept else None
-        )
-        if modality == "text":
-            # The unified multi-token decode is a single stateful model that OpenVINO GenAI's
-            # `LLMPipeline` drives (empty state == prefill, then step-by-step decode). Save it as
-            # `openvino_model.xml` + the OpenVINO tokenizer + the generation config.
-            if not dynamic:
-                logger.warning(
-                    "A static text-generation export (dynamic=False) produces a single-token decoder that "
-                    "OpenVINO GenAI can't drive (it can't prefill). Export with dynamic=True for GenAI."
-                )
-            components = {"model": components[kept]}
-            _save_openvino_tokenizer(model_id, processor, output, trust_remote_code)
-            try:
-                model.generation_config.save_pretrained(output)
-            except Exception as exception:
-                logger.warning("Generation config not saved, saving failed with: %s", exception)
+        # Other generative modalities: decompose and export every component.
+        components = exporter.export_for_generation(model, sample_inputs, config=config, multi_token=dynamic)
     else:
         components = {"model": exporter.export(model, sample_inputs, config=config)}
 
