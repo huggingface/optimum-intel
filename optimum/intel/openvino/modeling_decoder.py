@@ -851,12 +851,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         """
         return
 
-    def get_experts_implementation(self):
-        return {"": None}
-
-    def set_experts_implementation(self, experts_implementation):
-        return
-
     @classmethod
     def _from_pretrained(
         cls,
