@@ -2166,8 +2166,8 @@ class DummyQwenImageTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
-class DummyQwenImageRotaryEmbInputGenerator(DummyInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("img_cos", "img_sin", "txt_cos", "txt_sin")
+class DummyQwenImageResolutionInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("height", "width")
 
     def __init__(
         self,
@@ -2182,15 +2182,10 @@ class DummyQwenImageRotaryEmbInputGenerator(DummyInputGenerator):
     ):
         self.task = task
         self.batch_size = batch_size
-        self.height = height
-        self.width = width
-        self.sequence_length = sequence_length
-        # rotary frequencies span half of the per-head dimension
-        self.rotary_dim = normalized_config.config.attention_head_dim // 2
+        # packed latent resolution (matches the packed image sequence of `hidden_states`)
+        self.packed_height = height // 2
+        self.packed_width = width // 2
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name in ("img_cos", "img_sin"):
-            shape = [(self.height // 2) * (self.width // 2), self.rotary_dim]
-        else:
-            shape = [self.sequence_length, self.rotary_dim]
-        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        value = self.packed_height if input_name == "height" else self.packed_width
+        return self.constant_tensor([], value=value, dtype=getattr(torch, int_dtype), framework=framework)

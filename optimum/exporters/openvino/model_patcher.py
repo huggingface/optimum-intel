@@ -3187,21 +3187,82 @@ def _qwenimage_attn_processor_call(
     return img_attn_output, txt_attn_output
 
 
+def _qwenimage_rope_freqs(positions, inv_freq):
+    # positions: (seq,) float tensor of per-token positions along one axis
+    # inv_freq:  (dim // 2,) constant tensor of inverse frequencies
+    # returns real (cos, sin) of shape (seq, dim // 2), matching the real part / imaginary part
+    # of the complex `torch.polar(1, outer(positions, inv_freq))` used by diffusers' QwenEmbedRope.
+    # NOTE: use an explicit broadcast multiply instead of `torch.outer`. `torch.outer` traces to a
+    # MatMul whose constant `inv_freq` input is treated as a weight and gets int8-quantized by the
+    # default weight compression applied to models > 1B params. Quantizing `inv_freq` (values spanning
+    # 1.0 down to ~1e-4) destroys the low-magnitude frequencies and corrupts the rotary embeddings. An
+    # elementwise multiply is an Eltwise op, which weight compression leaves untouched.
+    angles = positions.float().unsqueeze(-1) * inv_freq.unsqueeze(0)
+    return torch.cos(angles), torch.sin(angles)
+
+
+def _qwenimage_build_rotary_emb(axes_dim, theta, image_seq_len, height, width, txt_seq_len, device):
+    # Reproduces diffusers' QwenEmbedRope (scale_rope=True, single image block, frame=1) using real
+    # trigonometric math instead of complex arithmetic, so it can be traced for OpenVINO while keeping
+    # the image resolution (`height`/`width`) as runtime tensor inputs rather than baked-in constants.
+    inv_freqs = [
+        1.0 / torch.pow(torch.tensor(float(theta), device=device), torch.arange(0, d, 2, device=device).float() / d)
+        for d in axes_dim
+    ]
+
+    # Per-token (frame, height, width) index arithmetic over the packed image sequence. Avoiding
+    # `view`/`expand` with tensor-derived sizes keeps `height`/`width` as genuine dynamic inputs.
+    hw = height * width
+    token = torch.arange(image_seq_len, device=device)
+    frame_idx = torch.div(token, hw, rounding_mode="floor")
+    rem = token % hw
+    height_idx = torch.div(rem, width, rounding_mode="floor")
+    width_idx = rem % width
+
+    h_half = height // 2
+    w_half = width // 2
+    # scale_rope centered positions: value - (size - size // 2)
+    pos_frame = frame_idx.float()
+    pos_height = height_idx.float() - (height - h_half).float()
+    pos_width = width_idx.float() - (width - w_half).float()
+
+    img_cos_parts, img_sin_parts = [], []
+    for pos, inv_freq in zip((pos_frame, pos_height, pos_width), inv_freqs):
+        cos, sin = _qwenimage_rope_freqs(pos, inv_freq)
+        img_cos_parts.append(cos)
+        img_sin_parts.append(sin)
+    img_cos = torch.cat(img_cos_parts, dim=-1)
+    img_sin = torch.cat(img_sin_parts, dim=-1)
+
+    # Text tokens share a single position across all three axes, offset by the max image index.
+    max_vid_index = torch.maximum(h_half, w_half)
+    txt_pos = torch.arange(txt_seq_len, device=device).float() + max_vid_index.float()
+    txt_cos_parts, txt_sin_parts = [], []
+    for inv_freq in inv_freqs:
+        cos, sin = _qwenimage_rope_freqs(txt_pos, inv_freq)
+        txt_cos_parts.append(cos)
+        txt_sin_parts.append(sin)
+    txt_cos = torch.cat(txt_cos_parts, dim=-1)
+    txt_sin = torch.cat(txt_sin_parts, dim=-1)
+
+    return (img_cos, img_sin), (txt_cos, txt_sin)
+
+
 def _qwenimage_transformer_forward(
     self,
     hidden_states,
     encoder_hidden_states,
     encoder_hidden_states_mask,
     timestep,
-    img_cos,
-    img_sin,
-    txt_cos,
-    txt_sin,
+    height,
+    width,
     guidance=None,
 ):
-    # Patched QwenImageTransformer2DModel forward that takes precomputed rotary embeddings as plain
-    # tensors. The original forward builds them from python-list `img_shapes` using complex arithmetic
-    # inside `self.pos_embed`, which cannot be traced. Here cos/sin are computed in the OV wrapper instead.
+    # Patched QwenImageTransformer2DModel forward. The original forward builds the rotary embeddings
+    # from python-list `img_shapes` using complex arithmetic inside `self.pos_embed`, which bakes a
+    # fixed resolution into the trace. Here the embeddings are computed inside the model from the
+    # `height`/`width` runtime tensor inputs using real math, so a single exported model serves any
+    # resolution while matching the original implementation numerically.
     hidden_states = self.img_in(hidden_states)
     timestep = timestep.to(hidden_states.dtype)
 
@@ -3217,7 +3278,15 @@ def _qwenimage_transformer_forward(
         else self.time_text_embed(timestep, guidance, hidden_states)
     )
 
-    image_rotary_emb = ((img_cos, img_sin), (txt_cos, txt_sin))
+    image_rotary_emb = _qwenimage_build_rotary_emb(
+        list(self.config.axes_dims_rope),
+        10000,
+        hidden_states.shape[1],
+        height,
+        width,
+        encoder_hidden_states.shape[1],
+        hidden_states.device,
+    )
 
     batch_size, image_seq_len = hidden_states.shape[:2]
     image_mask = torch.ones((batch_size, image_seq_len), dtype=torch.bool, device=hidden_states.device)

@@ -60,7 +60,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyQwen3OmniMoeVisionInputGenerator,
     DummyQwen3VLLMInputGenerator,
     DummyQwen3VLVisionEmbedInputGenerator,
-    DummyQwenImageRotaryEmbInputGenerator,
+    DummyQwenImageResolutionInputGenerator,
     DummyQwenImageTextInputGenerator,
     DummyQwenImageTransformerVisionInputGenerator,
     DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator,
@@ -2762,7 +2762,7 @@ class QwenImageTransformerOpenVINOConfig(UNetOpenVINOConfig):
         DummyTransformerTimestpsInputGenerator,
         DummyQwenImageTransformerVisionInputGenerator,
         DummyQwenImageTextInputGenerator,
-        DummyQwenImageRotaryEmbInputGenerator,
+        DummyQwenImageResolutionInputGenerator,
     )
     _MODEL_PATCHER = QwenImageTransformerModelPatcher
 
@@ -2778,10 +2778,8 @@ class QwenImageTransformerOpenVINOConfig(UNetOpenVINOConfig):
             "encoder_hidden_states": {0: "batch_size", 1: "sequence_length", 2: "joint_attention_dim"},
             "encoder_hidden_states_mask": {0: "batch_size", 1: "sequence_length"},
             "timestep": {0: "batch_size"},
-            "img_cos": {0: "packed_height_width"},
-            "img_sin": {0: "packed_height_width"},
-            "txt_cos": {0: "sequence_length"},
-            "txt_sin": {0: "sequence_length"},
+            "height": {},
+            "width": {},
         }
         if getattr(self._normalized_config.config, "guidance_embeds", False):
             common_inputs["guidance"] = {0: "batch_size"}

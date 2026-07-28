@@ -855,9 +855,6 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     shapes[inputs] = [batch_size, -1, 4]
             elif inputs.get_any_name() in ["height", "width", "num_frames", "rope_interpolation_scale"]:
                 shapes[inputs] = inputs.get_partial_shape()
-            elif inputs.get_any_name() in ["img_cos", "img_sin", "txt_cos", "txt_sin"]:
-                # rotary embeddings are precomputed per resolution / prompt length, keep them dynamic
-                shapes[inputs] = inputs.get_partial_shape()
             else:
                 shapes[inputs][0] = batch_size
                 shapes[inputs][1] = -1  # text_encoder_3 may have vary input length
@@ -1387,61 +1384,11 @@ class OVModelTransformer(OVPipelinePart):
 class OVModelQwenImageTransformer(OVPipelinePart):
     """
     Transformer wrapper for QwenImage. The diffusers `QwenImageTransformer2DModel` computes its rotary
-    position embeddings internally from python-list `img_shapes` using complex arithmetic, which cannot be
-    traced for OpenVINO. The exported model therefore expects the rotary embeddings as precomputed real
-    `cos`/`sin` tensors; this wrapper computes them on the fly and feeds them to the compiled model.
+    position embeddings internally from python-list `img_shapes` using complex arithmetic. The exported
+    OpenVINO model instead computes them inside the graph from the packed image `height`/`width` passed as
+    runtime scalar tensor inputs (real-valued math), so a single exported model works for any resolution.
+    This wrapper only has to translate `img_shapes` into those two scalars.
     """
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._rope_cache = {}
-        axes_dim = list(getattr(self.config, "axes_dims_rope", (16, 56, 56)))
-        theta = 10000
-        pos_index = torch.arange(4096)
-        neg_index = torch.arange(4096).flip(0) * -1 - 1
-
-        def rope_params(index, dim):
-            freqs = torch.outer(index, 1.0 / torch.pow(theta, torch.arange(0, dim, 2).float().div(dim)))
-            return torch.polar(torch.ones_like(freqs), freqs)
-
-        self._axes_dim = axes_dim
-        self._pos_freqs = torch.cat([rope_params(pos_index, d) for d in axes_dim], dim=1)
-        self._neg_freqs = torch.cat([rope_params(neg_index, d) for d in axes_dim], dim=1)
-
-    def _compute_video_freqs(self, frame, height, width):
-        # Replicates diffusers QwenEmbedRope._compute_video_freqs with scale_rope=True.
-        freqs_pos = self._pos_freqs.split([d // 2 for d in self._axes_dim], dim=1)
-        freqs_neg = self._neg_freqs.split([d // 2 for d in self._axes_dim], dim=1)
-
-        freqs_frame = freqs_pos[0][:frame].view(frame, 1, 1, -1).expand(frame, height, width, -1)
-        freqs_height = torch.cat([freqs_neg[1][-(height - height // 2) :], freqs_pos[1][: height // 2]], dim=0)
-        freqs_height = freqs_height.view(1, height, 1, -1).expand(frame, height, width, -1)
-        freqs_width = torch.cat([freqs_neg[2][-(width - width // 2) :], freqs_pos[2][: width // 2]], dim=0)
-        freqs_width = freqs_width.view(1, 1, width, -1).expand(frame, height, width, -1)
-
-        freqs = torch.cat([freqs_frame, freqs_height, freqs_width], dim=-1).reshape(frame * height * width, -1)
-        return freqs
-
-    def _rotary_embeddings(self, img_shapes, txt_seq_len):
-        key = (tuple(tuple(shape) for shape in img_shapes[0]), int(txt_seq_len))
-        if key not in self._rope_cache:
-            video_fhw = img_shapes[0]
-            if not isinstance(video_fhw, list):
-                video_fhw = [video_fhw]
-            vid_freqs = []
-            max_vid_index = 0
-            for frame, height, width in video_fhw:
-                vid_freqs.append(self._compute_video_freqs(frame, height, width))
-                max_vid_index = max(height // 2, width // 2, max_vid_index)
-            txt_freqs = self._pos_freqs[max_vid_index : max_vid_index + txt_seq_len, ...]
-            vid_freqs = torch.cat(vid_freqs, dim=0)
-            self._rope_cache[key] = (
-                vid_freqs.real.contiguous(),
-                vid_freqs.imag.contiguous(),
-                txt_freqs.real.contiguous(),
-                txt_freqs.imag.contiguous(),
-            )
-        return self._rope_cache[key]
 
     def forward(
         self,
@@ -1461,18 +1408,20 @@ class OVModelQwenImageTransformer(OVPipelinePart):
         if encoder_hidden_states_mask is None:
             encoder_hidden_states_mask = torch.ones(encoder_hidden_states.shape[:2], dtype=torch.int64)
 
-        txt_seq_len = encoder_hidden_states.shape[1]
-        img_cos, img_sin, txt_cos, txt_sin = self._rotary_embeddings(img_shapes, txt_seq_len)
+        # img_shapes is a per-batch list of (frame, height, width) blocks; the exported model supports a
+        # single image block (frame == 1), which is what OVQwenImagePipeline produces.
+        video_fhw = img_shapes[0]
+        if not isinstance(video_fhw, list):
+            video_fhw = [video_fhw]
+        _, packed_height, packed_width = video_fhw[0]
 
         model_inputs = {
             "hidden_states": hidden_states,
             "encoder_hidden_states": encoder_hidden_states,
             "encoder_hidden_states_mask": encoder_hidden_states_mask,
             "timestep": timestep,
-            "img_cos": img_cos,
-            "img_sin": img_sin,
-            "txt_cos": txt_cos,
-            "txt_sin": txt_sin,
+            "height": torch.tensor(packed_height, dtype=torch.int64),
+            "width": torch.tensor(packed_width, dtype=torch.int64),
         }
         if guidance is not None:
             model_inputs["guidance"] = guidance
