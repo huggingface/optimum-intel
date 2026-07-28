@@ -5020,7 +5020,7 @@ def _create_gemma4_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids,
     same_group = same_group.unsqueeze(1)  # [batch, 1, seq_len, total_len]
 
     # Un-mask same-group vision tokens in both masks (bidirectional attention within an image).
-    if is_transformers_version(">=", "5.9"):
+    if is_transformers_version(">=", "5.9") and is_transformers_version("<", "5.13"):
         full_mask = full_mask.masked_fill(same_group, 0.0)
     sliding_mask = sliding_mask.masked_fill(same_group, 0.0)
 
