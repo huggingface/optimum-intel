@@ -44,7 +44,6 @@ from diffusers import (
 )
 from diffusers.configuration_utils import ConfigMixin
 from diffusers.schedulers import SchedulerMixin
-from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils.constants import CONFIG_NAME
 from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
