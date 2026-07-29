@@ -924,7 +924,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     "Could not identify `latent_channels` from the VAE decoder configuration, to statically reshape the VAE decoder please provide a configuration."
                 )
                 self.is_dynamic = True
-        if model.inputs[0].get_partial_shape().rank.get_length() == 5:
+        if is_qwen_image and model.inputs[0].get_partial_shape().rank.get_length() == 5:
             # 3D (video-style) VAE decoder, run on a single temporal frame for images
             num_frames = num_frames if num_frames > 0 else 1
             shapes = {model.inputs[0]: [num_images_per_prompt, latent_channels, num_frames, height, width]}
