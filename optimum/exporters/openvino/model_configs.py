@@ -49,6 +49,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMVImageInputGenerator,
     DummyMiniCPMVResampleInputGenerator,
+    DummyOnyxVisionInputGenerator,
     DummyPhi3VisionProjectionInputGenerator,
     DummyQwen2VLLMInputGenerator,
     DummyQwen2VLVisionEmbedInputGenerator,
@@ -156,6 +157,8 @@ from optimum.exporters.openvino.model_patcher import (
     MixtralModelPatcher,
     ModelPatcher,
     MPTModelPatcher,
+    OnyxLanguageModelPatcher,
+    OnyxVisionEmbeddingsModelPatcher,
     OVDecoderModelPatcher,
     OVSeq2SeqModelPatcher,
     Phi3ModelPatcher,
@@ -2249,6 +2252,142 @@ class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return InternVLChatImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+
+@register_in_tasks_manager(
+    "onyx",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class OnyxTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    """Text-generation export config for the Onyx language model.
+
+    Onyx is grouped-query (few KV heads) with an explicit ``head_dim`` that is not
+    ``hidden_size // num_attention_heads``, so the Mistral-style GQA past-key-value
+    generator (which honours ``num_key_value_heads`` and ``head_dim``) is used.
+    """
+
+    DEFAULT_ONNX_OPSET = 14
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = OnyxLanguageModelPatcher
+
+
+class OnyxConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    TEXT_EMBEDDINGS = "text_embeddings"
+
+
+@register_in_tasks_manager("onyx", *["image-text-to-text"], library_name="transformers")
+class OnyxOpenVINOConfig(BaseVLMOpenVINOConfig):
+    """Multi-part OpenVINO export config for the Onyx VLM.
+
+    Splits the model into three IR files: the language model (consumes merged
+    ``inputs_embeds``), the token-embedding table, and the vision stack
+    (encoder -> adapter -> projection). Onyx has a flat config (no ``text_config``
+    / ``vision_config`` sub-configs), so the text sub-configs are built from the
+    top-level config itself.
+    """
+
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in OnyxConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyOnyxVisionInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: OnyxConfigBehavior = OnyxConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == OnyxConfigBehavior.VISION_EMBEDDINGS:
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == OnyxConfigBehavior.VISION_EMBEDDINGS:
+            # One temporal group [patch_temporal*3, H, W]; H/W are dynamic. The
+            # sparse-attention window mask is built inside the graph from the traced
+            # grid, so pixel_values is the only input.
+            return {
+                "pixel_values": {1: "height", 2: "width"},
+            }
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == OnyxConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "patch_tokens"}}
+        return {}
+
+    def with_behavior(self, behavior: Union[str, OnyxConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, OnyxConfigBehavior):
+            behavior = OnyxConfigBehavior(behavior)
+
+        if behavior == OnyxConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "onyx", self._orig_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == OnyxConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "onyx",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=OnyxLanguageModelPatcher,
+                inputs_update={"position_ids": {0: "batch_size", 1: "sequence_length"}},
+            )
+
+        if behavior == OnyxConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, OnyxConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, OnyxConfigBehavior):
+            behavior = OnyxConfigBehavior(behavior)
+
+        if behavior == OnyxConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == OnyxConfigBehavior.VISION_EMBEDDINGS:
+            # The vision patcher reaches model.vision_encoder / vision_adapter /
+            # vision_projection, which live under model.model.
+            vision = model.model
+            vision.config = model.config
+            return vision
+
+        if behavior == OnyxConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.model.embed_tokens
+            text_embedding.config = model.config
+            return text_embedding
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == OnyxConfigBehavior.VISION_EMBEDDINGS:
+            return OnyxVisionEmbeddingsModelPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
 
 
 @register_in_tasks_manager(

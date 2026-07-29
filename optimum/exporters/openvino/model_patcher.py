@@ -11041,3 +11041,338 @@ class LTX2TransformerPatcher(ModelPatcher):
         for name, module in self._model.named_modules():
             if name in self._orig_processors and hasattr(module, "set_processor"):
                 module.set_processor(self._orig_processors[name])
+
+
+# ------------------------------------------------------------------------------
+# Onyx (custom trust_remote_code VLM) export patchers.
+#
+# Onyx applies rotary embeddings with complex tensors
+# (torch.view_as_complex / torch.polar) in a module-level ``apply_rotary_emb``
+# helper shared by the vision encoder and the language model. OpenVINO cannot
+# convert complex ops (ComplexTypeMark), so both patchers below swap that global
+# for a mathematically-identical real-valued (cos/sin) implementation while the
+# graph is being traced, and restore it on exit.
+# ------------------------------------------------------------------------------
+def _onyx_apply_rotary_emb_real(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+    # freqs_cis is a complex tensor [seq, head_dim/2]; its real/imag parts are the
+    # cos/sin of the rotation angles. x is [batch, seq, heads, head_dim] with the
+    # real/imag pair interleaved on the last axis (the view_as_complex layout).
+    #
+    # An earlier version implemented the complex multiply directly on the
+    # interleaved (x[..., 0::2] / x[..., 1::2] + stack/flatten) layout. That is
+    # numerically correct but OpenVINO's RoPEFusion pass does not recognise the
+    # interleaved (GPT-J style) pattern, so the rotation stayed as a cloud of
+    # elementwise ops instead of a single fused RoPE op.
+    #
+    # Instead, deinterleave the head_dim into the half-split (GPT-NeoX / Llama)
+    # layout and express the rotation with the canonical ``rotate_half`` + a
+    # duplicated cos/sin, which is exactly the pattern RoPEFusion matches. This
+    # permutes the head_dim identically for query and key, so q.k (and therefore
+    # attention) is unchanged - it is only a reordering, not a different rotation.
+    # Mirrors ``llama4_apply_rotary_emb`` above, which solves the same complex-RoPE
+    # export problem for Llama4.
+    def rotate_half(t: torch.Tensor) -> torch.Tensor:
+        t1 = t[..., : t.shape[-1] // 2]
+        t2 = t[..., t.shape[-1] // 2 :]
+        return torch.cat((-t2, t1), dim=-1)
+
+    cos = freqs_cis.real
+    sin = freqs_cis.imag
+    cos = torch.cat((cos, cos), dim=-1).unsqueeze(0).unsqueeze(2)
+    sin = torch.cat((sin, sin), dim=-1).unsqueeze(0).unsqueeze(2)
+
+    b, s, h, d = x.shape
+    x_ = x.float().view(b, s, h, d // 2, 2).transpose(-1, -2).reshape(b, s, h, d)
+    out = x_ * cos + rotate_half(x_) * sin
+    return out.to(x.dtype)
+
+
+def _patch_onyx_rope(model):
+    """Replace ``apply_rotary_emb`` in the model's defining module with the
+    real-valued variant. Returns (module, original_fn) so it can be restored."""
+    import importlib
+
+    module = importlib.import_module(type(model).__module__)
+    orig = getattr(module, "apply_rotary_emb")
+    module.apply_rotary_emb = _onyx_apply_rotary_emb_real
+    return module, orig
+
+
+def _onyx_make_2d_rope_real(encoder, grid_h, grid_w, device):
+    """Real-valued twin of ``OnyxVisionEncoder._make_2d_rope``.
+
+    The eager method returns a complex tensor (``view_as_complex``); RoPE is then
+    applied by reading its ``.real`` / ``.imag`` parts. To keep the exported
+    vision graph free of any complex ops (which OpenVINO can convert but does not
+    always execute faithfully across the 50-layer stack), this returns the cos /
+    sin directly as a real tensor of shape ``[n_tokens, half_dim, 2]`` - the same
+    numbers, no ComplexTypeMark.
+    """
+    half_dim = encoder.head_dim // 2
+    quarter = half_dim // 2
+    theta = 10000.0
+    inv_freq = 1.0 / (
+        theta ** (torch.arange(0, half_dim, 2, dtype=torch.float32, device=device)[:quarter] / half_dim)
+    )
+    idx_h = torch.arange(1, grid_h + 1, dtype=torch.float32, device=device)
+    idx_w = torch.arange(1, grid_w + 1, dtype=torch.float32, device=device)
+    idx_ij_h = idx_h.unsqueeze(1).expand(-1, grid_w).reshape(-1)
+    idx_ij_w = idx_w.unsqueeze(0).expand(grid_h, -1).reshape(-1)
+    freq_h = torch.outer(idx_ij_h, inv_freq)
+    freq_w = torch.outer(idx_ij_w, inv_freq)
+    freq = torch.cat([freq_w, freq_h], dim=-1)
+    return torch.stack([torch.cos(freq), torch.sin(freq)], dim=-1)  # [n_tokens, half_dim, 2]
+
+
+def _onyx_apply_rotary_emb_real_vision(x, freqs_real):
+    """Apply RoPE from a real ``[n_tokens, half_dim, 2]`` cos/sin tensor.
+
+    Equivalent to ``_onyx_apply_rotary_emb_real`` but consumes the real
+    representation produced by ``_onyx_make_2d_rope_real`` instead of a complex
+    ``freqs_cis`` - so the whole vision RoPE path is complex-free. Uses the same
+    deinterleave + rotate_half formulation that OpenVINO's RoPEFusion matches.
+    """
+
+    def rotate_half(t):
+        t1 = t[..., : t.shape[-1] // 2]
+        t2 = t[..., t.shape[-1] // 2 :]
+        return torch.cat((-t2, t1), dim=-1)
+
+    cos = freqs_real[..., 0]
+    sin = freqs_real[..., 1]
+    cos = torch.cat((cos, cos), dim=-1).unsqueeze(0).unsqueeze(2)
+    sin = torch.cat((sin, sin), dim=-1).unsqueeze(0).unsqueeze(2)
+    b, s, h, d = x.shape
+    x_ = x.float().view(b, s, h, d // 2, 2).transpose(-1, -2).reshape(b, s, h, d)
+    out = x_ * cos + rotate_half(x_) * sin
+    return out.to(x.dtype)
+
+
+def _onyx_sparse_window_mask(grid_h, grid_w, gh, gw, device):
+    """Same-window attention mask (original token order), built with graph ops.
+
+    The eager encoder implements windowed sparse attention (factor > 1) by
+    building a token permutation that groups each ``gh`` x ``gw`` (``pos_emb_grid_h``
+    x ``pos_emb_grid_w``) spatial window into a contiguous block, running a
+    block-diagonal attention mask over the permuted sequence, then inverting the
+    permutation. Since masked attention is permutation-equivariant, that is exactly
+    equivalent to leaving tokens in their original (row-major) order and masking so
+    token i attends token j iff they fall in the same window.
+
+    Two tokens share a window iff they share BOTH a window row (``row // gh``) and a
+    window column (``col // gw``); comparing the two components separately avoids
+    the ``math.ceil`` window-count that the tracer would otherwise fold into a
+    constant (breaking every grid spanning more than one window). ``grid_h`` /
+    ``grid_w`` are traced tensors derived from the pixel shape, so ``arange`` and
+    the floor-divisions below trace as graph ops and generalise across grid sizes.
+
+    Returns bool [n_tokens, n_tokens] (True = attend) in ORIGINAL token order.
+    """
+    tok = torch.arange(grid_h * grid_w, device=device)
+    row = torch.div(tok, grid_w, rounding_mode="floor")
+    col = tok - row * grid_w
+    win_row = torch.div(row, gh, rounding_mode="floor")
+    win_col = torch.div(col, gw, rounding_mode="floor")
+    same_row = win_row.unsqueeze(1) == win_row.unsqueeze(0)
+    same_col = win_col.unsqueeze(1) == win_col.unsqueeze(0)
+    return same_row & same_col
+
+
+def _onyx_vision_attention_export_forward(self, x, slen, freqs_cis=None, attn_bias=None):
+    """``OnyxVisionAttention.forward`` for export, with static head dims.
+
+    The eager forward computes ``bs = bs_slen // slen`` and reshapes q/k/v to
+    ``[bs, slen, n_heads, head_dim]``. Because ``bs`` and ``slen`` are both traced
+    tensors, that reshape produces a fully dynamic ``[?, ?, ?, ?]`` shape, and
+    OpenVINO's RoPEFusion / SDPA (MHA) fusion passes require STATIC ``n_heads`` and
+    ``head_dim`` to match - so on the eager shape the vision RoPE stays a cloud of
+    elementwise ops and every SDPA falls back to a snippets ``Subgraph``.
+
+    The exported vision graph always processes a single group (``bs == 1``), so
+    reshaping to ``[1, -1, n_heads, head_dim]`` is numerically identical while
+    keeping ``n_heads`` / ``head_dim`` static in the graph - which lets both
+    fusions fire (mirrors the language model, whose q/k/v are ``[?, ?, 32, 128]``).
+    """
+    n_heads, head_dim = self.n_heads, self.head_dim
+
+    xq = self.q_proj(x).reshape(1, -1, n_heads, head_dim)
+    xk = self.k_proj(x).reshape(1, -1, n_heads, head_dim)
+    xv = self.v_proj(x).reshape(1, -1, n_heads, head_dim)
+
+    if freqs_cis is not None:
+        xq = _onyx_apply_rotary_emb_real_vision(xq, freqs_cis)
+        xk = _onyx_apply_rotary_emb_real_vision(xk, freqs_cis)
+
+    xq = xq.transpose(1, 2)
+    xk = xk.transpose(1, 2)
+    xv = xv.transpose(1, 2)
+
+    out = torch.nn.functional.scaled_dot_product_attention(xq, xk, xv, attn_mask=attn_bias)
+    out = out.transpose(1, 2).contiguous().view(-1, n_heads * head_dim)
+    return self.o_proj(out)
+
+
+def _onyx_vision_encoder_export_forward(self, images):
+    """Single-group ``OnyxVisionEncoder.forward`` for export.
+
+    Windowed sparse attention (factor > 1) is expressed WITHOUT the token
+    permutation the eager encoder uses: because masked attention is permutation-
+    equivariant, permute -> block-diagonal-mask -> inverse-permute is equivalent to
+    keeping tokens in their original order under a same-window mask. That mask is
+    built inside the graph by ``_onyx_sparse_window_mask`` (traced from the grid),
+    so no ``sp_mask`` input is needed and the exported features match the eager
+    encoder across every grid size.
+    """
+    device = self.conv1_linear.weight.device
+    dtype = self.conv1_linear.weight.dtype
+    ps = self.patch_size
+    sf = self.sparse_attention_factor
+
+    img = images[0].to(device=device, dtype=dtype)
+    if img.ndim == 3:
+        img = img.unsqueeze(0)
+    _, c, h, w = img.shape
+    grid_h, grid_w = h // ps, w // ps
+    n_tokens = grid_h * grid_w
+
+    if c == 3:
+        patches = img.unfold(2, ps, ps).unfold(3, ps, ps)
+        patches = patches.contiguous().view(1, c, grid_h, grid_w, ps, ps)
+        patches = patches.permute(0, 2, 3, 1, 4, 5).contiguous()
+        patches = patches.unsqueeze(3).expand(-1, -1, -1, self.patch_temporal, -1, -1, -1)
+    else:
+        frame_patches = []
+        for t in range(self.patch_temporal):
+            frame = img[:, t * 3 : (t + 1) * 3]
+            fp = frame.unfold(2, ps, ps).unfold(3, ps, ps)
+            fp = fp.contiguous().view(1, 3, grid_h, grid_w, ps, ps)
+            fp = fp.permute(0, 2, 3, 1, 4, 5).contiguous()
+            frame_patches.append(fp)
+        patches = torch.stack(frame_patches, dim=3)
+    patches = patches.reshape(1, n_tokens, -1)
+
+    x = self.conv1_linear(patches)
+    pos_emb = self._get_pos_emb(grid_h, grid_w, device)
+    x = x + pos_emb.unsqueeze(0).to(dtype)
+    x = self.ln_pre(x.view(-1, self.latent_dim)).view(1, -1, self.latent_dim)
+    # Real-valued RoPE (cos/sin as [n_tokens, half_dim, 2]); keeps the whole
+    # vision graph free of complex ops.
+    freqs_real = _onyx_make_2d_rope_real(self, grid_h, grid_w, device)
+
+    # Same-window sparse-attention mask, built inside the graph from the traced
+    # grid (see ``_onyx_sparse_window_mask``). Expand to a rank-4 attn bias
+    # ``[1, 1, n_tokens, n_tokens]`` so it broadcast-aligns with the
+    # ``[bs, n_heads, n_tokens, n_tokens]`` attention scores.
+    gh, gw = self.pos_emb_grid_h, self.pos_emb_grid_w
+    sp_mask_4d = _onyx_sparse_window_mask(grid_h, grid_w, gh, gw, device)[None, None]
+
+    # Every ``sf``-th block (and the last) uses global attention (no window mask);
+    # the rest use the same-window mask - matching the eager encoder's sparse
+    # windowed attention.
+    for i, block in enumerate(self.transformer):
+        is_global = (i == len(self.transformer) - 1) or ((i + 1) % sf == 0)
+        attn_bias = None if is_global else sp_mask_4d
+        x = block(x, slen=n_tokens, freqs_cis=freqs_real, attn_bias=attn_bias)
+
+    img_x = self.ln_post(x.view(-1, self.latent_dim)).view(1, -1, self.latent_dim)
+    img_x = self._pixel_shuffle_downsample(img_x, grid_h, grid_w)
+    return img_x.squeeze(0)
+
+
+class OnyxVisionEmbeddingsModelPatcher(ModelPatcher):
+    """Patch the Onyx vision stack (encoder -> adapter -> projection) for export.
+
+    Consumes a single video-style group tensor ``[patch_temporal*3, H, W]`` (an
+    image is the frame replicated ``patch_temporal`` times, which the encoder's
+    image branch already does internally) and returns the projected per-patch
+    features. The sparse-attention window mask is built inside the graph from the
+    traced grid, so ``pixel_values`` is the only input and the exported features
+    match the eager model bit-for-bit (see ``_onyx_vision_encoder_export_forward``).
+    """
+
+    def __init__(self, config, model, model_kwargs=None):
+        model.__orig_forward = model.forward
+
+        def forward_wrap(self, pixel_values):
+            features = self.vision_encoder([pixel_values])
+            features = self.vision_adapter(features)
+            features = self.vision_projection(features)
+            return features
+
+        model.forward = types.MethodType(forward_wrap, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        # Swap the module-level apply_rotary_emb for the real-freqs vision variant
+        # (the export forward feeds real cos/sin, keeping the graph complex-free).
+        import importlib
+
+        self._rope_module = importlib.import_module(type(self._model).__module__)
+        self._rope_orig = self._rope_module.apply_rotary_emb
+        self._rope_module.apply_rotary_emb = _onyx_apply_rotary_emb_real_vision
+        encoder = self._model.vision_encoder
+        self._enc_orig_forward = encoder.forward
+        encoder.forward = types.MethodType(_onyx_vision_encoder_export_forward, encoder)
+        # Swap each attention block to the static-head-dim forward so RoPEFusion and
+        # SDPA (MHA) fusion can match (see _onyx_vision_attention_export_forward).
+        self._attn_orig_forwards = []
+        for block in encoder.transformer:
+            self._attn_orig_forwards.append(block.attn.forward)
+            block.attn.forward = types.MethodType(_onyx_vision_attention_export_forward, block.attn)
+        super().__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._rope_module.apply_rotary_emb = self._rope_orig
+        self._model.vision_encoder.forward = self._enc_orig_forward
+        for block, orig in zip(self._model.vision_encoder.transformer, self._attn_orig_forwards):
+            block.attn.forward = orig
+        self._model.forward = self._model.__orig_forward
+
+
+class OnyxLanguageModelPatcher(OVDecoderModelPatcher):
+    """Patch the Onyx language model to consume ``inputs_embeds`` + a legacy KV
+    tuple for the stateful text-generation export, with real-valued RoPE."""
+
+    def __init__(self, config, model, model_kwargs=None):
+        model.__orig_forward = model.forward
+
+        def forward_wrap(
+            self,
+            attention_mask,
+            position_ids=None,
+            past_key_values=None,
+            inputs_embeds=None,
+            input_ids=None,
+            use_cache=True,
+        ):
+            if is_transformers_version("<", "5"):
+                new_past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                new_past_key_values = DynamicCache(past_key_values)
+
+            result = self.__orig_forward(
+                input_ids=input_ids,
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=new_past_key_values,
+                use_cache=use_cache,
+            )
+            if past_key_values is not None:
+                result["past_key_values"] = postprocess_past_key_values(result["past_key_values"])
+            return result
+
+        model.forward = types.MethodType(forward_wrap, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        self._rope_module, self._rope_orig = _patch_onyx_rope(self._model)
+        super().__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._rope_module.apply_rotary_emb = self._rope_orig
+        self._model.forward = self._model.__orig_forward
+
+

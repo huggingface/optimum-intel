@@ -2189,3 +2189,37 @@ class DummyQwenImageResolutionInputGenerator(DummyInputGenerator):
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         value = self.packed_height if input_name == "height" else self.packed_width
         return self.constant_tensor([], value=value, dtype=getattr(torch, int_dtype), framework=framework)
+
+
+class DummyOnyxVisionInputGenerator(DummyVisionInputGenerator):
+    """Dummy input for the Onyx vision stack.
+
+    Onyx consumes one temporal group at a time as a ``[patch_temporal*3, H, W]``
+    tensor (an image is the frame replicated ``patch_temporal`` times). H and W
+    must be multiples of ``patch_size * downsample_factor`` so the patch grid
+    divides evenly.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("pixel_values",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 1,
+        **kwargs,
+    ):
+        cfg = normalized_config.config
+        self.patch_size = cfg.vision_patch_size
+        self.patch_temporal = cfg.vision_patch_temporal
+        self.downsample_factor = cfg.vision_downsample_factor
+        stride = self.patch_size * self.downsample_factor
+        # Two patch cells per side keeps the grid small yet valid for downsampling.
+        self.height = stride * 2
+        self.width = stride * 2
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            shape = [self.patch_temporal * 3, self.height, self.width]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        raise ValueError(f"Unsupported input name {input_name}")

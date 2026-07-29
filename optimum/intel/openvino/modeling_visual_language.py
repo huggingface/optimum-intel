@@ -7363,7 +7363,98 @@ if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.rot_pos_emb = Qwen3_5VisionModel.rot_pos_emb
 
 
+class _OVOnyxForCausalLM(OVModelForVisualCausalLM):
+    """OpenVINO runtime for the Onyx VLM (custom trust_remote_code architecture).
+
+    The vision stack is exported as a single graph that consumes one temporal
+    group ``[patch_temporal*3, H, W]`` and returns its projected per-patch
+    features. The HF ``OnyxProcessor`` emits ``pixel_values`` as a list of such
+    per-image / per-video-group tensors, so ``get_vision_embeddings`` runs each
+    through the vision model and concatenates the features in list order (the
+    encoder's block-diagonal attention makes images/groups independent, so this
+    matches the eager model exactly). Features are then scattered into the
+    positions of the ``<|patch|>`` / ``<|video|>`` tokens in the prompt.
+    """
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        # Vision features are only consumed on the prefill step.
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        if pixel_values is None:
+            return None
+        groups = pixel_values if isinstance(pixel_values, (list, tuple)) else [pixel_values]
+        # The vision graph consumes one temporal group [patch_temporal*3, H, W].
+        # OnyxImageProcessor returns images as a single frame [3, H, W]; replicate
+        # it patch_temporal times to match (the encoder's image branch does the
+        # same internally). Video groups already have patch_temporal*3 channels.
+        patch_temporal = getattr(self.config, "vision_patch_temporal", 2)
+        features = []
+        for group in groups:
+            group = torch.as_tensor(group) if not isinstance(group, torch.Tensor) else group
+            group = group.float()
+            if group.ndim == 4 and group.shape[0] == 1:
+                group = group.squeeze(0)
+            if group.shape[0] == 3:
+                group = group.repeat(patch_temporal, 1, 1)
+            # The sparse windowed-attention mask is built inside the vision graph
+            # from the (traced) grid, so pixel_values is the only input.
+            feats = self.vision_embeddings(pixel_values=group).last_hidden_state
+            features.append(torch.from_numpy(feats) if isinstance(feats, np.ndarray) else feats)
+        if not features:
+            return None
+        return torch.cat(features, dim=0)
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        inputs_embeds = (
+            torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        )
+        vision_embeds = (
+            torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        )
+        B, N, C = inputs_embeds.shape
+        flat = inputs_embeds.reshape(B * N, C)
+        ids = input_ids.reshape(B * N)
+        # <|patch|> (image) and <|video|> positions receive vision features in order.
+        selected = (ids == self.config.patch_token_id) | (ids == self.config.video_token_id)
+        flat[selected] = vision_embeds.reshape(-1, C).to(flat.dtype)
+        return flat.reshape(B, N, C), attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+
+        content = []
+        if image is not None:
+            content.append({"type": "image"})
+        if video is not None:
+            content.append({"type": "video"})
+        content.append({"type": "text", "text": text})
+        messages = [{"role": "user", "content": content}]
+        prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = processor(
+            text=prompt,
+            images=[image] if image is not None else None,
+            videos=[video] if video is not None else None,
+            return_tensors="pt",
+        )
+        return inputs
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
+    "onyx": _OVOnyxForCausalLM,
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
     "llava_next_video": _OVLlavaNextVideoForCausalLM,
