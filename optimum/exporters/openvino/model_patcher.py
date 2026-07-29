@@ -18,6 +18,8 @@ import logging
 import math
 import types
 from dataclasses import dataclass
+from dataclasses import fields as dataclass_fields
+from dataclasses import is_dataclass
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -574,6 +576,31 @@ class OVDecoderModelPatcher(ModelPatcher):
             if hasattr(module, "_rope_orig_forward"):
                 module.forward = module._rope_orig_forward
                 del module._rope_orig_forward
+
+
+class Qwen3ForGuardModelPatcher(OVDecoderModelPatcher):
+    """
+    Qwen3ForGuardModel.forward() (Qwen/Qwen3Guard-Stream custom `trust_remote_code` class) returns a plain
+    `@dataclass` (`GuardLogitsOutputWithPast`) instead of a `transformers.ModelOutput`/dict, so the generic
+    `patched_forward` in `patching_utils.py` (which only special-cases dict, list/tuple, or a single tensor)
+    can't match its named fields (`risk_level_logits`, `category_logits`, `query_risk_level_logits`,
+    `query_category_logits`, `past_key_values`) against the OpenVINO config's declared outputs. We wrap
+    `self.orig_forward` to convert that dataclass into a plain dict right after it runs, so the rest of the
+    (unmodified) generic output-filtering logic in `patched_forward` works unchanged.
+    """
+
+    def __init__(self, config, model, model_kwargs=None):
+        super().__init__(config, model, model_kwargs)
+        original_orig_forward = self.orig_forward
+
+        @functools.wraps(original_orig_forward)
+        def guard_dataclass_output_to_dict(*args, **kwargs):
+            outputs = original_orig_forward(*args, **kwargs)
+            if is_dataclass(outputs) and not isinstance(outputs, dict):
+                outputs = {field.name: getattr(outputs, field.name) for field in dataclass_fields(outputs)}
+            return outputs
+
+        self.orig_forward = guard_dataclass_output_to_dict
 
 
 def _mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
