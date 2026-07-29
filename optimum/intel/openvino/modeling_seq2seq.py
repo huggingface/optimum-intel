@@ -460,16 +460,6 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
 
         # Load model from hub
         if not os.path.isdir(model_id):
-            allow_patterns = {
-                encoder_file_name,
-                decoder_file_name,
-                decoder_with_past_file_name,
-                encoder_file_name.replace(".xml", ".bin"),
-                decoder_file_name.replace(".xml", ".bin"),
-                decoder_with_past_file_name.replace(".xml", ".bin"),
-                cls.config_name,
-            }
-
             ignore_patterns = ["*.msgpack", "*.safetensors", "*pytorch_model.bin"]
             if not from_onnx:
                 ignore_patterns.extend(["*.onnx", "*.onnx_data"])
@@ -482,7 +472,6 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                 revision=revision,
                 token=token,
                 user_agent=http_user_agent,
-                allow_patterns=allow_patterns,
                 ignore_patterns=ignore_patterns,
             )
 

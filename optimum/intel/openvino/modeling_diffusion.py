@@ -457,17 +457,6 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         }
 
         if not os.path.isdir(str(model_id)):
-            all_components = {key for key in config.keys() if not key.startswith("_")} | {"vae_encoder", "vae_decoder"}
-            allow_patterns = {os.path.join(component, "*") for component in all_components}
-            allow_patterns.update(
-                {
-                    *file_names.values(),
-                    *(file_name.replace(".xml", ".bin") for file_name in file_names.values()),
-                    SCHEDULER_CONFIG_NAME,
-                    cls.config_name,
-                    CONFIG_NAME,
-                }
-            )
             ignore_patterns = ["*.msgpack", "*.safetensors", "*pytorch_model.bin"]
             if not from_onnx:
                 ignore_patterns.extend(["*.onnx", "*.onnx_data"])
@@ -480,7 +469,6 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 revision=revision,
                 token=token,
                 user_agent=http_user_agent,
-                allow_patterns=allow_patterns,
                 ignore_patterns=ignore_patterns,
             )
         else:
