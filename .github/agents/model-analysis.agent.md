@@ -24,14 +24,18 @@ python -c "import transformers, optimum.intel; print(transformers.__path__[0]); 
 from transformers import AutoConfig, AutoModelForCausalLM
 
 model_id = "<model_id>"
-config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
-model = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
+trust_remote_code = False
+config = AutoConfig.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+model = AutoModelForCausalLM.from_config(config, trust_remote_code=trust_remote_code)
 
 for name, module in model.named_modules():
     kind = type(module).__name__
     if any(key in kind for key in ("Attention", "Norm", "MLP", "MoE", "Expert")):
         print(name, kind)
 ```
+
+Keep `trust_remote_code=False` unless the user explicitly confirms that they
+trust the model source and accept that loading it may execute arbitrary code.
 
 Use the documented task-specific AutoModel class rather than forcing
 `AutoModelForCausalLM` for every modality.

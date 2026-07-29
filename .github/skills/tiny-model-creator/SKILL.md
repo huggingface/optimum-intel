@@ -54,6 +54,11 @@ Create `create_tiny_model.py` in the designated working directory. It must:
    config, and remote-code asset.
 6. Reuse a completed cached output directory on repeated calls.
 
+Define maximum parameter-count and model-memory budgets, then verify both after
+construction so reducing layer count cannot be offset by widening other
+dimensions. Estimate weight memory from each parameter's element count and
+element size, and reject a candidate that exceeds either budget.
+
 Do not reuse a cache merely because `config.json` and a weight file exist.
 Before returning it, validate a cache-format/version marker and all critical
 configuration invariants, including architecture identity, dimensions,
