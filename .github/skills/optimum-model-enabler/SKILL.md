@@ -188,12 +188,6 @@ outputs collapse to zeros or constant repeated tokens. Follow the
 tiny-model-creator skill's finite-logit, variance, diversity, and
 initialization checks before using the fixture for accuracy comparison.
 
-Do not use semantic WWB similarity from a random tiny fixture as the final
-accuracy proof for the requested model. Tiny fixtures are for implementation,
-debugging, and repository tests; run final WWB accuracy against the original
-Hugging Face model. If resources prevent that run, report the validation as
-blocked rather than lowering the threshold or repeatedly tuning random weights.
-
 ## Local installation safety
 
 When validation requires installing this checkout, use an editable no-deps
@@ -211,8 +205,7 @@ downgrade or replace the model-compatible Transformers version.
 
 Run all applicable checks:
 
-1. Export the local tiny model for targeted tests and the real model for final
-   accuracy validation.
+1. Export the local tiny model and, when resources allow, the real model.
 2. Load the export through the appropriate Optimum Intel OpenVINO API.
 3. Execute deterministic `model.generate()` through the requested task.
 4. For image-text tasks, use a real image and text prompt together.

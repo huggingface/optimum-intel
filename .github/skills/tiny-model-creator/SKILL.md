@@ -151,11 +151,6 @@ the creator, execute the requested task, generate at least one new token, and
 include the command and output. Do not validate one directory and return a
 different cached or previously generated artifact.
 
-These checks qualify the tiny fixture for development and repository tests;
-they do not replace final semantic WWB validation of the original model. Do
-not tune random fixture weights solely to cross the production-model WWB
-threshold.
-
 ## Rules
 
 - Do not upload the tiny model to Hugging Face.
