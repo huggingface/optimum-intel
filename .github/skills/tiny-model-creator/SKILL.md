@@ -146,6 +146,16 @@ actual shared parameter and confirm tying remains intact after saving and
 reloading. Re-run finite-logit, diversity, generation, and save/reload checks
 after every initialization change.
 
+When repairing a below-threshold HF-vs-OpenVINO result, output diversity alone
+is not sufficient. Reproduce the exact benchmark inputs and deterministic
+generation settings, compare generated token IDs, and inspect the top-1/top-2
+logit margin at the first divergence against the observed backend numerical
+error. Adjust the architecture-preserving initialization or retained capacity
+until greedy decoding is stable, regenerate ground truth from that exact saved
+fixture, and rerun the failing comparison. Do not accept the fixture, lower the
+threshold, switch to the original large model, or describe the gap as an
+unavoidable property of random weights while the required comparison fails.
+
 The final generation evidence must load the exact output directory returned by
 the creator, execute the requested task, generate at least one new token, and
 include the command and output. Do not validate one directory and return a
