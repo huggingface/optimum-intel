@@ -5782,17 +5782,10 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         if image is not None:
             conversation[0]["content"].insert(0, {"type": "image"})
         if audio is not None:
-            conversation[0]["content"].append({"type": "audio", "audio": audio})
-            return processor.apply_chat_template(
-                conversation,
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt",
-            )
+            conversation[0]["content"].append({"type": "audio"})
 
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
-        return processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
+        return processor(images=image, text=text_prompt, videos=video, audio=audio, return_tensors="pt")
 
     def _update_model_kwargs_for_generation(
         self,
