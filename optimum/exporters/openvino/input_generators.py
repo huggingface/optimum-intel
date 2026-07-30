@@ -494,6 +494,58 @@ class DummyGemma4UnifiedVisionInputGenerator(DummyVisionInputGenerator):
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
+class DummyGemma4UnifiedAudioInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("input_features",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.audio_embed_dim = getattr(normalized_config, "audio_embed_dim", 640)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        return self.random_float_tensor(
+            shape=[self.batch_size, self.sequence_length, self.audio_embed_dim],
+            framework=framework,
+            dtype=float_dtype,
+        )
+
+
+class DummyGemma4AudioInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("input_features", "input_features_mask")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = 100,
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.feature_size = getattr(normalized_config, "feature_size", 128)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "input_features_mask":
+            return torch.ones((self.batch_size, self.sequence_length), dtype=torch.bool)
+        return self.random_float_tensor(
+            shape=[self.batch_size, self.sequence_length, self.feature_size],
+            framework=framework,
+            dtype=float_dtype,
+        )
+
+
 class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
         self,
