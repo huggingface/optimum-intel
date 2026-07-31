@@ -1037,6 +1037,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bert",
         "distilbert",
+        "nomic_bert",
         "roberta",
         "sentence-transformers-bert",
         "qwen3",
