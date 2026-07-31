@@ -188,6 +188,14 @@ HUB_MODEL_NAMES = {
     "deberta": "optimum-intel-internal-testing/tiny-random-deberta",
     "deberta-v2": "optimum-intel-internal-testing/tiny-random-DebertaV2Model",
     "decilm": "optimum-intel-internal-testing/tiny-random-decilm",
+    # This fixture's config already sets rope_scaling={"type": "yarn", "mscale_all_dim": 0.707, ...},
+    # exercising the DeepseekPatcher.deepseek_v3_attn_forward YaRN softmax_scale/RoPE-interleave code
+    # path fixed in the "Fix deepseek_v3_attn_forward" commit. Note: its qk_rope_head_dim=2 makes the
+    # interleaved-pair RoPE rearrangement a mathematical no-op (a 1x2 transpose+reshape is the identity),
+    # so test_compare_to_transformers's logits-allclose assertion does not by itself regression-guard
+    # that part of the fix at this fixture size — see agent-results/optimum-intel in the OMEGA repo for
+    # a standalone isolated-math reproduction. Bumping qk_rope_head_dim/qk_nope_head_dim (e.g. to 4-8)
+    # would let this fixture catch that regression automatically in the future.
     "deepseek": "optimum-intel-internal-testing/tiny-random-deepseek-v3",
     "deit": "optimum-intel-internal-testing/tiny-random-DeiTModel",
     "convnext": "optimum-intel-internal-testing/tiny-random-convnext",
