@@ -220,8 +220,10 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
             if self.config.model_type in ["qwen3_5", "qwen3_5_moe"] and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 4, axis=0)
-            elif (self.config.model_type in ["qwen2_vl", "qwen2_5_vl", "qwen3_vl"]) and position_ids.ndim == 2:
-                # Qwen2-VL and Qwen3-VL use 3D mrope (3 spatial dimensions)
+            elif (
+                self.config.model_type in ["qwen2_vl", "qwen2_5_vl", "qwen3_vl", "cosmos3_omni"]
+            ) and position_ids.ndim == 2:
+                # Qwen2-VL, Qwen3-VL, and Cosmos3Omni (identical arch to Qwen3-VL) use 3D mrope (3 spatial dimensions)
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
             elif self.config.model_type == "qwen3_omni_moe" and position_ids.ndim == 2:
                 # Qwen3-Omni uses 4D mrope (temporal + 3 spatial dimensions)
@@ -1194,7 +1196,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
         # Prepare additional kwargs for qwen3_vl models
         additional_kwargs = {}
-        if self.config.model_type in ("qwen3_vl", "qwen3_omni_moe") and extra_outputs:
+        if self.config.model_type in ("qwen3_vl", "qwen3_omni_moe", "cosmos3_omni") and extra_outputs:
             additional_kwargs["visual_pos_masks"] = extra_outputs[0]
             additional_kwargs["deepstack_visual_embeds"] = extra_outputs[1]
 
@@ -7387,6 +7389,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "phi4_multimodal": _OVPhi4MMForCausalLM,
     "llama4": _OVLlama4ForCausalLM,
     "qwen3_vl": _OVQwen3VLForCausalLM,
+    "cosmos3_omni": _OVQwen3VLForCausalLM,  # architecturally identical to Qwen3-VL
     "qwen3_5": _OVQwen3_5ForCausalLM,
     "qwen3_5_text": _OVQwen3_5ForCausalLM,
     "qwen3_5_moe": _OVQwen3_5ForCausalLM,

@@ -300,6 +300,7 @@ HUB_MODEL_NAMES = {
     "qwen3_moe": "optimum-intel-internal-testing/tiny-random-qwen3moe",
     "qwen3_vl": "optimum-intel-internal-testing/tiny-random-qwen3-vl",
     "qwen3_vl_embedding": "optimum-intel-internal-testing/tiny-random-qwen3-vl-embedding",
+    "cosmos3_omni": "optimum-intel-internal-testing/tiny-random-cosmos3-omni",
     "qwen3_omni_moe": "optimum-intel-internal-testing/tiny-random-qwen3-omni",
     "qwen3_next": "optimum-intel-internal-testing/tiny-random-qwen3-next",
     "qwen3_5": "optimum-intel-internal-testing/tiny-random-qwen3.5",

@@ -326,6 +326,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "qwen3_vl",
     "qwen3_5",
     "qwen3_5_moe",
+    "cosmos3_omni",
     "got_ocr2",
     "gemma3",
     "gemma3n",

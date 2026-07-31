@@ -600,8 +600,16 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5",
         "qwen3_5_moe",
         "qwen3_omni_moe",
+        "cosmos3_omni",
     ]
-    SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl", "qwen2_5_vl", "qwen3_vl", "videochat_flash_qwen"]
+    SUPPORT_VIDEO = [
+        "llava_next_video",
+        "qwen2_vl",
+        "qwen2_5_vl",
+        "qwen3_vl",
+        "videochat_flash_qwen",
+        "cosmos3_omni",
+    ]
     SUPPORT_AUDIO = ["qwen3_omni_moe"]
     # "llama" is registered for image-text-to-text
     # to support VLM Eagle3 draft models (tested separately in test_genai.py).
@@ -661,6 +669,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "qwen3_5",
             "qwen3_5_moe",
             "gemma4_unified",
+            "cosmos3_omni",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -719,7 +728,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
 
         if (
-            model_arch in ("qwen3_vl", "llava", "llava_next", "llava_next_mistral")
+            model_arch in ("qwen3_vl", "cosmos3_omni", "llava", "llava_next", "llava_next_mistral")
             and is_openvino_version(">=", "2026.1.0")
             and is_transformers_version(">=", "5.0")
         ):
