@@ -113,7 +113,7 @@ def convert_recurrent_attention_cell(context):
     return [final_output.output(0)]
 
 
-# Conversion rule for the `Mamba2RecurrentCellOp` operation in a Torch graph.
+# Conversion rule for the `SSMRecurrentCellOp` operation in a Torch graph.
 #
 # This generalizes the recurrent-cell-to-`ov::Loop` approach (originally introduced for the
 # GatedDeltaNet block, see `convert_recurrent_attention_cell` above) to the Mamba2 selective
@@ -130,11 +130,11 @@ def convert_recurrent_attention_cell(context):
 # Inputs are in [B, T, H, ...] layout; the loop slices along dim 1 (T).
 # The skip connection `x_t * D` does not depend on the recurrent state and is added outside.
 #
-# The `Mamba2RecurrentCellOp` appears in the Torch graph as a result of replacing the
-# `Mamba2RecurrentCell` `torch.nn.Module` via a registered `ModuleExtension` in the OpenVINO
+# The `SSMRecurrentCellOp` appears in the Torch graph as a result of replacing the
+# `SSMRecurrentCell` `torch.nn.Module` via a registered `ModuleExtension` in the OpenVINO
 # PyTorch frontend; OpenVINO then applies this conversion rule to the resulting operation.
-def convert_recurrent_mamba2_cell(context):
-    # Inputs match the forward signature of `Mamba2RecurrentCell`:
+def convert_recurrent_ssm_cell(context):
+    # Inputs match the forward signature of `SSMRecurrentCell`:
     #   A          [H]          — negative log-decay rates
     #   dt         [B, T, H]   — time steps
     #   B          [B, T, G, N] — input matrix (G groups, expanded to H inside the loop)
@@ -242,7 +242,7 @@ def convert_recurrent_mamba2_cell(context):
             last_state_t,
             core_out_t,
         ],
-        "mamba2_body_model",
+        "ssm_body_model",
     )
 
     loop = ops.loop(seq_len, ops.constant(True, dtype="bool"))
