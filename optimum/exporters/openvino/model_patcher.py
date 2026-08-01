@@ -7074,6 +7074,442 @@ def zamba2_mamba_mixer(
     return contextualized_states
 
 
+# Torch-traceable reimplementation of FalconH1Mixer.torch_forward.
+# The original implementation branches on `use_precomputed_states` (which depends on
+# cache_position / seq_len at runtime) to choose between prefill and decoding code paths.
+# Data-dependent Python control flow like this is not correctly captured by TorchScript
+# tracing, so this patched version always executes both branches and selects the correct
+# result with an `is_decoding` scalar mask, mirroring the zamba2_mamba_mixer approach.
+# FalconH1-specific differences from a standard Mamba2 mixer that are preserved here:
+#   * an `ssm_in_multiplier` applied to the input and a `mup_vector` applied to the
+#     projected states,
+#   * projection split order [gate, hidden_states_B_C, dt],
+#   * an optional gated RMS norm (`mamba_rms_norm`); when disabled the gate is applied as
+#     `y * silu(gate)`.
+def falcon_h1_mamba_mixer(
+    self,
+    hidden_states,
+    cache_params=None,
+    cache_position: Optional[torch.LongTensor] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+):
+    def pad_tensor_by_size(input_tensor: torch.Tensor, pad_size: int):
+        pad_shape = (0, 0, 0, 0, 0, pad_size, 0, 0) if len(input_tensor.shape) == 4 else (0, 0, 0, pad_size, 0, 0)
+        return torch.nn.functional.pad(input_tensor, pad_shape, mode="constant", value=0)
+
+    def reshape_into_chunks(input_tensor, pad_size, chunk_size):
+        input_tensor = pad_tensor_by_size(input_tensor, pad_size)
+        if len(input_tensor.shape) == 3:
+            return input_tensor.reshape(input_tensor.shape[0], -1, chunk_size, input_tensor.shape[2])
+        else:
+            return input_tensor.reshape(
+                input_tensor.shape[0], -1, chunk_size, input_tensor.shape[2], input_tensor.shape[3]
+            )
+
+    def segment_sum(input_tensor):
+        chunk_size = input_tensor.size(-1)
+        input_tensor = input_tensor[..., None].expand(*input_tensor.size(), chunk_size)
+        mask = torch.tril(
+            torch.ones(chunk_size, chunk_size, device=input_tensor.device, dtype=torch.bool), diagonal=-1
+        )
+        input_tensor = input_tensor.masked_fill(~mask, 0)
+        tensor_segsum = torch.cumsum(input_tensor, dim=-2)
+        mask = torch.tril(torch.ones(chunk_size, chunk_size, device=input_tensor.device, dtype=torch.bool), diagonal=0)
+        tensor_segsum = tensor_segsum.masked_fill(~mask, -torch.inf)
+        return tensor_segsum
+
+    input_states = hidden_states
+    layer_idx = self.layer_idx
+
+    # Clamp `dt` using the model's time step limits. FalconH1 uses
+    # `time_step_limit = (0.0, float("inf"))` by default; serializing an OpenVINO `Clamp`
+    # op with `max=inf` produces an IR that the IR frontend cannot deserialize
+    # (the "inf" attribute fails to parse). When the upper bound is infinite we therefore
+    # clamp only with the lower bound, which is numerically equivalent.
+    def _clamp_dt(t):
+        low, high = self.time_step_limit
+        if high == float("inf"):
+            return torch.clamp(t, low)
+        return torch.clamp(t, low, high)
+
+    batch_size, seq_len, _ = input_states.shape
+    dtype = input_states.dtype
+
+    # distinguish prefill and decoding stage
+    is_decoding = torch.tensor(seq_len == 1).to(dtype)
+
+    # 1. Gated MLP's linear projection
+    # FalconH1 applies the mamba padding mask (mamba_attention_mask) only during prefill.
+    if attention_mask is not None:
+        input_states_prefill = (input_states * attention_mask[:, :seq_len, None]).to(dtype)
+        input_states = input_states_prefill * (1.0 - is_decoding) + input_states * is_decoding
+    # FalconH1-specific input multiplier
+    input_states = input_states * self.ssm_in_multiplier
+    projected_states = self.in_proj(input_states)
+    # FalconH1-specific MuP multipliers
+    projected_states = projected_states * self.mup_vector
+    gate, hidden_states_B_C, dt = projected_states.split(
+        [self.intermediate_size, self.conv_dim, self.num_heads], dim=-1
+    )
+
+    # 2. Convolution sequence transformation
+    if cache_params is not None:
+        # 2.1 decoding step
+        # Shift the cached conv window left by one and append the new token's projected
+        # states in the last slot. The original implementation uses `torch.roll` followed by
+        # an in-place assignment to the last position; during TorchScript tracing that
+        # in-place scatter on a rolled (non-leaf) tensor is not reliably captured and yields
+        # an incorrect conv window in the exported graph. Rebuild the window with a
+        # traceable slice + concat instead so the OpenVINO IR matches the eager result.
+        conv_state_prev = cache_params.conv_states[layer_idx]
+        new_conv_col = hidden_states_B_C[:, 0, :] if hidden_states_B_C.ndim == 3 else hidden_states_B_C
+        conv_state_dec = torch.cat(
+            [conv_state_prev[:, :, 1:], new_conv_col[..., None]],
+            dim=-1,
+        )
+
+        hidden_states_B_C_dec = torch.sum(
+            conv_state_dec.to(projected_states.device) * self.conv1d.weight.squeeze(1), dim=-1
+        )
+        if self.use_conv_bias:
+            hidden_states_B_C_dec += self.conv1d.bias
+        hidden_states_B_C_dec = self.act(hidden_states_B_C_dec).to(dtype)[:, None, ...]
+
+        # 2.2 prefill step
+        hidden_states_B_C_transposed = hidden_states_B_C.transpose(1, 2)
+        conv_state_prefill = torch.nn.functional.pad(
+            hidden_states_B_C_transposed, (self.conv_kernel_size - hidden_states_B_C_transposed.shape[-1], 0)
+        )
+
+        hidden_states_B_C_prefill = self.act(
+            self.conv1d(hidden_states_B_C_transposed).transpose(1, 2)
+        )[:, :seq_len, :]
+
+        # store the correct conv state depending on the phase
+        conv_state = conv_state_prefill * (1.0 - is_decoding) + conv_state_dec * is_decoding
+        cache_params.conv_states[layer_idx].copy_(conv_state)
+
+        hidden_states_B_C_prefill_masked = hidden_states_B_C_prefill
+        if attention_mask is not None:
+            hidden_states_B_C_prefill_masked = (hidden_states_B_C_prefill * attention_mask[:, :seq_len, None]).to(dtype)
+    else:
+        hidden_states_B_C_prefill = self.act(
+            self.conv1d(hidden_states_B_C.transpose(1, 2))[..., :seq_len].transpose(1, 2)
+        )
+        hidden_states_B_C_dec = hidden_states_B_C_prefill[:, :1]
+        hidden_states_B_C_prefill_masked = hidden_states_B_C_prefill
+
+    hidden_states_prefill, B_prefill, C_prefill = torch.split(
+        hidden_states_B_C_prefill_masked,
+        [self.intermediate_size, self.n_groups * self.ssm_state_size, self.n_groups * self.ssm_state_size],
+        dim=-1,
+    )
+    hidden_states_dec, B_dec, C_dec = torch.split(
+        hidden_states_B_C_dec,
+        [self.intermediate_size, self.n_groups * self.ssm_state_size, self.n_groups * self.ssm_state_size],
+        dim=-1,
+    )
+
+    A = -torch.exp(self.A_log.float())  # [num_heads]
+
+    # 3. SSM transformation
+    # 3.1 decoding step
+    if cache_params is not None:
+        dt_dec = dt
+        dt_dec = dt_dec.reshape(dt_dec.shape[0], -1, dt_dec.shape[-1])[:, :1, :]
+        dt_dec = dt_dec.transpose(1, 2).expand(batch_size, dt_dec.shape[-1], self.head_dim)
+        dt_bias_dec = self.dt_bias
+        dt_bias_dec = dt_bias_dec.reshape(dt_bias_dec.shape[0], -1).expand(dt_bias_dec.shape[0], self.head_dim)
+        dt_dec = torch.nn.functional.softplus(dt_dec + dt_bias_dec)
+        dt_dec = _clamp_dt(dt_dec)
+
+        A_dec = A[..., None, None].expand(self.num_heads, self.head_dim, self.ssm_state_size).to(dtype=torch.float32)
+        dA = torch.exp(dt_dec[..., None] * A_dec)
+
+        B_dec = B_dec.reshape(batch_size, -1)[:, : self.n_groups * self.ssm_state_size]
+        B_dec = B_dec.reshape(batch_size, self.n_groups, -1)[..., None, :]
+        B_dec = B_dec.expand(batch_size, self.n_groups, self.num_heads // self.n_groups, B_dec.shape[-1]).contiguous()
+        B_dec = B_dec.reshape(batch_size, -1, B_dec.shape[-1])
+        dB = dt_dec[..., None] * B_dec[..., None, :]
+
+        hidden_states_dec = hidden_states_dec.reshape(batch_size, -1, self.head_dim)
+        dBx = dB * hidden_states_dec[..., None]
+
+        new_ssm_state_dec = cache_params.ssm_states[layer_idx] * dA + dBx
+
+        C_dec = C_dec.reshape(batch_size, -1)[:, : self.n_groups * self.ssm_state_size]
+        C_dec = C_dec.reshape(batch_size, self.n_groups, -1)[..., None, :]
+        C_dec = C_dec.expand(batch_size, self.n_groups, self.num_heads // self.n_groups, C_dec.shape[-1]).contiguous()
+        C_dec = C_dec.reshape(batch_size, -1, C_dec.shape[-1])
+
+        ssm_states_dec = new_ssm_state_dec.to(C_dec.dtype)
+        ssm_states_reshaped = ssm_states_dec.view(batch_size * self.num_heads, self.head_dim, self.ssm_state_size)
+        C_reshaped = C_dec.view(batch_size * self.num_heads, self.ssm_state_size, 1)
+        y_dec = torch.bmm(ssm_states_reshaped, C_reshaped)
+        y_dec = y_dec.view(batch_size, self.num_heads, self.head_dim)
+
+        D_dec = self.D
+        D_dec = D_dec[..., None].expand(D_dec.shape[0], self.head_dim)
+        y_dec = (y_dec + hidden_states_dec * D_dec).to(y_dec.dtype)
+
+        y_dec = y_dec.reshape(batch_size, -1)[:, None, ...]
+
+    # 3.2 prefill step
+    dt = torch.nn.functional.softplus(dt + self.dt_bias)
+    dt = _clamp_dt(dt)
+
+    hidden_states_prefill = hidden_states_prefill.reshape(batch_size, seq_len, -1, self.head_dim).float()
+    B_prefill = B_prefill.reshape(batch_size, seq_len, -1, self.ssm_state_size).float()
+    C_prefill = C_prefill.reshape(batch_size, seq_len, -1, self.ssm_state_size).float()
+    B_prefill = B_prefill.repeat_interleave(self.num_heads // self.n_groups, dim=2, output_size=self.num_heads)
+    C_prefill = C_prefill.repeat_interleave(self.num_heads // self.n_groups, dim=2, output_size=self.num_heads)
+    pad_size = (self.chunk_size - seq_len % self.chunk_size) % self.chunk_size
+
+    D_residual = self.D[..., None] * pad_tensor_by_size(hidden_states_prefill, pad_size)
+
+    hidden_states_prefill = hidden_states_prefill * dt[..., None]
+    A = A.to(hidden_states_prefill.dtype) * dt
+
+    hidden_states_prefill, A, B_prefill, C_prefill = [
+        reshape_into_chunks(t, pad_size, self.chunk_size) for t in (hidden_states_prefill, A, B_prefill, C_prefill)
+    ]
+
+    A = A.permute(0, 3, 1, 2)
+    A_cumsum = torch.cumsum(A, dim=-1)
+
+    L = torch.exp(segment_sum(A))
+
+    G_intermediate = C_prefill[:, :, :, None, :, :] * B_prefill[:, :, None, :, :, :]
+    G = G_intermediate.sum(dim=-1)
+
+    M_intermediate = G[..., None] * L.permute(0, 2, 3, 4, 1)[..., None]
+    M = M_intermediate.sum(dim=-1)
+
+    Y_diag = (M[..., None] * hidden_states_prefill[:, :, None]).sum(3)
+
+    decay_states = torch.exp(A_cumsum[:, :, :, -1:] - A_cumsum)
+    B_decay_contraction = B_prefill * decay_states.permute(0, 2, 3, 1)[..., None]
+
+    states = (
+        (
+            B_decay_contraction.permute(0, 1, 3, 2, 4)[..., None]
+            * hidden_states_prefill.permute(0, 1, 3, 2, 4)[..., None, :]
+        )
+        .sum(dim=3)
+        .permute(0, 1, 2, 4, 3)
+    )
+    previous_states = torch.zeros_like(states[:, :1])
+
+    states = torch.cat([previous_states, states], dim=1)
+    decay_chunk = torch.exp(segment_sum(torch.nn.functional.pad(A_cumsum[:, :, :, -1], (1, 0))))
+
+    states_permuted = states.permute(0, 2, 1, 3, 4)
+    result = (decay_chunk[..., None, None] * states_permuted[:, :, None, ...]).sum(dim=2)
+    new_states = result.permute(0, 2, 1, 3, 4)
+    states, new_ssm_state_prefill = new_states[:, :-1], new_states[:, -1]
+
+    state_decay_out = torch.exp(A_cumsum)
+
+    C_times_states = C_prefill[..., None, :] * states[:, :, None, ...]
+    state_decay_out_permuted = state_decay_out.permute(0, 2, 3, 1)
+    Y_off = C_times_states.sum(-1) * state_decay_out_permuted[..., None]
+
+    y = Y_diag + Y_off
+
+    y = y.reshape(batch_size, -1, self.num_heads, self.head_dim)
+
+    y = y + D_residual
+
+    pad_mask = torch.tensor(pad_size > 0).to(torch.long)
+    y_new_len = y.size(1) * (1 - pad_mask) + seq_len * pad_mask
+    y = y[:, :y_new_len]
+    y_prefill = y.reshape(batch_size, seq_len, -1)
+
+    if cache_params is not None:
+        y = y_prefill[:, :seq_len] * (1.0 - is_decoding) + y_dec * is_decoding
+        ssm_state = new_ssm_state_prefill * (1.0 - is_decoding) + new_ssm_state_dec * is_decoding
+        cache_params.ssm_states[layer_idx].copy_(ssm_state)
+    else:
+        y = y_prefill
+
+    # FalconH1: gated RMS norm is optional
+    if self.mamba_rms_norm:
+        scan_output = self.norm(y, gate)
+    else:
+        scan_output = y * torch.nn.functional.silu(gate)
+
+    contextualized_states = self.out_proj(scan_output.to(dtype))  # [batch, seq_len, hidden_size]
+
+    return contextualized_states
+
+
+# This patcher class serves the following purposes:
+# 1. Packs the KV-cache, conv_state, and ssm_state tensors into a
+#    FalconHybridMambaAttentionDynamicCache structure for subsequent invocation of the
+#    model's `forward` method. Unlike alternating hybrids (Zamba2/GraniteMoeHybrid), every
+#    FalconH1 layer is hybrid and owns both mamba (conv/ssm) and attention (key/value) states.
+# 2. Patches the FalconH1Mixer so that the traced `forward` function works correctly
+#    during both the prefill and decoding steps.
+class FalconH1ModelPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from transformers.models.falcon_h1.modeling_falcon_h1 import FalconHybridMambaAttentionDynamicCache
+
+        super().__init__(config, model, model_kwargs)
+
+        class FalconH1DynamicCacheWrap(FalconHybridMambaAttentionDynamicCache):
+            def __init__(self, config, batch_size: int, conv_states, ssm_states, key_cache, value_cache):
+                # The parent constructor indexes a per-layer `devices` list to allocate the initial
+                # (zero) conv/ssm states. Those tensors are overwritten immediately below with the
+                # real cache tensors, so a list of `None` devices (default device) is sufficient here.
+                super().__init__(
+                    config=config,
+                    batch_size=batch_size,
+                    devices=[None] * config.num_hidden_layers,
+                )
+                self.conv_states = conv_states
+                self.ssm_states = ssm_states
+                self.key_cache = key_cache
+                self.value_cache = value_cache
+                # every layer is hybrid, so cache indices map 1:1 with layer indices
+                self.has_previous_state = True
+
+            def update(
+                self,
+                key_states: torch.Tensor,
+                value_states: torch.Tensor,
+                layer_idx: int,
+                cache_kwargs: Optional[dict[str, Any]] = None,
+            ) -> tuple[torch.Tensor, torch.Tensor]:
+                # Always concatenate past and new states. The past KV tensor has a seq
+                # length of 0 during the first (prefill) call, so the concat is a no-op
+                # then and correctly extends the cache on subsequent decode calls. We check
+                # the last (head_dim) dimension rather than the seq dimension so that the
+                # empty-cache branch is never taken (head_dim is always > 0), keeping the
+                # past-KV ReadValue connected to the attention for stateful export.
+                if self.key_cache[layer_idx].shape[-1] == 0:
+                    self.key_cache[layer_idx] = key_states
+                    self.value_cache[layer_idx] = value_states
+                else:
+                    self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
+                    self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
+
+                return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+            def __getitem__(self, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+                return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+            def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+                if len(self.key_cache) <= layer_idx or self.key_cache[layer_idx].numel() == 0:
+                    return 0
+                return self.key_cache[layer_idx].shape[-2]
+
+        # the patch is needed to include KV-cache, Conv, and SSM states in the inputs and outputs.
+        def patched_forward(
+            input_ids,
+            attention_mask=None,
+            cache_params=None,
+        ):
+            num_hidden_layers = self.real_config._config.num_hidden_layers
+            use_cache = False
+            wrapped_cache_params = None
+            if cache_params is not None:
+                use_cache = True
+                conv_states = []
+                ssm_states = []
+                key_cache = []
+                value_cache = []
+
+                # decouple ssm_states, conv_states, keys and values from cache_params
+                batch_size = cache_params[0].size(0)
+                for idx in range(num_hidden_layers):
+                    conv_states.append(cache_params[2 * idx])
+                    ssm_states.append(cache_params[2 * idx + 1])
+
+                for idx in range(num_hidden_layers):
+                    key_cache.append(cache_params[2 * num_hidden_layers + 2 * idx])
+                    value_cache.append(cache_params[2 * num_hidden_layers + 2 * idx + 1])
+
+                wrapped_cache_params = FalconH1DynamicCacheWrap(
+                    self.real_config._config, batch_size, conv_states, ssm_states, key_cache, value_cache
+                )
+
+            # The FalconH1 model derives `cache_position` (and therefore `position_ids`) from
+            # `torch.arange(seq_len)` whenever `cache_position` is not supplied, WITHOUT offsetting
+            # by the number of previously cached tokens. During single-token stateful decode that
+            # would place every new token at absolute position 0, so its RoPE phase would not match
+            # the cached keys (which were rotated at their real positions during prefill), producing
+            # a persistent logit error. `_update_causal_mask` also uses `attention_mask.shape[-1]`
+            # as the key/value target length, so the mask must span the whole context.
+            #
+            # We therefore build an explicit `cache_position` starting at the current past attention
+            # length and a full-length all-ones attention mask covering past_len + seq_len. Passing an
+            # all-ones mask keeps the model on the SDPA `is_causal` fast path (no explicit, in-place
+            # 4D causal mask is materialised), which is numerically correct for the standard causal
+            # case and reusable for prefill and decode in a single exported graph.
+            cache_position = None
+            model_attention_mask = attention_mask
+            if wrapped_cache_params is not None:
+                past_len = wrapped_cache_params.key_cache[0].shape[-2]
+                seq_len = input_ids.shape[1]
+                cache_position = torch.arange(past_len, past_len + seq_len, device=input_ids.device)
+                model_attention_mask = torch.ones(
+                    (input_ids.shape[0], past_len + seq_len),
+                    dtype=torch.int64,
+                    device=input_ids.device,
+                )
+
+            causal_lm_output = self.model_orig_forward(
+                input_ids=input_ids,
+                attention_mask=model_attention_mask,
+                past_key_values=wrapped_cache_params,
+                use_cache=use_cache,
+                cache_position=cache_position,
+            )
+            outputs = {
+                "logits": causal_lm_output.logits,
+            }
+
+            if use_cache:
+                past_key_values = causal_lm_output.past_key_values
+                present_key_values = []
+                for idx in range(num_hidden_layers):
+                    present_key_values.append(past_key_values.conv_states[idx])
+                    present_key_values.append(past_key_values.ssm_states[idx])
+
+                for idx in range(num_hidden_layers):
+                    present_key_values.append(past_key_values.key_cache[idx])
+                    present_key_values.append(past_key_values.value_cache[idx])
+
+                outputs["present_key_values"] = present_key_values
+
+            return outputs
+
+        self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+    def __enter__(self):
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
+        for layer in self._model.model.layers:
+            mamba_layer = layer.mamba
+            mamba_layer._orig_forward = mamba_layer.forward
+            mamba_layer.forward = types.MethodType(falcon_h1_mamba_mixer, mamba_layer)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+        for layer in self._model.model.layers:
+            mamba_layer = layer.mamba
+            mamba_layer.forward = mamba_layer._orig_forward
+
+
 # This patcher class serves the following purposes:
 # 1. Packs the KV-cache, conv_state, and ssm_state tensors into a Zamba2HybridDynamicCache structure
 #    for subsequent invocation of the model's `forward` method.
