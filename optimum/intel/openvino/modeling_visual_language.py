@@ -1147,6 +1147,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         position_ids=None,
         image_bound=None,
         tgt_sizes=None,
+        target_sizes=None,
         pixel_values_videos=None,
         image_grid_thw=None,
         video_grid_thw=None,
@@ -1177,6 +1178,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             past_key_values=past_key_values,
             image_bound=image_bound,
             tgt_sizes=tgt_sizes,
+            target_sizes=target_sizes,
             pixel_values_videos=pixel_values_videos,
             image_grid_thw=image_grid_thw,
             video_grid_thw=video_grid_thw,
@@ -7363,11 +7365,237 @@ if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.rot_pos_emb = Qwen3_5VisionModel.rot_pos_emb
 
 
+class _OVMiniCPMV4_6ForCausalLM(OVModelForVisualCausalLM):
+    """OpenVINO runtime for MiniCPM-V-4.6.
+
+    The exported ``vision_embeddings`` graph performs the entire image feature
+    extraction (NaViT SigLIP encoder, ViT window-attention merger, downsample
+    merger) but expects all data-dependent index / mask tensors to be provided.
+    This class reproduces the upstream ``MiniCPMV4_6`` NaViT packing logic in
+    Python to build those tensors, runs the vision graph, and inserts the
+    resulting image features into the text embeddings with a ``masked_scatter``
+    on ``image_token_id`` (matching ``MiniCPMV4_6Model.forward``). The
+    ``qwen3_5_text`` backbone uses standard 1D RoPE position ids, so no 3D
+    position handling is needed.
+    """
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = None,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        if is_transformers_version("<", "5.7.0"):
+            raise Exception("MiniCPM-V-4.6 requires transformers >= 5.7.0; earlier versions are not supported.")
+        super().__init__(
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+        vision_config = self.config.vision_config
+        self.num_patches_per_side = vision_config.image_size // vision_config.patch_size
+        self.insert_layer_id = vision_config.insert_layer_id
+        self.window_kernel_size = tuple(getattr(vision_config, "window_kernel_size", (2, 2)))
+        self.merge_kernel_size = tuple(self.config.merge_kernel_size)
+        self.downsample_mode = getattr(self.config, "downsample_mode", "16x")
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        attention_mask=None,
+        **kwargs,
+    ):
+        target_sizes = kwargs.pop("target_sizes", None)
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        # Only feed image tensors during prefill.
+        if past_key_values is not None:
+            model_inputs["pixel_values"] = None
+            model_inputs["target_sizes"] = None
+        else:
+            model_inputs["target_sizes"] = target_sizes
+        return model_inputs
+
+    @staticmethod
+    def _block_diagonal_mask(seqlens):
+        total = int(sum(seqlens))
+        mask = torch.full((1, total, total), float("-inf"))
+        offset = 0
+        for length in seqlens:
+            length = int(length)
+            mask[0, offset : offset + length, offset : offset + length] = 0.0
+            offset += length
+        return mask
+
+    def _patch_position_ids(self, target_sizes):
+        num_side = self.num_patches_per_side
+        boundaries = torch.arange(1 / num_side, 1.0, 1 / num_side)
+        pos_ids = []
+        for target_size in target_sizes:
+            nb_h, nb_w = int(target_size[0]), int(target_size[1])
+            fractional_h = torch.arange(0, 1 - 1e-6, 1 / nb_h)
+            fractional_w = torch.arange(0, 1 - 1e-6, 1 / nb_w)
+            bucket_h = torch.bucketize(fractional_h, boundaries, right=True)
+            bucket_w = torch.bucketize(fractional_w, boundaries, right=True)
+            pos_ids.append((bucket_h[:, None] * num_side + bucket_w).flatten())
+        return torch.cat(pos_ids)
+
+    def _window_index(self, target_sizes):
+        window_h, window_w = self.window_kernel_size
+        window_index_list = []
+        cu_seqlens = [0]
+        token_offset = 0
+        for height, width in target_sizes.tolist():
+            height, width = int(height), int(width)
+            index = torch.arange(height * width).reshape(height, width)
+            num_windows_h = height // window_h
+            num_windows_w = width // window_w
+            num_windows = num_windows_h * num_windows_w
+            index = index.reshape(num_windows_h, window_h, num_windows_w, window_w)
+            index = index.permute(0, 2, 1, 3).reshape(num_windows, window_h * window_w)
+            window_index_list.append(index.reshape(-1) + token_offset)
+            cu_this = torch.arange(1, num_windows + 1) * (window_h * window_w) + cu_seqlens[-1]
+            cu_seqlens.extend(cu_this.tolist())
+            token_offset += height * width
+        window_index = torch.cat(window_index_list)
+        cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int32)
+        return window_index, cu_seqlens
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        target_sizes = kwargs.get("target_sizes")
+        if target_sizes is None:
+            return None
+        if not isinstance(pixel_values, torch.Tensor):
+            pixel_values = torch.as_tensor(pixel_values)
+        if not isinstance(target_sizes, torch.Tensor):
+            target_sizes = torch.as_tensor(target_sizes)
+        # NaViT packing => encode only the first (packed) batch element.
+        pixel_values = pixel_values[:1].to(torch.float32)
+
+        window_h, window_w = self.window_kernel_size
+        merge_h, merge_w = self.merge_kernel_size
+
+        # ---- Python precompute of all index / mask tensors ----
+        pos_ids = self._patch_position_ids(target_sizes)
+        encoder_seqlens = [int(h * w) for h, w in target_sizes.tolist()]
+        encoder_mask = self._block_diagonal_mask(encoder_seqlens)
+
+        window_index, window_cu = self._window_index(target_sizes)
+        reverse_window_index = torch.argsort(window_index)
+        window_seqlens = (window_cu[1:] - window_cu[:-1]).tolist()
+        window_mask = self._block_diagonal_mask(window_seqlens)
+
+        # spatial merge gather (per image, concatenated). Each window of
+        # ``window_h * window_w`` patches becomes contiguous, so the exported graph
+        # can collapse all tiles with a ``-1`` row dimension.
+        merge_gather = []
+        offset = 0
+        for height, width in target_sizes.tolist():
+            height, width = int(height), int(width)
+            mh, mw = height // window_h, width // window_w
+            base = torch.arange(height * width).reshape(mh, window_h, mw, window_w)
+            base = base.permute(0, 2, 1, 3).reshape(-1) + offset
+            merge_gather.append(base)
+            offset += height * width
+        merge_gather = torch.cat(merge_gather)
+
+        downsampled_sizes = target_sizes // 2
+        downsampled_seqlens = [int(h * w) for h, w in downsampled_sizes.tolist()]
+        downsampled_mask = self._block_diagonal_mask(downsampled_seqlens)
+
+        final_gather = []
+        offset = 0
+        for height, width in downsampled_sizes.tolist():
+            height, width = int(height), int(width)
+            fh, fw = height // merge_h, width // merge_w
+            base = torch.arange(height * width).reshape(fh, merge_h, fw, merge_w)
+            base = base.permute(0, 2, 1, 3).reshape(-1) + offset
+            final_gather.append(base)
+            offset += height * width
+        final_gather = torch.cat(final_gather)
+
+        image_features = self.vision_embeddings(
+            pixel_values=pixel_values.numpy(),
+            pos_ids=pos_ids.numpy(),
+            encoder_attention_mask=encoder_mask.numpy(),
+            downsampled_attention_mask=downsampled_mask.numpy(),
+            window_index=window_index.numpy(),
+            reverse_window_index=reverse_window_index.numpy(),
+            window_attention_mask=window_mask.numpy(),
+            merge_gather_index=merge_gather.numpy(),
+            final_gather_index=final_gather.numpy(),
+        )[0]
+        return torch.from_numpy(image_features)
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        image_features = (
+            torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        )
+        image_features = image_features.to(inputs_embeds.dtype)
+        image_token_id = self.config.image_token_id
+        mask = input_ids == image_token_id
+        mask = mask.unsqueeze(-1).expand_as(inputs_embeds)
+        inputs_embeds = inputs_embeds.masked_scatter(mask, image_features)
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        conversation = [{"role": "user", "content": [{"type": "text", "text": text}]}]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+        if video is not None:
+            conversation[0]["content"].insert(0, {"type": "video"})
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+        inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
+        return inputs
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
     "llava_next_video": _OVLlavaNextVideoForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
+    "minicpmv4_6": _OVMiniCPMV4_6ForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
     "maira2": _OVMaira2ForCausalLM,
     "phi3_v": _OVPhi3VisionForCausalLM,

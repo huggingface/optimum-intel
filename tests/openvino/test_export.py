@@ -118,6 +118,7 @@ class ExportModelTest(unittest.TestCase):
         "gemma4_moe": OVModelForVisualCausalLM,
         "qwen3_5": OVModelForVisualCausalLM,
         "qwen3_5_moe": OVModelForVisualCausalLM,
+        "minicpmv4_6": OVModelForVisualCausalLM,
         "gemma4_unified": OVModelForVisualCausalLM,
         "gemma3n": OVModelForVisualCausalLM,
         "flux.2-klein": OVFlux2KleinPipeline,
