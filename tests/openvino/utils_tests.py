@@ -144,6 +144,102 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+def _create_tiny_jvlm_model():
+    """Generate a tiny random JinaVLM (model_type='jvlm') model for testing and return its path.
+
+    JinaVLM is a trust-remote-code image-text-to-text architecture that is not published as a
+    tiny fixture on the Hub, so the fixture is synthesized locally from the original config and
+    remote-code assets (no original weights are downloaded). The reduced model preserves the real
+    architecture: model_type ('jvlm'), architectures (JinaVLMForConditionalGeneration), the nested
+    text/vision/vl_connector configs and flags, the special-token vocabulary, the fixed vision
+    patch geometry, GQA/head-dim coupling and the RoPE contract. The result is cached under the
+    system temp dir so subsequent calls are cheap.
+    """
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor
+
+    original_model_id = "jinaai/jina-vlm"
+    cache_marker_value = "tiny-jvlm-v1"
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_jvlm"
+    marker = output_dir / ".tiny_cache_marker"
+
+    def _cache_is_valid():
+        if not ((output_dir / "config.json").exists() and marker.exists()):
+            return False
+        try:
+            if marker.read_text().strip() != cache_marker_value:
+                return False
+            cfg = AutoConfig.from_pretrained(output_dir, trust_remote_code=True)
+        except Exception:
+            return False
+        return (
+            cfg.model_type == "jvlm"
+            and cfg.architectures == ["JinaVLMForConditionalGeneration"]
+            and cfg.text_config.hidden_size == cfg.vision_config.output_size
+        )
+
+    if _cache_is_valid():
+        return str(output_dir)
+
+    if output_dir.exists():
+        import shutil
+
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    torch.manual_seed(SEED)
+
+    config = AutoConfig.from_pretrained(original_model_id, trust_remote_code=True)
+    cfg = config.to_dict()
+    text = cfg["text_config"]
+    vision = cfg["vision_config"]
+
+    # Tiny dimensions preserving divisibility / coupling invariants.
+    text["hidden_size"] = 64
+    text["n_layers"] = 2
+    text["num_hidden_layers"] = 2
+    text["block_config"]["attn_config"].update({"n_heads": 4, "n_kv_heads": 2, "head_dim": 16})
+    text["block_config"]["ffn_config"]["size"] = 128
+    # keep vocab_size so image special-token ids remain valid embedding indices
+
+    vision["hidden_size"] = 64
+    # vit_layers references [-4, -10] -> need at least 10 vision layers
+    vision["n_layers"] = 10
+    vision["output_size"] = text["hidden_size"]  # invariant: vision output == text hidden
+    vision["block_config"]["attn_config"].update({"n_heads": 4, "head_dim": 16})
+    vision["block_config"]["ffn_config"]["size"] = 128
+    conn = vision["vl_connector_config"]
+    conn["attn_pooling_config"].update({"n_heads": 4, "head_dim": 16})
+    conn["mlp_projector_config"]["size"] = 128
+
+    cfg["dtype"] = "float32"
+    cfg["torch_dtype"] = "float32"
+    for sub in (text, vision):
+        sub["dtype"] = "float32"
+        sub["torch_dtype"] = "float32"
+    cfg["text_config"] = text
+    cfg["vision_config"] = vision
+
+    tiny_config = config.__class__.from_dict(cfg)
+    model = AutoModelForCausalLM.from_config(tiny_config, trust_remote_code=True).to(torch.float32)
+    with torch.no_grad():
+        model.lm_head.weight.normal_(mean=0.0, std=0.2)
+        model.get_input_embeddings().weight.normal_(mean=0.0, std=0.2)
+    model.save_pretrained(output_dir, safe_serialization=True)
+
+    processor = AutoProcessor.from_pretrained(original_model_id, trust_remote_code=True, use_fast=False)
+    processor.save_pretrained(output_dir)
+
+    try:
+        from transformers import GenerationConfig
+
+        GenerationConfig.from_pretrained(original_model_id).save_pretrained(output_dir)
+    except Exception:
+        pass
+
+    marker.write_text(cache_marker_value)
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -238,6 +334,7 @@ HUB_MODEL_NAMES = {
     "internlm2": "optimum-intel-internal-testing/tiny-random-internlm2",
     "internvl_chat": "optimum-intel-internal-testing/tiny-random-internvl2",
     "jais": "optimum-intel-internal-testing/tiny-random-jais",
+    "jvlm": _create_tiny_jvlm_model(),
     "kokoro": _create_tiny_kokoro_model(),
     "levit": "optimum-intel-internal-testing/tiny-random-LevitModel",
     "lfm2": "optimum-intel-internal-testing/tiny-random-lfm2",
@@ -479,6 +576,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 9,
     },
+    "jvlm": {
+        "lm_model": 18,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 38,
+    },
     "llava_next": {
         "lm_model": 30,
         "text_embeddings_model": 1,
@@ -667,6 +769,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_asr",
     "fun_asr",
     "videochat_flash_qwen",
+    "jvlm",
 )
 
 if is_transformers_version("<", "5"):
@@ -685,6 +788,7 @@ ARCH_TO_MODEL_CLASS = {
     "qwen3_moe": "OVModelForCausalLM",
     "llama4": "OVModelForCausalLM",
     "llava": "OVModelForVisualCausalLM",
+    "jvlm": "OVModelForVisualCausalLM",
     "qwen3_5_moe": "OVModelForVisualCausalLM",
     "gemma4_moe": "OVModelForVisualCausalLM",
     "gemma4_unified": "OVModelForVisualCausalLM",

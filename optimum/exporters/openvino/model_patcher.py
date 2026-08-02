@@ -3063,6 +3063,142 @@ class MairaImageEmbeddingModelPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
+def jina_vlm_vision_embed_forward(self, image_patches, image_masks=None):
+    # Runs the JinaVLM vision tower + vision-language connector and returns the flattened image
+    # embeddings. This mirrors the tensor operations in `JinaVLM._encode_images` /
+    # `JinaVLMVisionModel.forward` but replaces the multi-dim `torch.all(..., keepdim=True)`
+    # padding-mask reduction with an OpenVINO-traceable equivalent, and drops the
+    # `image_input_idx` bookkeeping (only used for reshaping/sorting). At inference time the
+    # runtime scatters these features into the text embeddings using the processor-provided
+    # `image_input_idx`.
+    inner = self.model
+    vision_model = inner.vision_model
+    batch_size, n_crops, n_patches, n_pixels = image_patches.shape
+
+    flat_patches = image_patches.reshape(batch_size * n_crops, n_patches, n_pixels)
+    # A crop is fully-padded when every pixel equals -1. Reduce the two trailing dims explicitly
+    # so the resulting mask keeps shape (batch*crops, 1, 1) after tracing.
+    is_pad = (flat_patches == -1).all(dim=-1).all(dim=-1)  # (batch*crops,)
+    mask = (~is_pad).reshape(batch_size * n_crops, 1, 1).to(flat_patches.dtype)
+
+    out = vision_model.get_visual_features(flat_patches)
+    image_features = out.hidden_states
+    features = []
+    for layer in vision_model.vit_layers:
+        feats = image_features[layer]
+        if vision_model.n_prefix_tokens > 0:
+            feats = feats[:, 1:]
+        features.append(feats)
+    image_features = torch.cat(features, dim=-1)
+    image_features = image_features * mask
+    image_features = image_features.reshape(batch_size, n_crops, n_patches, -1).contiguous()
+
+    if image_masks is not None:
+        image_masks = image_masks.reshape(batch_size, n_crops, n_patches)
+    image_features = vision_model.vl_connector(image_features, image_masks)
+
+    # image_features: (batch_size, n_crops, n_pooled_patches, hidden_size)
+    _, __, n_pooled_patches, hidden_size = image_features.shape
+    # Add the image-patch token embedding, exactly as in the reference implementation.
+    patch_token = torch.tensor([[151938]], dtype=torch.long, device=image_features.device)
+    patch_embed = inner.language_model.embedding(patch_token)
+    image_features = image_features.reshape(batch_size, n_crops * n_pooled_patches, hidden_size)
+    image_features = image_features + patch_embed.reshape(1, 1, hidden_size)
+    return image_features
+
+
+class JinaVLMVisionEmbeddingsModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(jina_vlm_vision_embed_forward, model)
+        # Force eager attention so tracing does not rely on flash/sdpa backends inside the
+        # vision tower and the vision-language connector.
+        self._orig_attn_implementation = model.config._attn_implementation
+        model.config._attn_implementation = "sdpa"
+        if getattr(model.config, "vision_config", None) is not None:
+            model.config.vision_config._attn_implementation = "sdpa"
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        self._model.config._attn_implementation = self._orig_attn_implementation
+        if getattr(self._model.config, "vision_config", None) is not None:
+            self._model.config.vision_config._attn_implementation = self._orig_attn_implementation
+
+
+def jina_vlm_language_model_forward(
+    self,
+    inputs_embeds,
+    attention_mask=None,
+    position_ids=None,
+    past_key_values=None,
+    **kwargs,
+):
+    # `self` is the top-level JinaVLMForConditionalGeneration. Route embeddings through the text
+    # decoder + lm_head, returning logits and the updated cache. The text decoder already handles
+    # `torch.jit.is_tracing()` for cache creation, so tracing produces a valid graph.
+    seq_len = inputs_embeds.shape[1]
+    past_len = past_key_values.get_seq_length() if past_key_values is not None else 0
+    # JinaVLM builds its causal mask from the full attention_mask length (past + current). At
+    # runtime OVModelWithEmbedForCausalLM already supplies the full-length mask; during tracing the
+    # exporter provides a mask padded only to the past length, so extend it to (past + seq) here to
+    # keep the attention narrow operations consistent with the key/value length.
+    if attention_mask is not None:
+        expected_len = past_len + seq_len
+        if attention_mask.shape[-1] < expected_len:
+            pad = torch.ones(
+                (attention_mask.shape[0], expected_len - attention_mask.shape[-1]),
+                dtype=attention_mask.dtype,
+                device=attention_mask.device,
+            )
+            attention_mask = torch.cat([attention_mask, pad], dim=-1)
+    outputs = self.model.language_model(
+        input_ids=None,
+        inputs_embeds=inputs_embeds,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+        past_key_values=past_key_values,
+        use_cache=True,
+    )
+    logits = self.lm_head(outputs.last_hidden_state)
+    return {"logits": logits, "past_key_values": outputs.past_key_values}
+
+
+class JinaVLMLanguageModelPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(jina_vlm_language_model_forward, model)
+        self._orig_attn_implementation = model.config._attn_implementation
+        model.config._attn_implementation = "sdpa"
+        if getattr(model.config, "text_config", None) is not None:
+            model.config.text_config._attn_implementation = "sdpa"
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        # Skip OVDecoderModelPatcher rope/causal-mask patches: JinaVLM uses a custom text decoder
+        # that does not expose `_update_causal_mask` or the standard rope cache attributes.
+        ModelPatcher.__enter__(self)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        ModelPatcher.__exit__(self, exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        self._model.config._attn_implementation = self._orig_attn_implementation
+        if getattr(self._model.config, "text_config", None) is not None:
+            self._model.config.text_config._attn_implementation = self._orig_attn_implementation
+
+
 class LlavaNextVideoImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,

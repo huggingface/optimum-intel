@@ -90,6 +90,7 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl-refiner": OVStableDiffusionXLImg2ImgPipeline,
         "latent-consistency": OVLatentConsistencyModelPipeline,
         "llava": OVModelForVisualCausalLM,
+        "jvlm": OVModelForVisualCausalLM,
         "sam": OVSamModel,
         "speecht5": OVModelForTextToSpeechSeq2Seq,
         "clip": OVModelForZeroShotImageClassification,
@@ -141,7 +142,7 @@ class ExportModelTest(unittest.TestCase):
         "ltx2": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
     }
 
-    GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
+    GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5", "jvlm")
 
     def _openvino_export(
         self,
@@ -166,7 +167,7 @@ class ExportModelTest(unittest.TestCase):
             model_class = TasksManager.get_model_class_for_task(task, library=library_name)
             model = model_class(f"hf_hub:{model_name}", pretrained=True, exportable=True)
             TasksManager.standardize_model_attributes(model_name, model, library_name=library_name)
-        elif model_type in ["llava", "videochat_flash_qwen"]:
+        elif model_type in ["llava", "videochat_flash_qwen", "jvlm"]:
             model = MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
                 model_name, **loading_kwargs
             )
@@ -281,7 +282,9 @@ class ExportModelTest(unittest.TestCase):
         task = auto_model.export_feature
         model_name = MODEL_NAMES[model_type]
         loading_kwargs = {"attn_implementation": "eager"} if model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED else {}
-        if model_type == "llava":
+        if model_type in REMOTE_CODE_MODELS:
+            loading_kwargs["trust_remote_code"] = True
+        if model_type in ["llava", "jvlm"]:
             model = MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
                 model_name, **loading_kwargs
             )
@@ -311,7 +314,10 @@ class ExportModelTest(unittest.TestCase):
                 )
 
                 use_cache = supported_task.endswith("-with-past")
-                ov_model = auto_model.from_pretrained(tmpdirname, use_cache=use_cache)
+                trust_remote_code = model_type in REMOTE_CODE_MODELS
+                ov_model = auto_model.from_pretrained(
+                    tmpdirname, use_cache=use_cache, trust_remote_code=trust_remote_code
+                )
                 self.assertIsInstance(ov_model, OVBaseModel)
                 self.assertTrue(ov_model.can_generate())
                 self.assertTrue(ov_model.generation_config is not None)
@@ -321,7 +327,9 @@ class ExportModelTest(unittest.TestCase):
                 # check that generate config remains after repeated saving
                 with TemporaryDirectory() as tmpdirname2:
                     ov_model.save_pretrained(tmpdirname2)
-                    ov_model = auto_model.from_pretrained(tmpdirname2, use_cache=use_cache)
+                    ov_model = auto_model.from_pretrained(
+                        tmpdirname2, use_cache=use_cache, trust_remote_code=trust_remote_code
+                    )
                     self.assertIsInstance(ov_model, OVBaseModel)
                     self.assertTrue(ov_model.can_generate())
                     self.assertTrue(ov_model.generation_config is not None)

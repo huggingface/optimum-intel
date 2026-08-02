@@ -45,6 +45,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyFluxTransformerInputGenerator,
     DummyGemma4UnifiedVisionInputGenerator,
     DummyGemma4VisionInputGenerator,
+    DummyJinaVLMVisionInputGenerator,
     DummyKokoroInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMVImageInputGenerator,
@@ -77,6 +78,7 @@ from optimum.exporters.openvino.input_generators import (
     FunASRDummyAudioInputGenerator,
     Gemma4DummyPastKeyValuesGenerator,
     GPTBigCodeDummyPastKeyValuesGenerator,
+    JinaVLMDummyPastKeyValuesGenerator,
     Lfm2DummyPastKeyValuesGenerator,
     LTX2AudioVaeDecoderDummyInputGenerator,
     LTX2ConnectorsDummyInputGenerator,
@@ -132,6 +134,8 @@ from optimum.exporters.openvino.model_patcher import (
     InternVL2ChatLangModelPatcher,
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
+    JinaVLMLanguageModelPatcher,
+    JinaVLMVisionEmbeddingsModelPatcher,
     KokoroModelPatcher,
     Lfm2ModelPatcher,
     Lfm2MoeModelPatcher,
@@ -1972,6 +1976,22 @@ class BaseVLMOpenVINOConfig(OpenVINOConfig):
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return CommonImageEmbeddingsModelPatcher(self, model, model_kwargs)
+
+
+class JinaVLMNormalizedTextConfig(NormalizedTextConfig):
+    NUM_LAYERS = "num_hidden_layers"
+    HIDDEN_SIZE = "hidden_size"
+    VOCAB_SIZE = "vocab_size"
+
+    @property
+    def num_attention_heads(self):
+        return self.config.block_config.attn_config.n_heads
+
+
+class JinaVLMLanguageOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, JinaVLMDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = JinaVLMDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = JinaVLMNormalizedTextConfig
 
 
 @register_in_tasks_manager("llava", *["image-text-to-text"], library_name="transformers")
@@ -4617,6 +4637,111 @@ class GotOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+
+@register_in_tasks_manager("jvlm", *["image-text-to-text"], library_name="transformers")
+class JinaVLMOpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyJinaVLMVisionInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = NormalizedVisionConfig(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {
+            "image_patches": {0: "batch_size", 1: "num_crops", 2: "num_patches"},
+            "image_masks": {0: "batch_size", 1: "num_crops", 2: "num_patches"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"last_hidden_state": {0: "batch_size", 1: "num_image_tokens"}}
+
+    def with_behavior(self, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            InputEmbedOpenVINOConfig.NORMALIZED_CONFIG_CLASS = JinaVLMNormalizedTextConfig
+            return InputEmbedOpenVINOConfig(
+                self._orig_config.text_config,
+                task="feature-extraction",
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            internal_config = JinaVLMLanguageOpenVINOConfig(
+                self._orig_config.text_config,
+                task="text-generation",
+                use_past=True,
+                use_past_in_inputs=True,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            export_config = LMInputEmbedsConfigHelper(
+                internal_config,
+                patcher_cls=JinaVLMLanguageModelPatcher,
+            )
+            export_config._normalized_config = internal_config._normalized_config
+            return export_config
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            # JinaVLMForConditionalGeneration owns both the text decoder and the lm_head; the
+            # language patcher wraps its forward to consume `inputs_embeds` and emit logits.
+            return model
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return model
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.config.text_config
+            return text_embedding
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return JinaVLMVisionEmbeddingsModelPatcher(self, model, model_kwargs)
 
 
 @register_in_tasks_manager("gemma3", *["image-text-to-text"], library_name="transformers")
