@@ -46,7 +46,7 @@ from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSp
 from transformers.processing_utils import Unpack
 from transformers.utils import ModelOutput
 
-from optimum.exporters.openvino._ov_ops import convert_recurrent_attention_cell, convert_recurrent_ssm_cell
+from optimum.exporters.openvino._ov_ops import convert_recurrent_attention_cell, convert_recurrent_selective_ssm_cell
 from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.openvino.patching_utils import (
     ModelPatcher,
@@ -7497,7 +7497,7 @@ class GptOssModelPatcher(OVDecoderModelPatcher):
 # https://github.com/huggingface/transformers/blob/v4.55-release/src/transformers/models/granitemoehybrid/modeling_granitemoehybrid.py
 #
 # This patch replaces the chunked SSD implementation with a recurrent form that uses
-# `SSMRecurrentCell` (same as NemotronH), which is replaced by an `ov::Loop` during
+# `SelectiveSSMRecurrentCell` (same as NemotronH), which is replaced by an `ov::Loop` during
 # conversion. It runs a single unified code path for both prefill and decoding stages.
 def granite_moe_hybrid_mamba_mixer_forward(
     self,
@@ -7555,7 +7555,7 @@ def granite_moe_hybrid_mamba_mixer_forward(
     recurrent_state = recurrent_state.float()
 
     # A (H,), dt (B,T,H), B (B,T,G,N), x (B,T,H,P), C (B,T,G,N), state (B,H,P,N)
-    output_cell = self.ssm_recurrent_cell(A, dt, B, x, C, recurrent_state)
+    output_cell = self.selective_ssm_recurrent_cell(A, dt, B, x, C, recurrent_state)
 
     num_elems = batch_size * seq_len * self.num_heads * self.head_dim
     y = output_cell[:num_elems].reshape(batch_size, seq_len, self.num_heads, self.head_dim)
@@ -7697,10 +7697,10 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
         self.orig_forward = patched_forward
 
         self.module_extensions = {
-            SSMRecurrentCell: ModuleExtension(SSMRecurrentCell, "SSMRecurrentCellOp"),
+            SelectiveSSMRecurrentCell: ModuleExtension(SelectiveSSMRecurrentCell, "SelectiveSSMRecurrentCellOp"),
         }
         self.conversion_extensions = [
-            ConversionExtension("SSMRecurrentCellOp", convert_recurrent_ssm_cell),
+            ConversionExtension("SelectiveSSMRecurrentCellOp", convert_recurrent_selective_ssm_cell),
         ]
 
     def __enter__(self):
@@ -7750,7 +7750,7 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             if layer.mamba is not None:
                 mamba_layer = layer.mamba
                 mamba_layer._orig_forward = mamba_layer.forward
-                mamba_layer.ssm_recurrent_cell = SSMRecurrentCell()
+                mamba_layer.selective_ssm_recurrent_cell = SelectiveSSMRecurrentCell()
                 mamba_layer.forward = make_mamba_forward(mamba_layer)
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -7768,8 +7768,8 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             if layer.mamba is not None:
                 mamba_layer = layer.mamba
                 mamba_layer.forward = mamba_layer._orig_forward
-                if hasattr(mamba_layer, "ssm_recurrent_cell"):
-                    del mamba_layer.ssm_recurrent_cell
+                if hasattr(mamba_layer, "selective_ssm_recurrent_cell"):
+                    del mamba_layer.selective_ssm_recurrent_cell
 
 
 class BigBirdPegasusModelPatcher(OVSeq2SeqModelPatcher):
@@ -8639,8 +8639,8 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
 #       state_t = state_{t-1} * dA_t + dBx_t
 #       y_t     = reduce_sum(state_t * C_t, axis=N)
 # This loop has no known vectorized form that can be correctly traced by torch.jit.trace,
-# so it is replaced with an `ov::Loop` operation via `convert_recurrent_ssm_cell`.
-class SSMRecurrentCell(torch.nn.Module):
+# so it is replaced with an `ov::Loop` operation via `convert_recurrent_selective_ssm_cell`.
+class SelectiveSSMRecurrentCell(torch.nn.Module):
     def __init__(self):
         super().__init__()
 
@@ -8694,7 +8694,7 @@ class SSMRecurrentCell(torch.nn.Module):
 # Compared with the original implementation this patch:
 #  * replaces the `CausalConv1d` with the generic, cache-aware `ov_causal_conv1d()` helper;
 #  * expresses the selective scan in recurrent form (precompute dA/dBx/C, then run
-#    `SSMRecurrentCell`), which is replaced by an `ov::Loop` during conversion.
+#    `SelectiveSSMRecurrentCell`), which is replaced by an `ov::Loop` during conversion.
 # It runs a single unified code path for both the prefill and the decoding stages.
 def nemotron_h_mamba_mixer_forward(
     self,
@@ -8756,7 +8756,7 @@ def nemotron_h_mamba_mixer_forward(
     recurrent_state = recurrent_state.float()
 
     # A (H,), dt (B,T,H), B (B,T,G,N), x (B,T,H,P), C (B,T,G,N), state (B,H,P,N)
-    output_cell = self.ssm_recurrent_cell(A, dt, B, x, C, recurrent_state)
+    output_cell = self.selective_ssm_recurrent_cell(A, dt, B, x, C, recurrent_state)
 
     num_elems = batch_size * seq_len * self.num_heads * self.head_dim
     y = output_cell[:num_elems].reshape(batch_size, seq_len, self.num_heads, self.head_dim)
@@ -8949,10 +8949,10 @@ class NemotronHModelPatcher(OVDecoderModelPatcher):
         self.orig_forward = patched_forward
 
         self.module_extensions = {
-            SSMRecurrentCell: ModuleExtension(SSMRecurrentCell, "SSMRecurrentCellOp"),
+            SelectiveSSMRecurrentCell: ModuleExtension(SelectiveSSMRecurrentCell, "SelectiveSSMRecurrentCellOp"),
         }
         self.conversion_extensions = [
-            ConversionExtension("SSMRecurrentCellOp", convert_recurrent_ssm_cell),
+            ConversionExtension("SelectiveSSMRecurrentCellOp", convert_recurrent_selective_ssm_cell),
         ]
 
     def __enter__(self):
@@ -8989,7 +8989,7 @@ class NemotronHModelPatcher(OVDecoderModelPatcher):
             mixer = decoder_layer.mixer
             if isinstance(mixer, NemotronHMamba2Mixer):
                 mixer._orig_forward = mixer.forward
-                mixer.ssm_recurrent_cell = SSMRecurrentCell()
+                mixer.selective_ssm_recurrent_cell = SelectiveSSMRecurrentCell()
                 mixer.forward = make_mamba_forward(mixer)
             elif isinstance(mixer, NemotronHMoE):
                 mixer._orig_forward = mixer.forward
