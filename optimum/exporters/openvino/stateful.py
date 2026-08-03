@@ -253,8 +253,12 @@ def insert_state_for_nodes(model: ov.Model, nodes):
     outputs = sum((node.outputs() for node in nodes), [])
     for output in outputs:
         consumers = output.get_target_inputs()
-        # FIXME: get_any_name is not reliable as tensor may not have any names
-        variable_id = output.get_any_name()
+        if output.get_names():
+            variable_id = output.get_any_name()
+        else:
+            variable_id = f"{output.get_node().get_friendly_name()}.{output.get_index()}"
+            # set tensor name when tensor has no name
+            output.get_tensor().set_names({variable_id})
         read_value = ov.opset13.read_value(output, variable_id)
         for consumer in consumers:
             consumer.replace_source_output(read_value.output(0))

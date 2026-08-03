@@ -25,6 +25,7 @@ import openvino as ov
 import torch
 from huggingface_hub import constants, scan_cache_dir
 
+import optimum.exporters.openvino  # noqa: F401 (registers OpenVINO export configs in TasksManager)
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import is_transformers_version
 
@@ -300,10 +301,13 @@ HUB_MODEL_NAMES = {
     "qwen3_moe": "optimum-intel-internal-testing/tiny-random-qwen3moe",
     "qwen3_vl": "optimum-intel-internal-testing/tiny-random-qwen3-vl",
     "qwen3_vl_embedding": "optimum-intel-internal-testing/tiny-random-qwen3-vl-embedding",
+    "qwen3_omni_moe": "optimum-intel-internal-testing/tiny-random-qwen3-omni",
     "qwen3_next": "optimum-intel-internal-testing/tiny-random-qwen3-next",
     "qwen3_5": "optimum-intel-internal-testing/tiny-random-qwen3.5",
     "qwen3_5_moe": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
     "qwen3_asr": "optimum-intel-internal-testing/tiny-random-qwen3-asr",
+    "qwen3_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
+    "fun_asr": "optimum-intel-internal-testing/tiny-random-fun-asr",
     "rembert": "optimum-intel-internal-testing/tiny-random-rembert",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",
     "roberta": "optimum-intel-internal-testing/tiny-random-roberta",
@@ -358,6 +362,7 @@ HUB_MODEL_NAMES = {
     "sana": "optimum-intel-internal-testing/tiny-random-sana",
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
+    "ltx2": "optimum-intel-internal-testing/tiny-random-ltx2",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
     "flux.2-klein": "optimum-intel-internal-testing/tiny-random-flux.2-klein",
@@ -385,6 +390,13 @@ MODEL_NAMES = _resolve_cached_model_paths(HUB_MODEL_NAMES)
 
 EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7B")}
 
+DFLASH_MODELS = {
+    "qwen3_dflash": (
+        "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
+        "optimum-intel-internal-testing/tiny-random-qwen3",
+    )
+}
+
 # VLM-based Eagle3 draft models (AngelSlim Eagle3LlamaForCausalLM architecture).
 # These use Qwen3-VL MRoPE and target VLM models for speculative decoding.
 # Only used in the decoder test (not genai, since the VLM target needs image-text-to-text export).
@@ -397,11 +409,11 @@ EAGLE3_VLM_MODELS = {
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "afmoe": {"model": 16},
-    "bert": {"model": 68 if is_transformers_version("<", "5") else 70},
+    "bert": {"model": 68 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 70},
     "roberta": {"model": 68},
     "albert": {"model": 84},
     "vit": {"model": 64},
-    "blenderbot": {"model": 70 if is_transformers_version("<", "5") else 72},
+    "blenderbot": {"model": 70 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 72},
     "cohere2": {"model": 30},
     "gpt2": {"model": 44},
     "granitemoehybrid": {"model": 118},
@@ -409,8 +421,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "distilbert": {"model": 66},
     "t5": {
         "encoder": 64,
-        "decoder": 104 if is_transformers_version("<", "5") else 106,
-        "decoder_with_past": 84 if is_transformers_version("<", "5") else 86,
+        "decoder": 104 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 106,
+        "decoder_with_past": 84 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 86,
     },
     "stable-diffusion": {
         "unet": 242,
@@ -537,6 +549,18 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_merger_model": 10,
         "vision_embeddings_pos_model": 1,
     },
+    "qwen3_omni_moe": {
+        "lm_model": 34,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 13,
+        "vision_embeddings_pos_model": 1,
+        "audio_encoder_model": 18,
+        "talker_model": 25,
+        "talker_text_embeddings_model": 1,
+        "talker_projections_model": 4,
+        "code_predictor_model": 16,
+        "code2wav_model": 53,
+    },
     "sana": {
         "transformer": 58,
         "vae_decoder": 28,
@@ -548,6 +572,13 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vae_decoder": 28,
         "vae_encoder": 28,
         "text_encoder": 64,
+    },
+    "ltx2": {
+        "transformer": 34,
+        "vae_decoder": 28,
+        "vae_encoder": 28,
+        "text_encoder": 64,
+        "connectors": 10,
     },
     "sam": {
         "vision_encoder": 150,
@@ -575,6 +606,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "lfm2_moe": {"model": 46},
     "hunyuan_v1_dense": {"model": 32},
     "qwen3_eagle3": {"model": 20},
+    "qwen3_dflash": {"model": 30},
     "qwen3_vl_eagle3": {"model": 18},
     "qwen3_next": {"model": 100},
     "gemma3n": {
@@ -606,6 +638,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "decoder": 30,
         "decoder_with_past": 30,
     },
+    "fun_asr": {
+        "encoder": 46,
+        "decoder": 30,
+        "decoder_with_past": 30,
+    },
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -631,9 +668,11 @@ REMOTE_CODE_MODELS = (
     "decilm",
     "minicpm3",
     "deepseek",
+    "qwen3_dflash",
     "qwen3_eagle3",
     "qwen3_vl_eagle3",
     "qwen3_asr",
+    "fun_asr",
     "videochat_flash_qwen",
 )
 
@@ -656,6 +695,7 @@ ARCH_TO_MODEL_CLASS = {
     "qwen3_5_moe": "OVModelForVisualCausalLM",
     "gemma4_moe": "OVModelForVisualCausalLM",
     "gemma4_unified": "OVModelForVisualCausalLM",
+    "qwen3_omni_moe": "OVModelForMultimodalLM",
     "stable-diffusion": "OVDiffusionPipeline",
     "whisper": "OVModelForSpeechSeq2Seq",
     "bart": "OVModelForSeq2SeqLM",
@@ -798,6 +838,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "chatglm4": "chatglm",
     "codegen2": "codegen",
     "falcon-40b": "falcon",
+    "gemma4_moe": "gemma4",
     "gpt_oss_mxfp4": "gpt_oss",
     "llama_awq": "llama",
     "llava_next_mistral": "llava_next",
@@ -808,11 +849,26 @@ TEST_NAME_TO_MODEL_TYPE = {
     "opt_gptq": "opt",
     "perceiver_text": "perceiver",
     "perceiver_vision": "perceiver",
+    "qwen3_dflash": "qwen3",
+    "qwen3_vl_embedding": "qwen3_vl",
     "swin-window": "swin",
     "vit-with-attentions": "vit",
     "vit-with-hidden-states": "vit",
     "wav2vec2-hf": "wav2vec2",
 }
+
+
+def get_transformers_versions(model_type, library_name="transformers"):
+    supported_model_type = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES[library_name]
+    export_config = next(iter(supported_model_type[model_type]["openvino"].values()))
+    min_transformers = str(getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", "0"))
+    max_transformers = str(getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", "999"))
+    return min_transformers, max_transformers
+
+
+def is_model_type_transformers_compatible(model_type, library_name="transformers"):
+    min_transformers, max_transformers = get_transformers_versions(model_type, library_name)
+    return is_transformers_version(">=", min_transformers) and is_transformers_version("<=", max_transformers)
 
 
 def get_supported_model_for_library(library_name):
@@ -821,12 +877,7 @@ def get_supported_model_for_library(library_name):
 
     for model_type in supported_model_type:
         if supported_model_type[model_type].get("openvino"):
-            export_config = next(iter(supported_model_type[model_type]["openvino"].values()))
-
-            min_transformers = str(getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", "0"))
-            max_transformers = str(getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", "999"))
-
-            if is_transformers_version(">=", min_transformers) and is_transformers_version("<=", max_transformers):
+            if is_model_type_transformers_compatible(model_type, library_name):
                 valid_model.add(model_type)
 
     return valid_model

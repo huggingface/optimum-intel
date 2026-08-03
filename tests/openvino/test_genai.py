@@ -40,6 +40,7 @@ from transformers import (
     set_seed,
 )
 from utils_tests import (
+    DFLASH_MODELS,
     EAGLE3_MODELS,
     EAGLE3_VLM_MODELS,
     F32_CONFIG,
@@ -47,6 +48,8 @@ from utils_tests import (
     OPENVINO_DEVICE,
     REMOTE_CODE_MODELS,
     TEST_IMAGE_URL,
+    TEST_NAME_TO_MODEL_TYPE,
+    get_supported_model_for_library,
 )
 
 from optimum.exporters.openvino import main_export
@@ -148,64 +151,47 @@ class LLMPipelineTestCase(unittest.TestCase):
         "gemma2",
         "granite",
         "granitemoe",
+        "glm",
+        "mistral-nemo",
+        "opt",
+        "cohere2",
+        "gemma3_text",
+        "qwen3",
+        "qwen3_moe",
+        "glm4",
+        "arcee",
+        "gpt_oss",
+        "smollm3",
+        "phi3",
+        "phimoe",
+        "exaone4",
+        "exaone",
+        "decilm",
+        "internlm2",
+        "orion",
+        "aquila2",
+        "jais",
+        "aquila",
+        "internlm",
+        "dbrx",
     )
+
+    # remote modeling incompatible with v5 but not filtered as CodeGenOpenVINOConfig is compatible (codegen)
+    if is_transformers_version("<", "5"):
+        ALL_SUPPORTED_ARCHITECTURES += ("codegen2",)
 
     # to be expanded, other architectures work on NPU too
     # qwen2, phi and phi3 tests are flaky on NPU, not including for now
     NPU_SUPPORTED_ARCHITECTURES = ("gpt2", "glm", "opt", "qwen3_moe", "gpt_oss")
 
-    # min versions
-    if is_transformers_version(">=", "4.46.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "opt")
-        if is_transformers_version("<", "5"):
-            ALL_SUPPORTED_ARCHITECTURES += ("phimoe",)
-        if is_transformers_version("<", "4.54.0"):
-            ALL_SUPPORTED_ARCHITECTURES += ("deepseek",)
-    if is_transformers_version(">=", "4.47.0") and is_transformers_version("<", "4.56.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("qwen",)
-    if is_transformers_version(">=", "4.48.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("cohere2",)
-    if is_transformers_version(">=", "4.49"):
-        ALL_SUPPORTED_ARCHITECTURES += ("phi3",)
-    if is_transformers_version(">=", "4.50"):
-        ALL_SUPPORTED_ARCHITECTURES += ("gemma3_text",)
-    if is_transformers_version(">=", "4.51.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe")
-    if is_transformers_version(">=", "4.51.3"):
-        ALL_SUPPORTED_ARCHITECTURES += ("glm4",)
-    if is_transformers_version(">=", "4.53.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("arcee", "smollm3")
-    if is_transformers_version(">=", "4.54.0") and is_transformers_version("<", "5"):
-        ALL_SUPPORTED_ARCHITECTURES += ("exaone4",)
-    if is_transformers_version(">=", "4.55.1"):
-        ALL_SUPPORTED_ARCHITECTURES += ("gpt_oss",)
-
-    # max versions
-    if is_transformers_version("<", "4.54.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("minicpm", "minicpm3", "arctic")
-    if is_transformers_version("<", "4.56.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("chatglm4",)
-
-    if is_transformers_version("<", "5"):
-        ALL_SUPPORTED_ARCHITECTURES += (
-            # remote modeling incompatible with v5
-            "codegen2",
-            "exaone",
-            "decilm",
-            "internlm2",
-            "orion",
-            "aquila2",
-            "jais",
-            # remote modeling code failing with v5
-            "aquila",
-            "internlm",
-            # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
-            "dbrx",
-            # "phimoe",
-        )
-
     # for now we do not test NPU with old transformers versions
     SUPPORTED_ARCHITECTURES = NPU_SUPPORTED_ARCHITECTURES if OPENVINO_DEVICE == "NPU" else ALL_SUPPORTED_ARCHITECTURES
+    # filter architectures depending on min/max transformers supported versions
+    SUPPORTED_ARCHITECTURES = tuple(
+        arch
+        for arch in SUPPORTED_ARCHITECTURES
+        if TEST_NAME_TO_MODEL_TYPE.get(arch, arch) in get_supported_model_for_library("transformers")
+    )
 
     REMOTE_CODE_MODELS = (
         "minicpm",
@@ -315,26 +301,23 @@ class VLMPipelineTestCase(unittest.TestCase):
         "llava_next",
         # "minicpmv", # output is truncated for some reason
         "qwen2_vl",
+        "llava_next_mistral",
+        "qwen2_5_vl",
+        "gemma3",
+        "llava",
+        "llava_next_video",
     )
-    if is_transformers_version(">=", "4.46.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("llava_next_mistral",)
-        if is_transformers_version("<", "4.52.0"):
-            ALL_SUPPORTED_ARCHITECTURES += ("minicpmo",)
-        if is_transformers_version("<", "4.54.0"):
-            ALL_SUPPORTED_ARCHITECTURES += ("llava-qwen2", "phi3_v")
-    if is_transformers_version(">=", "4.49.0"):
-        ALL_SUPPORTED_ARCHITECTURES += ("qwen2_5_vl",)
-        if is_transformers_version("<", "4.54.0"):
-            ALL_SUPPORTED_ARCHITECTURES += ("phi4mm",)
-    if is_transformers_version(">=", "4.50"):
-        ALL_SUPPORTED_ARCHITECTURES += ("gemma3",)
-    if is_transformers_version("<", "5"):
-        ALL_SUPPORTED_ARCHITECTURES += ("llava", "llava_next_video")
 
     # for now we do not test NPU with old transformers versions
     NPU_SUPPORTED_ARCHITECTURES = ("qwen2_vl", "qwen2_5_vl")
 
     SUPPORTED_ARCHITECTURES = NPU_SUPPORTED_ARCHITECTURES if OPENVINO_DEVICE == "NPU" else ALL_SUPPORTED_ARCHITECTURES
+    # filter architectures depending on min/max transformers supported versions
+    SUPPORTED_ARCHITECTURES = tuple(
+        arch
+        for arch in SUPPORTED_ARCHITECTURES
+        if TEST_NAME_TO_MODEL_TYPE.get(arch, arch) in get_supported_model_for_library("transformers")
+    )
 
     REMOTE_CODE_MODELS = (
         "minicpmv",
@@ -354,7 +337,7 @@ class VLMPipelineTestCase(unittest.TestCase):
     IMAGE = Image.open(requests.get(TEST_IMAGE_URL, stream=True).raw).convert("RGB")
 
     def _get_model_class(self, model_arch):
-        if is_transformers_version(">=", "4.46") and model_arch in {
+        if model_arch in {
             "llava",
             "llava_next",
             "llava_next_mistral",
@@ -589,26 +572,36 @@ class Text2SpeechPipelineTestCase(unittest.TestCase):
         torch.testing.assert_close(transformers_output, genai_output, rtol=1e-2, atol=1e-3)
 
 
-@pytest.mark.skipif(OPENVINO_DEVICE == "NPU", reason="Eagle3 test is not yet supported on NPU")
-class LLMPipelineWithEagle3TestCase(unittest.TestCase):
+@pytest.mark.skipif(OPENVINO_DEVICE == "NPU", reason="Speculative decoding tests are not yet supported on NPU")
+class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
     GEN_KWARGS = {
         "max_new_tokens": 10,
         "min_new_tokens": 10,
         "do_sample": False,
         "num_beams": 1,
     }
+    SPECULATIVE_DECODING_MODELS = [
+        (model_arch, model_pair, "Eagle3", None, "2026.0") for model_arch, model_pair in EAGLE3_MODELS.items()
+    ] + [(model_arch, model_pair, "DFlash", "4.57", "2026.3") for model_arch, model_pair in DFLASH_MODELS.items()]
 
-    @parameterized.expand(EAGLE3_MODELS.items())
-    def test_compare_outputs(self, model_arch, model_pair):
-        if is_transformers_version("<", "4.54"):
-            self.skipTest("Eagle3 requires transformers >= 4.54")
-        if is_openvino_version("<", "2026.0"):
-            self.skipTest("Eagle3 requires openvino-genai >= 2026.0")
+    @parameterized.expand(SPECULATIVE_DECODING_MODELS)
+    def test_compare_outputs(
+        self,
+        model_arch,
+        model_pair,
+        speculative_decoding_type,
+        min_transformers_version,
+        min_openvino_version,
+    ):
+        if min_transformers_version is not None and is_transformers_version("<", min_transformers_version):
+            self.skipTest(f"{speculative_decoding_type} requires transformers >= {min_transformers_version}")
+        if is_openvino_version("<", min_openvino_version):
+            self.skipTest(f"{speculative_decoding_type} requires openvino-genai >= {min_openvino_version}")
 
         draft_model_id, target_model_id = model_pair
         trust_remote_code = model_arch in REMOTE_CODE_MODELS
 
-        # export main and draft eagle3 models and initialize OV LLM pipelines w/o Eagle3
+        # export main and draft models and initialize OV LLM pipelines w/o speculative decoding
         draft_model_path = Path(self.temp_dir) / "draft_model"
         main_model_path = Path(self.temp_dir) / "main_model"
         main_export(
@@ -627,17 +620,19 @@ class LLMPipelineWithEagle3TestCase(unittest.TestCase):
 
         prompt = "Paris is the capital of"
 
-        # Phase 1: generate with Eagle3 speculative decoding
+        # Phase 1: generate with speculative decoding
         ov_draft_model = draft_model(draft_model_path, "CPU")
-        ov_eagle3_pipe = LLMPipeline(main_model_path, OPENVINO_DEVICE, draft_model=ov_draft_model, **TEST_CONFIG)
-        genai_eagle3_output = str(
-            ov_eagle3_pipe.generate(prompt, echo=True, apply_chat_template=False, ignore_eos=True, **self.GEN_KWARGS)
+        ov_speculative_pipe = LLMPipeline(main_model_path, OPENVINO_DEVICE, draft_model=ov_draft_model, **TEST_CONFIG)
+        genai_speculative_output = str(
+            ov_speculative_pipe.generate(
+                prompt, echo=True, apply_chat_template=False, ignore_eos=True, **self.GEN_KWARGS
+            )
         )
-        del ov_eagle3_pipe
+        del ov_speculative_pipe
         del ov_draft_model
         gc.collect()
 
-        # Phase 2: generate without Eagle3
+        # Phase 2: generate without speculative decoding
         ov_pipe = LLMPipeline(main_model_path, OPENVINO_DEVICE, **TEST_CONFIG)
         genai_output = str(
             ov_pipe.generate(prompt, echo=True, apply_chat_template=False, ignore_eos=True, **self.GEN_KWARGS)
@@ -646,15 +641,15 @@ class LLMPipelineWithEagle3TestCase(unittest.TestCase):
         gc.collect()
 
         # assert they are not empty
-        self.assertTrue(genai_eagle3_output)
+        self.assertTrue(genai_speculative_output)
         self.assertTrue(genai_output)
 
         # compare outputs
-        self.assertEqual(genai_eagle3_output, genai_output)
+        self.assertEqual(genai_speculative_output, genai_output)
 
     @parameterized.expand(EAGLE3_VLM_MODELS.items())
     def test_compare_outputs_vlm(self, model_arch, model_pair):
-        if is_transformers_version("<", "4.57") or is_transformers_version(">=", "5.0.0"):
+        if is_transformers_version(">=", "5.0.0"):
             self.skipTest("Eagle3 VLM requires transformers >= 4.57 and < 5.0.0")
         if is_openvino_version("<", "2026.999"):
             self.skipTest(

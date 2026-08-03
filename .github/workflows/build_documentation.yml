@@ -22,14 +22,14 @@ jobs:
       PR_CLONE_URL: ${{ github.event.pull_request.head.repo.clone_url }}
 
     steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache-dependency-path: "kit/package-lock.json"
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -51,17 +51,33 @@ jobs:
         run: |
           pip install --upgrade pip uv
           uv pip install git+https://github.com/huggingface/doc-builder
-          uv pip install .[quality] diffusers accelerate datasets
+          uv pip install . --no-deps
+          doc-builder light-install optimum.intel
 
       - name: Make documentation
         shell: bash
+        run: |
+          make doc BUILD_DIR=./build_dir VERSION=${{ env.VERSION }}
+          cd build_dir
+          mv ./optimum.intel ./optimum-intel
+          cd ..
+
+      - name: Sync to bucket
         env:
-          HF_DOC_BUILD_TOKEN: ${{ secrets.HF_DOC_BUILD_PUSH }}
           HF_TOKEN: ${{ secrets.HF_DOC_BUILD_PUSH }}
         run: |
-          make doc BUILD_DIR=./doc-build VERSION=${{ env.VERSION }}
-          mv ./doc-build/optimum.intel optimum-intel
+          cd build_dir
+          uvx --from huggingface_hub hf sync ./optimum-intel hf://buckets/hf-doc-build/doc/optimum-intel
+          cd ..
+
+      - name: Push to dataset (legacy)
+        env:
+          HF_TOKEN: ${{ secrets.HF_DOC_BUILD_PUSH }}
+          COMMIT_MSG: "Updated with commit ${{ env.COMMIT_SHA }} See: https://github.com/huggingface/optimum-intel/commit/${{ env.COMMIT_SHA }}"
+        run: |
+          cd build_dir
           doc-builder push optimum-intel \
             --doc_build_repo_id "hf-doc-build/doc-build" \
-            --commit_msg "Updated with commit ${COMMIT_SHA} See: https://github.com/huggingface/optimum-intel/commit/${COMMIT_SHA}" \
+            --commit_msg "${COMMIT_MSG}" \
             --n_retries 5
+          cd ..

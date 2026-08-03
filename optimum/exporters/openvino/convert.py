@@ -80,6 +80,7 @@ from .stateful import (
     ensure_stateful_is_available,
     patch_stateful,
 )
+from .utils_annotations import add_hidden_states_rt_info
 
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,8 @@ if is_diffusers_available():
 
 
 if TYPE_CHECKING:
+    from transformers.configuration_utils import PretrainedConfig
+
     from optimum.exporters.openvino.base import OpenVINOConfig
     from optimum.intel.openvino.configuration import OVConfig
 
@@ -130,8 +133,10 @@ def _save_model(
     ov_config: Optional["OVConfig"] = None,
     library_name: Optional[str] = None,
     config: "OpenVINOConfig" = None,
+    patch_16bit_model: bool = False,
+    source_model=None,
 ):
-    compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
+    compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16" and not patch_16bit_model
     model = _add_version_info_to_model(model, library_name)
 
     runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}
@@ -139,6 +144,17 @@ def _save_model(
 
     if getattr(config, "eagle3", False):
         model = _add_eagle3_mode_to_rt_info(model)
+    if getattr(config, "dflash", False):
+        model = _add_dflash_mode_to_rt_info(model, config._config)
+    if source_model is not None and getattr(getattr(source_model, "config", None), "model_type", None) in {
+        "qwen3",
+        "qwen3_moe",
+        "qwen3_5",
+        "qwen3_5_moe",
+        "qwen3_5_text",
+        "qwen3_5_moe_text",
+    }:
+        add_hidden_states_rt_info(source_model, model, config)
 
     save_model(model, path, compress_to_fp16)
     del model
@@ -376,6 +392,11 @@ def export_pytorch(
                     extension=conversion_extensions,
                 )
 
+                if patch_16bit_model:
+                    from openvino.frontend.pytorch.patch_model import unpatch_model
+
+                    unpatch_model(model, "_openvino_module_extension_patch_orig_forward")
+
         ov_model.validate_nodes_and_infer_types()  # TODO: remove as unnecessary validation?
 
         output_names = list(config.outputs.keys())
@@ -399,6 +420,8 @@ def export_pytorch(
             ov_config=ov_config,
             library_name=library_name,
             config=config,
+            patch_16bit_model=patch_16bit_model,
+            source_model=model,
         )
         clear_class_registry()
         del ov_model
@@ -597,7 +620,7 @@ def export_from_model(
         )
 
     library_name = _infer_library_from_model_or_model_class(model)
-    if library_name not in ("open_clip", "kokoro"):
+    if library_name not in ("open_clip", "kokoro", "funasr"):
         TasksManager.standardize_model_attributes(model, library_name=library_name)
 
     if hasattr(model.config, "export_model_type") and model.config.export_model_type is not None:
@@ -911,6 +934,26 @@ def _add_eagle3_mode_to_rt_info(model: Model):
     return model
 
 
+def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig") -> Model:
+    """
+    Add DFlash metadata to DFlash draft model.
+
+    Marks model as DFlash draft model and adds DFlash configuration to the model including
+    mask token id and target layer ids.
+    """
+    try:
+        model.set_rt_info("True", ["dflash_mode"])
+        dflash_config = getattr(hf_config, "dflash_config", {})
+        if "mask_token_id" in dflash_config:
+            model.set_rt_info(str(dflash_config["mask_token_id"]), ["dflash", "mask_token_id"])
+        if "target_layer_ids" in dflash_config:
+            model.set_rt_info(",".join(map(str, dflash_config["target_layer_ids"])), ["dflash", "target_layer_ids"])
+    except Exception:
+        pass
+
+    return model
+
+
 def _add_version_info_to_model(model: Model, library_name: Optional[str] = None):
     """
     Add dependency versions to OpenVINO model
@@ -1057,7 +1100,10 @@ def _get_submodels_and_export_configs(
 
 
 def get_diffusion_models_for_export_ext(
-    pipeline: "DiffusionPipeline", int_dtype: str = "int64", float_dtype: str = "fp32", exporter: str = "openvino"
+    pipeline: "DiffusionPipeline",
+    int_dtype: str = "int64",
+    float_dtype: str = "fp32",
+    exporter: str = "openvino",
 ):
     is_sdxl = pipeline.__class__.__name__.startswith("StableDiffusionXL")
     is_sd3 = pipeline.__class__.__name__.startswith("StableDiffusion3")
@@ -1088,7 +1134,11 @@ def get_diffusion_models_for_export_ext(
     elif is_sana:
         models_for_export = get_sana_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_ltx_video:
-        models_for_export = get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+        is_ltx2 = pipeline.__class__.__name__.startswith("LTX2")
+        if is_ltx2:
+            models_for_export = get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+        else:
+            models_for_export = get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     else:
         raise ValueError(f"Unsupported pipeline type `{pipeline.__class__.__name__}` provided")
     return None, models_for_export
@@ -1164,6 +1214,126 @@ def get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     )
     vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
+
+    return models_for_export
+
+
+def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
+    models_for_export = {}
+
+    text_encoder = pipeline.text_encoder
+
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=text_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="feature-extraction",
+        model_type="gemma3-text-encoder",
+    )
+    export_config = export_config_constructor(
+        text_encoder.config,
+        int_dtype=int_dtype,
+        float_dtype=float_dtype,
+    )
+    export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["text_encoder"] = (text_encoder, export_config)
+
+    # Connectors
+    connectors = pipeline.connectors
+    connectors_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=connectors,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="ltx2-connectors",
+    )
+    connectors_export_config = connectors_config_constructor(
+        connectors.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    models_for_export["connectors"] = (connectors, connectors_export_config)
+
+    # Transformer
+    transformer = pipeline.transformer
+    transformer_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=transformer,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="ltx2-video-transformer",
+    )
+    transformer_export_config = transformer_config_constructor(
+        transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    models_for_export["transformer"] = (transformer, transformer_export_config)
+
+    # VAE Decoder
+    vae_decoder = copy.deepcopy(pipeline.vae)
+    if hasattr(pipeline.vae, "latents_mean") and pipeline.vae.latents_mean is not None:
+        vae_decoder.register_to_config(latents_mean_data=pipeline.vae.latents_mean.tolist())
+    if hasattr(pipeline.vae, "latents_std") and pipeline.vae.latents_std is not None:
+        vae_decoder.register_to_config(latents_std_data=pipeline.vae.latents_std.tolist())
+    if hasattr(pipeline, "audio_vae") and pipeline.audio_vae is not None:
+        if hasattr(pipeline.audio_vae, "latents_mean") and pipeline.audio_vae.latents_mean is not None:
+            vae_decoder.register_to_config(audio_latents_mean_data=pipeline.audio_vae.latents_mean.tolist())
+        if hasattr(pipeline.audio_vae, "latents_std") and pipeline.audio_vae.latents_std is not None:
+            vae_decoder.register_to_config(audio_latents_std_data=pipeline.audio_vae.latents_std.tolist())
+    vae_decoder.forward = lambda latent_sample: vae_decoder.decode(z=latent_sample)
+
+    vae_decoder_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_decoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="ltx2-vae-decoder",
+    )
+    vae_decoder_export_config = vae_decoder_config_constructor(
+        vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
+
+    # Audio VAE decoder and vocoder
+    if hasattr(pipeline, "audio_vae") and pipeline.audio_vae is not None:
+        # Audio VAE decoder
+        audio_vae_decoder = copy.deepcopy(pipeline.audio_vae)
+        audio_vae_decoder.forward = lambda latent_sample: {"sample": audio_vae_decoder.decode(z=latent_sample)}
+        audio_vae_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=audio_vae_decoder,
+            exporter=exporter,
+            library_name="diffusers",
+            task="semantic-segmentation",
+            model_type="ltx2-audio-vae-decoder",
+        )
+        audio_vae_export_config = audio_vae_config_constructor(
+            audio_vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        # Store latents_mean/std in config for un-normalization during inference
+        if hasattr(pipeline.audio_vae, "latents_mean") and pipeline.audio_vae.latents_mean is not None:
+            audio_vae_decoder.register_to_config(latents_mean_data=pipeline.audio_vae.latents_mean.tolist())
+        if hasattr(pipeline.audio_vae, "latents_std") and pipeline.audio_vae.latents_std is not None:
+            audio_vae_decoder.register_to_config(latents_std_data=pipeline.audio_vae.latents_std.tolist())
+        models_for_export["audio_vae_decoder"] = (audio_vae_decoder, audio_vae_export_config)
+
+        # Vocoder
+        if hasattr(pipeline, "vocoder") and pipeline.vocoder is not None:
+            vocoder = pipeline.vocoder
+            orig_vocoder_forward = vocoder.forward
+
+            def vocoder_forward(hidden_states):
+                return {"sample": orig_vocoder_forward(hidden_states)}
+
+            vocoder.forward = vocoder_forward
+            vocoder_config_constructor = TasksManager.get_exporter_config_constructor(
+                model=vocoder,
+                exporter=exporter,
+                library_name="diffusers",
+                task="semantic-segmentation",
+                model_type="ltx2-vocoder",
+            )
+            vocoder_export_config = vocoder_config_constructor(
+                vocoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+            )
+            models_for_export["vocoder"] = (vocoder, vocoder_export_config)
 
     return models_for_export
 
