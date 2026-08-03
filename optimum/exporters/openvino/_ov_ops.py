@@ -121,14 +121,18 @@ def convert_recurrent_attention_cell(context):
 #
 # The Mamba2 single-step recurrence follows the standard Mamba-2 discretization:
 #       dA_t    = exp(A * dt_t)                           # [B, H] (broadcast)
-#       dBx_t   = dt_t * B_t outer x_t                   # [B, H, P, N]
+#       dBx_t   = dtB_t outer x_t                        # [B, H, P, N]
 #       state_t = state_{t-1} * dA_t + dBx_t             # [B, H, P, N]
 #       y_t     = reduce_sum(state_t * C_t, axis=N)       # [B, H, P]
 #
-# The raw parameters A (log-decay), dt (time steps), B, x, C are passed directly into the
-# loop; discretization (exp, outer product) happens per timestep inside the body.
-# Inputs are in [B, T, H, ...] layout; the loop slices along dim 1 (T).
-# The skip connection `x_t * D` does not depend on the recurrent state and is added outside.
+# The time discretization of A and B is done vectorized over the whole sequence BEFORE the loop
+# (cheaper than recomputing per timestep):
+#       dA  = exp(A * dt)   # [B, T, H]      per-head state decay
+#       dtB = dt * B        # [B, T, H, N]   discretized input matrix
+# The loop then slices dA/dtB/x/C along dim 1 (T) and only forms the outer product dtB_t ⊗ x_t
+# per timestep (its [B, T, H, P, N] form is too large to materialize up front).
+# Inputs are in [B, T, H, ...] layout; the skip connection `x_t * D` does not depend on the
+# recurrent state and is added outside.
 #
 # The `SSMRecurrentCellOp` appears in the Torch graph as a result of replacing the
 # `SSMRecurrentCell` `torch.nn.Module` via a registered `ModuleExtension` in the OpenVINO
@@ -181,6 +185,12 @@ def convert_recurrent_ssm_cell(context):
     B_expanded = ops.reshape(B_tiled, BC_shape, False)  # [B, T, H, N]
     C_expanded = ops.reshape(C_tiled, BC_shape, False)  # [B, T, H, N]
 
+    # Vectorized time discretization of A and B over the whole sequence, before the loop:
+    #   dA  = exp(A * dt)  — A is [H] → broadcast to [1, 1, H], dt is [B, T, H] → [B, T, H]
+    #   dtB = dt * B       — dt is [B, T, H] → [B, T, H, 1], B_expanded is [B, T, H, N]
+    dA = ops.exp(ops.multiply(A, dt))  # [B, T, H]
+    dtB = ops.multiply(ops.unsqueeze(dt, const_minus_one), B_expanded)  # [B, T, H, N]
+
     # Build the zero-initialized output accumulator with shape [B, T, H, P].
     core_shape = ops.gather(x_shape, ops.constant([0, 1, 2, 3], dtype=np.int32), const_zero_axis)
     const_zero_f32 = ops.constant(0, dtype=np.float32)
@@ -190,31 +200,26 @@ def convert_recurrent_ssm_cell(context):
     seq_len = ops.gather(x_shape, const_one, const_zero_axis)
     seq_len = ops.convert(seq_len, "i32")
 
-    # Body parameters (one timestep slice each along dim 1).
+    # Body parameters (one timestep slice each along dim 1). dA/dtB are already discretized.
     timestep_param = ops.parameter([], np.int32, "timestep")
-    dt_t_param = ops.parameter([-1, 1, -1], np.float32, "dt_t")  # [B, 1, H]
-    B_t_param = ops.parameter([-1, 1, -1, -1], np.float32, "B_t")  # [B, 1, H, N]
+    dA_t_param = ops.parameter([-1, 1, -1], np.float32, "dA_t")  # [B, 1, H]
+    dtB_t_param = ops.parameter([-1, 1, -1, -1], np.float32, "dtB_t")  # [B, 1, H, N]
     x_t_param = ops.parameter([-1, 1, -1, -1], np.float32, "x_t")  # [B, 1, H, P]
     C_t_param = ops.parameter([-1, 1, -1, -1], np.float32, "C_t")  # [B, 1, H, N]
     last_state_t = ops.parameter([-1, -1, -1, -1], np.float32, "last_state_t")  # [B, H, P, N]
     core_out_t = ops.parameter([-1, -1, -1, -1], np.float32, "core_out_t")  # [B, T, H, P]
 
     # Drop the singleton sequence dimension introduced by slicing.
-    dt_t = ops.squeeze(dt_t_param, const_one)  # [B, H]
-    B_t = ops.squeeze(B_t_param, const_one)  # [B, H, N]
+    dA_t = ops.squeeze(dA_t_param, const_one)  # [B, H]
+    dtB_t = ops.squeeze(dtB_t_param, const_one)  # [B, H, N]
     x_t = ops.squeeze(x_t_param, const_one)  # [B, H, P]
     C_t = ops.squeeze(C_t_param, const_one)  # [B, H, N]
 
-    # Discretization inside the loop body:
-    # dA_t = exp(A * dt_t)  — A is [H], dt_t is [B, H] → broadcast to [B, H]
-    A_unsqueeze = ops.unsqueeze(A, const_zero_axis)  # [1, H]
-    dA_t = ops.exp(ops.multiply(A_unsqueeze, dt_t))  # [B, H]
     dA_t_4d = ops.unsqueeze(ops.unsqueeze(dA_t, const_minus_one), const_minus_one)  # [B, H, 1, 1]
 
-    # dBx_t = (dt_t * B_t)[:,None,:] * x_t[:,:,None]  → [B, H, P, N]
-    dt_B_t = ops.multiply(ops.unsqueeze(dt_t, const_minus_one), B_t)  # [B, H, N]
+    # dBx_t = dtB_t[:,:,None,:] * x_t[:,:,:,None]  → [B, H, P, N] (outer product, kept in loop)
     dBx_t = ops.multiply(
-        ops.unsqueeze(dt_B_t, const_minus_two),  # [B, H, 1, N]
+        ops.unsqueeze(dtB_t, const_minus_two),  # [B, H, 1, N]
         ops.unsqueeze(x_t, const_minus_one),  # [B, H, P, 1]
     )  # [B, H, P, N]
 
@@ -235,8 +240,8 @@ def convert_recurrent_ssm_cell(context):
         [body_cond, last_state_res, core_out_res],
         [
             timestep_param,
-            dt_t_param,
-            B_t_param,
+            dA_t_param,
+            dtB_t_param,
             x_t_param,
             C_t_param,
             last_state_t,
@@ -248,8 +253,8 @@ def convert_recurrent_ssm_cell(context):
     loop = ops.loop(seq_len, ops.constant(True, dtype="bool"))
     loop.set_function(body_model)
 
-    loop.set_sliced_input(dt_t_param, dt, 0, 1, 1, -1, 1)
-    loop.set_sliced_input(B_t_param, B_expanded.output(0), 0, 1, 1, -1, 1)
+    loop.set_sliced_input(dA_t_param, dA.output(0), 0, 1, 1, -1, 1)
+    loop.set_sliced_input(dtB_t_param, dtB.output(0), 0, 1, 1, -1, 1)
     loop.set_sliced_input(x_t_param, x, 0, 1, 1, -1, 1)
     loop.set_sliced_input(C_t_param, C_expanded.output(0), 0, 1, 1, -1, 1)
     loop.set_merged_input(last_state_t, last_state_old, last_state_res.output(0))

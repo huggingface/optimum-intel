@@ -8655,7 +8655,7 @@ class SSMRecurrentCell(torch.nn.Module):
     ):
         # Mamba-2 selective scan in recurrent form (one step per token):
         #   dA_t    = exp(A * dt_t)           — per-head state decay
-        #   dBx_t   = (dt_t * B_t) ⊗ x_t     — discretized input (outer product over P×N)
+        #   dBx_t   = dtB_t ⊗ x_t            — discretized input (outer product over P×N)
         #   state_t = state_{t-1} * dA_t + dBx_t
         #   y_t     = Σ_n (state_t * C_t)     — readout (reduce over state dim N)
         sequence_length = dt.shape[1]
@@ -8668,10 +8668,18 @@ class SSMRecurrentCell(torch.nn.Module):
         B = B.repeat_interleave(heads_per_group, dim=2)
         C = C.repeat_interleave(heads_per_group, dim=2)
 
+        # Time discretization of A and B is vectorized over the whole sequence (T) before the
+        # loop — cheaper than recomputing exp / (dt * B) per timestep inside the loop:
+        #   dA  = exp(A * dt)   -> (B, T, H)      per-head state decay
+        #   dtB = dt * B        -> (B, T, H, N)   discretized input matrix
+        # The outer product dtB ⊗ x stays inside the loop (its (B, T, H, P, N) form is too large
+        # to materialize up front).
+        dA = torch.exp(dt * A.view(1, 1, -1))  # (B, T, H)
+        dtB = dt[..., None] * B  # (B, T, H, N)
+
         for i in range(sequence_length):
-            dA_t = torch.exp(dt[:, i] * A.view(1, -1))  # (B, H)
-            dBx_t = dt[:, i, :, None, None] * B[:, i, :, None, :] * x[:, i, :, :, None]  # (B, H, P, N)
-            last_state = last_state * dA_t[:, :, None, None] + dBx_t
+            dBx_t = dtB[:, i, :, None, :] * x[:, i, :, :, None]  # (B, H, P, N)
+            last_state = last_state * dA[:, i, :, None, None] + dBx_t
             core_out[:, i] = (last_state * C[:, i].unsqueeze(-2)).sum(dim=-1)
 
         # Single flattened output (OpenVINO ModuleExtension expects one tensor).
