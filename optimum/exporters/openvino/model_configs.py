@@ -39,6 +39,10 @@ from optimum.exporters.openvino.config import (
 from optimum.exporters.openvino.input_generators import (
     AquilaDummyPastKeyValuesGenerator,
     ChatGLM2DummyPastKeyValuesGenerator,
+    # >>> COHERE-ASR FIX >>>
+    CohereAsrDummyAudioInputGenerator,
+    CohereAsrDummySeq2SeqDecoderTextInputGenerator,
+    # <<< COHERE-ASR FIX <<<
     DeciDummyPastKeyValuesGenerator,
     DummyAudioPhi4MMInputGenerator,
     DummyFluxTextInputGenerator,
@@ -104,6 +108,9 @@ from optimum.exporters.openvino.model_patcher import (
     BloomModelPatcher,
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
+    # >>> COHERE-ASR FIX >>>
+    CohereAsrModelPatcher,
+    # <<< COHERE-ASR FIX <<<
     CommonImageEmbeddingsModelPatcher,
     DBRXModelPatcher,
     DeciLMModelPatcher,
@@ -351,6 +358,17 @@ def init_model_configs():
             "Qwen3OmniMoeForConditionalGeneration",
         )
 
+    # >>> COHERE-ASR FIX >>>
+    TasksManager._CUSTOM_CLASSES[("pt", "cohere_asr", "automatic-speech-recognition")] = (
+        "transformers",
+        "AutoModelForSpeechSeq2Seq",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "cohere_asr", "automatic-speech-recognition-with-past")] = (
+        "transformers",
+        "AutoModelForSpeechSeq2Seq",
+    )
+
+    # <<< COHERE-ASR FIX <<<
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["fill"] = {"flux": "FluxFillPipeline"}
@@ -4358,6 +4376,109 @@ class FunASROpenVINOConfig(AudioToTextOpenVINOConfig):
             inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
 
 
+# >>> COHERE-ASR FIX >>>
+@register_in_tasks_manager(
+    "cohere_asr",
+    *[
+        "automatic-speech-recognition",
+        "automatic-speech-recognition-with-past",
+    ],
+    library_name="transformers",
+)
+class CohereAsrOpenVINOConfig(AudioToTextOpenVINOConfig):
+    """Export config for CohereAsrForConditionalGeneration (Conformer encoder, transformer decoder).
+
+    The encoder consumes variable length features plus a `length` input, so this derives from the
+    generic audio config rather than from Whisper, whose overrides pin a static 3000 frame shape."""
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        CohereAsrDummyAudioInputGenerator,
+        CohereAsrDummySeq2SeqDecoderTextInputGenerator,
+        DummySeq2SeqPastKeyValuesGenerator,
+    )
+
+    _MODEL_PATCHER = CohereAsrModelPatcher
+
+    NORMALIZED_CONFIG_CLASS = NormalizedSeq2SeqConfig.with_args(
+        encoder_num_layers="encoder_layers",
+        decoder_num_layers="decoder_layers",
+        hidden_size="hidden_size",
+        num_attention_heads="num_attention_heads",
+        decoder_num_attention_heads="num_key_value_heads",
+        feature_size="num_mel_bins",
+        # Conformer d_model, kept apart from the decoder hidden size above because the decoder
+        # dummy inputs are sized before encoder_decoder_proj runs
+        encoder_hidden_size="d_model",
+        allow_new=True,
+    )
+
+    @staticmethod
+    def _read_field(source, field, default=None):
+        """Read `field` from a mapping or from an object, falling back to `default`"""
+        if source is None:
+            return default
+        if isinstance(source, dict):
+            return source.get(field, default)
+        return getattr(source, field, default)
+
+    @classmethod
+    def _flatten_nested_config(cls, config: "PretrainedConfig"):
+        # The checkpoint keeps encoder and decoder settings in nested NeMo style sections, while
+        # NormalizedConfig resolves every field on the top level config
+        read_field = cls._read_field
+
+        encoder_config = getattr(config, "encoder", None)
+        if encoder_config is not None:
+            config.encoder_layers = read_field(encoder_config, "n_layers")
+            config.num_mel_bins = read_field(encoder_config, "feat_in")
+            config.d_model = read_field(encoder_config, "d_model")
+
+        decoder_config = read_field(getattr(config, "transf_decoder", None), "config_dict")
+        if decoder_config is not None:
+            config.decoder_layers = read_field(decoder_config, "num_layers")
+            config.hidden_size = read_field(decoder_config, "hidden_size")
+            config.num_attention_heads = read_field(decoder_config, "num_attention_heads")
+            config.num_key_value_heads = read_field(
+                decoder_config, "num_key_value_heads", read_field(decoder_config, "num_attention_heads")
+            )
+            config.vocab_size = getattr(config, "vocab_size", None) or read_field(decoder_config, "vocab_size")
+
+        preprocessor_config = getattr(config, "preprocessor", None)
+        if getattr(config, "num_mel_bins", None) is None and preprocessor_config is not None:
+            config.num_mel_bins = read_field(preprocessor_config, "features")
+
+        if getattr(config, "decoder_start_token_id", None) is None:
+            config.decoder_start_token_id = 0
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "automatic-speech-recognition",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        self._flatten_nested_config(config)
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+            **kwargs,
+        )
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = super().inputs
+        if self._behavior in {ConfigBehavior.ENCODER, ConfigBehavior.MONOLITH}:
+            # Real frame count per sample, needed by ConvSubsampling to mask the padded tail
+            common_inputs["length"] = {0: "batch_size"}
+        return common_inputs
+
+
+# <<< COHERE-ASR FIX <<<
 @register_in_tasks_manager(
     "t5",
     *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],

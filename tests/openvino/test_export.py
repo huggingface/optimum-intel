@@ -112,6 +112,9 @@ class ExportModelTest(unittest.TestCase):
         "lfm2_moe": OVModelForCausalLM,
         "qwen3_asr": OVModelForSpeechSeq2Seq,
         "fun_asr": OVModelForSpeechSeq2Seq,
+        # >>> COHERE-ASR FIX >>>
+        "cohere_asr": OVModelForSpeechSeq2Seq,
+        # <<< COHERE-ASR FIX <<<
         "mamba": OVModelForCausalLM,
         "falcon_mamba": OVModelForCausalLM,
         "gemma4": OVModelForVisualCausalLM,

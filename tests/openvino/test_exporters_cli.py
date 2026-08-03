@@ -136,6 +136,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
+        # >>> COHERE-ASR FIX >>>
+        ("automatic-speech-recognition", "cohere_asr"),
+        # <<< COHERE-ASR FIX <<<
     ]
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = [
@@ -173,6 +176,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         "speecht5": 2,
         "kokoro": 0,  # uses g2p, no tokenizer
         "clip": 2,
+        # >>> COHERE-ASR FIX >>>
+        "cohere_asr": 2,
+        # <<< COHERE-ASR FIX <<<
         "mamba": 2,
         "falcon_mamba": 2,
         "qwen3": 2,
@@ -1110,8 +1116,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = self._load_exported_ov_model(model_type, task, tmpdir, model_kwargs)
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
             expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
-            if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
-                del expected_int8["decoder_with_past"]
+            # >>> COHERE-ASR FIX >>>
+            if task.startswith(("text2text-generation", "automatic-speech-recognition")) and (
+                not task.endswith("with-past") or model.decoder.stateful
+            ):
+                expected_int8.pop("decoder_with_past", None)
+            # <<< COHERE-ASR FIX <<<
             check_compression_state_per_model(self, model.ov_models, expected_int8)
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)

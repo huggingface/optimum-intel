@@ -1396,6 +1396,41 @@ class DummyQwen3VLVisionEmbedInputGenerator(DummyQwen2VLVisionEmbedInputGenerato
             )
 
 
+# >>> COHERE-ASR FIX >>>
+class CohereAsrDummyAudioInputGenerator(DummyAudioInputGenerator):
+    """Dummy input generator for the Cohere ASR Conformer encoder.
+
+    The feature extractor pads to the longest sample of the batch instead of a fixed 30s window,
+    so the encoder takes a companion `length` input holding the real frame count per sample."""
+
+    SUPPORTED_INPUT_NAMES = ("input_features", "input_values", "length")
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name != "length":
+            return super().generate(input_name, framework=framework, int_dtype=int_dtype, float_dtype=float_dtype)
+
+        # Dummy batches are built without padding, so every sample covers all nb_max_frames frames
+        return self.random_int_tensor(
+            shape=[self.batch_size],
+            min_value=self.nb_max_frames,
+            max_value=self.nb_max_frames + 1,
+            framework=framework,
+            dtype=int_dtype,
+        )
+
+
+class CohereAsrDummySeq2SeqDecoderTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
+    """Dummy input generator for the Cohere ASR decoder.
+
+    Encoder states reach the decoder before `encoder_decoder_proj` is applied, so `encoder_outputs`
+    has to be sized with the Conformer `d_model` and not with the decoder hidden size."""
+
+    def __init__(self, task, normalized_config, **kwargs):
+        super().__init__(task, normalized_config, **kwargs)
+        self.hidden_size = normalized_config.encoder_hidden_size
+
+
+# <<< COHERE-ASR FIX <<<
 class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummySeq2SeqPastKeyValuesGenerator):
     """Custom KV cache generator for Qwen3-ASR with GQA (num_key_value_heads != num_attention_heads).
     Qwen3-ASR has no cross-attention, so only self-attention KV cache is generated (2 per layer)."""
