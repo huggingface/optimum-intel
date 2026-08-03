@@ -1865,6 +1865,7 @@ def get_vlm_text_generation_config(
         inputs_update=inputs_update,
         task=task,
     )
+    export_config._behavior = "language"
     export_config._normalized_config = internal_export_config._normalized_config
     if min_transformers_version is not None:
         export_config.MIN_TRANSFORMERS_VERSION = min_transformers_version
