@@ -152,6 +152,7 @@ class OVModelOpenCLIPBase(OVModel):
             local_files_only = True
 
         _export = export
+        model_dir = model_id
         try:
             if local_files_only:
                 object_id = model_id.replace("/", "--")
@@ -160,8 +161,6 @@ class OVModelOpenCLIPBase(OVModel):
                 with open(refs_file) as f:
                     revision = f.read()
                 model_dir = os.path.join(cached_model_dir, "snapshots", revision)
-            else:
-                model_dir = model_id
 
             ov_files = _find_files_matching_pattern(
                 model_dir,
@@ -190,8 +189,10 @@ class OVModelOpenCLIPBase(OVModel):
 
         if isinstance(model_id, Path):
             model_id = model_id.as_posix()
+        if isinstance(model_dir, Path):
+            model_dir = model_dir.as_posix()
 
-        config_path = config if isinstance(config, (str, os.PathLike)) else model_id
+        config_path = config if isinstance(config, (str, os.PathLike)) else model_dir
         config = cls._load_config(
             config_path,
             revision=revision,
@@ -205,7 +206,7 @@ class OVModelOpenCLIPBase(OVModel):
 
         from_pretrained_method = cls._export if _export else cls._from_pretrained
         return from_pretrained_method(
-            model_id=model_id,
+            model_id=model_dir,
             config=config,
             revision=revision,
             cache_dir=cache_dir,
