@@ -2812,33 +2812,10 @@ class QwenImageTextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
         }
 
 
-class QwenImageVaeEncoderDummyInputGenerator(LTXVaeDummyInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("sample",)
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name == "sample":
-            # RGB image input with a single temporal frame
-            return self.random_float_tensor([self.batch_size, 3, 1, self.height, self.width])
-        return super().generate(input_name, framework, int_dtype, float_dtype)
-
-
-class QwenImageVaeDecoderDummyInputGenerator(LTXVaeDummyInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("latent_sample",)
-
-    def __init__(self, task, normalized_config, *args, **kwargs):
-        super().__init__(task, normalized_config, *args, **kwargs)
-        self.z_dim = normalized_config.config.z_dim
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name == "latent_sample":
-            return self.random_float_tensor([self.batch_size, self.z_dim, 1, self.height, self.width])
-        return super().generate(input_name, framework, int_dtype, float_dtype)
-
-
 @register_in_tasks_manager("qwenimage-vae-encoder", *["semantic-segmentation"], library_name="diffusers")
 class QwenImageVaeEncoderOpenVINOConfig(VisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(num_channels="input_channels", allow_new=True)
-    DUMMY_INPUT_GENERATOR_CLASSES = (QwenImageVaeEncoderDummyInputGenerator,)
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeDummyInputGenerator,)
     _MODEL_PATCHER = QwenImageVaeModelPatcher
 
     @property
@@ -2874,7 +2851,7 @@ class LTX2VaeEncoderOpenVINOConfig(VaeEncoderOpenVINOConfig):
 @register_in_tasks_manager("qwenimage-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
 class QwenImageVaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(num_channels="z_dim", allow_new=True)
-    DUMMY_INPUT_GENERATOR_CLASSES = (QwenImageVaeDecoderDummyInputGenerator,)
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeDummyInputGenerator,)
     _MODEL_PATCHER = QwenImageVaeModelPatcher
 
     @property
