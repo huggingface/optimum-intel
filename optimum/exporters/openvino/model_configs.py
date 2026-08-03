@@ -1402,6 +1402,17 @@ class Gemma3TextOpenVINOConfig(Gemma2OpenVINOConfig):
     ],
     library_name="transformers",
 )
+@register_in_tasks_manager(
+    "gemma4_assistant_text",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
 class Gemma4TextOpenVINOConfig(Gemma3TextOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Gemma4DummyPastKeyValuesGenerator)
@@ -1432,6 +1443,17 @@ class Gemma4TextOpenVINOConfig(Gemma3TextOpenVINOConfig):
 
 @register_in_tasks_manager(
     "gemma4_unified_text",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+@register_in_tasks_manager(
+    "gemma4_unified_assistant_text",
     *[
         "feature-extraction",
         "feature-extraction-with-past",
@@ -4678,6 +4700,7 @@ class Gemma4ConfigBehavior(str, enum.Enum):
 
 
 @register_in_tasks_manager("gemma4", *["image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("gemma4_assistant", *["image-text-to-text"], library_name="transformers")
 class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "5.5"
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Gemma4ConfigBehavior]
@@ -5002,6 +5025,7 @@ class Gemma3nOpenVINOConfig(Gemma4OpenVINOConfig):
 
 
 @register_in_tasks_manager("gemma4_unified", *["image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("gemma4_unified_assistant", *["image-text-to-text"], library_name="transformers")
 class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
     # gemma4_unified (e.g. google/gemma-4-12B) reuses the gemma3 VLM scaffolding but has an
     # encoder-free vision embedder and no per-layer text embeddings. We only support text and
