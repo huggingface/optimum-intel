@@ -1,8 +1,10 @@
+import base64
 import copy
 import enum
 import hashlib
 import importlib
 import inspect
+import io
 import logging
 import math
 import os
@@ -2137,6 +2139,12 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
         spatial_merge_size = self.config.spatial_merge_size
         d = image_features.shape[-1]
 
+        if image_sizes is None:
+            # MistralCommonTokenizer, used for checkpoints published in Mistral's own format such as
+            # Mistral-Small-3.2-24B-Instruct-2506, returns pixel_values without image_sizes. It does not pad
+            # images, so the spatial dimensions of the tensor are the image sizes.
+            image_sizes = [pixel_values.shape[-2:]] * pixel_values.shape[0]
+
         image_sizes_scaled = [(size[0] // patch_size, size[1] // patch_size) for size in image_sizes]
         tokens_per_image = [h * w for h, w in image_sizes_scaled]
 
@@ -2199,6 +2207,18 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
                 "content": [{"type": "text", "text": text}],
             }
         ]
+
+        if not hasattr(processor, "image_processor"):
+            # Checkpoints published in Mistral's own format, such as Mistral-Small-3.2-24B-Instruct-2506, only
+            # provide tekken.json and are loaded as MistralCommonTokenizer. It tokenizes text and images in a
+            # single call and accepts images as an URL only, so in-memory images are passed as a data URL.
+            if image is not None:
+                buffer = io.BytesIO()
+                image.convert("RGB").save(buffer, format="PNG")
+                image_url = f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode()}"
+                conversation[0]["content"].insert(0, {"type": "image", "url": image_url})
+            return processor.apply_chat_template(conversation, return_dict=True, return_tensors="pt")
+
         if image is not None:
             conversation[0]["content"].insert(0, {"type": "image"})
 
