@@ -7620,8 +7620,13 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
                     return 0
                 return self.key_cache[0].shape[-2]
 
-            def get_mask_sizes(self, cache_position, layer_idx: int = 0):
-                kv_length = self.get_seq_length() + cache_position.shape[0]
+            def get_mask_sizes(self, query_length, layer_idx: int = 0):
+                # transformers >= 5.x passes the scalar `query_length` (int or 0-dim tensor);
+                # older versions passed a 1-d `cache_position` tensor. Use `.shape[0]` only for the
+                # legacy 1-d tensor; a scalar (empty shape) is added directly.
+                if hasattr(query_length, "shape") and len(query_length.shape) > 0:
+                    query_length = query_length.shape[0]
+                kv_length = self.get_seq_length() + query_length
                 return kv_length, 0
 
             @property
