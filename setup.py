@@ -38,6 +38,7 @@ INSTALL_REQUIRE = [
     "openvino-tokenizers>=2026.0",
     "requests>=2.33,<3.0",
     "Pillow",
+    "mistral-common[image]",
 ]
 
 TESTS_REQUIRE = [
