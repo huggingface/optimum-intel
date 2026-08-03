@@ -39,10 +39,8 @@ from optimum.exporters.openvino.config import (
 from optimum.exporters.openvino.input_generators import (
     AquilaDummyPastKeyValuesGenerator,
     ChatGLM2DummyPastKeyValuesGenerator,
-    # >>> COHERE-ASR FIX >>>
     CohereAsrDummyAudioInputGenerator,
     CohereAsrDummySeq2SeqDecoderTextInputGenerator,
-    # <<< COHERE-ASR FIX <<<
     DeciDummyPastKeyValuesGenerator,
     DummyAudioPhi4MMInputGenerator,
     DummyFluxTextInputGenerator,
@@ -108,9 +106,7 @@ from optimum.exporters.openvino.model_patcher import (
     BloomModelPatcher,
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
-    # >>> COHERE-ASR FIX >>>
     CohereAsrModelPatcher,
-    # <<< COHERE-ASR FIX <<<
     CommonImageEmbeddingsModelPatcher,
     DBRXModelPatcher,
     DeciLMModelPatcher,
@@ -358,7 +354,6 @@ def init_model_configs():
             "Qwen3OmniMoeForConditionalGeneration",
         )
 
-    # >>> COHERE-ASR FIX >>>
     TasksManager._CUSTOM_CLASSES[("pt", "cohere_asr", "automatic-speech-recognition")] = (
         "transformers",
         "AutoModelForSpeechSeq2Seq",
@@ -368,7 +363,6 @@ def init_model_configs():
         "AutoModelForSpeechSeq2Seq",
     )
 
-    # <<< COHERE-ASR FIX <<<
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["fill"] = {"flux": "FluxFillPipeline"}
@@ -4376,7 +4370,6 @@ class FunASROpenVINOConfig(AudioToTextOpenVINOConfig):
             inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
 
 
-# >>> COHERE-ASR FIX >>>
 @register_in_tasks_manager(
     "cohere_asr",
     *[
@@ -4478,7 +4471,6 @@ class CohereAsrOpenVINOConfig(AudioToTextOpenVINOConfig):
         return common_inputs
 
 
-# <<< COHERE-ASR FIX <<<
 @register_in_tasks_manager(
     "t5",
     *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],

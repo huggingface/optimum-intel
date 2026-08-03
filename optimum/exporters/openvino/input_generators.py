@@ -1396,7 +1396,6 @@ class DummyQwen3VLVisionEmbedInputGenerator(DummyQwen2VLVisionEmbedInputGenerato
             )
 
 
-# >>> COHERE-ASR FIX >>>
 class CohereAsrDummyAudioInputGenerator(DummyAudioInputGenerator):
     """Dummy input generator for the Cohere ASR Conformer encoder.
 
@@ -1430,7 +1429,6 @@ class CohereAsrDummySeq2SeqDecoderTextInputGenerator(DummySeq2SeqDecoderTextInpu
         self.hidden_size = normalized_config.encoder_hidden_size
 
 
-# <<< COHERE-ASR FIX <<<
 class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummySeq2SeqPastKeyValuesGenerator):
     """Custom KV cache generator for Qwen3-ASR with GQA (num_key_value_heads != num_attention_heads).
     Qwen3-ASR has no cross-attention, so only self-attention KV cache is generated (2 per layer)."""

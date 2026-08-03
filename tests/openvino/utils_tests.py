@@ -144,7 +144,6 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
-# >>> COHERE-ASR FIX >>>
 def _get_cohere_asr_test_model():
     # Falls back to a checkout local to the repository so the fixture can be regenerated offline
     model_id_override = os.getenv("OPTIMUM_INTEL_COHERE_ASR_TEST_MODEL")
@@ -158,7 +157,6 @@ def _get_cohere_asr_test_model():
     return "optimum-intel-internal-testing/tiny-random-cohere-asr"
 
 
-# <<< COHERE-ASR FIX <<<
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -196,9 +194,7 @@ HUB_MODEL_NAMES = {
     "chatglm4": "optimum-intel-internal-testing/tiny-random-chatglm4",
     "codegen": "optimum-intel-internal-testing/tiny-random-CodeGenForCausalLM",
     "codegen2": "optimum-intel-internal-testing/tiny-random-codegen2",
-    # >>> COHERE-ASR FIX >>>
     "cohere_asr": _get_cohere_asr_test_model(),
-    # <<< COHERE-ASR FIX <<<
     "data2vec-text": "optimum-intel-internal-testing/tiny-random-Data2VecTextModel",
     "data2vec-vision": "optimum-intel-internal-testing/tiny-random-Data2VecVisionModel",
     "data2vec-audio": "optimum-intel-internal-testing/tiny-random-Data2VecAudioModel",
@@ -654,13 +650,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "decoder": 30,
         "decoder_with_past": 30,
     },
-    # >>> COHERE-ASR FIX >>>
     "cohere_asr": {
         "encoder": 389,
         "decoder": 119,
         "decoder_with_past": 124,
     },
-    # <<< COHERE-ASR FIX <<<
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -683,9 +677,7 @@ REMOTE_CODE_MODELS = (
     "chatglm4",
     "exaone",
     "exaone4",
-    # >>> COHERE-ASR FIX >>>
     "cohere_asr",
-    # <<< COHERE-ASR FIX <<<
     "decilm",
     "minicpm3",
     "deepseek",

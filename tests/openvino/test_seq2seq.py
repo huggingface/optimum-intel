@@ -349,17 +349,13 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
 
 class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ("whisper",)
-    # >>> COHERE-ASR FIX >>>
     if is_transformers_version(">=", "4.57.0"):
         SUPPORTED_ARCHITECTURES += ("cohere_asr",)
-    # <<< COHERE-ASR FIX <<<
     OVMODEL_CLASS = OVModelForSpeechSeq2Seq
     AUTOMODEL_CLASS = AutoModelForSpeechSeq2Seq
     TASK = "automatic-speech-recognition"
-    # >>> COHERE-ASR FIX >>>
     # cohere_asr ships as a HuggingFace Hub remote-code model and requires opting in.
     REMOTE_CODE_MODELS = ("cohere_asr",)
-    # <<< COHERE-ASR FIX <<<
 
     def _generate_random_audio_data(self):
         np.random.seed(10)
@@ -368,7 +364,6 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
         return audio_data
 
-    # >>> COHERE-ASR FIX >>>
     def test_pipeline_autodetection_registers_non_whisper_architectures(self):
         # Without the registration the ASR pipeline falls back to its CTC branch for every non
         # Whisper architecture and calls the model instead of generate()
@@ -381,56 +376,38 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
             "non-Whisper OpenVINO ASR architectures through generate()",
         )
 
-    # <<< COHERE-ASR FIX <<<
-
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        # >>> COHERE-ASR FIX >>>
         trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
         transformers_model = self.AUTOMODEL_CLASS.from_pretrained(model_id, trust_remote_code=trust_remote_code)
-        # <<< COHERE-ASR FIX <<<
         ov_model = self.OVMODEL_CLASS.from_pretrained(
-            # >>> COHERE-ASR FIX >>>
-            model_id,
-            export=True,
-            ov_config=F32_CONFIG,
-            device=OPENVINO_DEVICE,
-            trust_remote_code=trust_remote_code
-            # <<< COHERE-ASR FIX <<<
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, trust_remote_code=trust_remote_code
         )
         ov_model_stateless = self.OVMODEL_CLASS.from_pretrained(
-            # >>> COHERE-ASR FIX >>>
             model_id,
             export=True,
             ov_config=F32_CONFIG,
             stateful=False,
             device=OPENVINO_DEVICE,
             trust_remote_code=trust_remote_code,
-            # <<< COHERE-ASR FIX <<<
         )
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
         self._check_openvino_model_attributes(ov_model_stateless, use_cache=True, stateful=False)
 
-        # >>> COHERE-ASR FIX >>>
         processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=trust_remote_code)
-        # <<< COHERE-ASR FIX <<<
         data = self._generate_random_audio_data()
         pt_features = processor.feature_extractor(data, return_tensors="pt")
-        # >>> COHERE-ASR FIX >>>
         decoder_start_token_id = getattr(transformers_model.config, "decoder_start_token_id", None) or 0
-        # <<< COHERE-ASR FIX <<<
         decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
 
         with torch.no_grad():
             transformers_outputs = transformers_model(**pt_features, **decoder_inputs)
 
-        # >>> COHERE-ASR FIX >>>
         # Cohere ASR ends with a log softmax, so its outputs are log probabilities spanning tens of
         # units and the runtime kernel is less accurate there than on plain logits
         logits_atol = 5e-2 if model_arch == "cohere_asr" else 1e-3
-        # <<< COHERE-ASR FIX <<<
 
         for input_type in ["pt", "np"]:
             features = processor.feature_extractor(data, return_tensors=input_type)
@@ -442,14 +419,14 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
             ov_stateless_outputs = ov_model_stateless(**features, **decoder_inputs)
             self.assertIn("logits", ov_outputs)
             # Compare tensor outputs
-            # >>> COHERE-ASR FIX >>>
             self.assertTrue(
                 torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=logits_atol)
             )
             self.assertTrue(
-                torch.allclose(torch.Tensor(ov_stateless_outputs.logits), transformers_outputs.logits, atol=logits_atol)
+                torch.allclose(
+                    torch.Tensor(ov_stateless_outputs.logits), transformers_outputs.logits, atol=logits_atol
+                )
             )
-            # <<< COHERE-ASR FIX <<<
 
         generate_kwrgs = {}
         if is_transformers_version("<", "5"):
@@ -488,13 +465,11 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        # >>> COHERE-ASR FIX >>>
         trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
         model = self.OVMODEL_CLASS.from_pretrained(
             model_id, device=OPENVINO_DEVICE, trust_remote_code=trust_remote_code
         )
         processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=trust_remote_code)
-        # <<< COHERE-ASR FIX <<<
         pipe = pipeline(
             "automatic-speech-recognition",
             model=model,
@@ -505,7 +480,9 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         outputs = pipe(inputs)
         self.assertIsInstance(outputs["text"], str)
 
-        ov_pipe = optimum_pipeline("automatic-speech-recognition", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline(
+            "automatic-speech-recognition", model_id, accelerator="openvino", trust_remote_code=trust_remote_code
+        )
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs["text"], ov_outputs["text"])
         del ov_pipe
@@ -513,7 +490,6 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         del model
         gc.collect()
 
-    # >>> COHERE-ASR FIX >>>
     @pytest.mark.run_slow
     @slow
     def test_cohere_asr_generate_non_30s_multiple_audio(self):
@@ -600,8 +576,6 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
             self.assertIsNotNone(reloaded_processor.tokenizer)
             del model
             gc.collect()
-
-    # <<< COHERE-ASR FIX <<<
 
 
 class OVModelForImageTextToTextIntegrationTest(OVSeq2SeqTestMixin):

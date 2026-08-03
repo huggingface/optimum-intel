@@ -16,11 +16,7 @@ import functools
 import inspect
 import logging
 import math
-
-# >>> COHERE-ASR FIX >>>
 import sys
-
-# <<< COHERE-ASR FIX <<<
 import types
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -10249,7 +10245,6 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
                     del attn._orig_forward
 
 
-# >>> COHERE-ASR FIX >>>
 class CohereAsrModelPatcher(OVSeq2SeqModelPatcher):
     """Makes the Cohere ASR remote code traceable.
 
@@ -10261,7 +10256,7 @@ class CohereAsrModelPatcher(OVSeq2SeqModelPatcher):
         self._patched_positional_encodings = []
         self._patch_positional_encoding()
         self._patch_cache_seq_length()
-        self._patch_decoder_positions()
+        self._patch_decoder_inputs()
 
     def _patch_positional_encoding(self):
         # Matched by class name so the patch also covers the encoder only submodule that the
@@ -10313,7 +10308,7 @@ class CohereAsrModelPatcher(OVSeq2SeqModelPatcher):
         self._orig_get_cache_seq_length = remote_module._get_cache_seq_length
         remote_module._get_cache_seq_length = self._cache_seq_length
 
-    def _patch_decoder_positions(self):
+    def _patch_decoder_inputs(self):
         # `positions` is not part of the exported decoder signature, and the remote code defaults it
         # to arange(tgt_len), which restarts at zero on every cached step and makes the decoder loop
         self._forward_without_positions = self._model.forward
@@ -10324,6 +10319,11 @@ class CohereAsrModelPatcher(OVSeq2SeqModelPatcher):
             if decoder_ids is None:
                 decoder_ids = kwargs.get("decoder_input_ids")
             past_key_values = kwargs.get("past_key_values")
+            if decoder_ids is not None and past_key_values is None and self.real_config._behavior == "decoder":
+                # The remote code only fills a cache it is handed, so the cacheless decoder would
+                # export no `present` outputs and leave the second submodel with an empty cache
+                past_key_values = EncoderDecoderCache(DynamicCache(), DynamicCache())
+                kwargs["past_key_values"] = past_key_values
             if kwargs.get("positions") is None and decoder_ids is not None and past_key_values is not None:
                 # Reuses the cache length the remote code already resolves dynamically, so the
                 # offset stays a graph value instead of the traced step index
@@ -10352,7 +10352,6 @@ class CohereAsrModelPatcher(OVSeq2SeqModelPatcher):
             self._cache_seq_length_module = None
 
 
-# <<< COHERE-ASR FIX <<<
 class KokoroModelPatcher(ModelPatcher):
     """
     Patches the Kokoro TTS model for OpenVINO export by redirecting forward

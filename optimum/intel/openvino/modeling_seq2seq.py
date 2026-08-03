@@ -750,11 +750,9 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             elif is_decoder and not inputs.get_any_name().startswith("encoder"):
                 if not inputs.get_any_name().startswith("beam_idx"):
                     shapes[inputs][1] = -1
-            # >>> COHERE-ASR FIX >>>
             # Rank 1 encoder inputs such as the cohere_asr `length` only carry a batch dimension,
             # which the assignment above already covers
             elif len(shapes[inputs]) > 1:
-                # <<< COHERE-ASR FIX <<<
                 shapes[inputs][1] = sequence_length
         model.reshape(shapes)
         return model
@@ -908,11 +906,9 @@ class OVEncoder(OVModelPart):
         self,
         input_ids: torch.LongTensor = None,
         attention_mask: torch.LongTensor = None,
-        # >>> COHERE-ASR FIX >>>
         # Listed explicitly rather than picked up from kwargs because generate() inspects this
         # signature when it decides which encoder arguments to forward
         length: Optional[torch.LongTensor] = None,
-        # <<< COHERE-ASR FIX <<<
         **kwargs,
     ) -> BaseModelOutput:
         self.compile()
@@ -926,7 +922,6 @@ class OVEncoder(OVModelPart):
                 attention_mask = torch.ones_like(inputs[self.main_input_name])
             inputs["attention_mask"] = attention_mask
 
-        # >>> COHERE-ASR FIX >>>
         # Frame count per sample, used by the Conformer encoder to mask the padded tail
         if "length" in self.input_names:
             if length is None:
@@ -941,7 +936,6 @@ class OVEncoder(OVModelPart):
                 )
             inputs["length"] = length
 
-        # <<< COHERE-ASR FIX <<<
         # Qwen3-ASR requires input_features chunking before passing to encoder for processing of long audios.
         if getattr(self.config, "model_type", None) == "qwen3_asr":
             input_features = inputs["input_features"]
@@ -1640,9 +1634,6 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
         return logits_processor
 
 
-# >>> COHERE-ASR FIX >>>
-
-
 def _register_ov_speech_seq2seq_for_pipeline_autodetection():
     """Let transformers pipelines recognise `OVModelForSpeechSeq2Seq` as a seq2seq ASR model.
 
@@ -1659,4 +1650,3 @@ def _register_ov_speech_seq2seq_for_pipeline_autodetection():
 
 
 _register_ov_speech_seq2seq_for_pipeline_autodetection()
-# <<< COHERE-ASR FIX <<<
