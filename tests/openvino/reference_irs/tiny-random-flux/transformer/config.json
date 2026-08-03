@@ -1,0 +1,20 @@
+{
+  "_class_name": "FluxTransformer2DModel",
+  "_diffusers_version": "0.39.0",
+  "_name_or_path": "/home/anatyrova/.cache/huggingface/hub/models--optimum-intel-internal-testing--tiny-random-flux/snapshots/cb92278e2022bacbcec5abd2f267ea3298725dd2/transformer",
+  "attention_head_dim": 16,
+  "axes_dims_rope": [
+    4,
+    4,
+    8
+  ],
+  "guidance_embeds": false,
+  "in_channels": 4,
+  "joint_attention_dim": 32,
+  "num_attention_heads": 2,
+  "num_layers": 1,
+  "num_single_layers": 1,
+  "out_channels": null,
+  "patch_size": 1,
+  "pooled_projection_dim": 32
+}

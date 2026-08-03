@@ -1,0 +1,2 @@
+tests/openvino/reference_irs/**/*.bin filter=lfs diff=lfs merge=lfs -text
+tests/openvino/reference_irs/**/*.xml filter=lfs diff=lfs merge=lfs -text
