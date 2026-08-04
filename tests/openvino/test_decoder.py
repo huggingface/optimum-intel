@@ -489,6 +489,71 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del ov_model
         gc.collect()
 
+    def test_falcon_h1_stateful_decode_matches_transformers(self):
+        # Focused regression test for the FalconH1 stateful single-token decode fix.
+        #
+        # `test_compare_to_transformers` skips falcon_h1 because it also exercises a
+        # left-padded batch, which is a genuine hybrid-mamba limitation (the stateful
+        # conv/ssm recurrence has no per-position padding mask during single-token
+        # decode, the same reason zamba2/granitemoehybrid are skipped there). That skip
+        # left the exact bug this PR fixes without an automated OV-vs-Transformers
+        # assertion: during stateful decode the patched forward previously passed no
+        # `cache_position` and only a length-1 attention mask, so every decode token was
+        # placed at RoPE position 0 and its causal mask attended to a single key instead
+        # of the full KV context.
+        #
+        # This test drives an *unpadded*, right-aligned single prompt through greedy
+        # (num_beams=1) generation over multiple decode steps, which is exactly the path
+        # the fix corrects, and asserts bit-exact greedy token-id agreement with the
+        # Transformers reference. The documented left-padded-batch and beam-search
+        # limitations remain unchanged (this test uses neither padding nor beam search).
+        model_arch = "falcon_h1"
+        self.mock_torch_compile(model_arch)
+        model_id = MODEL_NAMES[model_arch]
+
+        set_seed(SEED)
+        ov_model = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        self.assertTrue(ov_model.stateful)
+
+        set_seed(SEED)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32)
+
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        # Single, unpadded prompt (batch size 1) so no per-position padding mask is
+        # involved; this isolates the cache_position / full-context attention-mask path.
+        tokens = tokenizer("What is the capital of France?", return_tensors="pt")
+
+        # Disable EOS so generation always runs the full number of decode steps and the
+        # RoPE-position / KV-context regression is exercised across many decode steps
+        # (not just prefill).
+        ov_model.generation_config.eos_token_id = None
+        transformers_model.generation_config.eos_token_id = None
+        ov_model.config.eos_token_id = None
+        transformers_model.config.eos_token_id = None
+        gen_config = GenerationConfig(
+            max_new_tokens=20,
+            min_new_tokens=20,
+            num_beams=1,
+            do_sample=False,
+        )
+
+        set_seed(SEED)
+        with torch.no_grad():
+            transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
+        set_seed(SEED)
+        ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
+
+        self.assertTrue(
+            torch.equal(ov_outputs, transformers_outputs),
+            f"OV output {ov_outputs}\nTransformers output  {transformers_outputs}",
+        )
+
+        del transformers_model
+        del ov_model
+        gc.collect()
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow
     @slow
