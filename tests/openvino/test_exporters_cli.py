@@ -131,6 +131,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "bitnet"),
         ("text-generation-with-past", "qwen3_next"),
         ("image-text-to-text", "qwen3_vl_eagle3"),
+        ("image-text-to-text", "paddleocr_vl"),
         ("text-generation", "lfm2_moe"),
         ("text-generation-with-past", "lfm2_moe"),
         ("text-generation-with-past", "mamba"),
@@ -184,6 +185,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "smollm3": 2,
         "qwen3_vl_eagle3": 0,
         "qwen3_vl_embedding": 2,
+        "paddleocr_vl": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
