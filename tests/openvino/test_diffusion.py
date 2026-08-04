@@ -160,7 +160,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
-        height, width, batch_size = 64, 64, 1
+        height, width, batch_size = 64, 64, 2
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
         auto_cls = self.AUTOMODEL_CLASS if "sana" not in model_arch else DiffusionPipeline
@@ -183,7 +183,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             np.testing.assert_allclose(ov_output, diffusers_output, atol=atol, rtol=1e-2)
 
         # test on inputs nondivisible on 64
-        height, width, batch_size = 96, 96, 1
+        height, width, batch_size = 96, 96, 2
 
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
