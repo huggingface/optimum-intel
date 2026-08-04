@@ -3340,23 +3340,6 @@ class QwenImageTransformerModelPatcher(ModelPatcher):
         self._processor_cls.__call__ = self._orig_processor_call
 
 
-def _qwenimage_vae_encoder_forward(self, sample):
-    # Single-frame (image) encode without the streaming feature cache, which uses None placeholders
-    # that cannot be traced. For a single temporal frame this is numerically identical to the cached path.
-    self.clear_cache()
-    enc = self.encoder(sample)
-    enc = self.quant_conv(enc)
-    return enc
-
-
-def _qwenimage_vae_decoder_forward(self, latent_sample):
-    self.clear_cache()
-    x = self.post_quant_conv(latent_sample)
-    out = self.decoder(x)
-    out = torch.clamp(out, min=-1.0, max=1.0)
-    return out
-
-
 class QwenImageVaeModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
