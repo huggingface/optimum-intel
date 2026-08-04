@@ -3112,20 +3112,9 @@ def mistral3_vision_embed_forward(self, pixel_values):
 # Mistral3MultiModalProjector.forward() and Mistral3PatchMerger.forward() with norm and cycle block excluded.
 # norm is moved to vision_embed_forward, cycle block runs in PyTorch at runtime.
 def mistral3_multi_modal_projector_forward(self, image_features):
-    if image_features.is_floating_point():
-        image_features = image_features.to(self.patch_merger.merging_layer.weight.dtype)
-
     hidden_states = self.patch_merger.merging_layer(image_features)
-
-    if hidden_states.is_floating_point():
-        hidden_states = hidden_states.to(self.linear_1.weight.dtype)
-
     hidden_states = self.linear_1(hidden_states)
     hidden_states = self.act(hidden_states)
-
-    if hidden_states.is_floating_point():
-        hidden_states = hidden_states.to(self.linear_2.weight.dtype)
-
     hidden_states = self.linear_2(hidden_states)
     return hidden_states
 
