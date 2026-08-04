@@ -3118,6 +3118,9 @@ class FluxTransformerModelPatcher(ModelPatcher):
             self._model.pos_embed.forward = self._model.pos_embed._orig_forward
 
 
+# Patching is needed, as OpenVINO PyTorch frontend fails to trace torch.cat with Complex tensors,
+# so the Rotary embeddings related calculations are rewritten in float values.
+# Original code: https://github.com/huggingface/diffusers/blob/f27949dad9f88a34eb22ff80956bbbb940cdbd2b/src/diffusers/models/transformers/transformer_qwenimage.py#L94
 def _qwenimage_apply_rotary_emb(x, freqs):
     # Real-valued equivalent of the complex rotary embedding used by QwenImage.
     # `x` has layout [batch, sequence, heads, head_dim]; `freqs` is a (cos, sin) tuple of [sequence, head_dim // 2].
@@ -3132,7 +3135,8 @@ def _qwenimage_apply_rotary_emb(x, freqs):
     out_odd = x_even * sin + x_odd * cos
     return torch.stack([out_even, out_odd], dim=-1).flatten(-2).type_as(x)
 
-
+# Patching is needed to use _qwenimage_apply_rotary_emb instead of original method that uses complex values.
+# Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L270
 def _qwenimage_attn_processor_call(
     self,
     attn,
@@ -3187,6 +3191,9 @@ def _qwenimage_attn_processor_call(
     return img_attn_output, txt_attn_output
 
 
+# Patching is needed, as OpenVINO PyTorch frontend fails to trace torch.cat with Complex tensors,
+# so the Rotary embeddings related calculations are rewritten in float values.
+# Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L237
 def _qwenimage_rope_freqs(positions, inv_freq):
     # positions: (seq,) float tensor of per-token positions along one axis
     # inv_freq:  (dim // 2,) constant tensor of inverse frequencies
@@ -3201,6 +3208,9 @@ def _qwenimage_rope_freqs(positions, inv_freq):
     return torch.cos(angles), torch.sin(angles)
 
 
+# Patching is needed, as OpenVINO PyTorch frontend fails to trace torch.cat with Complex tensors,
+# so the Rotary embeddings related calculations are rewritten in float values.
+# Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L196
 def _qwenimage_build_rotary_emb(axes_dim, theta, image_seq_len, height, width, txt_seq_len, device):
     # Reproduces diffusers' QwenEmbedRope (scale_rope=True, single image block, frame=1) using real
     # trigonometric math instead of complex arithmetic, so it can be traced for OpenVINO while keeping
@@ -3248,6 +3258,9 @@ def _qwenimage_build_rotary_emb(axes_dim, theta, image_seq_len, height, width, t
     return (img_cos, img_sin), (txt_cos, txt_sin)
 
 
+# Patching is needed to use [height, width] instead of original img_shapes, that fails to be scripted with torch.script.
+# Only first element is used, so it is valid to use only one shape: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L206
+# Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L545
 def _qwenimage_transformer_forward(
     self,
     hidden_states,
