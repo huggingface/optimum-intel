@@ -3,6 +3,11 @@
 Use this reference only after the traceback or analysis proves that original
 model code is incompatible with tracing/export.
 
+Before writing a new patch, search optimum-intel for existing patches and
+helper functions. Reuse or extend semantically equivalent implementations
+instead of duplicating them. This applies to MoE, RoPE, attention variants,
+and other architecture blocks.
+
 ## Data-dependent control flow
 
 `torch.jit.trace` records the path taken by example inputs. Python conditions,
