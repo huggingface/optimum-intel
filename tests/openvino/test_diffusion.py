@@ -431,19 +431,17 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
         self.assertFalse(ov_pipeline.is_dynamic)
         expected_batch = batch_size * num_images_per_prompt
-        if model_arch != "qwenimage" and (
-            (
-                ov_pipeline.unet is not None
-                and "timestep_cond" not in {inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs}
-            )
-            or (
-                ov_pipeline.transformer is not None
-                and not {"txt_ids"}.intersection(
-                    {inputs.get_any_name() for inputs in ov_pipeline.transformer.model.inputs}
-                )
+        if (
+            ov_pipeline.unet is not None
+            and "timestep_cond" not in {inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs}
+        ) or (
+            ov_pipeline.transformer is not None
+            and not {"txt_ids"}.intersection(
+                {inputs.get_any_name() for inputs in ov_pipeline.transformer.model.inputs}
             )
         ):
-            expected_batch *= 2
+            if model_arch != "qwenimage":
+                expected_batch *= 2
         self.assertEqual(
             ov_pipeline.batch_size,
             expected_batch,
