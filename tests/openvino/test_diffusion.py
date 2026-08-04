@@ -436,9 +436,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             and "timestep_cond" not in {inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs}
         ) or (
             ov_pipeline.transformer is not None
-            and not {"txt_ids"}.intersection(
-                {inputs.get_any_name() for inputs in ov_pipeline.transformer.model.inputs}
-            )
+            and "txt_ids" not in {inputs.get_any_name() for inputs in ov_pipeline.transformer.model.inputs}
         ):
             if model_arch != "qwenimage":
                 expected_batch *= 2
