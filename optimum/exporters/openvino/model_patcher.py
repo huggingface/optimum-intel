@@ -3147,6 +3147,9 @@ def jina_vlm_language_model_forward(
     # `self` is the top-level JinaVLMForConditionalGeneration. Route embeddings through the text
     # decoder + lm_head, returning logits and the updated cache. The text decoder already handles
     # `torch.jit.is_tracing()` for cache creation, so tracing produces a valid graph.
+    # This mirrors the tensor operations in `JinaVLMForConditionalGeneration.forward` from the
+    # original PyTorch remote code:
+    # https://huggingface.co/jinaai/jina-vlm/blob/ddfa80b180f87f59873fd1cea352dec51183ab88/modeling_jvlm.py#L749
     seq_len = inputs_embeds.shape[1]
     past_len = past_key_values.get_seq_length() if past_key_values is not None else 0
     # JinaVLM builds its causal mask from the full attention_mask length (past + current). At
