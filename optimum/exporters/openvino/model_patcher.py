@@ -3148,6 +3148,7 @@ def _qwenimage_apply_rotary_emb(x, freqs):
     rot = torch.cat([x2 * -1.0, x1], dim=-1)  # contiguous rotate-half
     return (xp * cos + rot * sin).type_as(x)
 
+
 # Patching is needed to use _qwenimage_apply_rotary_emb instead of original method that uses complex values.
 # Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L270
 def _qwenimage_attn_processor_call(
@@ -3376,6 +3377,7 @@ class QwenImageVaeModelPatcher(ModelPatcher):
 
         # OpenVINO has no "nearest-exact" upsampling op; "nearest" is identical for the integer
         # scale factor of 2 used here.
+        # Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/autoencoders/autoencoder_kl_qwenimage.py#L151
         self._patched_upsamplers = []
         for module in self._model.modules():
             if isinstance(module, QwenImageUpsample) and module.mode == "nearest-exact":
