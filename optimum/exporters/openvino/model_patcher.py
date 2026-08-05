@@ -11264,7 +11264,14 @@ def _onyx_vision_encoder_export_forward(self, images):
     # ``[1, 1, n_tokens, n_tokens]`` so it broadcast-aligns with the
     # ``[bs, n_heads, n_tokens, n_tokens]`` attention scores.
     gh, gw = self.pos_emb_grid_h, self.pos_emb_grid_w
-    sp_mask_4d = _onyx_sparse_window_mask(grid_h, grid_w, gh, gw, device)[None, None]
+    sp_mask_bool = _onyx_sparse_window_mask(grid_h, grid_w, gh, gw, device)[None, None]
+    # Convert the boolean same-window mask into an additive floating-point bias
+    # (0.0 where a token may attend, ``finfo.min`` where it may not). Feeding SDPA a
+    # float attn_mask makes the exported ScaledDotProductAttention take a
+    # floating-point mask input instead of a boolean one.
+    sp_mask_4d = torch.zeros_like(sp_mask_bool, dtype=dtype).masked_fill(
+        sp_mask_bool.logical_not(), torch.finfo(dtype).min
+    )
 
     # Every ``sf``-th block (and the last) uses global attention (no window mask);
     # the rest use the same-window mask - matching the eager encoder's sparse
