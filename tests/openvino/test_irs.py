@@ -6,16 +6,99 @@ regressions when upgrading transformers or other dependencies.
 """
 
 import json
-import xml.etree.ElementTree as ET
-from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import pytest
-from optimum.intel import OVModelForSequenceClassification, OVModelForCausalLM, OVDiffusionPipeline
+from openvino import Core, Model
+
+from optimum.intel import OVDiffusionPipeline
 
 
 REFERENCE_IR_DIR = Path(__file__).parent / "reference_irs"
+
+
+# OpenVINO model comparison functions
+# Adapted from: https://github.com/openvinotoolkit/openvino/blob/master/src/bindings/python/tests/utils/helpers.py
+def _compare_models(model_one: Model, model_two: Model, compare_names: bool = True) -> tuple[bool, str]:
+    """Function to compare OpenVINO model (ops names, types and shapes).
+
+    Note that the functions uses get_ordered_ops, so the topological order of ops should be also preserved.
+
+    :param model_one: The first model to compare.
+    :param model_two: The second model to compare.
+    :param compare_names: Flag to control friendly names checking. Default: True
+    :return: tuple which consists of bool value (True if models are equal, otherwise False)
+             and string with the message to reuse for debug/testing purposes. The string value
+             is empty when models are equal.
+    """
+    result = True
+    msg = ""
+
+    # Check friendly names of models
+    if compare_names and model_one.get_friendly_name() != model_two.get_friendly_name():
+        result = False
+        msg += "Friendly names of models are not equal "
+        msg += f"model_one: {model_one.get_friendly_name()}, model_two: {model_two.get_friendly_name()}.\n"
+
+    model_one_ops = model_one.get_ordered_ops()
+    model_two_ops = model_two.get_ordered_ops()
+
+    # Check overall number of operators
+    if len(model_one_ops) != len(model_two_ops):
+        result = False
+        msg += "Not equal number of ops "
+        msg += f"model_one: {len(model_one_ops)}, model_two: {len(model_two_ops)}.\n"
+
+    # Only compare ops that exist in both models
+    for i in range(min(len(model_one_ops), len(model_two_ops))):
+        op_one_name = model_one_ops[i].get_friendly_name()  # op from model_one
+        op_two_name = model_two_ops[i].get_friendly_name()  # op from model_two
+        # Check friendly names
+        if compare_names and op_one_name != op_two_name and model_one_ops[i].get_type_name() != "Constant":
+            result = False
+            msg += "Not equal op names "
+            msg += f"model_one: {op_one_name}, "
+            msg += f"model_two: {op_two_name}.\n"
+        # Check output sizes
+        if model_one_ops[i].get_output_size() != model_two_ops[i].get_output_size():
+            result = False
+            msg += f"Not equal output sizes of {op_one_name} and {op_two_name}.\n"
+        for idx in range(model_one_ops[i].get_output_size()):
+            # Check partial shapes of outputs
+            op_one_partial_shape = model_one_ops[i].get_output_partial_shape(idx)
+            op_two_partial_shape = model_two_ops[i].get_output_partial_shape(idx)
+            if op_one_partial_shape != op_two_partial_shape:
+                result = False
+                msg += f"Not equal op partial shapes of {op_one_name} and {op_two_name} on {idx} index "
+                msg += f"model_one: {op_one_partial_shape}, "
+                msg += f"model_two: {op_two_partial_shape}.\n"
+            # Check element types of outputs
+            op_one_element_type = model_one_ops[i].get_output_element_type(idx)
+            op_two_element_type = model_two_ops[i].get_output_element_type(idx)
+            if op_one_element_type != op_two_element_type:
+                result = False
+                msg += f"Not equal output element types of {op_one_name} and {op_two_name} on {idx} index "
+                msg += f"model_one: {op_one_element_type}, "
+                msg += f"model_two: {op_two_element_type}.\n"
+
+    return result, msg
+
+
+def compare_models(model_one: Model, model_two: Model, compare_names: bool = True):
+    """Function to compare OpenVINO model (ops names, types and shapes).
+
+    :param model_one: The first model to compare.
+    :param model_two: The second model to compare.
+    :param compare_names: Flag to control friendly names checking. Default: True
+    :return: True if models are equal, otherwise raise an error with a report of mismatches.
+    """
+    result, msg = _compare_models(model_one, model_two, compare_names=compare_names)
+
+    if not result:
+        raise RuntimeError(msg)
+
+    return result
 
 
 def load_reference_metadata(ref_dir: Path) -> Optional[Dict]:
@@ -40,106 +123,14 @@ def find_ir_files(directory: Path) -> List[Path]:
     return sorted(ir_files)
 
 
-def parse_ir_xml(xml_path: Path) -> Dict:
-    """Parse OpenVINO IR XML and extract key structural information."""
-    tree = ET.parse(xml_path)
-    root = tree.getroot()
-
-    layers = root.find("layers")
-    if layers is None:
-        raise ValueError(f"No layers found in {xml_path}")
-
-    # Extract operator types
-    op_types = []
-    layer_info = []
-
-    for layer in layers.findall("layer"):
-        layer_id = layer.get("id")
-        layer_name = layer.get("name")
-        layer_type = layer.get("type")
-        layer_version = layer.get("version")
-
-        op_types.append(layer_type)
-        layer_info.append({
-            "id": layer_id,
-            "name": layer_name,
-            "type": layer_type,
-            "version": layer_version
-        })
-
-    # Count operator type frequencies
-    op_type_counts = Counter(op_types)
-
-    # Extract edges (connections between layers)
-    edges_section = root.find("edges")
-    edge_count = len(edges_section.findall("edge")) if edges_section is not None else 0
-
-    return {
-        "total_layers": len(layer_info),
-        "op_type_counts": dict(op_type_counts),
-        "layers": layer_info,
-        "edge_count": edge_count,
-        "net_version": root.get("version"),
-    }
-
-
-def compare_irs(ref_info: Dict, new_info: Dict) -> Tuple[bool, List[str]]:
-    """Compare two IR structures and return differences."""
-    differences = []
-
-    # Compare total layer count
-    if ref_info["total_layers"] != new_info["total_layers"]:
-        differences.append(
-            f"Layer count mismatch: reference={ref_info['total_layers']}, "
-            f"new={new_info['total_layers']}"
-        )
-
-    # Compare operator type distributions
-    ref_ops = ref_info["op_type_counts"]
-    new_ops = new_info["op_type_counts"]
-
-    all_op_types = set(ref_ops.keys()) | set(new_ops.keys())
-
-    for op_type in sorted(all_op_types):
-        ref_count = ref_ops.get(op_type, 0)
-        new_count = new_ops.get(op_type, 0)
-
-        if ref_count != new_count:
-            differences.append(
-                f"Operator '{op_type}' count mismatch: "
-                f"reference={ref_count}, new={new_count}"
-            )
-
-    # Compare edge count
-    if ref_info["edge_count"] != new_info["edge_count"]:
-        differences.append(
-            f"Edge count mismatch: reference={ref_info['edge_count']}, "
-            f"new={new_info['edge_count']}"
-        )
-
-    # Compare net version
-    if ref_info["net_version"] != new_info["net_version"]:
-        differences.append(
-            f"IR version mismatch: reference={ref_info['net_version']}, "
-            f"new={new_info['net_version']}"
-        )
-
-    is_identical = len(differences) == 0
-    return is_identical, differences
-
-
 class TestIRStability:
     """Test suite for IR stability across transformers versions."""
 
     @pytest.mark.parametrize(
         "model_id,model_class,ref_dir",
         [
-            (
-                "optimum-intel-internal-testing/tiny-random-flux",
-                OVDiffusionPipeline,
-                "tiny-random-flux"
-            ),
-        ]
+            ("optimum-intel-internal-testing/tiny-random-flux", OVDiffusionPipeline, "tiny-random-flux"),
+        ],
     )
     def test_ir_stability(self, model_id: str, model_class, ref_dir: str, tmp_path: Path):
         """Test that exported IR matches reference IR."""
@@ -184,7 +175,10 @@ class TestIRStability:
                 f"  Extra components: {extra or 'none'}"
             )
 
-        # Compare each component's IR
+        # Initialize OpenVINO Core for loading models
+        core = Core()
+
+        # Compare each component's IR using OpenVINO's compare_models
         all_differences = {}
         for ref_ir_file in ref_ir_files:
             component_name = str(ref_ir_file.parent) if str(ref_ir_file.parent) != "." else "root"
@@ -192,13 +186,16 @@ class TestIRStability:
             ref_ir_path = ref_ir_dir / ref_ir_file
             new_ir_path = new_ir_dir / ref_ir_file
 
-            ref_info = parse_ir_xml(ref_ir_path)
-            new_info = parse_ir_xml(new_ir_path)
+            # Load both models using OpenVINO Core
+            ref_model = core.read_model(str(ref_ir_path))
+            new_model = core.read_model(str(new_ir_path))
 
-            is_identical, differences = compare_irs(ref_info, new_info)
-
-            if not is_identical:
-                all_differences[component_name] = differences
+            # Compare models (compare_names=False to ignore auto-generated friendly names)
+            try:
+                compare_models(ref_model, new_model, compare_names=False)
+            except RuntimeError as e:
+                # Model comparison failed - store the error message
+                all_differences[component_name] = str(e).strip().split("\n")
 
         # Report all differences
         if all_differences:
@@ -206,7 +203,7 @@ class TestIRStability:
             for component, diffs in all_differences.items():
                 diff_lines.append(f"\n[{component}]")
                 for diff in diffs:
-                    diff_lines.append(f"  - {diff}")
+                    diff_lines.append(f"  {diff}")
 
             diff_msg = "\n".join(diff_lines)
 
