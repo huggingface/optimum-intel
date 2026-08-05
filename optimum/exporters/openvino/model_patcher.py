@@ -3122,18 +3122,31 @@ class FluxTransformerModelPatcher(ModelPatcher):
 # so the Rotary embeddings related calculations are rewritten in float values.
 # Original code: https://github.com/huggingface/diffusers/blob/f27949dad9f88a34eb22ff80956bbbb940cdbd2b/src/diffusers/models/transformers/transformer_qwenimage.py#L94
 def _qwenimage_apply_rotary_emb(x, freqs):
-    # Real-valued equivalent of the complex rotary embedding used by QwenImage.
-    # `x` has layout [batch, sequence, heads, head_dim]; `freqs` is a (cos, sin) tuple of [sequence, head_dim // 2].
-    # The complex path reshapes the last dim into (real, imag) interleaved pairs, this reproduces it with real math.
-    cos, sin = freqs
-    x_reshaped = x.reshape(*x.shape[:-1], -1, 2)
-    x_even = x_reshaped[..., 0]
-    x_odd = x_reshaped[..., 1]
-    cos = cos[None, :, None, :]
-    sin = sin[None, :, None, :]
-    out_even = x_even * cos - x_odd * sin
-    out_odd = x_even * sin + x_odd * cos
-    return torch.stack([out_even, out_odd], dim=-1).flatten(-2).type_as(x)
+    # Real-valued equivalent of the complex rotary embedding used by QwenImage, written so that the
+    # traced subgraph is recognized by OpenVINO's GPT-NeoX `RoPEFusion` matcher and collapsed into the
+    # dedicated `ov::op::internal::RoPE` operation at compile time.
+    #
+    # QwenImage rotates *interleaved* pairs (dims 2j, 2j+1) with frequency j. That matcher only accepts
+    # the *contiguous* rotate-half convention (first half vs. second half, dims j and j+D/2). The two are
+    # related by the fixed "de-interleave" permutation P that sends even dims to the first half and odd
+    # dims to the second half. Applying P to `x` up front and rotating contiguously reproduces the
+    # interleaved rotation exactly, and because the identical permutation is applied to both query and
+    # key (and never undone) it cancels in the q.k^T attention score, leaving the model numerically
+    # unchanged while exposing a fusable subgraph.
+    #
+    # The matched region is: `xp` (de-interleaved) fed into both `xp * cos` and the two half-slices, with
+    # the rotate expressed as Slice + Multiply(-1) + Concat, then `xp * cos + rotate_half(xp) * sin`.
+    # Note the negation must be `x2 * -1.0` (an Eltwise Multiply); a unary `-x` traces to a `Negative`
+    # op which the matcher does not recognize.
+    cos, sin = freqs  # each [1, seq, 1, head_dim] with the half-width table duplicated onto both halves
+    x_even = x[..., 0::2]  # even dims -> first contiguous half
+    x_odd = x[..., 1::2]  # odd dims  -> second contiguous half
+    xp = torch.cat([x_even, x_odd], dim=-1)  # de-interleaved [batch, seq, heads, head_dim]
+    half = xp.shape[-1] // 2
+    x1 = xp[..., :half]
+    x2 = xp[..., half:]
+    rot = torch.cat([x2 * -1.0, x1], dim=-1)  # contiguous rotate-half
+    return (xp * cos + rot * sin).type_as(x)
 
 # Patching is needed to use _qwenimage_apply_rotary_emb instead of original method that uses complex values.
 # Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L270
@@ -3211,6 +3224,16 @@ def _qwenimage_rope_freqs(positions, inv_freq):
 # Patching is needed, as OpenVINO PyTorch frontend fails to trace torch.cat with Complex tensors,
 # so the Rotary embeddings related calculations are rewritten in float values.
 # Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L196
+def _qwenimage_expand_rope_freq(freq):
+    # Turn a half-width per-position table `freq` [seq, head_dim // 2] into the full-width table
+    # [1, seq, 1, head_dim] consumed by `_qwenimage_apply_rotary_emb`. Because the rotary apply
+    # de-interleaves `x` into two contiguous halves (see that function), each frequency must land at
+    # position j and position j + head_dim // 2, i.e. the half-width table is simply duplicated onto both
+    # halves. The singleton batch/head axes broadcast over the [batch, seq, heads, head_dim] tensor.
+    full = torch.cat([freq, freq], dim=-1)  # [seq, head_dim]
+    return full[None, :, None, :]  # [1, seq, 1, head_dim]
+
+
 def _qwenimage_build_rotary_emb(axes_dim, theta, image_seq_len, height, width, txt_seq_len, device):
     # Reproduces diffusers' QwenEmbedRope (scale_rope=True, single image block, frame=1) using real
     # trigonometric math instead of complex arithmetic, so it can be traced for OpenVINO while keeping
@@ -3254,6 +3277,12 @@ def _qwenimage_build_rotary_emb(axes_dim, theta, image_seq_len, height, width, t
         txt_sin_parts.append(sin)
     txt_cos = torch.cat(txt_cos_parts, dim=-1)
     txt_sin = torch.cat(txt_sin_parts, dim=-1)
+
+    # Expand to the full-width, broadcast layout so the rotary apply traces to a RoPE-fusable subgraph.
+    img_cos = _qwenimage_expand_rope_freq(img_cos)
+    img_sin = _qwenimage_expand_rope_freq(img_sin)
+    txt_cos = _qwenimage_expand_rope_freq(txt_cos)
+    txt_sin = _qwenimage_expand_rope_freq(txt_sin)
 
     return (img_cos, img_sin), (txt_cos, txt_sin)
 
