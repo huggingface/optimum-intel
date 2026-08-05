@@ -125,6 +125,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "hunyuan_v1_dense"),
         ("feature-extraction", "qwen3_vl_embedding"),
         ("text-generation-with-past", "qwen3_eagle3"),
+        ("text-generation-with-past", "qwen3_dflash"),
         ("text-generation-with-past", "zamba2"),
         ("text-generation-with-past", "exaone4"),
         ("text-generation-with-past", "bitnet"),

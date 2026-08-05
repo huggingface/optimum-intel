@@ -236,13 +236,15 @@ class Eagle3DummyGenerator(DummyInputGenerator):
         self.batch_size = batch_size
         self.sequence_length = sequence_length
         self.hidden_size = normalized_config.hidden_size
+        dflash_config = getattr(normalized_config.config, "dflash_config", {}) or {}
+        self.num_hidden_state_layers = len(dflash_config.get("target_layer_ids", [])) or 3
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        # hidden_states is provided as a concatenation of three hidden-layer outputs from the main model
+        # hidden_states is provided as a concatenation of hidden-layer outputs from the main model
         shape = (
             self.batch_size,
             self.sequence_length,
-            self.hidden_size * 3,
+            self.hidden_size * self.num_hidden_state_layers,
         )
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 

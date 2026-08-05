@@ -29,7 +29,7 @@ except Exception as error:
 INSTALL_REQUIRE = [
     "torch>=2.1",
     "safetensors<0.8.0",
-    "optimum@git+https://github.com/huggingface/optimum.git",
+    "optimum~=2.3.0",
     "transformers>=4.51,<5.11",
     "setuptools",
     "huggingface-hub>=0.23.2,<1.22",

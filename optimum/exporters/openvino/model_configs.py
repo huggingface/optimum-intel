@@ -424,8 +424,58 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = OVDecoderModelPatcher
 
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        use_past: bool = False,
+        use_past_in_inputs: bool = False,
+        preprocessors: list[Any] | None = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            use_past=use_past,
+            use_past_in_inputs=use_past_in_inputs,
+            preprocessors=preprocessors,
+        )
+        archs = getattr(config, "architectures", None)
+        self.dflash = isinstance(archs, list) and len(archs) > 0 and archs[0] == "DFlashDraftModel"
+        if self.dflash:
+            model_type = getattr(config, "model_type", "")
+            if model_type != "qwen3":
+                raise ValueError(f"DFlash export supports only Qwen3-based draft models, got model_type={model_type}.")
+            dflash_config = getattr(config, "dflash_config", {}) or {}
+            if not dflash_config.get("target_layer_ids", []):
+                raise ValueError("DFlash export requires non-empty dflash_config['target_layer_ids'].")
+            # DFlash draft checkpoints still advertise model_type="qwen3"; the
+            # architecture and dflash_config fields identify the draft variant.
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (
+                DummyTextInputGenerator,
+                Eagle3VLMDummyGenerator,
+                Eagle3DummyGenerator,
+                GemmaDummyPastKeyValuesGenerator,
+            )
+            self.PAD_ATTENTION_MASK_TO_PAST = False
+
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self.dflash:
+            common_inputs = super().inputs
+            common_inputs.pop("input_ids", None)
+            common_inputs["inputs_embeds"] = {0: "batch_size", 1: "block_size"}
+            common_inputs["hidden_states"] = {0: "batch_size", 1: "context_length"}
+            common_inputs["position_ids"] = {0: "batch_size", 1: "context_length + block_size"}
+            if self.use_past_in_inputs:
+                mask_length = "past_sequence_length + context_length + block_size"
+            else:
+                mask_length = "context_length + block_size"
+            common_inputs["attention_mask"] = {0: "batch_size", 1: mask_length}
+            return common_inputs
         if self.task in ["feature-extraction"]:
             common_inputs = {
                 "input_ids": {0: "batch_size", 1: "sequence_length"},
@@ -434,6 +484,49 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         else:
             common_inputs = super().inputs
         return common_inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self.dflash:
+            common_outputs = super().outputs
+            common_outputs.pop("logits", None)
+            return {
+                "last_hidden_state": {0: "batch_size", 1: "draft_sequence_length"},
+                **common_outputs,
+            }
+        return super().outputs
+
+    def overwrite_shape_and_generate_input(
+        self, dummy_input_gen: DummyInputGenerator, input_name: str, framework: str, input_shapes: dict
+    ):
+        if self.dflash and input_name in {"inputs_embeds", "hidden_states", "position_ids", "attention_mask"}:
+            sequence_length = dummy_input_gen.sequence_length
+            block_length = sequence_length + 1
+            if input_name == "inputs_embeds":
+                dummy_input_gen.sequence_length = block_length
+            elif input_name == "hidden_states":
+                dummy_input_gen.sequence_length = sequence_length
+            elif input_name == "position_ids":
+                dummy_input_gen.sequence_length = sequence_length + block_length
+            else:
+                if self.use_past_in_inputs:
+                    dummy_input_gen.sequence_length = sequence_length * 2 + block_length
+                else:
+                    dummy_input_gen.sequence_length = sequence_length + block_length
+            dummy_input = dummy_input_gen.generate(
+                input_name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
+            )
+            dummy_input_gen.sequence_length = sequence_length
+            return dummy_input
+        return super().overwrite_shape_and_generate_input(dummy_input_gen, input_name, framework, input_shapes)
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        super().add_past_key_values(inputs_or_outputs, direction)
+        if self.dflash and direction == "outputs":
+            for axes in inputs_or_outputs.values():
+                for axis, name in axes.items():
+                    if name == "past_sequence_length + sequence_length":
+                        axes[axis] = "past_sequence_length + context_length"
 
 
 @register_in_tasks_manager(
