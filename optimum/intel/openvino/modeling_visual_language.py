@@ -7451,6 +7451,11 @@ class _OVMiniCPMV4_6ForCausalLM(OVModelForVisualCausalLM):
         return mask
 
     def _patch_position_ids(self, target_sizes):
+        # Reproduces the upstream NaViT nearest-neighbour patch position ids used by
+        # ``MiniCPMV4_6VisionEmbeddings.forward`` via ``get_vision_nearest_position_ids``:
+        # https://github.com/huggingface/transformers/blob/main/src/transformers/vision_utils.py
+        # (see ``MiniCPMV4_6VisionEmbeddings`` in
+        # https://github.com/huggingface/transformers/blob/main/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py).
         num_side = self.num_patches_per_side
         boundaries = torch.arange(1 / num_side, 1.0, 1 / num_side)
         pos_ids = []
@@ -7464,6 +7469,11 @@ class _OVMiniCPMV4_6ForCausalLM(OVModelForVisualCausalLM):
         return torch.cat(pos_ids)
 
     def _window_index(self, target_sizes):
+        # Reproduces the upstream window reordering + ``cu_seqlens`` computed by
+        # ``MiniCPMV4_6ViTWindowAttentionMerger.get_window_index`` (which calls
+        # ``get_vision_window_index``):
+        # https://github.com/huggingface/transformers/blob/main/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py
+        # https://github.com/huggingface/transformers/blob/main/src/transformers/vision_utils.py
         window_h, window_w = self.window_kernel_size
         window_index_list = []
         cu_seqlens = [0]
@@ -7485,6 +7495,12 @@ class _OVMiniCPMV4_6ForCausalLM(OVModelForVisualCausalLM):
         return window_index, cu_seqlens
 
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        # Python-side reproduction of the upstream NaViT vision pipeline
+        # (``MiniCPMV4_6Model.get_image_features`` ->
+        # ``MiniCPMV4_6VisionModel.forward`` -> ``MiniCPMV4_6ViTWindowAttentionMerger.forward``
+        # -> ``MiniCPMV4_6Merger.forward``). The window-merge / spatial-merge gather
+        # indices below mirror the reshape+permute merging done in those modules:
+        # https://github.com/huggingface/transformers/blob/main/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
         target_sizes = kwargs.get("target_sizes")
@@ -7555,6 +7571,9 @@ class _OVMiniCPMV4_6ForCausalLM(OVModelForVisualCausalLM):
     def merge_vision_text_embeddings(
         self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
     ):
+        # Reproduces the ``masked_scatter`` on ``image_token_id`` performed by
+        # ``MiniCPMV4_6Model.forward``:
+        # https://github.com/huggingface/transformers/blob/main/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
         image_features = (
             torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds

@@ -9749,6 +9749,9 @@ def _minicpmv4_6_vision_attention(attn, hidden_states, attention_mask):
     the OpenVINO runtime precomputes an additive block-diagonal ``attention_mask``
     (0 inside a chunk, ``-inf`` across chunks) and this helper runs a single dense
     attention with that mask, which is numerically identical.
+
+    Original PyTorch code (``MiniCPMV4_6VisionAttention.forward``):
+    https://github.com/huggingface/transformers/blob/main/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py
     """
     input_shape = hidden_states.shape[:-1]
     hidden_shape = (*input_shape, -1, attn.head_dim)
@@ -9772,6 +9775,10 @@ class MiniCPMV4_6VisionEmbeddingsModelPatcher(ModelPatcher):
     patch position ids, window reordering indices, and spatial-merge gather indices)
     is precomputed on the Python side by ``_OVMiniCPMV4_6ForCausalLM`` and passed in
     as plain tensors, so the graph itself only contains fixed tensor ops.
+
+    Traced forward reproduces the upstream ``MiniCPMV4_6VisionModel.forward`` +
+    ``MiniCPMV4_6ViTWindowAttentionMerger.forward`` + ``MiniCPMV4_6Merger.forward``:
+    https://github.com/huggingface/transformers/blob/main/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py
     """
 
     def __init__(
