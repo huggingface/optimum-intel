@@ -305,24 +305,23 @@ def export_openvino_hf(
             for name, (module, inputs, part_stateful) in parts.items()
         }
     elif generative and modality == "text":
-        # OpenVINO text generation needs exactly ONE graph: the unified stateful multi-token decode
-        # (`decode_multi_token`, dynamic sequence axis). Both OVModelForCausalLM and OpenVINO GenAI's
-        # LLMPipeline drive it for the whole loop — empty state == prefill, then step-by-step decode, and
-        # its dynamic query axis also covers chunked prefill / continuation. The separate `prefill` and
-        # single-token `decode` graphs the decomposition produces are never used by any OV runtime, so
-        # decompose (cheap) and export ONLY the one we keep — tracing + converting the other two is the
-        # dominant, wasted export cost. (Static export has no multi-token graph; fall back to `decode`.)
-        kept = "decode_multi_token" if dynamic else "decode"
+        # OpenVINO text generation needs exactly ONE graph: the unified stateful multi-token `decode`
+        # (dynamic sequence axis). Both OVModelForCausalLM and OpenVINO GenAI's LLMPipeline drive it for
+        # the whole loop — empty state == prefill, then step-by-step decode, and its dynamic query axis
+        # also covers chunked prefill / continuation. The separate `prefill` graph the decomposition
+        # produces is never used by any OV runtime, so decompose (cheap) and export ONLY the `decode`
+        # graph — tracing + converting `prefill` is the dominant, wasted export cost. (A static export,
+        # dynamic=False, captures a single-token `decode` that can't prefill.)
         if not dynamic:
             logger.warning(
                 "A static text-generation export (dynamic=False) produces a single-token decoder that "
                 "OpenVINO GenAI can't drive (it can't prefill). Export with dynamic=True for GenAI."
             )
-        submodel, subinputs = decompose_for_generation(model, sample_inputs, multi_token=dynamic)[kept]
+        submodel, subinputs = decompose_for_generation(model, sample_inputs, multi_token_decode=dynamic)["decode"]
         components = {"model": exporter.export(submodel, subinputs, config=config)}
     elif generative:
         # Other generative modalities: decompose and export every component.
-        components = exporter.export_for_generation(model, sample_inputs, config=config, multi_token=dynamic)
+        components = exporter.export_for_generation(model, sample_inputs, config=config, multi_token_decode=dynamic)
     else:
         components = {"model": exporter.export(model, sample_inputs, config=config)}
 
