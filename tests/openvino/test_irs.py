@@ -64,7 +64,8 @@ def _compare_models(model_one: Model, model_two: Model, compare_names: bool = Tr
         if model_one_ops[i].get_output_size() != model_two_ops[i].get_output_size():
             result = False
             msg += f"Not equal output sizes of {op_one_name} and {op_two_name}.\n"
-        for idx in range(model_one_ops[i].get_output_size()):
+        # Only compare outputs that exist in both ops
+        for idx in range(min(model_one_ops[i].get_output_size(), model_two_ops[i].get_output_size())):
             # Check partial shapes of outputs
             op_one_partial_shape = model_one_ops[i].get_output_partial_shape(idx)
             op_two_partial_shape = model_two_ops[i].get_output_partial_shape(idx)
