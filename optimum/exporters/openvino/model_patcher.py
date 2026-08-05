@@ -3065,12 +3065,16 @@ class MairaImageEmbeddingModelPatcher(ModelPatcher):
 
 def jina_vlm_vision_embed_forward(self, image_patches, image_masks=None):
     # Runs the JinaVLM vision tower + vision-language connector and returns the flattened image
-    # embeddings. This mirrors the tensor operations in `JinaVLM._encode_images` /
-    # `JinaVLMVisionModel.forward` but replaces the multi-dim `torch.all(..., keepdim=True)`
-    # padding-mask reduction with an OpenVINO-traceable equivalent, and drops the
-    # `image_input_idx` bookkeeping (only used for reshaping/sorting). At inference time the
-    # runtime scatters these features into the text embeddings using the processor-provided
-    # `image_input_idx`.
+    # embeddings. This mirrors the tensor operations in `JinaVLMForConditionalGeneration._encode_images`
+    # and `JinaVLMVisionModel.forward` from the original PyTorch remote code:
+    # https://huggingface.co/jinaai/jina-vlm/blob/ddfa80b180f87f59873fd1cea352dec51183ab88/modeling_jvlm.py#L525
+    # (`_encode_images`) and
+    # https://huggingface.co/jinaai/jina-vlm/blob/ddfa80b180f87f59873fd1cea352dec51183ab88/modeling_jvlm.py#L223
+    # (`JinaVLMVisionModel.forward`).
+    # It replaces the multi-dim `torch.all(..., keepdim=True)` padding-mask reduction with an
+    # OpenVINO-traceable equivalent, and drops the `image_input_idx` bookkeeping (only used for
+    # reshaping/sorting). At inference time the runtime scatters these features into the text
+    # embeddings using the processor-provided `image_input_idx`.
     inner = self.model
     vision_model = inner.vision_model
     batch_size, n_crops, n_patches, n_pixels = image_patches.shape
