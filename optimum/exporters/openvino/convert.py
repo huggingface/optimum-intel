@@ -400,9 +400,12 @@ def export_pytorch(
         ov_model.validate_nodes_and_infer_types()  # TODO: remove as unnecessary validation?
 
         output_names = list(config.outputs.keys())
+        output_name_aliases = getattr(config, "output_name_aliases", {})
         for idx, out_tensor in enumerate(ov_model.outputs):
             if idx < len(output_names):
-                out_tensor.get_tensor().set_names({output_names[idx]})
+                primary_name = output_names[idx]
+                tensor_names = {primary_name, *output_name_aliases.get(primary_name, [])}
+                out_tensor.get_tensor().set_names(tensor_names)
 
         input_names = [item.name for item in input_info]
         for idx, inp_tensor in enumerate(ov_model.inputs):
