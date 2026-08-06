@@ -390,6 +390,23 @@ class OVMultiModalProjector(OVVisionProjection):
     _model_name = "multi_modal_projector"
 
 
+class OVMTPModel(OVModelPart):
+    """
+    Wrapper for the stateful MTP (Multi-Token Prediction) head submodel.
+
+    Registering the MTP head as a model part makes it visible to `_ov_model_names`,
+    so it is loaded, saved and — importantly — weight-compressed together with the
+    other submodels (e.g. by `optimum-cli export openvino --weight-format int4`).
+    """
+
+    _model_name = "mtp"
+
+    def forward(self, **kwargs):
+        self.compile()
+        inputs = {name: kwargs[name] for name in self.input_names if name in kwargs}
+        return self.request(inputs)
+
+
 class OVAudioEmbeddings(OVModelPart):
     _model_name = "audio_embeddings"
 
@@ -743,6 +760,7 @@ MODEL_PARTS_CLS_MAPPING = {
     "talker_projections": OVTalkerProjections,
     "code_predictor": OVCodePredictorDecoder,
     "code2wav": OVCode2Wav,
+    "mtp": OVMTPModel,
 }
 
 
@@ -6973,7 +6991,10 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
 
 class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
-    additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
+    # `mtp` is optional: only present for checkpoints exported with an MTP head
+    # (e.g. Qwen3.6-35B-A3B). It is loaded/saved/compressed like any other part; if
+    # the openvino_mtp_model.xml file is absent it is skipped gracefully.
+    additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos", "mtp"]
 
     def __init__(
         self,
