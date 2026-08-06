@@ -15,6 +15,7 @@
 
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import torch
 from parameterized import parameterized
@@ -463,3 +464,60 @@ class CustomExportModelTest(unittest.TestCase):
         ov_outputs = ov_model(**tokens)
         self.assertTrue(torch.allclose(ov_outputs.token_embeddings, model_outputs.token_embeddings, atol=1e-4))
         self.assertTrue(torch.allclose(ov_outputs.sentence_embedding, model_outputs.sentence_embedding, atol=1e-4))
+
+
+class SentenceTransformersPoolingCopyTest(unittest.TestCase):
+    def test_copy_pooling_metadata_from_local_model_path(self):
+        from optimum.exporters.openvino.__main__ import maybe_copy_sentence_transformers_pooling
+
+        with TemporaryDirectory() as model_dir, TemporaryDirectory() as output_dir:
+            pooling_dir = Path(model_dir) / "1_Pooling"
+            pooling_dir.mkdir(parents=True, exist_ok=True)
+            expected_content = '{"pooling_mode_lasttoken": true}'
+            (pooling_dir / "config.json").write_text(expected_content)
+
+            maybe_copy_sentence_transformers_pooling(
+                model_name_or_path=model_dir,
+                output=output_dir,
+                library_name="sentence_transformers",
+            )
+
+            copied_config = Path(output_dir) / "1_Pooling" / "config.json"
+            self.assertTrue(copied_config.is_file())
+            self.assertEqual(copied_config.read_text(), expected_content)
+
+    def test_copy_pooling_metadata_from_hub_snapshot(self):
+        from optimum.exporters.openvino.__main__ import maybe_copy_sentence_transformers_pooling
+
+        with TemporaryDirectory() as snapshot_root, TemporaryDirectory() as output_dir:
+            pooling_dir = Path(snapshot_root) / "1_Pooling"
+            pooling_dir.mkdir(parents=True, exist_ok=True)
+            expected_content = '{"pooling_mode_mean_tokens": true}'
+            (pooling_dir / "config.json").write_text(expected_content)
+
+            with patch("optimum.exporters.openvino.__main__.snapshot_download", return_value=snapshot_root):
+                maybe_copy_sentence_transformers_pooling(
+                    model_name_or_path="sentence-transformers/all-MiniLM-L6-v2",
+                    output=output_dir,
+                    library_name="sentence_transformers",
+                )
+
+            copied_config = Path(output_dir) / "1_Pooling" / "config.json"
+            self.assertTrue(copied_config.is_file())
+            self.assertEqual(copied_config.read_text(), expected_content)
+
+    def test_skip_copy_for_non_sentence_transformers_library(self):
+        from optimum.exporters.openvino.__main__ import maybe_copy_sentence_transformers_pooling
+
+        with TemporaryDirectory() as model_dir, TemporaryDirectory() as output_dir:
+            pooling_dir = Path(model_dir) / "1_Pooling"
+            pooling_dir.mkdir(parents=True, exist_ok=True)
+            (pooling_dir / "config.json").write_text('{"pooling_mode_cls_token": true}')
+
+            maybe_copy_sentence_transformers_pooling(
+                model_name_or_path=model_dir,
+                output=output_dir,
+                library_name="transformers",
+            )
+
+            self.assertFalse((Path(output_dir) / "1_Pooling").exists())
