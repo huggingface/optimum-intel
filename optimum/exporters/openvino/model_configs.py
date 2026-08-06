@@ -43,6 +43,8 @@ from optimum.exporters.openvino.input_generators import (
     DummyAudioPhi4MMInputGenerator,
     DummyFluxTextInputGenerator,
     DummyFluxTransformerInputGenerator,
+    DummyGemma4AudioInputGenerator,
+    DummyGemma4UnifiedAudioInputGenerator,
     DummyGemma4UnifiedVisionInputGenerator,
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
@@ -4671,6 +4673,7 @@ class Gemma3OpenVINOConfig(BaseVLMOpenVINOConfig):
 
 
 class Gemma4ConfigBehavior(str, enum.Enum):
+    AUDIO_EMBEDDINGS = "audio_embeddings"
     VISION_EMBEDDINGS = "vision_embeddings"
     TEXT_EMBEDDINGS = "text_embeddings"
     LANGUAGE = "language"
@@ -4701,6 +4704,9 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
             behavior=behavior,
         )
         self._behavior = behavior
+        self.SUPPORTED_BEHAVIORS = list(type(self).SUPPORTED_BEHAVIORS)
+        if config.audio_config is None:
+            self.SUPPORTED_BEHAVIORS.remove(Gemma4ConfigBehavior.AUDIO_EMBEDDINGS.value)
         if self._behavior == Gemma4ConfigBehavior.VISION_EMBEDDINGS and config.model_type == "gemma4":
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4VisionInputGenerator,)
             # Attach image_seq_length from preprocessor to normalized config so
@@ -4737,6 +4743,10 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator,)
             self._config = config.text_config
             self._normalized_config = NormalizedTextConfig(self._config)
+        elif self._behavior == Gemma4ConfigBehavior.AUDIO_EMBEDDINGS:
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4AudioInputGenerator,)
+            self._config = config.audio_config
+            self._normalized_config = NormalizedConfig(self._config)
 
     @staticmethod
     def _get_language_model(model):
@@ -4775,12 +4785,35 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
                 preprocessors=self._preprocessors,
             )
             return config
+        if behavior == Gemma4ConfigBehavior.AUDIO_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
         return super().with_behavior(behavior)
 
     def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
-        if behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
-            import torch
+        if behavior == Gemma4ConfigBehavior.AUDIO_EMBEDDINGS:
 
+            class AudioEmbeddingsModule(torch.nn.Module):
+                def __init__(self, model):
+                    super().__init__()
+                    self.audio_tower = model.model.audio_tower
+                    self.embed_audio = model.model.embed_audio
+
+                def forward(self, input_features: torch.Tensor, input_features_mask: torch.Tensor):
+                    audio_outputs = self.audio_tower(input_features, input_features_mask, return_dict=True)
+                    audio_features = self.embed_audio(inputs_embeds=audio_outputs.last_hidden_state)
+                    return audio_features, audio_outputs.attention_mask
+
+            audio_embeddings = AudioEmbeddingsModule(model)
+            audio_embeddings.config = model.config.audio_config
+            return audio_embeddings
+        if behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
             class PerLayerInputsModule(torch.nn.Module):
                 def __init__(self, language_model, vocab_size_per_layer_input: int, config):
                     super().__init__()
@@ -4830,8 +4863,6 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
-            import torch
-
             class TextEmbeddingsModule(torch.nn.Module):
                 def __init__(self, model):
                     super().__init__()
@@ -4857,6 +4888,11 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Gemma4ConfigBehavior.AUDIO_EMBEDDINGS:
+            return {
+                "input_features": {0: "num_audios", 1: "audio_sequence_length"},
+                "input_features_mask": {0: "num_audios", 1: "audio_sequence_length"},
+            }
         if self._behavior == Gemma4ConfigBehavior.LANGUAGE:
             return super().inputs
         if self._behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
@@ -4872,6 +4908,11 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Gemma4ConfigBehavior.AUDIO_EMBEDDINGS:
+            return {
+                "last_hidden_state": {0: "num_audios", 1: "audio_output_sequence_length"},
+                "attention_mask": {0: "num_audios", 1: "audio_output_sequence_length"},
+            }
         if self._behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
             return {"text_embeds_per_layer": {}}
         return super().outputs
@@ -5001,12 +5042,18 @@ class Gemma3nOpenVINOConfig(Gemma4OpenVINOConfig):
         return super().inputs
 
 
+class Gemma4UnifiedConfigBehavior(str, enum.Enum):
+    AUDIO_EMBEDDINGS = "audio_embeddings"
+    LANGUAGE = "language"
+    TEXT_EMBEDDINGS = "text_embeddings"
+    VISION_EMBEDDINGS = "vision_embeddings"
+
+
 @register_in_tasks_manager("gemma4_unified", *["image-text-to-text"], library_name="transformers")
 class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
     # gemma4_unified (e.g. google/gemma-4-12B) reuses the gemma3 VLM scaffolding but has an
-    # encoder-free vision embedder and no per-layer text embeddings. We only support text and
-    # vision (audio is not exported).
-    SUPPORTED_BEHAVIORS = [model_type.value for model_type in VLMConfigBehavior]
+    # encoder-free vision and audio embedders and no per-layer text embeddings.
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in Gemma4UnifiedConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyTextInputGenerator)
     MIN_TRANSFORMERS_VERSION = "5.10"
     MAX_TRANSFORMERS_VERSION = "5.10.99"
@@ -5017,7 +5064,7 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
         task: str = "feature-extraction",
         int_dtype: str = "int64",
         float_dtype: str = "fp32",
-        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        behavior: Gemma4UnifiedConfigBehavior = Gemma4UnifiedConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
     ):
         super().__init__(
@@ -5029,6 +5076,9 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
             behavior=behavior,
         )
         self._behavior = behavior
+        self.SUPPORTED_BEHAVIORS = list(type(self).SUPPORTED_BEHAVIORS)
+        if config.audio_config is None:
+            self.SUPPORTED_BEHAVIORS.remove(Gemma4UnifiedConfigBehavior.AUDIO_EMBEDDINGS.value)
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4UnifiedVisionInputGenerator,)
             self._config = config.vision_config
@@ -5050,10 +5100,14 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator,)
             self._config = config.text_config
             self._normalized_config = NormalizedTextConfig(self._config)
+        elif self._behavior == Gemma4UnifiedConfigBehavior.AUDIO_EMBEDDINGS:
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4UnifiedAudioInputGenerator,)
+            self._config = config.audio_config
+            self._normalized_config = NormalizedConfig(self._config)
 
-    def with_behavior(self, behavior: Union[str, VLMConfigBehavior]):
-        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
-            behavior = VLMConfigBehavior(behavior)
+    def with_behavior(self, behavior: Union[str, Gemma4UnifiedConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Gemma4UnifiedConfigBehavior):
+            behavior = Gemma4UnifiedConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.LANGUAGE:
             inputs_update = {}
@@ -5067,11 +5121,20 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
                 model_patcher=Gemma4UnifiedLMModelPatcher,
                 inputs_update=inputs_update,
             )
+        if behavior == Gemma4UnifiedConfigBehavior.AUDIO_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
         return super().with_behavior(behavior)
 
-    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
-        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
-            behavior = VLMConfigBehavior(behavior)
+    def get_model_for_behavior(self, model, behavior: Union[str, Gemma4UnifiedConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Gemma4UnifiedConfigBehavior):
+            behavior = Gemma4UnifiedConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
@@ -5090,6 +5153,20 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
             text_embedding.config = model.model.language_model.config
             return text_embedding
 
+        if behavior == Gemma4UnifiedConfigBehavior.AUDIO_EMBEDDINGS:
+
+            class AudioEmbeddingsModule(torch.nn.Module):
+                def __init__(self, model):
+                    super().__init__()
+                    self.embed_audio = model.model.embed_audio
+
+                def forward(self, input_features: torch.Tensor):
+                    return self.embed_audio(inputs_embeds=input_features)
+
+            audio_embeddings = AudioEmbeddingsModule(model)
+            audio_embeddings.config = model.config.audio_config
+            return audio_embeddings
+
         return super().get_model_for_behavior(model, behavior)
 
     def patch_model_for_export(self, model, model_kwargs=None):
@@ -5100,12 +5177,20 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Gemma4UnifiedConfigBehavior.AUDIO_EMBEDDINGS:
+            return {"input_features": {0: "num_audios", 1: "audio_sequence_length"}}
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return {
                 "pixel_values": {0: "batch_size", 1: "num_patches"},
                 "image_position_ids": {0: "batch_size", 1: "num_patches"},
             }
         return super().inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Gemma4UnifiedConfigBehavior.AUDIO_EMBEDDINGS:
+            return {"last_hidden_state": {0: "num_audios", 1: "audio_sequence_length"}}
+        return super().outputs
 
 
 @register_in_tasks_manager("idefics3", *["image-text-to-text"], library_name="transformers")
