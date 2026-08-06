@@ -1191,7 +1191,8 @@ class OVWeightCompressionTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = [
         config
         for config in SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION
-        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
+        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1])
+        in get_supported_model_for_library("transformers") | get_supported_model_for_library("funasr")
     ]
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [

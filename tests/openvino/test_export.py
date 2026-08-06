@@ -128,7 +128,11 @@ class ExportModelTest(unittest.TestCase):
         model_type: model_cls
         for model_type, model_cls in SUPPORTED_ARCHITECTURES.items()
         if TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type)
-        in get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
+        in (
+            get_supported_model_for_library("transformers")
+            | get_supported_model_for_library("diffusers")
+            | get_supported_model_for_library("funasr")
+        )
     }
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
