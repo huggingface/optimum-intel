@@ -144,6 +144,141 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+def _create_tiny_youtu_vl_model():
+    """Generate a tiny, architecture-faithful random youtu_vl model and return its local path.
+
+    tencent/Youtu-VL-4B-Instruct is a remote-code VLM (a SigLIP2 windowed vision tower + patch
+    merger with a DeepSeek-V3-style multi-latent-attention text backbone). No public tiny fixture
+    exists, so we build one locally without loading the original weights, preserving the
+    architecture identity (model_type / architectures / auto_map), the MLA per-head dimension
+    coupling, the full vocabulary (custom_tokens reference ids up to ~283375) and the SigLIP2
+    vision sub-config. The result is cached under the system temp dir and reused on repeat calls.
+    """
+    original_model_id = "tencent/Youtu-VL-4B-Instruct"
+    cache_format_version = "youtu_vl-tiny-v1"
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_youtu_vl"
+    marker_file = output_dir / "TINY_CACHE_MARKER.json"
+    config_file = output_dir / "config.json"
+
+    overrides = dict(
+        hidden_size=32,
+        intermediate_size=128,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        q_lora_rank=256,
+        kv_lora_rank=128,
+        qk_rope_head_dim=64,
+        qk_nope_head_dim=128,
+        v_head_dim=128,
+        vision_num_patches=64,
+    )
+
+    # Reuse a valid cached fixture (validate identity/dimension invariants + a cache marker).
+    if marker_file.exists() and config_file.exists():
+        try:
+            with open(marker_file) as f:
+                marker = json.load(f)
+            with open(config_file) as f:
+                cfg_json = json.load(f)
+            valid = (
+                marker.get("cache_format_version") == cache_format_version
+                and cfg_json.get("model_type") == "youtu_vl"
+                and cfg_json.get("architectures") == ["YoutuVLForConditionalGeneration"]
+                and cfg_json.get("hidden_size") == overrides["hidden_size"]
+                and cfg_json.get("num_hidden_layers") == overrides["num_hidden_layers"]
+                and cfg_json.get("qk_rope_head_dim") == overrides["qk_rope_head_dim"]
+                and cfg_json.get("qk_nope_head_dim") == overrides["qk_nope_head_dim"]
+                and cfg_json.get("v_head_dim") == overrides["v_head_dim"]
+                and cfg_json.get("vision_config", {}).get("model_type") == "siglip2_vision_model"
+                and any((output_dir / n).exists() for n in ("model.safetensors", "pytorch_model.bin"))
+            )
+            if valid:
+                return str(output_dir)
+        except Exception:
+            pass
+
+    import shutil
+
+    from huggingface_hub import hf_hub_download
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor
+
+    config = AutoConfig.from_pretrained(original_model_id, trust_remote_code=True)
+
+    # ---- text side (MLA): keep per-head dims exactly, reduce only widths/layers ----
+    config.hidden_size = overrides["hidden_size"]
+    config.intermediate_size = overrides["intermediate_size"]
+    config.num_hidden_layers = overrides["num_hidden_layers"]
+    config.num_attention_heads = overrides["num_attention_heads"]
+    config.num_key_value_heads = overrides["num_key_value_heads"]
+    config.q_lora_rank = overrides["q_lora_rank"]
+    config.kv_lora_rank = overrides["kv_lora_rank"]
+    config.qk_rope_head_dim = overrides["qk_rope_head_dim"]
+    config.qk_nope_head_dim = overrides["qk_nope_head_dim"]
+    config.v_head_dim = overrides["v_head_dim"]
+    config.qk_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
+    config.head_dim = config.qk_rope_head_dim
+
+    # ---- vision side (SigLIP2) ----
+    vision_config = config.vision_config
+    vision_config.hidden_size = overrides["hidden_size"]
+    vision_config.intermediate_size = 64
+    vision_config.num_hidden_layers = 2
+    vision_config.num_attention_heads = 2
+    vision_config.num_patches = overrides["vision_num_patches"]
+    vision_config.out_hidden_size = config.hidden_size
+
+    # Force float32 for the fixture would blow the size budget with the full vocab; keep bfloat16
+    # (the original dtype) at every effective precision level.
+    config.torch_dtype = "bfloat16"
+    if hasattr(config, "dtype"):
+        config.dtype = "bfloat16"
+    vision_config.torch_dtype = "bfloat16"
+    if hasattr(vision_config, "dtype"):
+        vision_config.dtype = "bfloat16"
+
+    torch.manual_seed(SEED)
+    model = AutoModelForCausalLM.from_config(config, trust_remote_code=True).to(torch.bfloat16).eval()
+
+    # Re-initialize the (tied) embedding with larger variance so random-weight logits do not
+    # collapse to a near-constant distribution.
+    with torch.no_grad():
+        emb = model.get_input_embeddings()
+        emb.weight.normal_(mean=0.0, std=0.2)
+        pad = getattr(config, "pad_token_id", None)
+        if pad is not None and 0 <= pad < emb.weight.shape[0]:
+            emb.weight[pad].zero_()
+    model.tie_weights()
+
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    model.save_pretrained(output_dir, safe_serialization=True)
+    AutoProcessor.from_pretrained(original_model_id, trust_remote_code=True).save_pretrained(output_dir)
+
+    src_dir = os.path.dirname(hf_hub_download(original_model_id, "config.json"))
+    for fname in (
+        "generation_config.json",
+        "configuration_youtu_vl.py",
+        "configuration_siglip2.py",
+        "modeling_youtu_vl.py",
+        "modeling_siglip2.py",
+        "processing_youtu_vl.py",
+        "image_processing_siglip2_fast.py",
+        "__init__.py",
+        "chat_template.json",
+    ):
+        s = os.path.join(src_dir, fname)
+        if os.path.exists(s):
+            shutil.copy2(os.path.realpath(s), os.path.join(output_dir, fname))
+
+    with open(marker_file, "w") as f:
+        json.dump({"cache_format_version": cache_format_version, "original_model_id": original_model_id}, f)
+
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -352,6 +487,7 @@ HUB_MODEL_NAMES = {
     "xlm-roberta": "optimum-intel-internal-testing/tiny-random-xlm-roberta",
     "xglm": "optimum-intel-internal-testing/tiny-random-XGLMForCausalLM",
     "xverse": "optimum-intel-internal-testing/tiny-random-xverse",
+    "youtu_vl": _create_tiny_youtu_vl_model(),
     "glm4": "optimum-intel-internal-testing/tiny-random-glm4",
     "glm": "optimum-intel-internal-testing/tiny-random-glm-edge",
     "open-clip": "optimum-intel-internal-testing/tiny-open-clip-model",
@@ -507,6 +643,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 1,
         "vision_embeddings_merger_model": 10,
+    },
+    "youtu_vl": {
+        "lm_model": 34,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 15,
     },
     "qwen3_vl": {
         "lm_model": 30,
@@ -667,6 +808,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_asr",
     "fun_asr",
     "videochat_flash_qwen",
+    "youtu_vl",
 )
 
 if is_transformers_version("<", "5"):

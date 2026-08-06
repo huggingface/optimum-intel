@@ -72,6 +72,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyVideoChatFlashQwenProjectorInputGenerator,
     DummyVisionPositionIdsInputGenerator,
     DummyVisionPositionIdsPhi4InputGenerator,
+    DummyYoutuVLVisionEmbedInputGenerator,
     Eagle3DummyGenerator,
     Eagle3VLMDummyGenerator,
     FunASRDummyAudioInputGenerator,
@@ -187,6 +188,8 @@ from optimum.exporters.openvino.model_patcher import (
     SpeechT5ModelPatcher,
     VideoChatFlashQwenVisionEmbeddingModelPatcher,
     XverseModelPatcher,
+    YoutuVLLanguageModelPatcher,
+    YoutuVLVisionEmbMergerPatcher,
     Zamba2ModelPatcher,
     _get_model_attribute,
 )
@@ -4585,6 +4588,135 @@ class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
     MAX_TRANSFORMERS_VERSION = "4.53.3"
     _MODEL_PATCHER = DeepseekPatcher
+
+
+@register_in_tasks_manager(
+    "youtu_vl", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class YoutuVLTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    # Text backbone of youtu_vl: a DeepSeek-V3-style multi-latent-attention (MLA) decoder.
+    # The KV cache stores key states of dim `qk_nope_head_dim + qk_rope_head_dim` and value states
+    # of dim `v_head_dim` per attention head, matching the MiniCPM3/DeepSeek MLA cache layout.
+    MIN_TRANSFORMERS_VERSION = "4.53.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, OVMiniCPM3DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = OVMiniCPM3DummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = YoutuVLLanguageModelPatcher
+
+
+class YoutuVLConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    TEXT_EMBEDDINGS = "text_embeddings"
+
+
+@register_in_tasks_manager("youtu_vl", *["image-text-to-text"], library_name="transformers")
+class YoutuVLOpenVINOConfig(BaseVLMOpenVINOConfig):
+    # tencent/Youtu-VL-4B-Instruct: a VLM combining a SigLIP2 windowed vision tower + patch merger
+    # with a DeepSeek-V3-style MLA text backbone. The config is flat (text parameters live at the
+    # top level, so there is no `text_config`); the language behavior therefore uses the original
+    # config directly with the `youtu_vl` text-generation export config registered above.
+    MIN_TRANSFORMERS_VERSION = "4.53.0"
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in YoutuVLConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyYoutuVLVisionEmbedInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: YoutuVLConfigBehavior = YoutuVLConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == YoutuVLConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, YoutuVLConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, YoutuVLConfigBehavior):
+            behavior = YoutuVLConfigBehavior(behavior)
+
+        if behavior == YoutuVLConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == YoutuVLConfigBehavior.VISION_EMBEDDINGS:
+            return model
+
+        if behavior == YoutuVLConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.config
+            return text_embedding
+
+    def with_behavior(
+        self,
+        behavior: Union[str, YoutuVLConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, YoutuVLConfigBehavior):
+            behavior = YoutuVLConfigBehavior(behavior)
+
+        if behavior == YoutuVLConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "youtu_vl",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+            )
+
+        if behavior == YoutuVLConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "youtu_vl",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=YoutuVLLanguageModelPatcher,
+            )
+
+        if behavior == YoutuVLConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == YoutuVLConfigBehavior.VISION_EMBEDDINGS:
+            return YoutuVLVisionEmbMergerPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == YoutuVLConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {0: "sequence_length"},
+                "attention_mask": {1: "sequence_length", 2: "sequence_length"},
+                "window_attention_mask": {1: "sequence_length", 2: "sequence_length"},
+                "window_index": {0: "unit_sequence_length"},
+                "rotary_pos_emb": {0: "sequence_length"},
+            }
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == YoutuVLConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "seq_len"}}
+        return {}
 
 
 @register_in_tasks_manager("got_ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")

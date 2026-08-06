@@ -122,6 +122,7 @@ class ExportModelTest(unittest.TestCase):
         "gemma3n": OVModelForVisualCausalLM,
         "flux.2-klein": OVFlux2KleinPipeline,
         "qwen3_omni_moe": OVModelForMultimodalLM,
+        "youtu_vl": OVModelForVisualCausalLM,
     }
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = {
@@ -170,6 +171,11 @@ class ExportModelTest(unittest.TestCase):
             model = MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
                 model_name, **loading_kwargs
             )
+        elif model_type == "youtu_vl":
+            # youtu_vl is a remote-code VLM whose auto_map only registers AutoModelForCausalLM.
+            from transformers import AutoModelForCausalLM
+
+            model = AutoModelForCausalLM.from_pretrained(model_name, **loading_kwargs)
         elif model_type == "qwen3_asr":
             from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
 

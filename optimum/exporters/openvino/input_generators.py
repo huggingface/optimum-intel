@@ -1396,6 +1396,58 @@ class DummyQwen3VLVisionEmbedInputGenerator(DummyQwen2VLVisionEmbedInputGenerato
             )
 
 
+class DummyYoutuVLVisionEmbedInputGenerator(DummyVisionInputGenerator):
+    # Dummy inputs for the SigLIP2-based youtu_vl vision tower + patch merger exported as a single model.
+    # The window_index / cu_seqlens / rotary_pos_emb are precomputed at runtime from `spatial_shapes`
+    # (their construction contains dynamic-length python loops that are not traceable), so the exported
+    # model receives the already-materialized `attention_mask`, `window_attention_mask`, `window_index`
+    # and `rotary_pos_emb` tensors together with the patchified `pixel_values`.
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "attention_mask",
+        "window_attention_mask",
+        "window_index",
+        "rotary_pos_emb",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 1,
+        **kwargs,
+    ):
+        self.batch_size = batch_size
+        config = normalized_config.config
+        self.hidden_size = config.hidden_size
+        self.num_heads = config.num_attention_heads
+        self.num_channels = config.num_channels
+        self.patch_size = config.patch_size
+        self.spatial_merge_size = 2
+        self.spatial_merge_unit = self.spatial_merge_size * self.spatial_merge_size
+        # A small square grid that is divisible by the spatial merge size.
+        self.grid_h = 4
+        self.grid_w = 4
+        self.in_features = self.num_channels * self.patch_size * self.patch_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        seq_len = self.batch_size * self.grid_h * self.grid_w
+
+        if input_name == "pixel_values":
+            return self.random_float_tensor([seq_len, self.in_features], framework=framework, dtype=float_dtype)
+
+        if input_name in ["attention_mask", "window_attention_mask"]:
+            return self.random_mask_tensor([1, seq_len, seq_len], framework=framework, dtype=float_dtype)
+
+        if input_name == "rotary_pos_emb":
+            dim = self.hidden_size // self.num_heads // 2
+            return self.random_float_tensor([seq_len, dim], framework=framework, dtype=float_dtype)
+
+        if input_name == "window_index":
+            hidden_size = seq_len // self.spatial_merge_unit
+            return self.random_int_tensor([hidden_size], max_value=hidden_size)
+
+
 class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummySeq2SeqPastKeyValuesGenerator):
     """Custom KV cache generator for Qwen3-ASR with GQA (num_key_value_heads != num_attention_heads).
     Qwen3-ASR has no cross-attention, so only self-attention KV cache is generated (2 per layer)."""
