@@ -141,6 +141,10 @@ class ExportModelTest(unittest.TestCase):
         "ltx2": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
     }
 
+    if is_transformers_version(">=", "4.50.0"):
+        SUPPORTED_ARCHITECTURES.update({"gemma3_text": OVModelForFeatureExtraction})
+
+
     GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
 
     def _openvino_export(
