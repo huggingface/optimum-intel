@@ -544,7 +544,14 @@ class OVHfExportCommand(BaseOptimumCLICommand):
     def parse_args(parser: "ArgumentParser"):
         # Reuse the `openvino` argument surface so the two paths feel identical on the CLI; this
         # experimental path only honors a subset (see `run` — no quantization yet).
-        return parse_args_openvino(parser)
+        result = parse_args_openvino(parser)
+        parser.add_argument(
+            "--subfolder",
+            type=str,
+            default="",
+            help="Subfolder within the model repo or path holding the model and processor files.",
+        )
+        return result
 
     def run(self):
         from ...exporters.openvino_hf import export_openvino_hf
@@ -570,4 +577,5 @@ class OVHfExportCommand(BaseOptimumCLICommand):
             stateful=not self.args.disable_stateful,
             fp16=self.args.weight_format != "fp32",
             trust_remote_code=self.args.trust_remote_code,
+            subfolder=self.args.subfolder,
         )

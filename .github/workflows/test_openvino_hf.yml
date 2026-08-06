@@ -39,7 +39,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip uv
-          uv pip install .[tests] pillow librosa openvino-genai openvino-tokenizers
+          uv pip install .[tests] pillow librosa openvino-genai openvino-tokenizers pytest-xdist
 
       # The `openvino-hf` path relies on `transformers.exporters.OpenVINOExporter` (+ multi-token
       # decode), which isn't in a release yet — pin Transformers to the branch here (not in setup.py,
@@ -55,4 +55,4 @@ jobs:
 
       - name: Test with Pytest
         run: |
-          pytest tests/openvino/test_export_hf.py --durations=0 -v
+          pytest tests/openvino/test_export_hf.py --durations=0 -v -n auto

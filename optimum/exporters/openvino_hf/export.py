@@ -37,6 +37,7 @@ in ``decomposers.py``; the default single/prefill-decode decomposition comes fro
 Exposed on the CLI as ``optimum-cli export openvino-hf`` (see ``optimum.commands.export.openvino``).
 """
 
+import contextlib
 import logging
 from pathlib import Path
 from typing import Union
@@ -158,13 +159,13 @@ def _task_from_architecture(architecture: str, has_vision_config: bool = False) 
     return "feature-extraction"
 
 
-def _infer_task(model_id: str, trust_remote_code: bool) -> str:
+def _infer_task(model_id: str, trust_remote_code: bool, subfolder: str = "") -> str:
     """Infer the export task from the model's ``config.architectures`` (see ``_task_from_architecture``).
 
     Requires ``config.architectures`` to be set (true for real checkpoints; some randomly-initialised
     test fixtures omit it — pass an explicit ``task`` for those).
     """
-    config = AutoConfig.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+    config = AutoConfig.from_pretrained(model_id, subfolder=subfolder, trust_remote_code=trust_remote_code)
     if not config.architectures:
         raise ValueError(
             f"Could not infer a task for {model_id!r}: its config has no `architectures`. "
@@ -173,11 +174,41 @@ def _infer_task(model_id: str, trust_remote_code: bool) -> str:
     return _task_from_architecture(config.architectures[0], getattr(config, "vision_config", None) is not None)
 
 
-def _load_processor(model_id: str, modality: str, trust_remote_code: bool):
-    """Load the processor auto-class for ``modality`` (tokenizer / image processor / feature
-    extractor / multimodal processor)."""
+def _load_processor(
+    model_id: str, modality: str, trust_remote_code: bool, subfolder: str = "", prefer_composite: bool = True
+):
+    """Load a processor for ``model_id``.
+
+    Prefer the composite ``AutoProcessor``: it bundles every sub-processor a model needs (e.g. a
+    VLM-based image classifier like ShieldGemma2 needs the text side — a built-in prompt → ``input_ids``
+    — alongside ``pixel_values``, which a bare image processor can't supply). Fall back to the
+    modality-specific auto-class for models that register no composite processor — or, with
+    ``prefer_composite=False``, when the composite loads but can't drive this modality's sample (a
+    VisionEncoderDecoder processor, say, rejects an image-only call because it demands text).
+    """
+    if prefer_composite:
+        with contextlib.suppress(Exception):
+            return transformers.AutoProcessor.from_pretrained(
+                model_id, subfolder=subfolder, trust_remote_code=trust_remote_code
+            )
     processor_class = getattr(transformers, _MODALITY_TO_PROCESSOR[modality])
-    return processor_class.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+    return processor_class.from_pretrained(model_id, subfolder=subfolder, trust_remote_code=trust_remote_code)
+
+
+def _load_processor_and_build_sample(model_id, modality, model, trust_remote_code, subfolder=""):
+    """Load a processor and build the tiny example batch for ``modality``, returning both.
+
+    Retries once with the modality-specific processor when the composite one loads but can't drive the
+    sample (a VisionEncoderDecoder demands text for an image-only call; a VLM on a text export has no
+    tokenizer ``pad_token``).
+    """
+    for prefer_composite in (True, False):
+        processor = _load_processor(model_id, modality, trust_remote_code, subfolder, prefer_composite)
+        try:
+            return processor, _build_sample_inputs(processor, modality, model)
+        except (ValueError, TypeError, AttributeError):
+            if not prefer_composite:
+                raise
 
 
 def _resolve_device(device):
@@ -196,7 +227,9 @@ def _to_device(inputs, device):
     return {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
 
 
-def _save_openvino_tokenizer(model_id: str, processor, output: Path, trust_remote_code: bool = False) -> None:
+def _save_openvino_tokenizer(
+    model_id: str, processor, output: Path, trust_remote_code: bool = False, subfolder: str = ""
+) -> None:
     """Convert the tokenizer to OpenVINO IR (`openvino_tokenizer.xml` / `openvino_detokenizer.xml`) so
     OpenVINO GenAI (`LLMPipeline`, `VLMPipeline`, `WhisperPipeline`) can decode text from the export.
 
@@ -209,7 +242,7 @@ def _save_openvino_tokenizer(model_id: str, processor, output: Path, trust_remot
         tokenizer = (
             processor
             if hasattr(processor, "convert_tokens_to_ids")
-            else AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+            else AutoTokenizer.from_pretrained(model_id, subfolder=subfolder, trust_remote_code=trust_remote_code)
         )
     try:
         export_tokenizer(tokenizer, output)
@@ -234,11 +267,14 @@ def export_openvino_hf(
     dynamic: bool = True,
     trust_remote_code: bool = False,
     device: Union[str, None] = None,
+    subfolder: str = "",
 ) -> Path:
     """Export a Transformers model to OpenVINO IR through the Transformers (HF) exporter.
 
     Args:
         model_id: Hub id or local path of the model to export.
+        subfolder: Subfolder within ``model_id`` holding the model + processor files (forwarded to every
+            ``from_pretrained``), for repos that nest models under a path.
         output: Directory to write the OpenVINO IR, processor and config into.
         task: One of ``_TASK_TO_AUTO_MODEL`` or ``"auto"`` to infer it from the model config.
         stateful: Fuse the KV-cache into OpenVINO state (generative models only).
@@ -256,7 +292,7 @@ def export_openvino_hf(
         and the model config.
     """
     if task == "auto":
-        task = _infer_task(model_id, trust_remote_code)
+        task = _infer_task(model_id, trust_remote_code, subfolder=subfolder)
         logger.info("Inferred task %r", task)
     if task not in _TASK_TO_AUTO_MODEL:
         raise ValueError(f"Unsupported task {task!r}. Choose one of: {sorted(_TASK_TO_AUTO_MODEL)} (or 'auto').")
@@ -268,12 +304,16 @@ def export_openvino_hf(
 
     device = _resolve_device(device)
     logger.info("Loading %s (%s) for task %r [%s] on %s", model_id, auto_model_class_name, task, modality, device)
-    model = auto_model_class.from_pretrained(model_id, dtype=torch.float32, trust_remote_code=trust_remote_code)
+    model = auto_model_class.from_pretrained(
+        model_id, subfolder=subfolder, dtype=torch.float32, trust_remote_code=trust_remote_code
+    )
     model = model.eval().to(device)
-    processor = _load_processor(model_id, modality, trust_remote_code)
-    # The per-architecture example batch, on the export device for the real forward passes the
+    # The per-architecture example batch, moved to the export device for the real forward passes the
     # decompositions run (VLM/seq2seq `generate` captures).
-    sample_inputs = _to_device(_build_sample_inputs(processor, modality, model), device)
+    processor, sample_inputs = _load_processor_and_build_sample(
+        model_id, modality, model, trust_remote_code, subfolder
+    )
+    sample_inputs = _to_device(sample_inputs, device)
 
     exporter = OpenVINOExporter()
     config = OpenVINOConfig(dynamic=dynamic, stateful=stateful and generative)
@@ -332,7 +372,7 @@ def export_openvino_hf(
 
     if generative:
         # Generative models decode to text: save the OpenVINO tokenizer + generation config alongside the IR.
-        _save_openvino_tokenizer(model_id, processor, output, trust_remote_code)
+        _save_openvino_tokenizer(model_id, processor, output, trust_remote_code, subfolder=subfolder)
         _try_save_generation_config(model, output)
 
     processor.save_pretrained(output)

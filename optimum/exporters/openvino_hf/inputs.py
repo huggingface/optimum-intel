@@ -35,6 +35,13 @@ def _default_vlm_inputs(processor, model) -> dict:
     """Default VLM sample: an ``<image>`` prompt whose token expands to match the pixel features
     (works for llava-style processors). Kept off the runtime `preprocess_inputs` so the traced vision
     size stays the model's own — what the runtime feeds at inference."""
+    # llava-style processors compute the image-token count as `(h // patch_size) * (w // patch_size)`;
+    # an under-specified fixture processor can leave `patch_size` unset, so fill it from the vision config.
+    if getattr(processor, "patch_size", None) is None:
+        vision_config = getattr(model.config, "vision_config", None)
+        patch_size = getattr(vision_config, "patch_size", None)
+        if patch_size is not None:
+            processor.patch_size = patch_size
     image_token = getattr(processor, "image_token", None) or "<image>"
     images = [Image.new("RGB", (224, 224))] * _EXAMPLE_BATCH_SIZE
     text = [f"{image_token}\n{_EXAMPLE_PROMPT}"] * _EXAMPLE_BATCH_SIZE
