@@ -27,6 +27,7 @@ from utils_tests import (
     SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED,
     TEST_NAME_TO_MODEL_TYPE,
     get_supported_model_for_library,
+    is_qwen3_omni_available,
 )
 
 from optimum.exporters.openvino import export_from_model, main_export
@@ -131,6 +132,11 @@ class ExportModelTest(unittest.TestCase):
         in get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
     }
 
+    # Dense Qwen3-Omni only exists in transformers builds that ship the qwen3_omni module, so it can't
+    # live in the statically-filtered dict above.
+    if is_qwen3_omni_available():
+        SUPPORTED_ARCHITECTURES.update({"qwen3_omni": OVModelForMultimodalLM})
+
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "stable-diffusion-3": {"text_encoder_3": "8.0"},
@@ -194,6 +200,10 @@ class ExportModelTest(unittest.TestCase):
             # rotary embedding. The CLI export backfills it; mirror that here for the direct model load.
             loading_kwargs["config"] = _ensure_qwen3_omni_rope_scaling(AutoConfig.from_pretrained(model_name))
             model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
+        elif model_type == "qwen3_omni":
+            from transformers import Qwen3OmniForConditionalGeneration
+
+            model = Qwen3OmniForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
         else:
             model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
 
@@ -375,6 +385,32 @@ class ExportModelTest(unittest.TestCase):
             for behavior in Qwen3OmniMoeConfigBehavior:
                 model_path = Path(tmpdir) / f"openvino_{behavior.value}_model.xml"
                 self.assertTrue(model_path.exists(), f"Missing {behavior.value}_model for task={task}")
+
+    QWEN3_OMNI_EXPECTED_PARTS = (
+        "language_model",
+        "text_embeddings_model",
+        "vision_embeddings_model",
+        "vision_embeddings_pos_model",
+        "audio_encoder_model",
+        "talker_model",
+        "talker_text_embeddings_model",
+        "talker_projections_model",
+        "code_predictor_model",
+        "code2wav_model",
+    )
+
+    @parameterized.expand(["text-to-audio", "automatic-speech-recognition"])
+    @unittest.skipUnless(is_qwen3_omni_available(), "dense qwen3_omni is not available in this transformers build")
+    def test_qwen3_omni_export_task(self, task):
+        model_name = MODEL_NAMES["qwen3_omni"]
+        from transformers import Qwen3OmniForConditionalGeneration
+
+        model = Qwen3OmniForConditionalGeneration.from_pretrained(model_name, attn_implementation="eager")
+        with TemporaryDirectory() as tmpdir:
+            export_from_model(model, tmpdir, task=task, stateful=True)
+            for part_name in self.QWEN3_OMNI_EXPECTED_PARTS:
+                model_path = Path(tmpdir) / f"openvino_{part_name}.xml"
+                self.assertTrue(model_path.exists(), f"Missing {part_name} for task={task}")
 
     def test_compare_openvino_onnx_supported_architectures(self):
         onnx_architectures = set()

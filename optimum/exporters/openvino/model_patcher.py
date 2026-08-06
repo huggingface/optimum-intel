@@ -4623,6 +4623,330 @@ class Qwen3OmniMoeCode2WavPatcher(ModelPatcher):
             )
 
 
+class Qwen3OmniVisionMergerPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def image_embed_forward(
+            self,
+            hidden_states: torch.Tensor,
+            pos_embeds: torch.Tensor,
+            attention_mask: torch.Tensor,
+            rotary_pos_emb: torch.Tensor,
+        ) -> torch.Tensor:
+            hidden_states = self.patch_embed(hidden_states)
+            hidden_states = hidden_states + pos_embeds
+            deepstack_feature_lists = []
+            for layer_num, blk in enumerate(self.blocks):
+                hidden_states = blk(hidden_states, attention_mask=attention_mask, rotary_pos_emb=rotary_pos_emb)
+                if layer_num in self.deepstack_visual_indexes:
+                    deepstack_feature = self.merger_list[self.deepstack_visual_indexes.index(layer_num)](hidden_states)
+                    deepstack_feature_lists.append(deepstack_feature)
+            last_hidden_state = self.merger(hidden_states)
+            return last_hidden_state, torch.stack(deepstack_feature_lists, dim=0)
+
+        model.forward = types.MethodType(image_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        patch_qwen2vl_vision_blocks(self._model)
+        super().__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        for block in self._model.blocks:
+            block.forward = block._orig_forward
+            block.attn.forward = block.attn._orig_forward
+
+
+class Qwen3OmniAudioEncoderPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def audio_forward(
+            self,
+            padded_feature: torch.Tensor,
+            padded_mask_after_cnn: torch.Tensor,
+            aftercnn_lens: torch.Tensor,
+            cu_seqlens: torch.Tensor,
+        ) -> torch.Tensor:
+            padded_feature = padded_feature.unsqueeze(1)
+            padded_embed = torch.nn.functional.gelu(self.conv2d1(padded_feature))
+            padded_embed = torch.nn.functional.gelu(self.conv2d2(padded_embed))
+            padded_embed = torch.nn.functional.gelu(self.conv2d3(padded_embed))
+            b, c, f, t = padded_embed.size()
+            padded_embed = self.conv_out(padded_embed.permute(0, 3, 1, 2).contiguous().view(b, t, c * f))
+
+            positional_embedding = (
+                self.positional_embedding.positional_embedding[: padded_embed.shape[1], :]
+                .unsqueeze(0)
+                .to(padded_embed.dtype)
+            )
+            padded_embed = padded_embed + positional_embedding
+
+            # Flatten rather than boolean-index: the latter bakes a data-dependent shape that OV can't trace.
+            # Encoder layers run with eager attention during export, so cu_seqlens don't affect the output.
+            b, t, d = padded_embed.shape
+            hidden_states = padded_embed.reshape(b * t, d)
+
+            for encoder_layer in self.layers:
+                layer_outputs = encoder_layer(hidden_states, cu_seqlens)
+                hidden_states = layer_outputs[0]
+
+            hidden_states = self.ln_post(hidden_states)
+            hidden_states = self.proj1(hidden_states)
+            hidden_states = self.act(hidden_states)
+            hidden_states = self.proj2(hidden_states)
+
+            hidden_states = hidden_states.reshape(b, t, -1)
+            hidden_states = hidden_states * padded_mask_after_cnn.to(hidden_states.dtype).unsqueeze(-1)
+            return hidden_states
+
+        model.forward = types.MethodType(audio_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Qwen3OmniLanguageModelPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        # Talker consumes one intermediate layer's hidden state; layer index comes from talker_config.
+        talker_config = getattr(model.config, "talker_config", None)
+        accept_hidden_layer = getattr(talker_config, "accept_hidden_layer", None)
+
+        def lm_forward(
+            self,
+            attention_mask,
+            position_ids,
+            past_key_values,
+            inputs_embeds,
+            visual_pos_masks,
+            deepstack_visual_embeds,
+            use_cache=True,
+        ):
+            if is_transformers_version("<", "5"):
+                pkv = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                pkv = DynamicCache(past_key_values)
+            outputs = self.thinker.model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                use_cache=use_cache,
+                past_key_values=pkv,
+                visual_pos_masks=visual_pos_masks,
+                deepstack_visual_embeds=deepstack_visual_embeds,
+                output_hidden_states=accept_hidden_layer is not None,
+            )
+            hidden_states = outputs[0]
+            logits = self.thinker.lm_head(hidden_states)
+            pkv_tuple = postprocess_past_key_values(outputs.past_key_values)
+            if accept_hidden_layer is not None:
+                intermediate_hidden_states = outputs.hidden_states[accept_hidden_layer]
+                return (logits, hidden_states, intermediate_hidden_states, pkv_tuple)
+            return (logits, hidden_states, pkv_tuple)
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(lm_forward, model)
+
+        thinker_model = model.thinker.model
+        thinker_model.__orig_deepstack_process = thinker_model._deepstack_process
+        thinker_model._deepstack_process = types.MethodType(_deepstack_process_patched, thinker_model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        thinker_model = self._model.thinker.model
+        thinker_model._deepstack_process = thinker_model.__orig_deepstack_process
+
+
+class Qwen3OmniTalkerLanguageModelPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        def lm_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values, use_cache=True):
+            if is_transformers_version("<", "5"):
+                pkv = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                pkv = DynamicCache(past_key_values)
+            outputs = self.talker.model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                use_cache=use_cache,
+                past_key_values=pkv,
+            )
+            hidden_states = outputs[0]
+            logits = self.talker.codec_head(hidden_states)
+            return (logits, hidden_states, postprocess_past_key_values(outputs.past_key_values))
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(lm_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Qwen3OmniCodePredictorPatcher(OVDecoderModelPatcher):
+    # Single-step CodePredictor graph: one call runs one inner step and grows the KV cache.
+    # The Python-side loop (OVCodePredictorDecoder) invokes it num_code_groups-1 times.
+    # This replaces the earlier fully-unrolled graph, whose num_code_groups-1 inlined transformer
+    # forwards each allocated their own FP32 activations, ballooning peak device memory. A
+    # single-step stateful graph keeps peak activations at ~1x.
+    # Sampling stays in-graph via the Gumbel-max trick (argmax(logits + Gumbel(0,1)) ~ Categorical),
+    # because the sampled code must be turned back into a codec embedding within the same call to
+    # feed the next step; a per-call int64 seed keeps runs reproducible. Baking the codec embedding
+    # into the graph (via token_embed) means no separate codec_embedding weights file is needed.
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        code_predictor = model.talker.code_predictor
+        # Dummy inputs are float32; upcasting the module avoids dtype mismatches during tracing.
+        code_predictor.float()
+
+        # Per-step lm_head / codec_embedding are selected by a runtime `step` index, so their
+        # weights are stacked into a single tensor that index_select can gather from during tracing.
+        stacked_heads = torch.stack([head.weight for head in code_predictor.lm_head])
+        stacked_codec_embeds = torch.stack([emb.weight for emb in code_predictor.model.codec_embedding])
+
+        def _seeded_uniform(seed, shape, dtype, device):
+            # Traceable PRNG: pure arithmetic on the seed tensor, no CPU fallback.
+            # Emits a (0, 1) uniform tensor of the requested shape; identical seeds
+            # produce identical draws run to run, independent of batch or device state.
+            idx = torch.arange(shape[-1], device=device, dtype=torch.float32)
+            seed_f = seed.to(torch.float32)
+            # Two-term hash keeps correlations low across adjacent indices.
+            raw = torch.sin(seed_f * 12.9898 + idx * 78.233) * 43758.5453
+            u = raw - torch.floor(raw)  # fractional part ~ uniform(0, 1)
+            return u.clamp(min=1e-20, max=1.0 - 1e-20).to(dtype).expand(shape)
+
+        def _gumbel_sample(logits, top_k, seed):
+            # argmax(logits + Gumbel(0,1)) ~ Categorical(softmax(logits)). Top-k masking uses
+            # sort + index_select so top_k can be a runtime int64 tensor (torch.topk requires
+            # a Python int for k, which breaks tracing).
+            sorted_logits, _ = torch.sort(logits, dim=-1, descending=True)
+            top_k_idx = torch.clamp(top_k.reshape(1) - 1, min=0)
+            threshold = torch.index_select(sorted_logits, -1, top_k_idx)
+            logits = torch.where(logits < threshold, torch.full_like(logits, float("-inf")), logits)
+            u = _seeded_uniform(seed, logits.shape, logits.dtype, logits.device)
+            gumbel = -torch.log(-torch.log(u))
+            return (logits + gumbel).argmax(dim=-1)
+
+        def cp_forward(
+            self,
+            inputs_embeds,
+            attention_mask,
+            position_ids,
+            step,
+            seed,
+            temperature,
+            top_k,
+            past_key_values=None,
+            **kwargs,
+        ):
+            # inputs_embeds: prefill [B, 2, hidden] = concat(prefix_hidden[:, -1:], first_code_embed),
+            #                decode  [B, 1, hidden] = previous step's codec embedding.
+            # step: scalar int64 index into lm_head / codec_embedding; seed: scalar int64;
+            # temperature: scalar float32; top_k: scalar int64.
+
+            # KV cache passed in as legacy tuples; wrapped for the Transformers 4.x/5.x API.
+            if is_transformers_version("<", "5"):
+                pkv = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                pkv = DynamicCache(past_key_values)
+
+            outputs = self.talker.code_predictor.model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                use_cache=True,
+                past_key_values=pkv,
+            )
+            hidden_states = outputs.last_hidden_state
+            present = postprocess_past_key_values(outputs.past_key_values)
+
+            # Gather the per-step lm_head / codec_embedding weights via the runtime step index.
+            step_idx = step.reshape(1)
+            head_weight = torch.index_select(stacked_heads, 0, step_idx).squeeze(0)
+            embed_weight = torch.index_select(stacked_codec_embeds, 0, step_idx).squeeze(0)
+
+            # Original: self.lm_head[step](hidden_states), then torch.multinomial() sampling.
+            step_logits = torch.nn.functional.linear(hidden_states[:, -1, :], head_weight)
+            step_logits = step_logits / torch.clamp(temperature, min=1e-6)
+            token = _gumbel_sample(step_logits, top_k, seed)
+
+            # Original: self.model.codec_embedding[step](token). Emitted so the caller can both
+            # feed it as the next step's input and accumulate it into codec_hiddens_sum.
+            token_embed = torch.nn.functional.embedding(token, embed_weight).unsqueeze(1)
+            code = token.unsqueeze(-1)  # [B, 1]
+            return (code, token_embed, present)
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(cp_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Qwen3OmniCode2WavPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: Union["PreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs=model_kwargs or {})
+        self._orig_get_extra_padding = None
+
+    def __enter__(self):
+        super().__enter__()
+        # Override Qwen3OmniCausalConvNet._get_extra_padding_for_conv1d: the original uses math.ceil
+        # on dynamic shapes which can't be traced. For every Code2Wav conv config, extra_padding == 0.
+        import transformers.models.qwen3_omni.modeling_qwen3_omni as qwen3_omni_module
+
+        self._orig_get_extra_padding = qwen3_omni_module.Qwen3OmniCausalConvNet._get_extra_padding_for_conv1d
+        qwen3_omni_module.Qwen3OmniCausalConvNet._get_extra_padding_for_conv1d = lambda self, hidden_state: 0
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if self._orig_get_extra_padding is not None:
+            import transformers.models.qwen3_omni.modeling_qwen3_omni as qwen3_omni_module
+
+            qwen3_omni_module.Qwen3OmniCausalConvNet._get_extra_padding_for_conv1d = self._orig_get_extra_padding
+
+
 # copied from https://github.com/huggingface/transformers/blob/v4.47.1/src/transformers/models/granitemoe/modeling_granitemoe.py#L321
 def _granite_moe_topk_gating_forward(self, hidden_states):
     # compute the top_k routing decision

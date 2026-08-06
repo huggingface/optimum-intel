@@ -37,6 +37,7 @@ from utils_tests import (
     get_num_quantized_nodes,
     get_supported_model_for_library,
     is_model_type_transformers_compatible,
+    is_qwen3_omni_available,
 )
 
 from optimum.exporters.openvino.__main__ import main_export
@@ -144,6 +145,24 @@ class OVCLIExportTestCase(unittest.TestCase):
         if TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type)
         in get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
     ]
+
+    # Qwen3-Omni-MoE requires Transformers 5.0+ (fused-experts / router API).
+    if is_transformers_version(">=", "5.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-to-audio", "qwen3_omni_moe"),
+                ("automatic-speech-recognition", "qwen3_omni_moe"),
+            ]
+        )
+
+    # Dense Qwen3-Omni only exists in transformers builds that ship the qwen3_omni module.
+    if is_qwen3_omni_available():
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-to-audio", "qwen3_omni"),
+                ("automatic-speech-recognition", "qwen3_omni"),
+            ]
+        )
 
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
@@ -828,9 +847,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
 
     def _load_exported_ov_model(self, model_type: str, task: str, tmpdir: str, model_kwargs: Dict):
-        # qwen3_omni_moe spans multiple tasks but always loads via OVModelForMultimodalLM,
-        # the dedicated omni-modal wrapper (talker/audio_encoder/code2wav) for this architecture.
-        if model_type == "qwen3_omni_moe":
+        # qwen3_omni(_moe) spans multiple tasks but always loads via OVModelForMultimodalLM,
+        # the dedicated omni-modal wrapper (talker/audio_encoder/code2wav) for these architectures.
+        if model_type in ("qwen3_omni_moe", "qwen3_omni"):
             from optimum.intel.openvino import OVModelForMultimodalLM
 
             return OVModelForMultimodalLM.from_pretrained(tmpdir, **model_kwargs)
