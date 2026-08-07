@@ -136,6 +136,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
+        ("image-text-to-text", "youtu_vl"),
     ]
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = [

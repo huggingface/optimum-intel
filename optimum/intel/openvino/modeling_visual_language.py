@@ -3676,6 +3676,260 @@ if is_transformers_version(">=", "4.57"):
     _OVQwen2_5_VLForCausalLM.get_vision_position_ids = getattr(Qwen2_5_VLModel, "get_vision_position_ids", None)
 
 
+class _OVYoutuVLForCausalLM(OVModelForVisualCausalLM):
+    # Runtime wrapper for tencent/Youtu-VL-4B-Instruct.
+    # The SigLIP2 windowed vision tower + patch merger are exported as a single `vision_embeddings`
+    # model; window_index / cu_seqlens / rotary_pos_emb (dynamic-length python loops) are recomputed
+    # here and passed in as materialized tensors, mirroring the Qwen2.5-VL runtime path.
+    # The DeepSeek-V3-style MLA text backbone uses plain 1-D position ids (no mRoPE).
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = None,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+        vision_config = config.vision_config
+        head_dim = vision_config.hidden_size // vision_config.num_attention_heads
+
+        class YoutuVisionRotaryEmbedding(torch.nn.Module):
+            def __init__(self, dim: int, theta: float = 10000.0) -> None:
+                super().__init__()
+                inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float) / dim))
+                self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+            def forward(self, seqlen: int) -> torch.Tensor:
+                seq = torch.arange(seqlen, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
+                freqs = torch.outer(seq, self.inv_freq)
+                return freqs
+
+        self._rotary_pos_emb = YoutuVisionRotaryEmbedding(head_dim // 2)
+        self._spatial_merge_size = 2
+        self._spatial_merge_unit = self._spatial_merge_size * self._spatial_merge_size
+        self._patch_size = vision_config.patch_size
+        # window_size in the SigLIP2 encoder is `patch_size * 2 * 8`
+        self._window_size = self._patch_size * 2 * 8
+
+    def rot_pos_emb(self, spatial_shapes):
+        pos_ids = []
+        for h, w in spatial_shapes:
+            h = int(h)
+            w = int(w)
+            hpos_ids = torch.arange(h).unsqueeze(1).expand(-1, w)
+            hpos_ids = hpos_ids.reshape(
+                h // self._spatial_merge_size,
+                self._spatial_merge_size,
+                w // self._spatial_merge_size,
+                self._spatial_merge_size,
+            )
+            hpos_ids = hpos_ids.permute(0, 2, 1, 3).flatten()
+
+            wpos_ids = torch.arange(w).unsqueeze(0).expand(h, -1)
+            wpos_ids = wpos_ids.reshape(
+                h // self._spatial_merge_size,
+                self._spatial_merge_size,
+                w // self._spatial_merge_size,
+                self._spatial_merge_size,
+            )
+            wpos_ids = wpos_ids.permute(0, 2, 1, 3).flatten()
+            pos_ids.append(torch.stack([hpos_ids, wpos_ids], dim=-1))
+        pos_ids = torch.cat(pos_ids, dim=0)
+        max_grid_size = int(spatial_shapes.max())
+        rotary_pos_emb_full = self._rotary_pos_emb(max_grid_size)
+        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+        return rotary_pos_emb
+
+    def get_window_index(self, spatial_shapes):
+        window_index: list = []
+        cu_window_seqlens: list = [0]
+        window_index_id = 0
+        vit_merger_window_size = self._window_size // self._spatial_merge_size // self._patch_size
+
+        for grid_h, grid_w in spatial_shapes:
+            grid_h = int(grid_h)
+            grid_w = int(grid_w)
+            grid_t = 1
+            llm_grid_h, llm_grid_w = grid_h // self._spatial_merge_size, grid_w // self._spatial_merge_size
+            index = torch.arange(grid_t * llm_grid_h * llm_grid_w).reshape(grid_t, llm_grid_h, llm_grid_w)
+            pad_h = (vit_merger_window_size - llm_grid_h % vit_merger_window_size) % vit_merger_window_size
+            pad_w = (vit_merger_window_size - llm_grid_w % vit_merger_window_size) % vit_merger_window_size
+            num_windows_h = (llm_grid_h + pad_h) // vit_merger_window_size
+            num_windows_w = (llm_grid_w + pad_w) // vit_merger_window_size
+            index_padded = torch.nn.functional.pad(index, (0, pad_w, 0, pad_h), "constant", -100)
+            index_padded = index_padded.reshape(
+                grid_t,
+                num_windows_h,
+                vit_merger_window_size,
+                num_windows_w,
+                vit_merger_window_size,
+            )
+            index_padded = index_padded.permute(0, 1, 3, 2, 4).reshape(
+                grid_t,
+                num_windows_h * num_windows_w,
+                vit_merger_window_size,
+                vit_merger_window_size,
+            )
+            seqlens = (index_padded != -100).sum([2, 3]).reshape(-1)
+            index_padded = index_padded.reshape(-1)
+            index_new = index_padded[index_padded != -100]
+            window_index.append(index_new + window_index_id)
+            cu_seqlens_tmp = seqlens.cumsum(0) * self._spatial_merge_unit + cu_window_seqlens[-1]
+            cu_window_seqlens.extend(cu_seqlens_tmp.tolist())
+            window_index_id += grid_t * llm_grid_h * llm_grid_w
+        window_index = torch.cat(window_index, dim=0)
+        return window_index, cu_window_seqlens
+
+    def get_vision_embeddings(self, pixel_values, spatial_shapes=None, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        if spatial_shapes is None:
+            raise ValueError("`spatial_shapes` is required to compute youtu_vl vision embeddings")
+
+        spatial_shapes = spatial_shapes if isinstance(spatial_shapes, torch.Tensor) else torch.as_tensor(spatial_shapes)
+        # The exported vision model consumes the patchified pixel values with shape
+        # (num_patches, num_channels * patch_size ** 2).
+        pixel_values = pixel_values if isinstance(pixel_values, torch.Tensor) else torch.as_tensor(pixel_values)
+        if pixel_values.ndim == 3:
+            pixel_values = pixel_values.reshape(-1, pixel_values.shape[-1])
+
+        seq_len = pixel_values.shape[0]
+        rotary_pos_emb = self.rot_pos_emb(spatial_shapes)
+        window_index, cu_window_seqlens = self.get_window_index(spatial_shapes)
+        cu_window_seqlens = torch.tensor(cu_window_seqlens, dtype=torch.int32)
+        cu_window_seqlens = torch.unique_consecutive(cu_window_seqlens)
+        cu_seqlens = torch.repeat_interleave(spatial_shapes[:, 0] * spatial_shapes[:, 1], 1).cumsum(
+            dim=0, dtype=torch.int32
+        )
+        cu_seqlens = torch.nn.functional.pad(cu_seqlens, (1, 0), value=0)
+
+        attention_mask = torch.zeros((1, seq_len, seq_len), dtype=torch.bool)
+        for i in range(1, len(cu_seqlens)):
+            attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = True
+        causal_mask = torch.zeros((1, seq_len, seq_len), dtype=torch.float32)
+        causal_mask.masked_fill_(torch.logical_not(attention_mask), float("-inf"))
+
+        window_attention_mask = torch.zeros((1, seq_len, seq_len), dtype=torch.bool)
+        for i in range(1, len(cu_window_seqlens)):
+            window_attention_mask[
+                ..., cu_window_seqlens[i - 1] : cu_window_seqlens[i], cu_window_seqlens[i - 1] : cu_window_seqlens[i]
+            ] = True
+        window_causal_mask = torch.zeros((1, seq_len, seq_len), dtype=torch.float32)
+        window_causal_mask.masked_fill_(torch.logical_not(window_attention_mask), float("-inf"))
+
+        res = self.vision_embeddings(
+            pixel_values=pixel_values,
+            attention_mask=causal_mask,
+            window_attention_mask=window_causal_mask,
+            window_index=window_index,
+            rotary_pos_emb=rotary_pos_emb,
+        )[0]
+        return res
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        spatial_shapes=None,
+        **kwargs,
+    ):
+        inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
+        if pixel_values is not None and input_ids.shape[1] != 1:
+            image_embeds = self.get_vision_embeddings(
+                pixel_values, spatial_shapes=spatial_shapes, input_ids=input_ids, **kwargs
+            )
+            if image_embeds is not None:
+                image_embeds = torch.from_numpy(image_embeds) if isinstance(image_embeds, np.ndarray) else image_embeds
+                n_image_tokens = (input_ids == self.config.image_token_id).sum().item()
+                n_image_features = image_embeds.shape[0]
+                if n_image_tokens != n_image_features:
+                    raise ValueError(
+                        f"Image features and image tokens do not match: tokens: {n_image_tokens}, features {n_image_features}"
+                    )
+                mask = input_ids == self.config.image_token_id
+                mask_unsqueezed = mask.unsqueeze(-1)
+                mask_expanded = mask_unsqueezed.expand_as(inputs_embeds)
+                image_mask = mask_expanded.to(inputs_embeds.device)
+                image_embeds = image_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+                inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        attention_mask=None,
+        spatial_shapes=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        # Vision features are only needed during the prefill step.
+        if past_key_values is not None:
+            model_inputs["pixel_values"] = None
+            model_inputs["spatial_shapes"] = None
+        else:
+            model_inputs["spatial_shapes"] = spatial_shapes
+        return model_inputs
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+        inputs = processor(images=image, text=[text_prompt], return_tensors="pt")
+        return inputs
+
+
 class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
     additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
 
@@ -7394,4 +7648,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_omni_moe": _OVQwen3OmniMoeForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
+    "youtu_vl": _OVYoutuVLForCausalLM,
 }
