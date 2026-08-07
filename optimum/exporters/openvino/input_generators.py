@@ -1116,6 +1116,102 @@ class DummyMiniCPMVResampleInputGenerator(DummyVisionInputGenerator):
             return self.random_float_tensor(shape=[self.feat_size, self.batch_size, self.hidden_size])
 
 
+class DummyMiniCPMV4_6ImageInputGenerator(DummyVisionInputGenerator):
+    """Dummy inputs for the fully-fused MiniCPM-V-4.6 image feature extractor.
+
+    The exported graph takes the NaViT-packed ``pixel_values`` together with a set of
+    precomputed index / mask tensors (patch position ids, block-diagonal encoder and
+    window attention masks, window reordering indices, and spatial-merge gather
+    indices). This generator builds a self-consistent set for a small square dummy
+    grid so that all divisibility invariants (window 2x2 then merge 2x2) hold.
+    """
+
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "pos_ids",
+        "encoder_attention_mask",
+        "downsampled_attention_mask",
+        "window_index",
+        "reverse_window_index",
+        "window_attention_mask",
+        "merge_gather_index",
+        "final_gather_index",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height)
+        vision_config = normalized_config.config
+        self.patch_size = vision_config.patch_size
+        # Small square grid (8x8 patches) that stays divisible by the window (2x2)
+        # and, after the /2 window merge, by the merge kernel (2x2).
+        self.grid_h = 8
+        self.grid_w = 8
+        self.window_h, self.window_w = 2, 2
+        self.merge_h, self.merge_w = 2, 2
+        self.num_patches = self.grid_h * self.grid_w
+        self.merged_h = self.grid_h // self.window_h
+        self.merged_w = self.grid_w // self.window_w
+        self.merged_patches = self.merged_h * self.merged_w
+        self.final_h = self.merged_h // self.merge_h
+        self.final_w = self.merged_w // self.merge_w
+        self.final_patches = self.final_h * self.final_w
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            return self.random_float_tensor(
+                shape=[1, self.num_channels, self.patch_size, self.num_patches * self.patch_size],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "pos_ids":
+            return self.random_int_tensor(
+                shape=[self.num_patches], min_value=0, max_value=8, framework=framework, dtype=int_dtype
+            )
+        if input_name in ("encoder_attention_mask", "window_attention_mask"):
+            return self.constant_tensor(
+                shape=[1, self.num_patches, self.num_patches],
+                value=0.0,
+                framework=framework,
+                dtype=DTYPE_MAPPER.pt(float_dtype),
+            )
+        if input_name == "downsampled_attention_mask":
+            return self.constant_tensor(
+                shape=[1, self.merged_patches, self.merged_patches],
+                value=0.0,
+                framework=framework,
+                dtype=DTYPE_MAPPER.pt(float_dtype),
+            )
+        if input_name in ("window_index", "reverse_window_index"):
+            return self.random_int_tensor(
+                shape=[self.num_patches], min_value=0, max_value=self.num_patches, framework=framework, dtype=int_dtype
+            )
+        if input_name == "merge_gather_index":
+            return self.random_int_tensor(
+                shape=[self.merged_patches * self.window_h * self.window_w],
+                min_value=0,
+                max_value=self.num_patches,
+                framework=framework,
+                dtype=int_dtype,
+            )
+        if input_name == "final_gather_index":
+            return self.random_int_tensor(
+                shape=[self.final_patches * self.merge_h * self.merge_w],
+                min_value=0,
+                max_value=self.merged_patches,
+                framework=framework,
+                dtype=int_dtype,
+            )
+
+
 class DummyPhi3VisionProjectionInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("input",)
 

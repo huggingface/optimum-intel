@@ -30,9 +30,81 @@ from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import is_transformers_version
 
 
+def _create_tiny_minicpmv4_6_model():
+    """Generate a tiny random MiniCPM-V-4.6 model for testing and return its local path.
+
+    Preserves the real ``minicpmv4_6`` architecture: a NaViT-packed
+    ``minicpmv4_6_vision`` encoder with a ViT window-attention merger + downsample
+    merger, and a ``qwen3_5_text`` hybrid (linear + full attention) language backbone.
+    Scale parameters (hidden sizes, layer counts) are reduced while the (tied)
+    embedding table keeps the real vocabulary so the MiniCPM-V tokenizer chat-template
+    token ids stay in range. Cached on disk so repeated calls are cheap.
+    """
+    import torch
+
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_minicpmv4_6"
+    marker = output_dir / "tiny_minicpmv4_6_v1"
+    if marker.exists() and (output_dir / "config.json").exists():
+        return str(output_dir)
+
+    from transformers import AutoConfig, AutoProcessor, MiniCPMV4_6ForConditionalGeneration
+
+    torch.manual_seed(42)
+    base_id = "openbmb/MiniCPM-V-4.6"
+    config = AutoConfig.from_pretrained(base_id)
+
+    tc = config.text_config
+    tc.num_hidden_layers = 4
+    tc.layer_types = ["linear_attention", "linear_attention", "linear_attention", "full_attention"]
+    tc.hidden_size = 64
+    tc.intermediate_size = 128
+    tc.num_attention_heads = 4
+    tc.num_key_value_heads = 2
+    tc.head_dim = 64
+    tc.linear_key_head_dim = 32
+    tc.linear_value_head_dim = 32
+    tc.linear_num_key_heads = 4
+    tc.linear_num_value_heads = 4
+    tc.linear_conv_kernel_dim = 4
+    tc.max_position_embeddings = 4096
+
+    vc = config.vision_config
+    vc.hidden_size = 128
+    vc.intermediate_size = 256
+    vc.num_hidden_layers = 4
+    vc.num_attention_heads = 4
+    vc.patch_size = 14
+    vc.image_size = 980
+
+    config.insert_layer_id = 1
+    config.vocab_size = tc.vocab_size
+    config.tie_word_embeddings = True
+    tc.image_token_id = config.image_token_id
+    tc.video_token_id = config.video_token_id
+    config.dtype = "float32"
+    config.torch_dtype = "float32"
+    for sub in (tc, vc):
+        sub.dtype = "float32"
+        sub.torch_dtype = "float32"
+
+    model = MiniCPMV4_6ForConditionalGeneration(config).to(torch.float32).eval()
+    with torch.no_grad():
+        for name, param in model.named_parameters():
+            if "language_model" in name and param.dim() == 2 and (
+                "proj" in name or "mlp" in name or "fc" in name
+            ):
+                param.normal_(mean=0.0, std=0.12)
+        model.get_input_embeddings().weight.normal_(mean=0.0, std=0.18)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(output_dir, safe_serialization=True)
+    AutoProcessor.from_pretrained(base_id).save_pretrained(output_dir)
+    marker.write_text("tiny_minicpmv4_6_v1")
+    return str(output_dir)
+
+
 def _create_tiny_kokoro_model():
     """Generate a tiny random Kokoro TTS model for testing and return its local path.
-
     Falls back to the original Hub id if the `kokoro` package is not installed.
     Result is cached on disk under the system temp dir, so subsequent calls are cheap.
     """
@@ -43,8 +115,13 @@ def _create_tiny_kokoro_model():
     if config_file.exists() and weights_file.exists() and voice_file.exists():
         return str(output_dir)
 
-    from kokoro.istftnet import Decoder
-    from kokoro.modules import CustomAlbert, ProsodyPredictor, TextEncoder
+    try:
+        from kokoro.istftnet import Decoder
+        from kokoro.modules import CustomAlbert, ProsodyPredictor, TextEncoder
+    except ImportError:
+        # Honor the documented fallback: if the optional `kokoro` package is not
+        # installed, use the original Hub id instead of breaking test collection.
+        return "hexgrad/Kokoro-82M"
     from transformers import AlbertConfig
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -262,6 +339,9 @@ HUB_MODEL_NAMES = {
     "minicpm": "optimum-intel-internal-testing/tiny-random-minicpm",
     "minicpm3": "optimum-intel-internal-testing/tiny-random-minicpm3",
     "minicpmv": "optimum-intel-internal-testing/tiny-random-minicpmv-2_6",
+    "minicpmv4_6": _create_tiny_minicpmv4_6_model()
+    if is_transformers_version(">=", "5.7.0")
+    else "openbmb/MiniCPM-V-4.6",
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
     "mistral-nemo": "optimum-intel-internal-testing/tiny-random-mistral-nemo",
@@ -490,6 +570,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 26,
         "resampler_model": 6,
+    },
+    "minicpmv4_6": {
+        "lm_model": 70,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 34,
     },
     "llava_next_video": {
         "lm_model": 30,

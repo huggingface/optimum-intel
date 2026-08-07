@@ -47,6 +47,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
+    DummyMiniCPMV4_6ImageInputGenerator,
     DummyMiniCPMVImageInputGenerator,
     DummyMiniCPMVResampleInputGenerator,
     DummyPhi3VisionProjectionInputGenerator,
@@ -150,6 +151,7 @@ from optimum.exporters.openvino.model_patcher import (
     MambaPatcher,
     MiniCPM3Patcher,
     MiniCPMModelPatcher,
+    MiniCPMV4_6VisionEmbeddingsModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
     MistralModelPatcher,
@@ -7000,6 +7002,142 @@ class Qwen3_5MoeOpenVINOConfig(Qwen3_5OpenVINOConfig):
                 "qwen3_5_moe_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
             ).outputs
         return super().outputs
+
+
+class MiniCPMV4_6ConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    TEXT_EMBEDDINGS = "text_embeddings"
+
+
+@register_in_tasks_manager("minicpmv4_6", *["image-text-to-text"], library_name="transformers")
+class MiniCPMV4_6OpenVINOConfig(BaseVLMOpenVINOConfig):
+    """OpenVINO exporter configuration for MiniCPM-V-4.6.
+
+    MiniCPM-V-4.6 combines a NaViT-packed SigLIP-style vision encoder with a ViT
+    window-attention merger + downsample merger, and a ``qwen3_5_text`` hybrid
+    (linear + full attention) language backbone. Unlike the older resampler-based
+    ``minicpmv`` architecture, image features are inserted through a simple
+    ``masked_scatter`` on ``image_token_id`` and the text backbone uses standard
+    1D RoPE position ids (its ``rope_type`` is ``default`` with no mrope-section
+    effect), so no 3D position handling is required.
+    """
+
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in MiniCPMV4_6ConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = ()
+    MIN_TRANSFORMERS_VERSION = "5.7.0"
+    MODEL_TYPE = "minicpmv4_6"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: MiniCPMV4_6ConfigBehavior = MiniCPMV4_6ConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+            behavior=behavior,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == MiniCPMV4_6ConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMV4_6ImageInputGenerator,)
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == MiniCPMV4_6ConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {0: "batch_size", 3: "patch_seq"},
+                "pos_ids": {0: "num_patches"},
+                "encoder_attention_mask": {1: "num_patches", 2: "num_patches"},
+                "downsampled_attention_mask": {1: "merged_patches", 2: "merged_patches"},
+                "window_index": {0: "num_patches"},
+                "reverse_window_index": {0: "num_patches"},
+                "window_attention_mask": {1: "num_patches", 2: "num_patches"},
+                "merge_gather_index": {0: "merge_gather"},
+                "final_gather_index": {0: "final_gather"},
+            }
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == MiniCPMV4_6ConfigBehavior.VISION_EMBEDDINGS:
+            return {"image_features": {0: "num_image_tokens"}}
+        return {}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, MiniCPMV4_6ConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, MiniCPMV4_6ConfigBehavior):
+            behavior = MiniCPMV4_6ConfigBehavior(behavior)
+
+        if behavior == MiniCPMV4_6ConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "qwen3_5_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+            )
+
+        if behavior == MiniCPMV4_6ConfigBehavior.LANGUAGE:
+            # MiniCPM-V-4.6 feeds the qwen3_5_text backbone standard 1D (2D
+            # batched) position ids — its rope_type is ``default`` with no mrope
+            # section, so the 3D mrope position ids used by the standalone Qwen3.5
+            # VLM are not required here.
+            return get_vlm_text_generation_config(
+                "qwen3_5_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Qwen3_5ModelPatcher,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+            )
+
+        if behavior == MiniCPMV4_6ConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, MiniCPMV4_6ConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, MiniCPMV4_6ConfigBehavior):
+            behavior = MiniCPMV4_6ConfigBehavior(behavior)
+
+        if behavior == MiniCPMV4_6ConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == MiniCPMV4_6ConfigBehavior.VISION_EMBEDDINGS:
+            # top-level MiniCPMV4_6Model so the patcher can reach both the vision
+            # tower (with its window merger) and the downsample merger.
+            return model.model
+
+        if behavior == MiniCPMV4_6ConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.model.get_input_embeddings()
+            text_embedding.config = model.model.language_model.config
+            return text_embedding
+
+    def patch_model_for_export(self, model: "PreTrainedModel", model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == MiniCPMV4_6ConfigBehavior.VISION_EMBEDDINGS:
+            return MiniCPMV4_6VisionEmbeddingsModelPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
 
 
 @register_in_tasks_manager(
