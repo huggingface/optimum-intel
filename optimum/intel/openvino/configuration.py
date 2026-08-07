@@ -1115,8 +1115,18 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         if self.bits not in [2, 4, 8]:
             raise ValueError(f"Only support quantization to [2,4,8] bits but found {self.bits}")
 
-        if self.bits == 2 and not self.sym:
-            logger.warning("INT2 weight compression is only supported in symmetric mode. Overriding `sym` to True.")
+        # 2-bit asymmetric is expressible as of CompressWeightsMode.INT2_ASYM (nncf-int2-asym.patch):
+        # at 2 bits the symmetric grid (-2, -1, 0, 1) spends a level on an unused sign for one-sided
+        # groups. Only fall back to symmetric when the installed NNCF genuinely cannot express it --
+        # rewriting `sym` otherwise makes openvino_config.json misreport the recipe, and that record
+        # is the only one that travels with the model.
+        if self.bits == 2 and not self.sym and not (
+            is_nncf_available() and hasattr(nncf.CompressWeightsMode, "INT2_ASYM")
+        ):
+            logger.warning(
+                "INT2 asymmetric weight compression requires an NNCF providing "
+                "CompressWeightsMode.INT2_ASYM. Overriding `sym` to True."
+            )
             self.sym = True
 
         if self.bits == 8 and self.dtype:
