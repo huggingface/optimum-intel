@@ -40,7 +40,7 @@ from transformers.image_utils import (
 from transformers.modeling_outputs import ImageClassifierOutput
 from transformers.utils import TensorType
 
-from optimum.exporters.onnx.config import VisionOnnxConfig
+from optimum.exporters.openvino.config import VisionOpenVINOConfig
 from optimum.utils import NormalizedVisionConfig
 
 from .utils import _is_timm_ov_dir
@@ -79,7 +79,7 @@ class TimmConfig(PretrainedConfig):
         return cls.from_dict(config_dict, **kwargs)
 
 
-class TimmOnnxConfig(VisionOnnxConfig):
+class TimmOpenVINOConfig(VisionOpenVINOConfig):
     DEFAULT_TIMM_ONNX_OPSET = 13
     outputs = OrderedDict([("logits", {0: "batch_size"})])
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig

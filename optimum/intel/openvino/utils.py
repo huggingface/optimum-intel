@@ -138,6 +138,7 @@ _HEAD_TO_AUTOMODELS = {
     "sam": "OVSamModel",
     "sana": "OVSanaPipeline",
     "flux": "OVFluxPipeline",
+    "flux.2-klein": "OVFlux2KleinPipeline",
     "flux-fill": "OVFluxFillPipeline",
     "pix2struct": "OVModelForPix2Struct",
     "latent-consistency": "OVLatentConsistencyModelPipeline",
@@ -147,6 +148,7 @@ _HEAD_TO_AUTOMODELS = {
     "automatic-speech-recognition": "OVModelForSpeechSeq2Seq",
     "automatic-speech-recognition-with-past": "OVModelForSpeechSeq2Seq",
     "ltx-video": "OVLTXPipeline",
+    "ltx2": "OVLTX2Pipeline",
     "text-to-audio": "OVModelForTextToSpeechSeq2Seq",
 }
 
@@ -189,12 +191,19 @@ PREDEFINED_TEXT_IMAGE_ENCODER_DATASETS = {
 }
 
 PREDEFINED_VISUAL_LM_DATASETS = {
+    # "contextual" deprecated: images now unreachable, "textvqa" should be used instead
     "contextual": {
         "id": "ucla-contextual/contextual_test",
         "split": "test",
         "inputs": {"image_url": "image_url", "instruction": "instruction"},
         "streaming": True,
-    }
+    },
+    "textvqa": {
+        "id": "lmms-lab/textvqa",
+        "split": "validation",
+        "inputs": {"image": "image", "instruction": "question"},
+        "streaming": True,
+    },
 }
 
 PREDEFINED_SPEECH_TO_TEXT_DATASETS = {
