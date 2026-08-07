@@ -772,6 +772,31 @@ def _apply_default_ignored_scope_config(
 
             merged_ignored_scope = _merge_ignored_scopes(q_config.ignored_scope, default_ignored_scope)
             q_config.ignored_scope = merged_ignored_scope
+
+    # Try to match by folder name
+    if quantization_config_copy is None:
+        model_path = Path(model_id_or_path)
+        for model_id, default_ignored_scopes_per_model in _DEFAULT_IGNORED_SCOPE_CONFIGS.items():
+            short_id = model_id.split("/")[-1]
+            if model_path.name == short_id:
+                quantization_config_copy = quantization_config.clone()
+                for ov_model_name, default_ignored_scope in default_ignored_scopes_per_model.items():
+                    q_config = quantization_config_copy.quantization_configs.get(
+                        ov_model_name, quantization_config_copy.default_config
+                    )
+                    if not q_config:
+                        raise RuntimeError(
+                            "Can't apply default quantization config because corresponding model quantization config is missing."
+                        )
+                    if ov_model_name not in quantization_config_copy.quantization_configs:
+                        # If submodel quantization config is not explicitly defined, clone and modify the default one
+                        q_config = q_config.clone()
+                        quantization_config_copy.quantization_configs[ov_model_name] = q_config
+
+                    merged_ignored_scope = _merge_ignored_scopes(q_config.ignored_scope, default_ignored_scope)
+                    q_config.ignored_scope = merged_ignored_scope
+                break
+
     return quantization_config_copy or quantization_config
 
 
