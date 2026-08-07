@@ -124,6 +124,7 @@ class ExportModelTest(unittest.TestCase):
         "gemma3n": OVModelForVisualCausalLM,
         "flux.2-klein": OVFlux2KleinPipeline,
         "qwen3_omni_moe": OVModelForMultimodalLM,
+        "mistral3": OVModelForVisualCausalLM,
     }
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = {
@@ -218,6 +219,7 @@ class ExportModelTest(unittest.TestCase):
                     preprocessors=preprocessors,
                     stateful=stateful,
                     model_kwargs=model_kwargs,
+                    patch_16bit_model=patch_16bit_model,
                 )
 
                 use_cache = supported_task.endswith("-with-past")
@@ -279,7 +281,8 @@ class ExportModelTest(unittest.TestCase):
         model_kwargs = None
         if model_type == "speecht5":
             model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
-        self._openvino_export(model_type, model_kwargs=model_kwargs)
+        patch_16bit_model = model_type == "mistral3"
+        self._openvino_export(model_type, model_kwargs=model_kwargs, patch_16bit_model=patch_16bit_model)
 
     @parameterized.expand(GENERATIVE_MODELS)
     def test_export_with_custom_gen_config(self, model_type):
