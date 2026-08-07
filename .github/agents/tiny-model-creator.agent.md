@@ -18,7 +18,7 @@ Provide:
 
 - the tiny-model directory and reusable creation script;
 - the original and tiny `model_type` and `architectures` comparison;
-- the exact successful `model.generate()` command and generated output;
+- the exact successful task execution command and output;
 - the construction logic required for a cached
   `_create_tiny_<model_type>_model()` repository test helper;
 - any unresolved architectural invariant or dependency failure.

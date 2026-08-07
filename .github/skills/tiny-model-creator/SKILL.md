@@ -10,10 +10,10 @@ argument-hint: "<model_id> <task>"
 
 Create a tiny random model for the requested architecture without loading the
 original model weights. The artifact must preserve the real architecture and
-execute the requested generation path.
+execute the requested task path.
 
 If repairing a tiny model after a validation or benchmark failure, start from
-the exact failing local artifact, creation script, traceback, and generation
+the exact failing local artifact, creation script, traceback, and task
 reproducer. Repair that artifact and rerun the same command; do not generate a
 different model and use its success as evidence for the failed one.
 
@@ -27,7 +27,7 @@ Record:
 - hidden-size, head-count, grouping, rotary, cache, vocabulary, and special
   token invariants;
 - tokenizer, processor, chat-template, and remote-code files required to load;
-- the correct AutoModel class and generation interface for the task.
+- the correct model or pipeline class and execution interface for the task.
 
 Determine and record the Transformers version or version range supported by
 the original model, especially for trust-remote-code architectures. Create and
@@ -88,78 +88,25 @@ component merely to make export pass.
 
 If the tiny model's `model_type`, `architectures`, or task-relevant component
 identity differs from the original model, stop and report the mismatch. A tiny
-model that generates successfully through another architecture is not a valid
+model that executes successfully through another architecture is not a valid
 fixture.
 
-## Step 4 — Validate real generation
+## Step 4 — Validate the real task path
 
-Reload the saved directory through its documented Transformers API and run
-deterministic `model.generate()` with at least one new token.
+Reload the saved directory through its documented Transformers or pipeline API
+and execute the requested task.
 
-- Text generation: tokenize a real prompt and decode generated tokens.
-- Image-text generation: process a real image and prompt together, apply the
-  correct chat template, and decode only newly generated tokens.
-- Other generative tasks: exercise the real task pipeline, not a component
-  forward pass.
+Follow the task-specific tiny-model validation and output-validity instructions
+supplied for `<task>`.
 
-If generation fails, repair the violated configuration invariant, recreate the
-model, and rerun it. Loading, saving, or a forward pass alone is not success.
+If task execution fails, repair the violated configuration invariant, recreate
+the model, and rerun it. Loading, saving, or a forward pass alone is not
+success.
 
-### Prevent collapsed or invalid tiny-model outputs
-
-Before accepting the fixture, verify that its outputs are numerically valid and
-informative enough for HF-vs-OpenVINO comparison:
-
-1. Run a forward pass on representative task inputs and assert that logits and
-   relevant intermediate outputs contain no NaN or Inf values.
-2. Check that logits have non-zero finite variance and are not uniformly zero.
-3. Generate multiple new tokens for at least two distinct prompts or inputs.
-   Reject a fixture when all generated continuations collapse to zeros, one
-   repeated token, or the same constant sequence across every input.
-4. Record the finite-value check, logits variance, and generated token IDs in
-   the validation evidence.
-
-Example numerical checks:
-
-```python
-with torch.no_grad():
-    outputs = model(**inputs)
-logits = outputs.logits.float()
-assert torch.isfinite(logits).all(), "Tiny model produced NaN/Inf logits"
-assert logits.std().item() > 0, "Tiny model logits collapsed to a constant"
-```
-
-If outputs collapse, do not weaken the comparison test. Experiment with a less
-aggressive reduction, retain more layers/hidden dimensions or vocabulary
-structure, and verify all normalization/scaling invariants. When appropriate
-for the architecture, reinitialize the output head with greater variance, for
-example:
-
-```python
-with torch.no_grad():
-    model.lm_head.weight.normal_(mean=0.0, std=0.2)
-```
-
-Respect tied embeddings and architecture-specific initialization: if the
-output head is tied to input embeddings, reinitialize through the model's
-actual shared parameter and confirm tying remains intact after saving and
-reloading. Re-run finite-logit, diversity, generation, and save/reload checks
-after every initialization change.
-
-When repairing a below-threshold HF-vs-OpenVINO result, output diversity alone
-is not sufficient. Reproduce the exact benchmark inputs and deterministic
-generation settings, compare generated token IDs, and inspect the top-1/top-2
-logit margin at the first divergence against the observed backend numerical
-error. Adjust the architecture-preserving initialization or retained capacity
-until greedy decoding is stable, regenerate ground truth from that exact saved
-fixture, and rerun the failing comparison. Do not accept the fixture, lower the
-threshold, switch to the original large model, or describe the gap as an
-unavoidable property of random weights while the required comparison fails.
-
-The final generation evidence must load the exact output directory returned by
-the creator, execute the requested task, generate at least one new token, and
-include the command and output. Do not validate one directory and return a
-different cached or previously generated artifact.
+The final validation evidence must load the exact output directory returned by
+the creator, execute the requested task, and include the command and output. Do
+not validate one directory and return a different cached or previously
+generated artifact.
 
 ## Rules
 
@@ -175,5 +122,5 @@ different cached or previously generated artifact.
 ## Report
 
 Report the output directory, script path, configuration comparison, parameter
-count, exact generation command, generated output, and any dependency or
-remote-code constraints.
+count, exact task execution command, output, and any dependency or remote-code
+constraints.

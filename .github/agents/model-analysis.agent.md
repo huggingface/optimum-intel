@@ -18,27 +18,13 @@ and produce evidence for the model-enablement agent. Do not modify source.
 python -c "import transformers, optimum.intel; print(transformers.__path__[0]); print(optimum.intel.__path__[0])"
 ```
 
-3. Inspect the real Transformers architecture and print relevant modules:
+3. Inspect the real Transformers architecture using the documented
+task-specific model class supplied for the requested task. Keep
+`trust_remote_code=False` unless the user explicitly confirms that they trust
+the model source and accept that loading it may execute arbitrary code.
 
-```python
-from transformers import AutoConfig, AutoModelForCausalLM
-
-model_id = "<model_id>"
-trust_remote_code = False
-config = AutoConfig.from_pretrained(model_id, trust_remote_code=trust_remote_code)
-model = AutoModelForCausalLM.from_config(config, trust_remote_code=trust_remote_code)
-
-for name, module in model.named_modules():
-    kind = type(module).__name__
-    if any(key in kind for key in ("Attention", "Norm", "MLP", "MoE", "Expert")):
-        print(name, kind)
-```
-
-Keep `trust_remote_code=False` unless the user explicitly confirms that they
-trust the model source and accept that loading it may execute arbitrary code.
-
-Use the documented task-specific AutoModel class rather than forcing
-`AutoModelForCausalLM` for every modality.
+Inspect relevant modules such as attention, normalization, MLP, MoE, and expert
+blocks. Do not force `AutoModelForCausalLM` for every modality.
 
 4. Inspect forward signatures for the top-level model and every exported
    component. Record tensor names, shapes, dtypes, cache layout, custom dummy

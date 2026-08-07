@@ -15,8 +15,8 @@ smallest complete model-support implementation.
 
 - [model-patching-patterns.md](model-patching-patterns.md) — tracing failures,
   data-dependent control flow, and vectorized MoE reference.
-- [inference-validation.md](inference-validation.md) — executable validation
-  templates for text, image-text, and video tasks.
+- [inference-validation.md](inference-validation.md) — common accuracy-diagnosis
+  guidance for end-to-end validation.
 
 Use `.model_analysis/<model_type>_analysis.md` from the model-analysis agent as
 the architecture source of truth. Do not replace real-model evidence with
@@ -123,51 +123,8 @@ Kokoro pattern in `tests/openvino/utils_tests.py`:
 Do not upload new tiny models to the Hub. Reuse a Hub fixture only when it
 predates the support and is already the established repository fixture.
 
-For VLMs, cover all exported submodels and update relevant architecture,
-remote-code, video, compression, and preprocessing matrices. Run targeted
-tests from every modified test file. A `-k` command selecting zero tests is not
-evidence.
+Follow the task-specific repository-test requirements supplied for `<task>`.
 
-For `image-text-to-text` architectures, inspect and update every applicable
-VLM test matrix explicitly:
-
-- `tests/openvino/test_export.py`: register the architecture with
-  `OVModelForVisualCausalLM` where full VLM export is supported;
-- `tests/openvino/test_seq2seq.py`: update
-  `OVModelForVisualCausalLMIntegrationTest.SUPPORTED_ARCHITECTURES`,
-  `SUPPORT_VIDEO`, every applicable `REMOTE_CODE_MODELS` collection,
-  skip/unsupported sets, and model-specific preprocessing branches;
-- `tests/openvino/test_exporters_cli.py`: cover the model/task pair, tokenizer
-  export expectations, compression, and 4-bit cases when supported;
-- `tests/openvino/test_quantization.py`: update auto-compression coverage and
-  expected quantized submodel counts when applicable;
-- `tests/openvino/utils_tests.py`: provide the model fixture and expected IR
-  details for language, text embedding, vision embedding, projector, merger,
-  resampler, and position submodels that the architecture actually exports.
-
-Specifically verify:
-
-- every applicable `REMOTE_CODE_MODELS` collection contains the architecture
-  when `trust_remote_code=True` is required;
-- a later class-level assignment does not overwrite an earlier registration;
-- `_ARCHITECTURES_TO_EXPECTED_INT8` contains measured expected node counts for
-  every exported VLM submodel;
-- CLI export, tokenizer export, save/reload, deterministic generation, and
-  HF-vs-OpenVINO comparison are covered where applicable.
-
-Run pytest with collection output or explicit node IDs and confirm that each
-command selected at least one test.
-
-At minimum for VLM source changes, run the relevant selections from:
-
-```bash
-python -m pytest -v tests/openvino/test_export.py -k <model_type>
-python -m pytest -v tests/openvino/test_seq2seq.py -k <model_type>
-python -m pytest -v tests/openvino/test_exporters_cli.py -k <model_type>
-python -m pytest -v tests/openvino/test_quantization.py -k <model_type>
-```
-
-Run the quantization selection when quantization tables or behavior changed.
 If a required test cannot run because of hardware, time, credentials, or an
 unavailable fixture, report the exact blocker and leave support incomplete.
 Do not substitute an ad-hoc script for required repository coverage.
@@ -175,7 +132,7 @@ Do not substitute an ad-hoc script for required repository coverage.
 Use the same tiny-model artifact for repository tests and the evidence claimed
 for that fixture. A WWB score or generation result from a separately generated
 tiny model does not validate `_create_tiny_<model_type>_model()`. Run HF-vs-OV
-comparison, generation, and save/reload against the exact helper output.
+comparison, task execution, and save/reload against the exact helper output.
 
 When a repository test exposes a fixture defect, repair the helper rather than
 weakening tolerances or skipping the architecture. Typical checks include
@@ -183,10 +140,8 @@ effective nested precision, cache invalidation, remote-code registration,
 processor assets, supported exporter behaviors, and architectural dimension
 invariants.
 
-Also reject tiny fixtures whose logits contain NaN/Inf or whose generated
-outputs collapse to zeros or constant repeated tokens. Follow the
-tiny-model-creator skill's finite-logit, variance, diversity, and
-initialization checks before using the fixture for accuracy comparison.
+Follow the task-specific output-validity requirements before using the fixture
+for accuracy comparison.
 
 ## Local installation safety
 
@@ -207,20 +162,18 @@ Run all applicable checks:
 
 1. Export the local tiny model and, when resources allow, the real model.
 2. Load the export through the appropriate Optimum Intel OpenVINO API.
-3. Execute deterministic `model.generate()` through the requested task.
-4. For image-text tasks, use a real image and text prompt together.
-5. Compare with the Hugging Face reference using identical preprocessing,
-   prompt, image, generation settings, and decoded-token boundary.
-6. Run targeted repository tests and formatting or lint checks.
+3. Execute the requested task through its real end-to-end inference path.
+4. Compare with the Hugging Face reference using identical preprocessing,
+   inputs, settings, and output boundary.
+5. Run targeted repository tests and formatting or lint checks.
 
-Use the task-specific executable templates in
-[inference-validation.md](inference-validation.md), adapting model classes and
-inputs from the analysis report rather than blindly copying a nearby model.
+Follow the task-specific end-to-end validation instructions supplied for
+`<task>`. Use [inference-validation.md](inference-validation.md) for common
+accuracy-diagnosis guidance.
 
 Loading, saving, conversion alone, or a forward-only call does not prove
-generative support. If quality differs, compare preprocessing tensors,
-submodel outputs, embedding insertion, logits, and generated token IDs to find
-the first divergence.
+support. If quality differs, compare preprocessing tensors, submodel outputs,
+embedding insertion, logits, and task outputs to find the first divergence.
 
 ## Step 6 — Documentation and cleanup
 
