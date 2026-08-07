@@ -124,6 +124,7 @@ class ExportModelTest(unittest.TestCase):
         "gemma3n": OVModelForVisualCausalLM,
         "flux.2-klein": OVFlux2KleinPipeline,
         "qwen3_omni_moe": OVModelForMultimodalLM,
+        "nemotron_h": OVModelForCausalLM,
     }
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = {
