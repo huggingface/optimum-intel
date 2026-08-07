@@ -600,6 +600,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5",
         "qwen3_5_moe",
         "qwen3_omni_moe",
+        "mistral3",
     ]
     SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl", "qwen2_5_vl", "qwen3_vl", "videochat_flash_qwen"]
     SUPPORT_AUDIO = ["qwen3_omni_moe"]
@@ -650,6 +651,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "llava",
             "llava_next",
             "llava_next_mistral",
+            "mistral3",
             "qwen2_vl",
             "qwen2_5_vl",
             "got_ocr2",
@@ -757,6 +759,12 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(
             model_id, trust_remote_code=trust_remote_code, **loading_kwargs
         )
+
+        # The tiny Mistral3 checkpoint contains mixed fp32/bf16 weights, while the
+        # integration test compares against an F32 OpenVINO export.
+        if model_arch == "mistral3":
+            transformers_model = transformers_model.float()
+
         transformers_model.eval()
         if "internvl_chat" in model_arch:
             tokenizer = AutoTokenizer.from_pretrained(model_id, trast_remote_code=trust_remote_code)
