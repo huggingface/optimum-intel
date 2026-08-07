@@ -58,7 +58,6 @@ from .utils import (
     classproperty,
 )
 
-
 core = Core()
 
 logger = logging.getLogger(__name__)
@@ -750,8 +749,10 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             elif is_decoder and not inputs.get_any_name().startswith("encoder"):
                 if not inputs.get_any_name().startswith("beam_idx"):
                     shapes[inputs][1] = -1
-            else:
+            elif len(shapes[inputs]) > 1:
                 shapes[inputs][1] = sequence_length
+            # rank-1 encoder inputs (e.g. cohere_asr's `length`, one value per batch entry)
+            # only have a batch dimension, already set above; nothing else to reshape.
         model.reshape(shapes)
         return model
 
@@ -904,6 +905,7 @@ class OVEncoder(OVModelPart):
         self,
         input_ids: torch.LongTensor = None,
         attention_mask: torch.LongTensor = None,
+        length: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> BaseModelOutput:
         self.compile()
@@ -916,6 +918,27 @@ class OVEncoder(OVModelPart):
             if attention_mask is None:
                 attention_mask = torch.ones_like(inputs[self.main_input_name])
             inputs["attention_mask"] = attention_mask
+
+        # cohere_asr: `length` carries the true (pre-padding) per-sample frame count that the
+        # Conformer encoder (ConvSubsampling) needs for correct masking. Declaring `length` as an
+        # explicit parameter (rather than only accepting it via **kwargs) is required so that
+        # `GenerationMixin._validate_model_kwargs`/`_prepare_encoder_decoder_kwargs_for_generation`
+        # (which inspect `encoder.forward`'s signature) recognize and forward it.
+        if "length" in self.input_names:
+            if length is None:
+                # Matches CohereAsr's own eager default (`ConformerEncoder.forward`): when the
+                # caller doesn't supply `length` (e.g. calling the model directly, bypassing
+                # `generate()`), assume every sample in the batch spans the full unpadded
+                # `input_features` time dimension. The traced OV graph always requires this
+                # input, unlike the eager module where it's optional.
+                input_features = inputs[self.main_input_name]
+                length = torch.full(
+                    (input_features.shape[0],),
+                    input_features.shape[-1],
+                    dtype=torch.int64,
+                    device=input_features.device if hasattr(input_features, "device") else None,
+                )
+            inputs["length"] = length
 
         # Qwen3-ASR requires input_features chunking before passing to encoder for processing of long audios.
         if getattr(self.config, "model_type", None) == "qwen3_asr":
@@ -1613,3 +1636,41 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
             logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
             generation_config.forced_decoder_ids = forced_decoder_ids
         return logits_processor
+
+
+def _register_ov_speech_seq2seq_for_pipeline_autodetection():
+    """Make `transformers.pipeline("automatic-speech-recognition", ...)` recognize `OVModelForSpeechSeq2Seq`.
+
+    `AutomaticSpeechRecognitionPipeline.__init__` picks its internal behavior ("seq2seq_whisper" /
+    "seq2seq" / "ctc") using a heuristic that never accounts for wrapped/exported model classes:
+
+        if model.config.model_type == "whisper":
+            self.type = "seq2seq_whisper"
+        elif model.__class__.__name__ in MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES.values():
+            self.type = "seq2seq"
+        ...
+        else:
+            self.type = "ctc"
+
+    `MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES` only ever contains native PyTorch class names (e.g.
+    "CohereAsrForConditionalGeneration"), never `OVModelForSpeechSeq2Seq`. For any non-Whisper
+    architecture (`cohere_asr`, `qwen3_asr`, ...) this silently misroutes the pipeline to the "ctc"
+    branch, which calls `model(**inputs)` directly instead of `model.generate(**inputs)` -- the wrong
+    calling contract for our stateful, generate()-only decoder, and typically crashes deep inside
+    `OVModelForSeq2SeqLM.forward()` with unrelated-looking errors (e.g. `decoder_input_ids` being
+    `None`). Whisper itself is unaffected because it takes the `model_type == "whisper"` branch above.
+    Registering our (single, architecture-independent) wrapper class name here once fixes pipeline
+    auto-detection for every current and future non-Whisper OpenVINO ASR architecture.
+    """
+    try:
+        from transformers.models.auto.modeling_auto import MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES
+    except ImportError:
+        return
+
+    if OVModelForSpeechSeq2Seq.__name__ not in MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES.values():
+        MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES["_optimum_intel_ov_speech_seq2seq"] = (
+            OVModelForSpeechSeq2Seq.__name__
+        )
+
+
+_register_ov_speech_seq2seq_for_pipeline_autodetection()

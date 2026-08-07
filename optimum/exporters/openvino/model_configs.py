@@ -39,6 +39,8 @@ from optimum.exporters.openvino.config import (
 from optimum.exporters.openvino.input_generators import (
     AquilaDummyPastKeyValuesGenerator,
     ChatGLM2DummyPastKeyValuesGenerator,
+    CohereAsrDummyAudioInputGenerator,
+    CohereAsrDummySeq2SeqDecoderTextInputGenerator,
     DeciDummyPastKeyValuesGenerator,
     DummyAudioPhi4MMInputGenerator,
     DummyFluxTextInputGenerator,
@@ -107,6 +109,7 @@ from optimum.exporters.openvino.model_patcher import (
     BloomModelPatcher,
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
+    CohereAsrModelPatcher,
     CommonImageEmbeddingsModelPatcher,
     DBRXModelPatcher,
     DeciLMModelPatcher,
@@ -234,7 +237,6 @@ from optimum.utils.normalized_config import (
     NormalizedVisionConfig,
 )
 
-
 COMMON_TEXT_TASKS = [
     "feature-extraction",
     "fill-mask",
@@ -356,6 +358,15 @@ def init_model_configs():
             "transformers",
             "Qwen3OmniMoeForConditionalGeneration",
         )
+
+    TasksManager._CUSTOM_CLASSES[("pt", "cohere_asr", "automatic-speech-recognition")] = (
+        "transformers",
+        "AutoModelForSpeechSeq2Seq",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "cohere_asr", "automatic-speech-recognition-with-past")] = (
+        "transformers",
+        "AutoModelForSpeechSeq2Seq",
+    )
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
@@ -4463,6 +4474,112 @@ class FunASROpenVINOConfig(AudioToTextOpenVINOConfig):
         for i in range(self._normalized_config.decoder_num_layers):
             inputs_or_outputs[f"{name}.{i}.decoder.key"] = {0: "batch_size", 2: decoder_sequence_name}
             inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
+
+
+@register_in_tasks_manager(
+    "cohere_asr",
+    *[
+        "automatic-speech-recognition",
+        "automatic-speech-recognition-with-past",
+    ],
+    library_name="transformers",
+)
+class CohereAsrOpenVINOConfig(AudioToTextOpenVINOConfig):
+    """
+    OpenVINO export config for CohereAsrForConditionalGeneration.
+    Architecture: Conformer encoder + Transformer decoder (encoder_outputs +
+    decoder_input_ids + past_key_values → decoder logits).
+
+    Unlike Whisper, the Conformer encoder consumes a *variable-length*
+    `input_features` tensor: `CohereAsrFeatureExtractor` (Hub remote code) does not pad to a
+    fixed `nb_max_frames=3000` (Whisper's 30s convention) — it pads only to the batch's max
+    sample length and additionally returns a `length` tensor with the true per-sample frame
+    count, which `ConformerEncoder`/`ConvSubsampling` require for correct masking. Because of
+    this different contract, this class extends `AudioToTextOpenVINOConfig` directly instead of
+    `WhisperOpenVINOConfig` (whose `.inputs`/`.outputs` overrides hardcode the static
+    Whisper-only 3000-frame shape) and adds `length` as an explicit second encoder input.
+    """
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        CohereAsrDummyAudioInputGenerator,
+        CohereAsrDummySeq2SeqDecoderTextInputGenerator,
+        DummySeq2SeqPastKeyValuesGenerator,
+    )
+
+    _MODEL_PATCHER = CohereAsrModelPatcher
+
+    NORMALIZED_CONFIG_CLASS = NormalizedSeq2SeqConfig.with_args(
+        encoder_num_layers="encoder_layers",
+        decoder_num_layers="decoder_layers",
+        hidden_size="hidden_size",
+        num_attention_heads="num_attention_heads",
+        decoder_num_attention_heads="num_key_value_heads",
+        feature_size="num_mel_bins",
+        # Encoder (Conformer) `d_model`, distinct from the decoder's `hidden_size` above -- used
+        # to correctly size the `encoder_outputs` dummy input for `encoder_decoder_proj`,
+        # see `CohereAsrDummySeq2SeqDecoderTextInputGenerator`.
+        encoder_hidden_size="d_model",
+        allow_new=True,
+    )
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "automatic-speech-recognition",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        def _get(obj, key, default=None):
+            if obj is None:
+                return default
+            if isinstance(obj, dict):
+                return obj.get(key, default)
+            return getattr(obj, key, default)
+
+        encoder = getattr(config, "encoder", None)
+        decoder = getattr(config, "transf_decoder", None)
+        decoder_cfg = _get(decoder, "config_dict")
+        preprocessor = getattr(config, "preprocessor", None)
+
+        if encoder is not None:
+            config.encoder_layers = _get(encoder, "n_layers")
+            config.num_mel_bins = _get(encoder, "feat_in")
+            config.d_model = _get(encoder, "d_model")
+
+        if decoder_cfg is not None:
+            config.decoder_layers = _get(decoder_cfg, "num_layers")
+            config.hidden_size = _get(decoder_cfg, "hidden_size")
+            config.num_attention_heads = _get(decoder_cfg, "num_attention_heads")
+            config.num_key_value_heads = _get(
+                decoder_cfg, "num_key_value_heads", _get(decoder_cfg, "num_attention_heads")
+            )
+            config.vocab_size = getattr(config, "vocab_size", None) or _get(decoder_cfg, "vocab_size")
+
+        if getattr(config, "num_mel_bins", None) is None and preprocessor is not None:
+            config.num_mel_bins = _get(preprocessor, "features")
+
+        if getattr(config, "decoder_start_token_id", None) is None:
+            config.decoder_start_token_id = 0
+
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+            **kwargs,
+        )
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = super().inputs
+        if self._behavior in {ConfigBehavior.ENCODER, ConfigBehavior.MONOLITH}:
+            # `length` carries the true per-sample frame count (before any batch padding) that
+            # ConformerEncoder/ConvSubsampling need for masking; see CohereAsrDummyAudioInputGenerator.
+            common_inputs["length"] = {0: "batch_size"}
+        return common_inputs
 
 
 @register_in_tasks_manager(

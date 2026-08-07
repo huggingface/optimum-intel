@@ -349,9 +349,13 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
 
 class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ("whisper",)
+    if is_transformers_version(">=", "4.57.0"):
+        SUPPORTED_ARCHITECTURES += ("cohere_asr",)
     OVMODEL_CLASS = OVModelForSpeechSeq2Seq
     AUTOMODEL_CLASS = AutoModelForSpeechSeq2Seq
     TASK = "automatic-speech-recognition"
+    # cohere_asr ships as a HuggingFace Hub remote-code model and requires opting in.
+    REMOTE_CODE_MODELS = ("cohere_asr",)
 
     def _generate_random_audio_data(self):
         np.random.seed(10)
@@ -360,24 +364,62 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
         return audio_data
 
+    def test_pipeline_autodetection_registers_non_whisper_architectures(self):
+        """Regression test for the `transformers.pipeline("automatic-speech-recognition", ...)`
+        misdetection bug reported against `cohere_asr` (follow-up to optimum-intel#1788).
+
+        `AutomaticSpeechRecognitionPipeline.__init__` decides its internal behavior with:
+            - `model.config.model_type == "whisper"` -> "seq2seq_whisper"
+            - `model.__class__.__name__ in MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES.values()` ->
+              "seq2seq"
+            - otherwise -> "ctc" (calls `model(**inputs)` directly instead of
+              `model.generate(**inputs)`)
+
+        `MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES` only ever lists native PyTorch class names
+        (e.g. "CohereAsrForConditionalGeneration"), never `OVModelForSpeechSeq2Seq`. Since Whisper
+        is the only architecture that takes the first branch, every *other* OpenVINO ASR
+        architecture (`cohere_asr`, `qwen3_asr`, ...) used to be silently misrouted to the "ctc"
+        branch, crashing deep inside `OVModelForSeq2SeqLM.forward()` (e.g.
+        `AttributeError: 'NoneType' object has no attribute 'shape'` from a `None`
+        `decoder_input_ids`) instead of raising a clear, actionable error.
+
+        This does not need a real model/checkpoint: the fix registers the (single,
+        architecture-independent) `OVModelForSpeechSeq2Seq` class name once at import time.
+        """
+        from transformers.models.auto.modeling_auto import MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES
+
+        self.assertIn(
+            OVModelForSpeechSeq2Seq.__name__,
+            MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES.values(),
+            "OVModelForSpeechSeq2Seq must be registered so transformers.pipeline("
+            "'automatic-speech-recognition', ...) routes non-Whisper OpenVINO ASR architectures "
+            "through .generate() instead of misdetecting them as CTC models.",
+        )
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        transformers_model = self.AUTOMODEL_CLASS.from_pretrained(model_id)
+        trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
+        transformers_model = self.AUTOMODEL_CLASS.from_pretrained(model_id, trust_remote_code=trust_remote_code)
         ov_model = self.OVMODEL_CLASS.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, trust_remote_code=trust_remote_code
         )
         ov_model_stateless = self.OVMODEL_CLASS.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, stateful=False, device=OPENVINO_DEVICE
+            model_id,
+            export=True,
+            ov_config=F32_CONFIG,
+            stateful=False,
+            device=OPENVINO_DEVICE,
+            trust_remote_code=trust_remote_code,
         )
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
         self._check_openvino_model_attributes(ov_model_stateless, use_cache=True, stateful=False)
 
-        processor = AutoProcessor.from_pretrained(model_id)
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=trust_remote_code)
         data = self._generate_random_audio_data()
         pt_features = processor.feature_extractor(data, return_tensors="pt")
-        decoder_start_token_id = transformers_model.config.decoder_start_token_id
+        decoder_start_token_id = getattr(transformers_model.config, "decoder_start_token_id", None) or 0
         decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
 
         with torch.no_grad():
@@ -435,8 +477,9 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = self.OVMODEL_CLASS.from_pretrained(model_id, device=OPENVINO_DEVICE)
-        processor = AutoProcessor.from_pretrained(model_id)
+        trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
+        model = self.OVMODEL_CLASS.from_pretrained(model_id, device=OPENVINO_DEVICE, trust_remote_code=trust_remote_code)
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=trust_remote_code)
         pipe = pipeline(
             "automatic-speech-recognition",
             model=model,
@@ -453,6 +496,216 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         del ov_pipe
         del pipe
         del model
+        gc.collect()
+
+    @pytest.mark.run_slow
+    @slow
+    def test_cohere_asr_generate_non_30s_multiple_audio(self):
+        """
+        Regression test for https://github.com/huggingface/optimum-intel/pull/1788: the encoder
+        of `CohereAsrOpenVINOConfig` used to inherit `WhisperOpenVINOConfig`'s dummy-input
+        generator unchanged, which hardcodes `input_features`' last dimension to Whisper's
+        static `nb_max_frames=3000`. `CohereAsrFeatureExtractor` (unlike Whisper's) does not pad
+        to a fixed 3000-frame convention -- it only pads to the batch's own max sample length --
+        so any real (non-30s-multiple) audio produced a `[batch, feature_size, natural_len]`
+        tensor that couldn't be fed to the static-shape encoder, raising an OpenVINO shape
+        `RuntimeError` at inference time (export itself succeeded, masking the bug from
+        export-only tests). This exercises the actual `generate()` call path end-to-end on
+        several odd/non-30s-multiple durations to confirm the encoder's `input_features` and
+        `length` inputs are genuinely dynamic and multi-step decoding completes without error.
+        """
+        if "cohere_asr" not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest("cohere_asr not in SUPPORTED_ARCHITECTURES for this transformers version")
+
+        model_id = MODEL_NAMES["cohere_asr"]
+        model = self.OVMODEL_CLASS.from_pretrained(
+            model_id, export=True, device=OPENVINO_DEVICE, trust_remote_code=True
+        )
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+
+        # Encoder input_features/length must stay dynamic (no hardcoded nb_max_frames=3000).
+        encoder_inputs = {inp.get_any_name(): inp.get_partial_shape() for inp in model.encoder.model.inputs}
+        self.assertIn("length", encoder_inputs, "encoder must expose a `length` input for cohere_asr")
+        input_features_shape = encoder_inputs["input_features"]
+        self.assertTrue(
+            input_features_shape[-1].is_dynamic,
+            f"encoder `input_features` last dim must be dynamic, got {input_features_shape}",
+        )
+
+        np.random.seed(SEED)
+        for seconds in (3, 7, 11):
+            audio = (np.random.randn(16000 * seconds).astype(np.float32)) * 0.01
+            inputs = processor(audio, sampling_rate=16000, return_tensors="pt")
+            generated = model.generate(**inputs, max_new_tokens=8)
+            self.assertEqual(generated.shape[0], 1)
+            self.assertGreater(generated.shape[1], 1)
+
+        del model
+        gc.collect()
+
+    @pytest.mark.run_slow
+    @slow
+    def test_cohere_asr_with_past_decoder_is_stateful(self):
+        """
+        Regression test for https://github.com/huggingface/optimum-intel/pull/1788: exporting
+        `cohere_asr` with `--task automatic-speech-recognition-with-past` used to only produce a
+        single, non-stateful `openvino_decoder_model.xml` (no `beam_idx` input, no KV-cache
+        state/sinks), which downstream stateful-decoder consumers (e.g.
+        `openvino_genai.WhisperPipeline`) require. Asserts the with-past export produces a
+        genuinely stateful decoder, mirroring the statefulness assertions already used elsewhere
+        in this file (`_check_openvino_model_attributes`/`model_has_state`).
+        """
+        if "cohere_asr" not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest("cohere_asr not in SUPPORTED_ARCHITECTURES for this transformers version")
+
+        model_id = MODEL_NAMES["cohere_asr"]
+        model = self.OVMODEL_CLASS.from_pretrained(
+            model_id, export=True, device=OPENVINO_DEVICE, trust_remote_code=True, stateful=True
+        )
+        self.assertTrue(model_has_state(model.decoder.model))
+        decoder_input_names = {inp.get_any_name() for inp in model.decoder.model.inputs}
+        self.assertIn("beam_idx", decoder_input_names)
+        self.assertGreater(len(model.decoder.model.get_sinks()), 0)
+
+        # And the stateful decoder must actually support >1 decode step without raising
+        # (regression test for the `_get_cache_seq_length`-derived shape-baking bug where the
+        # attention-mask's total kv length got fixed at trace time).
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        np.random.seed(SEED)
+        audio = (np.random.randn(16000 * 5).astype(np.float32)) * 0.01
+        inputs = processor(audio, sampling_rate=16000, return_tensors="pt")
+        generated = model.generate(**inputs, max_new_tokens=12)
+        self.assertGreater(generated.shape[1], 1)
+
+        del model
+        gc.collect()
+
+    @pytest.mark.run_slow
+    @slow
+    def test_cohere_asr_exported_processor_is_self_contained(self):
+        """
+        Regression check for the reported "Bug 3" in the PR #1788 follow-up ticket: a user
+        claimed `optimum-cli export openvino` doesn't copy tokenizer files (`tokenizer.json`,
+        `tokenizer.model`, `special_tokens_map.json`) into the export directory for cohere_asr,
+        so `AutoProcessor.from_pretrained(export_dir, trust_remote_code=True)` -- exactly as
+        documented in PR #1788's own "Inference" snippet -- fails. This does not reproduce with
+        the current `CohereAsrTokenizer`/`CohereAsrFeatureExtractor` remote code (confirmed via
+        real-model testing against `CohereLabs/cohere-transcribe-03-2026`), but is asserted here
+        so any future regression is caught by CI rather than only by a user report.
+        """
+        if "cohere_asr" not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest("cohere_asr not in SUPPORTED_ARCHITECTURES for this transformers version")
+
+        model_id = MODEL_NAMES["cohere_asr"]
+        with TemporaryDirectory() as tmp_dir:
+            model = self.OVMODEL_CLASS.from_pretrained(
+                model_id, export=True, device=OPENVINO_DEVICE, trust_remote_code=True
+            )
+            model.save_pretrained(tmp_dir)
+            processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+            processor.save_pretrained(tmp_dir)
+
+            # Must succeed without any manual file copying, exactly as documented in the PR.
+            reloaded_processor = AutoProcessor.from_pretrained(tmp_dir, trust_remote_code=True)
+            self.assertIsNotNone(reloaded_processor.tokenizer)
+            del model
+            gc.collect()
+
+
+class Qwen3ASRTest(unittest.TestCase):
+    """
+    Test Qwen3ASR model type.
+    Compares OpenVINO model output to original PyTorch transformers model output.
+    """
+
+    SUPPORTED_ARCHITECTURES = ("qwen3_asr",)
+
+    def _generate_audio_data(self):
+        np.random.seed(SEED)
+        sample_rate = 16000
+        duration = 120
+        t = np.linspace(0, 1.0, sample_rate * duration, endpoint=False)
+        audio_data = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+        return audio_data, sample_rate
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.skipif(
+        is_transformers_version("!=", "4.57.6"),
+        reason="requires transformers==4.57.6.",
+    )
+    def test_compare_to_transformers(self, model_arch):
+        from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
+
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+
+        # Load processor
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+
+        # Prepare audio input
+        audio_data, sample_rate = self._generate_audio_data()
+        text_prompt = processor.apply_chat_template(
+            [
+                {"role": "system", "content": ""},
+                {"role": "user", "content": [{"type": "audio", "audio": ""}]},
+            ],
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+        inputs = processor(
+            text=text_prompt,
+            audio=audio_data,
+            sampling_rate=sample_rate,
+            return_tensors="pt",
+        )
+
+        # Load and infer with PyTorch model
+        transformers_model = Qwen3ASRForConditionalGeneration.from_pretrained(model_id, trust_remote_code=True)
+        transformers_model.eval()
+
+        gen_kwargs = {
+            "max_new_tokens": 10,
+        }
+
+        with torch.no_grad():
+            pt_generated_ids = transformers_model.generate(
+                input_ids=inputs["input_ids"],
+                input_features=inputs["input_features"],
+                feature_attention_mask=inputs["feature_attention_mask"],
+                attention_mask=inputs["attention_mask"],
+                **gen_kwargs,
+            )
+        if hasattr(pt_generated_ids, "sequences"):
+            pt_generated_ids = pt_generated_ids.sequences
+
+        # Load and infer with OpenVINO model
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+
+        ov_generated_ids = ov_model.generate(
+            input_features=inputs["input_features"],
+            attention_mask=inputs.get("feature_attention_mask"),
+            decoder_input_ids=inputs["input_ids"],
+            **gen_kwargs,
+        )
+        if hasattr(ov_generated_ids, "sequences"):
+            ov_generated_ids = ov_generated_ids.sequences
+
+        # Compare generated token sequences
+        self.assertTrue(
+            torch.equal(pt_generated_ids, ov_generated_ids),
+            f"Token mismatch:\n  PyTorch:  {pt_generated_ids[0].tolist()}\n  OpenVINO: {ov_generated_ids[0].tolist()}",
+        )
+
+        # Compare decoded text
+        prompt_len = inputs["input_ids"].shape[1]
+        pt_text = processor.batch_decode(pt_generated_ids[:, prompt_len:], skip_special_tokens=True)[0]
+        ov_text = processor.batch_decode(ov_generated_ids[:, prompt_len:], skip_special_tokens=True)[0]
+        self.assertEqual(pt_text, ov_text)
+
+        del transformers_model
+        del ov_model
         gc.collect()
 
 
