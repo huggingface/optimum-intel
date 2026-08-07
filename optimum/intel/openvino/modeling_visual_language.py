@@ -29,6 +29,7 @@ from transformers import (
     AutoConfig,
     AutoImageProcessor,
     AutoModel,
+    AutoModelForCausalLM,
     AutoModelForImageTextToText,
     GenerationConfig,
     GenerationMixin,
@@ -333,6 +334,8 @@ class OVVisionEmbedding(OVModelPart):
             self._main_input = "images"
         elif model_has_input_output_name(self.model, "hidden_states"):
             self._main_input = "hidden_states"
+        elif model_has_input_output_name(self.model, "image_patches"):
+            self._main_input = "image_patches"
         else:
             self._main_input = "pixel_values"
 
@@ -5640,6 +5643,132 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         return model_kwargs
 
 
+class _OVJinaVLMForCausalLM(OVModelForVisualCausalLM):
+    # JinaVLM's remote code registers JinaVLMForConditionalGeneration under AutoModelForCausalLM.
+    auto_model_class = AutoModelForCausalLM
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        # During decoding (single new token) no image is processed.
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        image_masks = kwargs.get("image_masks")
+        image_features = self.vision_embeddings(pixel_values, image_masks=image_masks).last_hidden_state
+        return image_features
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        # JinaVLM interleaves image features into the text embeddings at positions given by
+        # `image_input_idx` (index-based scatter), matching the reference
+        # `_interleave_image_and_text_embeddings`.
+        image_embeds = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        image_input_idx = kwargs.get("image_input_idx")
+        if image_input_idx is None:
+            raise ValueError("`image_input_idx` is required to merge JinaVLM image and text embeddings")
+        if isinstance(image_input_idx, np.ndarray):
+            image_input_idx = torch.from_numpy(image_input_idx)
+
+        batch_size = inputs_embeds.shape[0]
+        hidden_size = inputs_embeds.shape[-1]
+        image_embeds = image_embeds.reshape(batch_size, -1, hidden_size).to(inputs_embeds.dtype)
+        image_input_idx = image_input_idx.reshape(batch_size, -1)
+
+        valid = image_input_idx >= 0
+        batch_idx = torch.arange(batch_size, device=inputs_embeds.device)
+        batch_idx = torch.tile(batch_idx[:, None], [1, image_input_idx.shape[1]])
+        inputs_embeds = inputs_embeds.clone()
+        inputs_embeds[batch_idx[valid], image_input_idx[valid]] = image_embeds[valid]
+
+        return inputs_embeds, attention_mask, position_ids
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        image_sizes=None,
+        attention_mask=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            image_sizes=image_sizes,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        # Carry the JinaVLM-specific image tensors through the first generation step only; after
+        # the prefill step the image inputs are no longer required.
+        if past_key_values is None:
+            model_inputs["image_patches"] = kwargs.get("image_patches")
+            model_inputs["image_masks"] = kwargs.get("image_masks")
+            model_inputs["image_input_idx"] = kwargs.get("image_input_idx")
+        return model_inputs
+
+    def forward(
+        self,
+        input_ids,
+        pixel_values=None,
+        past_key_values=None,
+        inputs_embeds=None,
+        image_sizes=None,
+        attention_mask=None,
+        position_ids=None,
+        image_patches=None,
+        image_masks=None,
+        image_input_idx=None,
+        **kwargs,
+    ):
+        if pixel_values is None:
+            pixel_values = image_patches
+        return super().forward(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            image_sizes=image_sizes,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            image_masks=image_masks,
+            image_input_idx=image_input_idx,
+            **kwargs,
+        )
+
+    @staticmethod
+    def preprocess_inputs(
+        text: Optional[str] = None,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("processor is required")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        if getattr(processor, "chat_template", None) is None:
+            raise ValueError("JinaVLM requires a chat template to build image-text inputs.")
+
+        images = None
+        content = []
+        if image is not None:
+            images = image if isinstance(image, list) else [image]
+            content.extend([{"type": "image"}] * len(images))
+        content.append({"type": "text", "text": text})
+        conversation = [{"role": "user", "content": content}]
+        prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+        inputs = processor(images=images, text=prompt, return_tensors="pt")
+        return inputs
+
+
 class _OVGotOCR2ForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1 and kwargs.get("past_key_values") is not None:
@@ -7377,6 +7506,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen2_5_vl": _OVQwen2_5_VLForCausalLM,
     "qwen2_5_vl_text": _OVQwen2_5_VLForCausalLM,
     "got_ocr2": _OVGotOCR2ForCausalLM,
+    "jvlm": _OVJinaVLMForCausalLM,
     "gemma3": _OVGemma3ForCausalLM,
     "gemma3n": _OVGemma4ForCausalLM,
     "gemma4": _OVGemma4ForCausalLM,

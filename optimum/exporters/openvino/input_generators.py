@@ -2124,3 +2124,97 @@ class DummyQwen3OmniMoeVisionInputGenerator(DummyQwen3VLVisionEmbedInputGenerato
             return self.random_float_tensor([seq_len, self.embed_dim], framework=framework, dtype=float_dtype)
 
         return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyJinaVLMVisionInputGenerator(DummyInputGenerator):
+    """Dummy inputs for the JinaVLM (model_type='jvlm') vision embeddings sub-model.
+
+    The JinaVLM processor produces image tensors as pre-extracted patches rather than raw
+    ``pixel_values``:
+
+    * ``image_patches`` of shape ``(batch_size, n_crops, n_patches, n_pixels)`` where
+      ``n_pixels = n_channels * patch_size ** 2`` and ``n_patches = (input_h // patch_size) *
+      (input_w // patch_size)``;
+    * ``image_masks`` of shape ``(batch_size, n_crops, n_patches)`` describing padded patches.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("image_patches", "image_masks")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        self.batch_size = batch_size
+        config = normalized_config.config
+        self.n_channels = config.n_channels
+        self.patch_size = config.patch_size
+        input_size = config.input_size
+        input_h, input_w = (input_size[0], input_size[1]) if input_size is not None else (self.patch_size, self.patch_size)
+        self.n_patches = (input_h // self.patch_size) * (input_w // self.patch_size)
+        self.n_pixels = self.n_channels * self.patch_size * self.patch_size
+        # A single crop is enough to trace the vision graph; the runtime supports dynamic n_crops.
+        self.n_crops = 1
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "image_patches":
+            return self.random_float_tensor(
+                shape=[self.batch_size, self.n_crops, self.n_patches, self.n_pixels],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "image_masks":
+            return self.random_int_tensor(
+                shape=[self.batch_size, self.n_crops, self.n_patches],
+                min_value=0,
+                max_value=2,
+                framework=framework,
+                dtype=int_dtype,
+            )
+        raise ValueError(f"Unsupported input name {input_name} for DummyJinaVLMVisionInputGenerator")
+
+
+class JinaVLMDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    """Past key/values generator for the JinaVLM (model_type='jvlm') language model.
+
+    The JinaVLM text decoder uses grouped-query attention with the number of key/value heads and
+    the per-head dimension defined in ``text_config.block_config.attn_config``.
+    """
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+        attn_config = normalized_config.config.block_config.attn_config
+        self.num_key_value_heads = attn_config.n_kv_heads or attn_config.n_heads
+        self.head_dim = attn_config.head_dim or (self.hidden_size // self.num_attention_heads)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        shape = (
+            self.batch_size,
+            self.num_key_value_heads,
+            self.sequence_length,
+            self.head_dim,
+        )
+        return [
+            (
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+            )
+            for _ in range(self.num_layers)
+        ]
