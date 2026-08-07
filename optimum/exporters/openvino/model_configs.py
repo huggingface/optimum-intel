@@ -14,6 +14,7 @@
 
 import enum
 import logging
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Union
 
 import torch
@@ -173,6 +174,7 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3_5MoeModelPatcher,
     Qwen3_5VisionEmbMergerPatcher,
     Qwen3ASRModelPatcher,
+    Qwen3ForGuardModelPatcher,
     Qwen3MoeModelPatcher,
     Qwen3NextModelPatcher,
     Qwen3OmniMoeAudioEncoderPatcher,
@@ -451,6 +453,16 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         )
         archs = getattr(config, "architectures", None)
         self.dflash = isinstance(archs, list) and len(archs) > 0 and archs[0] == "DFlashDraftModel"
+        # Qwen3Guard-Stream (`Qwen3ForGuardModel`, custom `trust_remote_code` class) still declares
+        # model_type="qwen3" and has an otherwise-standard Qwen3 backbone, but replaces the causal-LM head
+        # with 4 small token-classification heads (`risk_level_logits`, `category_logits`,
+        # `query_risk_level_logits`, `query_category_logits`) returned in a plain `@dataclass`
+        # (`GuardLogitsOutputWithPast`) rather than a `transformers.ModelOutput`. Detect it the same way as
+        # the DFlash draft-model variant above (via `architectures`, since `model_type` alone can't
+        # disambiguate) and adjust only the declared outputs + model patcher accordingly.
+        self.is_guard = isinstance(archs, list) and len(archs) > 0 and archs[0] == "Qwen3ForGuardModel"
+        if self.is_guard:
+            self._MODEL_PATCHER = Qwen3ForGuardModelPatcher
         if self.dflash:
             model_type = getattr(config, "model_type", "")
             if model_type != "qwen3":
@@ -493,6 +505,18 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self.is_guard:
+            common_outputs = OrderedDict(
+                {
+                    "risk_level_logits": {0: "batch_size", 1: "sequence_length"},
+                    "category_logits": {0: "batch_size", 1: "sequence_length"},
+                    "query_risk_level_logits": {0: "batch_size", 1: "sequence_length"},
+                    "query_category_logits": {0: "batch_size", 1: "sequence_length"},
+                }
+            )
+            if self.use_past:
+                self.add_past_key_values(common_outputs, direction="outputs")
+            return common_outputs
         if self.dflash:
             common_outputs = super().outputs
             common_outputs.pop("logits", None)
