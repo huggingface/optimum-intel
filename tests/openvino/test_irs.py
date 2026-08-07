@@ -10,12 +10,10 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import pytest
+from huggingface_hub import snapshot_download
 from openvino import Core, Model
 
 from optimum.intel import OVDiffusionPipeline
-
-
-REFERENCE_IR_DIR = Path(__file__).parent / "reference_irs"
 
 
 # OpenVINO model comparison functions
@@ -128,19 +126,31 @@ class TestIRStability:
     """Test suite for IR stability across transformers versions."""
 
     @pytest.mark.parametrize(
-        "model_id,model_class,ref_dir",
+        "model_id,model_class",
         [
-            ("optimum-intel-internal-testing/tiny-random-flux", OVDiffusionPipeline, "tiny-random-flux"),
+            ("optimum-intel-internal-testing/tiny-random-flux", OVDiffusionPipeline),
         ],
     )
-    def test_ir_stability(self, model_id: str, model_class, ref_dir: str, tmp_path: Path):
+    def test_ir_stability(self, model_id: str, model_class, tmp_path: Path):
         """Test that exported IR matches reference IR."""
 
-        # Load reference IR directory
-        ref_ir_dir = REFERENCE_IR_DIR / ref_dir
+        # Download reference IRs from HuggingFace (openvino/ folder)
+        try:
+            ref_ir_dir = (
+                Path(
+                    snapshot_download(
+                        repo_id=model_id,
+                        allow_patterns=["openvino/**"],
+                        repo_type="model",
+                    )
+                )
+                / "openvino"
+            )
+        except Exception as e:
+            pytest.skip(f"Failed to download reference IRs from {model_id}: {e}")
 
         if not ref_ir_dir.exists():
-            pytest.skip(f"Reference IR directory not found: {ref_ir_dir}")
+            pytest.skip(f"No openvino/ folder found in {model_id}")
 
         # Load reference metadata
         ref_metadata = load_reference_metadata(ref_ir_dir)
