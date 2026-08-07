@@ -5598,12 +5598,29 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
             raise ValueError("Video input is not supported")
         if audio is not None:
             raise ValueError("Audio input is not supported")
-        # The gemma4_unified processor has no chat template, so build the prompt directly.
-        # An image is referenced by the processor's image token placeholder.
+        if getattr(tokenizer, "chat_template", None) is None:
+            if image is not None:
+                # If chat template is not available we need to add image token manually, as there's a requirement
+                # that image token number should match the number of provided images:
+                # https://github.com/huggingface/transformers/blob/v5.10.0/src/transformers/models/gemma4_unified/processing_gemma4_unified.py#L187
+                image_token = getattr(processor, "image_token", "<|image|>")
+                if image_token not in text:
+                    text = f"{image_token}{text}"
+            return processor(images=image, text=text, return_tensors="pt")
+
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
         if image is not None:
-            image_token = getattr(processor, "image_token", "<|image|>")
-            text = f"{image_token}{text}"
-        return processor(images=image, text=text, return_tensors="pt")
+            conversation[0]["content"].insert(0, {"type": "image"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+        return processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
 
     def _update_model_kwargs_for_generation(
         self,

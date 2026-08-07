@@ -39,17 +39,17 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.10"
 
       - name: Install dependencies
         run: |
           pip install --upgrade pip uv
-          uv pip install .[tests] librosa diffusers
+          uv pip install .[tests] librosa
 
       - name: Login with fork PRs CI token
         if: ${{ env.HF_TOKEN == '' }}
