@@ -1163,6 +1163,27 @@ class OVCacheWithMambaStates(MambaCache):
             self.mamba_headdim = getattr(config, "mamba_d_head", None)
             self.num_mamba_layers = layer_types.count("mamba")
             self.num_attn_layers = layer_types.count("attention")
+        elif config.model_type == "falcon_h1":
+            # FalconH1 is a fully-parallel hybrid: every decoder layer contains both a Mamba2
+            # mixer (conv + ssm states) and a self-attention block (key + value cache), so the
+            # number of mamba layers and attention layers both equal `num_hidden_layers`.
+            # FalconH1 also uses distinct config attribute names (`mamba_n_groups`,
+            # `mamba_n_heads`, `mamba_d_head`, `mamba_d_state`, `mamba_d_ssm`) and a mamba
+            # intermediate size that is independent of the MLP `intermediate_size`.
+            self.num_key_value_heads = getattr(config, "num_key_value_heads", None)
+            self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
+            self.mamba_ngroups = getattr(config, "mamba_n_groups", None)
+            self.n_mamba_heads = getattr(config, "mamba_n_heads", None)
+            self.ssm_state_size = getattr(config, "mamba_d_state", None)
+            self.mamba_headdim = getattr(config, "mamba_d_head", None)
+            # mamba intermediate size (conv/ssm hidden dim), NOT the MLP intermediate_size
+            self.intermediate_size = (
+                config.mamba_d_ssm
+                if getattr(config, "mamba_d_ssm", None) is not None
+                else int(config.mamba_expand * config.hidden_size)
+            )
+            self.num_mamba_layers = config.num_hidden_layers
+            self.num_attn_layers = config.num_hidden_layers
         else:
             # Mamba 2 specific parameters
             hybrid_layer_ids = getattr(config, "hybrid_layer_ids", None)
@@ -1527,6 +1548,8 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                     # to be the length of the full context, so default mask from OVModelForCausalLM needs to be used.
                     # Other models like Mamba typically do not require an attention_mask
                     # for the decoding step after the first token so use attention mask of ones.
+                    # FalconH1 reconstructs a full-length decode mask inside its exporter patcher,
+                    # so a length-1 ones mask here is sufficient.
                     attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
 
             else:
