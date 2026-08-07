@@ -685,6 +685,12 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             # get decoder inputs from shifting lm labels to the right
             decoder_input_ids = self._shift_right(labels)
 
+        # An encoder that changes the length of the sequence reports the mask that matches its own
+        # output, and the incoming one no longer lines up with the states cross attention sees
+        encoder_attention_mask = getattr(encoder_outputs, "attention_mask", None)
+        if encoder_attention_mask is None:
+            encoder_attention_mask = attention_mask
+
         # Decode
         if past_key_values is None or self.decoder_with_past is None:
             decoder_outputs = self.decoder(
@@ -693,7 +699,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                 ),
                 attention_mask=decoder_attention_mask,
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
-                encoder_attention_mask=attention_mask,
+                encoder_attention_mask=encoder_attention_mask,
                 past_key_values=past_key_values,
                 cache_position=cache_position,
             )
@@ -702,7 +708,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                 input_ids=decoder_input_ids[:, -1:],  # Cut decoder_input_ids if past is used
                 attention_mask=decoder_attention_mask,
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
-                encoder_attention_mask=attention_mask,
+                encoder_attention_mask=encoder_attention_mask,
                 past_key_values=past_key_values,
                 cache_position=cache_position,
             )
@@ -947,11 +953,18 @@ class OVEncoder(OVModelPart):
             return BaseModelOutput(last_hidden_state=audio_features)
 
         # Run inference
-        last_hidden_state = torch.from_numpy(
-            self.request(inputs, share_inputs=True, share_outputs=True)["last_hidden_state"]
-        ).to(self.device)
+        request_outputs = self.request(inputs, share_inputs=True, share_outputs=True)
+        last_hidden_state = torch.from_numpy(request_outputs["last_hidden_state"]).to(self.device)
+        encoder_outputs = BaseModelOutput(last_hidden_state=last_hidden_state)
 
-        return BaseModelOutput(last_hidden_state=last_hidden_state)
+        # Encoders that subsample the time axis hand back the mask that goes with the shortened
+        # states, which is the one cross attention needs rather than the one that came in
+        if "encoder_attention_mask" in self.output_names:
+            encoder_outputs.attention_mask = torch.from_numpy(request_outputs["encoder_attention_mask"]).to(
+                self.device
+            )
+
+        return encoder_outputs
 
 
 class OVDecoder(OVModelPart):

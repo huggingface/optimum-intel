@@ -10352,6 +10352,99 @@ class CohereAsrModelPatcher(OVSeq2SeqModelPatcher):
             self._cache_seq_length_module = None
 
 
+class CohereAsrNativeModelPatcher(OVSeq2SeqModelPatcher):
+    """Reconnects the encoder mask for the transformers native Cohere ASR decoder.
+
+    The model reads the subsampled mask off the encoder output, but the decoder submodel is traced
+    with the encoder states handed in as a bare tensor, so the mask has to be reattached."""
+
+    def __enter__(self):
+        super().__enter__()
+        self._strip_forward_annotations()
+        self._patch_inner_forward()
+        self._patch_encoder_attention()
+
+    def _patch_encoder_attention(self):
+        # A padded frame masks its own attention row out completely, and the softmax over that row
+        # comes back as NaN here where the fused torch kernel returns zeros instead
+        inner_model = getattr(self._model, "model", None)
+        # The encoder submodel is traced on its own, so it is already the model being patched
+        encoder = getattr(inner_model, "encoder", None) if inner_model is not None else self._model
+        self._encoder_attentions = [layer.self_attn for layer in getattr(encoder, "layers", [])]
+
+        for attention in self._encoder_attentions:
+            attention._forward_with_masked_rows = attention.forward
+            attention.forward = functools.partial(self._attention_without_masked_rows, attention)
+
+    @staticmethod
+    def _attention_without_masked_rows(attention, hidden_states, *args, attention_mask=None, **kwargs):
+        attn_output, attn_weights = attention._forward_with_masked_rows(
+            hidden_states, *args, attention_mask=attention_mask, **kwargs
+        )
+        if attention_mask is not None:
+            # Zeroed rather than left as they are so the depthwise convolution downstream, the only
+            # step that mixes across time, keeps reading padded frames as empty
+            fully_masked_rows = attention_mask.any(dim=-1).logical_not().transpose(1, 2)
+            attn_output = attn_output.masked_fill(fully_masked_rows, 0.0)
+        return attn_output, attn_weights
+
+    def _strip_forward_annotations(self):
+        # The tracing wrapper is built by executing the forward signature as source, so an
+        # annotation naming a type it does not import drops the export to positional arguments and
+        # the shared seq2seq patcher can then no longer find the cache it is meant to convert
+        signature = inspect.signature(self._model.forward)
+        self._model.forward.__signature__ = signature.replace(
+            parameters=[
+                parameter.replace(annotation=inspect.Parameter.empty) for parameter in signature.parameters.values()
+            ]
+        )
+
+    def _patch_inner_forward(self):
+        # Patched on the inner model because that is the first place the arguments carry names, and
+        # also where the mask is read off the encoder output the decoder submodel never produces
+        self._inner_model = getattr(self._model, "model", None)
+        if self._inner_model is None:
+            return
+
+        self._inner_forward = self._inner_model.forward
+
+        @functools.wraps(self._inner_forward)
+        def patched_inner_forward(*args, **kwargs):
+            encoder_outputs = kwargs.get("encoder_outputs")
+            if encoder_outputs is not None:
+                # Bypassing the encoder leaves `attention_mask` carrying the subsampled mask rather
+                # than the frame level one, which is exactly what cross attention needs
+                kwargs["encoder_outputs"] = self._as_encoder_output(encoder_outputs, kwargs.get("attention_mask"))
+            if kwargs.get("use_cache") is None:
+                # Never filled in from the config here, and left unset the cache is dropped from the
+                # outputs, so the exported decoder would have nothing to hand to the next step
+                kwargs["use_cache"] = True
+            return self._inner_forward(*args, **kwargs)
+
+        self._inner_model.forward = patched_inner_forward
+
+    @staticmethod
+    def _as_encoder_output(encoder_outputs, encoder_mask):
+        # The dummy generator hands the states over as a tuple, which the model cannot read the
+        # mask off, so they are rewrapped instead of being passed straight through
+        hidden_states = getattr(encoder_outputs, "last_hidden_state", None)
+        if hidden_states is None:
+            hidden_states = encoder_outputs[0] if isinstance(encoder_outputs, (list, tuple)) else encoder_outputs
+
+        rewrapped = BaseModelOutput(last_hidden_state=hidden_states)
+        rewrapped.attention_mask = encoder_mask
+        return rewrapped
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for attention in getattr(self, "_encoder_attentions", []):
+            attention.forward = attention._forward_with_masked_rows
+        self._encoder_attentions = []
+        if getattr(self, "_inner_model", None) is not None:
+            self._inner_model.forward = self._inner_forward
+            self._inner_model = None
+
+
 class KokoroModelPatcher(ModelPatcher):
     """
     Patches the Kokoro TTS model for OpenVINO export by redirecting forward

@@ -638,9 +638,9 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "decoder_with_past": 30,
     },
     "cohere_asr": {
-        "encoder": 389,
-        "decoder": 119,
-        "decoder_with_past": 124,
+        "encoder": 60,
+        "decoder": 48,
+        "decoder_with_past": 48,
     },
 }
 
@@ -664,7 +664,6 @@ REMOTE_CODE_MODELS = (
     "chatglm4",
     "exaone",
     "exaone4",
-    "cohere_asr",
     "decilm",
     "minicpm3",
     "deepseek",
