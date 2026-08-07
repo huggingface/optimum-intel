@@ -49,6 +49,8 @@ from optimum.exporters.openvino.input_generators import (
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMVImageInputGenerator,
     DummyMiniCPMVResampleInputGenerator,
+    DummyPaddleOCRVLLMInputGenerator,
+    DummyPaddleOCRVLVisionEmbedInputGenerator,
     DummyPhi3VisionProjectionInputGenerator,
     DummyQwen2VLLMInputGenerator,
     DummyQwen2VLVisionEmbedInputGenerator,
@@ -155,6 +157,9 @@ from optimum.exporters.openvino.model_patcher import (
     MPTModelPatcher,
     OVDecoderModelPatcher,
     OVSeq2SeqModelPatcher,
+    PaddleOCRVLLanguageModelPatcher,
+    PaddleOCRVLVisionEmbeddingsPatcher,
+    PaddleOCRVLVisionEmbMergerPatcher,
     Phi3ModelPatcher,
     Phi3VisionImageEmbeddingsPatcher,
     Phi4MMAudioEncoderPatcher,
@@ -397,6 +402,31 @@ class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = OVDecoderModelPatcher
+
+
+class PaddleOCRVLTextNormalizedConfig(NormalizedTextConfig):
+    # PaddleOCR-VL (Ernie4.5) language model uses an explicit ``head_dim`` (128) that is
+    # NOT hidden_size / num_attention_heads (64), and grouped-query attention.
+    NUM_KEY_VALUE_HEADS = "num_key_value_heads"
+
+    @property
+    def head_dim(self):
+        return getattr(self.config, "head_dim", self.hidden_size // self.num_attention_heads)
+
+
+@register_in_tasks_manager(
+    "paddleocr_vl_text",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class PaddleOCRVLTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    # Internal text-generation config for the PaddleOCR-VL Ernie4.5 decoder. Reuses the
+    # GQA past-key-values generator that honours the explicit ``head_dim``.
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = PaddleOCRVLTextNormalizedConfig
+    _MODEL_PATCHER = OVDecoderModelPatcher
+    MIN_TRANSFORMERS_VERSION = "4.57.0"
 
 
 @register_in_tasks_manager("qwen2_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -3720,6 +3750,145 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
                 "qwen3_vl_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
             ).outputs
         raise Exception("Unknown Qwen3VL behavior type.")
+
+
+class PaddleOCRVLConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    VISION_EMBEDDINGS_MERGER = "vision_embeddings_merger"
+    TEXT_EMBEDDINGS = "text_embeddings"
+
+
+@register_in_tasks_manager("paddleocr_vl", *["image-text-to-text"], library_name="transformers")
+class PaddleOCRVLOpenVINOConfig(BaseVLMOpenVINOConfig):
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in PaddleOCRVLConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyPaddleOCRVLVisionEmbedInputGenerator,)
+    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    MAX_TRANSFORMERS_VERSION = "5.0"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: PaddleOCRVLConfigBehavior = PaddleOCRVLConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior in (
+            PaddleOCRVLConfigBehavior.VISION_EMBEDDINGS,
+            PaddleOCRVLConfigBehavior.VISION_EMBEDDINGS_MERGER,
+        ) and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, PaddleOCRVLConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, PaddleOCRVLConfigBehavior):
+            behavior = PaddleOCRVLConfigBehavior(behavior)
+
+        if behavior == PaddleOCRVLConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == PaddleOCRVLConfigBehavior.VISION_EMBEDDINGS:
+            vision_embeddings = model.visual.vision_model.embeddings
+            vision_embeddings.config = model.config.vision_config
+            return vision_embeddings
+
+        if behavior == PaddleOCRVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            # The merger wraps the SigLIP encoder + post layernorm + Projector (mlp_AR).
+            vision_merger = model
+            return vision_merger
+
+        if behavior == PaddleOCRVLConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.model.embed_tokens
+            text_embedding.config = model.config
+            return text_embedding
+
+    def with_behavior(
+        self,
+        behavior: Union[str, PaddleOCRVLConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, PaddleOCRVLConfigBehavior):
+            behavior = PaddleOCRVLConfigBehavior(behavior)
+
+        if behavior == PaddleOCRVLConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "paddleocr_vl_text",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version="4.57.0",
+            )
+
+        if behavior == PaddleOCRVLConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "paddleocr_vl_text",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=PaddleOCRVLLanguageModelPatcher,
+                dummy_input_generator=DummyPaddleOCRVLLMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                min_transformers_version="4.57.0",
+            )
+
+        if behavior in (
+            PaddleOCRVLConfigBehavior.VISION_EMBEDDINGS,
+            PaddleOCRVLConfigBehavior.VISION_EMBEDDINGS_MERGER,
+        ):
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == PaddleOCRVLConfigBehavior.VISION_EMBEDDINGS:
+            return PaddleOCRVLVisionEmbeddingsPatcher(self, model, model_kwargs)
+        if self._behavior == PaddleOCRVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            return PaddleOCRVLVisionEmbMergerPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == PaddleOCRVLConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {0: "patch_thw_grid"},
+                "interp_h": {0: "grid_h"},
+                "interp_w": {0: "grid_w"},
+            }
+        if self._behavior == PaddleOCRVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            return {
+                "hidden_states": {0: "sequence_length"},
+                "attention_mask": {1: "sequence_length", 2: "sequence_length"},
+                "rope_emb_cos": {0: "sequence_length"},
+                "rope_emb_sin": {0: "sequence_length"},
+                "merge_index": {0: "sequence_length"},
+            }
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == PaddleOCRVLConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "sequence_length"}}
+        if self._behavior == PaddleOCRVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            return {"last_hidden_state": {0: "merged_sequence_length"}}
+        return {}
 
 
 class Qwen3OmniMoeConfigBehavior(str, enum.Enum):

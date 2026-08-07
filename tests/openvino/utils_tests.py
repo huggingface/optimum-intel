@@ -144,6 +144,170 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+_TINY_PADDLEOCR_VL_MARKER = "tiny_paddleocr_vl_v1"
+_PADDLEOCR_VL_ORIGINAL_ID = "PaddlePaddle/PaddleOCR-VL-1.5"
+_PADDLEOCR_VL_REMOTE_CODE_FILES = [
+    "configuration_paddleocr_vl.py",
+    "modeling_paddleocr_vl.py",
+    "image_processing_paddleocr_vl.py",
+    "processing_paddleocr_vl.py",
+]
+_PADDLEOCR_VL_ASSET_FILES = [
+    "generation_config.json",
+    "processor_config.json",
+    "preprocessor_config.json",
+    "chat_template.jinja",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "added_tokens.json",
+    "tokenizer.json",
+    "tokenizer.model",
+]
+
+
+def _patch_paddleocr_vl_remote_code(modeling_path: Path) -> None:
+    """Make the 4.55-era remote modeling code load under transformers>=4.56.
+
+    transformers>=4.56 renamed the ``create_causal_mask`` keyword ``inputs_embeds``
+    to ``input_embeds``; call it positionally. This only affects the local test
+    fixture's own copy of the remote code; the real model is handled at the
+    Optimum export/runtime patching level (see PaddleOCRVLLanguageModelPatcher).
+    """
+    text = modeling_path.read_text()
+    old = (
+        "        causal_mask = create_causal_mask(\n"
+        "            config=self.config,\n"
+        "            inputs_embeds=inputs_embeds,\n"
+        "            attention_mask=attention_mask,\n"
+        "            past_key_values=past_key_values,\n"
+        "            position_ids=position_ids,\n"
+        "            cache_position=cache_position,\n"
+        "        )"
+    )
+    new = (
+        "        causal_mask = create_causal_mask(\n"
+        "            self.config,\n"
+        "            inputs_embeds,\n"
+        "            attention_mask,\n"
+        "            cache_position,\n"
+        "            past_key_values,\n"
+        "            position_ids,\n"
+        "        )"
+    )
+    if old in text:
+        modeling_path.write_text(text.replace(old, new))
+
+
+def _create_tiny_paddleocr_vl_model():
+    """Create (or reuse) a tiny random PaddleOCR-VL fixture and return its local path.
+
+    Reduces layer/hidden/vision dimensions while preserving the architecture
+    identity (`model_type=paddleocr_vl`, `PaddleOCRVLForConditionalGeneration`,
+    explicit `head_dim=128`, GQA grouping, mrope_section sum == head_dim//2, full
+    vocab so special-token ids stay in range, SigLIP-variant vision tower). Original
+    weights are never loaded.
+    """
+    import shutil
+
+    from huggingface_hub import hf_hub_download
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor
+
+    out_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_paddleocr_vl"
+    marker_file = out_dir / ".tiny_model_marker.json"
+    cfg_file = out_dir / "config.json"
+    if marker_file.exists() and cfg_file.exists():
+        try:
+            if json.loads(marker_file.read_text()).get("marker") == _TINY_PADDLEOCR_VL_MARKER:
+                cfg = json.loads(cfg_file.read_text())
+                if (
+                    cfg.get("model_type") == "paddleocr_vl"
+                    and cfg.get("architectures") == ["PaddleOCRVLForConditionalGeneration"]
+                    and cfg.get("head_dim") == 128
+                    and cfg.get("vision_config", {}).get("model_type") == "paddleocr_vl"
+                    and any((out_dir / f).exists() for f in ("model.safetensors", "pytorch_model.bin"))
+                ):
+                    return str(out_dir)
+        except Exception:
+            pass
+
+    assets_dir = Path(tempfile.gettempdir()) / "optimum_intel_paddleocr_vl_assets"
+    if not (assets_dir / "config.json").exists():
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        for f in ["config.json"] + _PADDLEOCR_VL_REMOTE_CODE_FILES + _PADDLEOCR_VL_ASSET_FILES:
+            try:
+                hf_hub_download(_PADDLEOCR_VL_ORIGINAL_ID, f, local_dir=str(assets_dir))
+            except Exception:
+                pass
+    _patch_paddleocr_vl_remote_code(assets_dir / "modeling_paddleocr_vl.py")
+
+    config = AutoConfig.from_pretrained(str(assets_dir), trust_remote_code=True)
+
+    # Text/decoder side: keep head_dim=128 and GQA grouping and full vocab.
+    config.hidden_size = 64
+    config.intermediate_size = 256
+    config.num_hidden_layers = 2
+    config.num_attention_heads = 2
+    config.num_key_value_heads = 1
+    config.head_dim = 128
+    config.max_position_embeddings = 4096
+    config.use_cache = True
+    assert sum(config.rope_scaling.get("mrope_section", [])) == config.head_dim // 2
+
+    # Vision side: shrink layers/hidden but keep patch/merge contracts.
+    vc = config.vision_config
+    vc.hidden_size = 128
+    vc.intermediate_size = 256
+    vc.num_hidden_layers = 2
+    vc.num_attention_heads = 4
+    vc.image_size = 224
+
+    config.torch_dtype = "float32"
+    if hasattr(config, "dtype"):
+        config.dtype = "float32"
+    vc.torch_dtype = "float32"
+    if hasattr(vc, "dtype"):
+        vc.dtype = "float32"
+
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    torch.manual_seed(SEED)
+    model = AutoModelForCausalLM.from_config(config, trust_remote_code=True).to(torch.float32)
+    with torch.no_grad():
+        model.lm_head.weight.normal_(mean=0.0, std=0.2)
+        model.get_input_embeddings().weight.normal_(mean=0.0, std=0.2)
+
+    model.save_pretrained(str(out_dir), safe_serialization=True)
+    processor = AutoProcessor.from_pretrained(str(assets_dir), trust_remote_code=True)
+    processor.save_pretrained(str(out_dir))
+
+    for f in _PADDLEOCR_VL_REMOTE_CODE_FILES + _PADDLEOCR_VL_ASSET_FILES:
+        src = assets_dir / f
+        dst = out_dir / f
+        if src.exists() and not dst.exists():
+            shutil.copy2(src, dst)
+    _patch_paddleocr_vl_remote_code(out_dir / "modeling_paddleocr_vl.py")
+
+    cfg_json = json.loads((out_dir / "config.json").read_text())
+    cfg_json["auto_map"] = {
+        "AutoConfig": "configuration_paddleocr_vl.PaddleOCRVLConfig",
+        "AutoModel": "modeling_paddleocr_vl.PaddleOCRVLForConditionalGeneration",
+        "AutoModelForCausalLM": "modeling_paddleocr_vl.PaddleOCRVLForConditionalGeneration",
+    }
+    cfg_json["architectures"] = ["PaddleOCRVLForConditionalGeneration"]
+    if "vision_config" in cfg_json:
+        cfg_json["vision_config"]["auto_map"] = {
+            "AutoConfig": "configuration_paddleocr_vl.PaddleOCRVLConfig",
+            "AutoModel": "modeling_paddleocr_vl.PaddleOCRVisionModel",
+        }
+        cfg_json["vision_config"]["architectures"] = ["PaddleOCRVisionModel"]
+    (out_dir / "config.json").write_text(json.dumps(cfg_json, indent=2))
+
+    marker_file.write_text(json.dumps({"marker": _TINY_PADDLEOCR_VL_MARKER}))
+    return str(out_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -279,6 +443,7 @@ HUB_MODEL_NAMES = {
     "nystromformer": "optimum-intel-internal-testing/tiny-random-NystromformerModel",
     "olmo": "optimum-intel-internal-testing/tiny-random-olmo-hf",
     "orion": "optimum-intel-internal-testing/tiny-random-orion",
+    "paddleocr_vl": _create_tiny_paddleocr_vl_model(),
     "pegasus": "optimum-intel-internal-testing/tiny-random-pegasus",
     "perceiver_text": "optimum-intel-internal-testing/tiny-random-language_perceiver",
     "perceiver_vision": "optimum-intel-internal-testing/tiny-random-vision_perceiver_conv",
@@ -508,6 +673,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 1,
         "vision_embeddings_merger_model": 10,
     },
+    "paddleocr_vl": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 14,
+    },
     "qwen3_vl": {
         "lm_model": 30,
         "text_embeddings_model": 1,
@@ -667,6 +838,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_asr",
     "fun_asr",
     "videochat_flash_qwen",
+    "paddleocr_vl",
 )
 
 if is_transformers_version("<", "5"):
