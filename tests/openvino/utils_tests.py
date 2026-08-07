@@ -361,6 +361,7 @@ HUB_MODEL_NAMES = {
     "sana": "optimum-intel-internal-testing/tiny-random-sana",
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
+    "qwenimage": "optimum-intel-internal-testing/tiny-random-qwen-image",
     "ltx2": "optimum-intel-internal-testing/tiny-random-ltx2",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",

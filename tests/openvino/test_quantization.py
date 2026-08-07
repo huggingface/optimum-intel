@@ -994,7 +994,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "lm_model": {"int8": 12, "int4": 18},
+                "lm_model": {"int8": 10, "int4": 20},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 1},
                 "vision_embeddings_merger_model": {"int8": 32},
@@ -1191,7 +1191,8 @@ class OVWeightCompressionTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = [
         config
         for config in SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION
-        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
+        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1])
+        in get_supported_model_for_library("transformers") | get_supported_model_for_library("funasr")
     ]
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [

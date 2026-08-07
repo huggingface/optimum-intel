@@ -97,6 +97,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     if is_diffusers_version(">=", "0.33.0"):
         SUPPORTED_ARCHITECTURES.extend(["sana-sprint"])
 
+    if is_diffusers_version(">=", "0.35.0"):
+        SUPPORTED_ARCHITECTURES.extend(["qwenimage"])
+
     if is_transformers_version("<", "5") or is_diffusers_version(">=", "0.37"):
         SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
 
@@ -157,7 +160,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
-        height, width, batch_size = 64, 64, 1
+        height, width, batch_size = 64, 64, 2
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
         auto_cls = self.AUTOMODEL_CLASS if "sana" not in model_arch else DiffusionPipeline
@@ -180,7 +183,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             np.testing.assert_allclose(ov_output, diffusers_output, atol=atol, rtol=1e-2)
 
         # test on inputs nondivisible on 64
-        height, width, batch_size = 96, 96, 1
+        height, width, batch_size = 96, 96, 2
 
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
@@ -243,7 +246,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             elif output_type == "pt":
                 self.assertEqual(outputs.shape, (batch_size, 3, height, width))
             else:
-                if model_arch == "flux":
+                if model_arch in ["flux", "qwenimage"]:
                     packed_height = height // pipeline.vae_scale_factor // 2
                     packed_width = width // pipeline.vae_scale_factor // 2
                     channels = pipeline.transformer.config.in_channels
@@ -435,7 +438,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             ov_pipeline.transformer is not None
             and "txt_ids" not in {inputs.get_any_name() for inputs in ov_pipeline.transformer.model.inputs}
         ):
-            expected_batch *= 2
+            if model_arch != "qwenimage":
+                expected_batch *= 2
         self.assertEqual(
             ov_pipeline.batch_size,
             expected_batch,
