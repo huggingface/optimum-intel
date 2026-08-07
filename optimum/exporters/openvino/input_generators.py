@@ -2124,3 +2124,68 @@ class DummyQwen3OmniMoeVisionInputGenerator(DummyQwen3VLVisionEmbedInputGenerato
             return self.random_float_tensor([seq_len, self.embed_dim], framework=framework, dtype=float_dtype)
 
         return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyQwenImageTransformerVisionInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("hidden_states",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"] // 8,
+        height: int = DEFAULT_DUMMY_SHAPES["height"] // 8,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width=width, height=height, **kwargs)
+        self.in_channels = normalized_config.config.in_channels
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "hidden_states":
+            shape = [self.batch_size, (self.height // 2) * (self.width // 2), self.in_channels]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyQwenImageTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("encoder_hidden_states", "encoder_hidden_states_mask")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.hidden_size = self.normalized_config.config.joint_attention_dim
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "encoder_hidden_states":
+            shape = [self.batch_size, self.sequence_length, self.hidden_size]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "encoder_hidden_states_mask":
+            shape = [self.batch_size, self.sequence_length]
+            return self.random_int_tensor(shape, min_value=1, max_value=2, framework=framework, dtype=int_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyQwenImageResolutionInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("height", "width")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"] // 8,
+        height: int = DEFAULT_DUMMY_SHAPES["height"] // 8,
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        # packed latent resolution (matches the packed image sequence of `hidden_states`)
+        self.packed_height = height // 2
+        self.packed_width = width // 2
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        value = self.packed_height if input_name == "height" else self.packed_width
+        return self.constant_tensor([], value=value, dtype=getattr(torch, int_dtype), framework=framework)
