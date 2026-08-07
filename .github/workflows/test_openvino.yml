@@ -52,10 +52,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7.0.1
 
-      - name: Pull Git LFS files for IR tests
-        if: ${{ matrix.test-pattern == '*irs*' }}
-        run: git lfs pull
-
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
