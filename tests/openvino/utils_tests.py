@@ -366,6 +366,7 @@ HUB_MODEL_NAMES = {
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
     "flux.2-klein": "optimum-intel-internal-testing/tiny-random-flux.2-klein",
     "qwen3_vl_eagle3": "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
+    "minicpm_v_4_eagle3": "optimum-intel-internal-testing/tiny-random-minicpm-v-4-eagle3",
     "videochat_flash_qwen": "optimum-intel-internal-testing/tiny-videochat-flash-qwen",
 }
 
@@ -601,6 +602,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "qwen3_eagle3": {"model": 20},
     "qwen3_dflash": {"model": 30},
     "qwen3_vl_eagle3": {"model": 18},
+    "minicpm_v_4_eagle3": {"model": 18},
     "qwen3_next": {"model": 100},
     "gemma3n": {
         "lm_model": 72,
@@ -664,6 +666,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_dflash",
     "qwen3_eagle3",
     "qwen3_vl_eagle3",
+    "minicpm_v_4_eagle3",
     "qwen3_asr",
     "fun_asr",
     "videochat_flash_qwen",
