@@ -187,8 +187,6 @@ class OVModelOpenCLIPBase(OVModel):
                 f"Could not infer whether the model was already converted or not to the OpenVINO IR, keeping `export={export}`.\n{exception}"
             )
 
-        if isinstance(model_id, Path):
-            model_id = model_id.as_posix()
         if isinstance(model_dir, Path):
             model_dir = model_dir.as_posix()
 
