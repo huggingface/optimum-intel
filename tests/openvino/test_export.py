@@ -107,6 +107,7 @@ class ExportModelTest(unittest.TestCase):
         "qwen3": OVModelForFeatureExtraction,
         "zamba2": OVModelForCausalLM,
         "exaone4": OVModelForCausalLM,
+        "ouro": OVModelForCausalLM,
         "lfm2": OVModelForCausalLM,
         "afmoe": OVModelForCausalLM,
         "qwen3_next": OVModelForCausalLM,
