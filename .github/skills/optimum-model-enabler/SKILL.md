@@ -125,7 +125,20 @@ Source support without tests is incomplete. Update the applicable files:
 - `tests/openvino/test_export.py` for model/API export coverage;
 - `tests/openvino/test_exporters_cli.py` for CLI export coverage;
 - `tests/openvino/test_quantization.py` for compression and quantization;
+- `tests/openvino/test_transformations.py` for applicable graph-transformation coverage;
 - `tests/openvino/utils_tests.py` for fixtures and expected IR details.
+
+For architectures that use supported graph transformations, add the
+corresponding coverage in `tests/openvino/test_transformations.py` by following
+the existing tests for the closest supported architecture:
+
+- for models with MoE blocks, verify the applicable transformation such as
+  `ConvertTiledMoEBlockToGatherMatmuls`;
+- for models with RoPE blocks, verify `RoPEFusion`.
+
+Add these tests only when the architecture actually exercises the corresponding
+pattern. Reuse existing transformation-test helpers and patterns instead of
+duplicating equivalent test logic.
 
 For a new architecture, invoke the **tiny-model-creator** agent and follow the
 Kokoro pattern in `tests/openvino/utils_tests.py`:
