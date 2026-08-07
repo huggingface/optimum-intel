@@ -39,8 +39,12 @@ jobs:
             "*diffusion*",
             "*quantization*",
             "*transformation*",
+            "*irs*",
           ]
         transformers-version: ["4.57.6", "latest"]
+        exclude:
+          - test-pattern: "*irs*"
+            transformers-version: "4.57.6"
 
     runs-on: ubuntu-22.04
 
