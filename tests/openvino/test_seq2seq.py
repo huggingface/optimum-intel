@@ -788,8 +788,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 f"Each batch of input_ids must contain exactly one BOS token, "
                 f"but found counts: {bos_token_counts.tolist()}",
             )
-
-            inputs.pop("token_type_ids")
+            if model_arch in ["gemma3n"]:
+                inputs.pop("token_type_ids")
 
         transformers_inputs = copy.deepcopy(inputs)
         # llama4 preprocessing force bf16 dtype for pixel_values, that does not work on CPU with fp32 model

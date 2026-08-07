@@ -27,7 +27,7 @@ from utils_tests import (
     get_supported_model_for_library,
 )
 
-from optimum.intel.utils.import_utils import is_transformers_version
+from optimum.intel.utils.import_utils import is_diffusers_version, is_transformers_version
 
 
 # Expected transformations per architecture, separated by stage:
@@ -239,6 +239,30 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToPowerStatic",
         ],
     },
+    "qwen3_omni_moe": {
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "TransposeMatMul",
+            "CommonFusions",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
+            "ConvertBroadcast3",
+            "ConvertTiledMoeBlockToGatherMatmuls",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    },
 }
 
 if is_transformers_version(">=", "5.0.0"):
@@ -256,6 +280,22 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
     for arch, v in ARCH_TO_EXPECTED_TRANSFORMATIONS.items()
     if arch in get_supported_model_for_library("transformers")
 }
+
+
+# Diffusion architectures are loaded through a pipeline class and live in the diffusers library (not
+# transformers), so they are added after the transformers filter above with an explicit `model_class`.
+# QwenImage's real-valued rotary embedding is written so the traced subgraph matches the GPT-NeoX
+# rotate-half matcher (`RoPEFusionGPTNEOX`), which OpenVINO fuses into the dedicated
+# `ov::op::internal::RoPE` op; the parent `RoPEFusion` pass reports it as applied.
+if is_diffusers_version(">=", "0.35.0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["qwenimage"] = {
+        "model_class": "OVDiffusionPipeline",
+        "convert": [],
+        "compile": [
+            "RoPEFusionGPTNEOX",
+            "RoPEFusion",
+        ],
+    }
 
 
 def _get_flat_transforms(arch):
@@ -342,7 +382,9 @@ class OVTransformationTest(unittest.TestCase):
         expected_transforms = _get_flat_transforms(model_arch)
         model_id = MODEL_NAMES[model_arch]
         trust_remote_code = model_arch in REMOTE_CODE_MODELS
-        model_class = ARCH_TO_MODEL_CLASS.get(model_arch)
+        model_class = ARCH_TO_EXPECTED_TRANSFORMATIONS[model_arch].get("model_class") or ARCH_TO_MODEL_CLASS.get(
+            model_arch
+        )
 
         log_output = _capture_stderr_during(
             model_id,

@@ -9,6 +9,7 @@ on:
   pull_request:
     branches:
       - main
+      - v*-release
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -39,10 +40,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.10"
 
@@ -60,13 +61,13 @@ jobs:
         run: |
           uv pip install --pre -U openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
+      - name: Qwen3.5 and Qwen3.5-Moe Validation
+        run: |
+          uv pip install "transformers>=5.2,<5.3"
+          pytest tests/openvino/${{ matrix.test-pattern }} -k "qwen3_5 or qwen3_5_moe" --durations=0
+
       - name: Gemma 4 Unified Validation
         run: |
           uv pip install "transformers>=5.10,<5.11"
           pytest tests/openvino/${{ matrix.test-pattern }} -k gemma4_unified --durations=0
 
-      - name: LTX2 Export and Diffusion Validation
-        if: ${{ matrix.test-pattern == '*export*' }}
-        run: |
-          uv pip install "diffusers==0.38.0"
-          pytest tests/openvino/test_diffusion.py -k ltx2 --durations=0

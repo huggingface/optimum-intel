@@ -126,6 +126,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "hunyuan_v1_dense"),
         ("feature-extraction", "qwen3_vl_embedding"),
         ("text-generation-with-past", "qwen3_eagle3"),
+        ("text-generation-with-past", "qwen3_dflash"),
         ("text-generation-with-past", "zamba2"),
         ("text-generation-with-past", "exaone4"),
         ("text-generation-with-past", "bitnet"),
@@ -711,7 +712,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
             "--dataset textvqa --num-samples 1",
             {
-                "lm_model": {"int8": 12, "int4": 18},
+                "lm_model": {"int8": 10, "int4": 20},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 1},
                 "vision_embeddings_merger_model": {"int8": 32},
