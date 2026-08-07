@@ -2084,7 +2084,7 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         )
 
         self.vae_decoder = OVModelVaeDecoder(vae_decoder, self, DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER)
-        # vae_encoder is only exported/loaded for image-to-video; text-to-video leaves it as None.
+        # vae_encoder is exported for both tasks but only loaded for image-to-video (None otherwise).
         self.vae_encoder = (
             OVModelVaeEncoder(vae_encoder, self, DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER)
             if isinstance(vae_encoder, openvino.Model)
