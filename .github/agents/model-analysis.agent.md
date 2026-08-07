@@ -51,6 +51,13 @@ for xml in sorted(Path("<output_dir>").glob("openvino_*.xml")):
    `optimum/exporters/openvino/model_configs.py`, `input_generators.py`,
    `model_patcher.py`, and `optimum/intel/openvino/`. Compare—not merely names—
    inputs, outputs, cache, positions, preprocessing, behaviors, and runtime.
+
+   Before proposing any new helper, forward replacement, dummy generator,
+   patcher, runtime method, or utility, search the repository for existing
+   implementations providing the same or compatible behavior. Prefer reusing,
+   subclassing, parameterizing, or minimally extending existing code over
+   duplicating it. Record in the analysis which existing classes/functions can
+   be reused and which behavior genuinely requires new implementation.
 7. If a tiny model is supplied, compare it against the original model. Stop
    analysis with a mismatch if `model_type`, architecture, task components,
    cache, position, VLM token, or MoE identity differs.

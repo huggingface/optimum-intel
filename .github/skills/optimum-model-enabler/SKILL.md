@@ -70,6 +70,21 @@ position IDs, tracing behavior, and runtime behavior are compatible.
 
 ## Step 3 — Implement targeted support
 
+Before adding new implementation code, search the repository for existing
+helpers, base classes, patchers, dummy generators, runtime utilities, and
+model-family implementations that already provide the required behavior.
+Prefer, in order:
+
+1. reuse an existing implementation unchanged;
+2. subclass or configure an existing implementation;
+3. extract or minimally generalize shared behavior when multiple architectures
+   need it;
+4. add model-specific code only when the required behavior is genuinely unique.
+
+Do not copy an existing implementation into a new model-specific helper merely
+to change names or small constants. When new code is required, document why the
+closest existing implementation cannot be reused safely.
+
 Depending on the reproduced failure, update only the required integration
 points:
 
@@ -80,9 +95,12 @@ points:
 - `optimum/intel/openvino/` for runtime loading, preprocessing, generation, or
   cache/stateful handling.
 
-Patch the exact class identified by the traceback. Replace data-dependent
-Python control flow with traceable tensor operations where necessary without
-changing unrelated architectures. After every source edit, rerun the original
+Patch the exact class identified by the traceback. Before implementing a new
+patch, check whether an existing patcher or traceable helper already handles
+the same operation and can be reused or minimally generalized. Replace
+data-dependent Python control flow with traceable tensor operations where
+necessary without changing unrelated architectures.
+After every source edit, rerun the original
 reproducer and verify it passes the previous failure point.
 
 Read [model-patching-patterns.md](model-patching-patterns.md) when tracing,
