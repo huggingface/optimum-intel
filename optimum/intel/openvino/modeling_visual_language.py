@@ -7363,6 +7363,247 @@ if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.rot_pos_emb = Qwen3_5VisionModel.rot_pos_emb
 
 
+class _OVDeepseekVLV2ForCausalLM(OVModelForVisualCausalLM):
+    """OpenVINO runtime for the DeepSeek-VL2 (``deepseek_vl_v2``) family.
+
+    The exported model is split into the standard three VLM submodels:
+
+    * ``vision_embeddings``: the SigLIP vision tower followed by the MLP
+      projector. It consumes the flat batch of image tiles
+      ``[num_tiles, 3, H, W]`` and returns the per-tile patch embeddings
+      (``last_hidden_state``) together with the two learned structural
+      parameters ``image_newline`` and ``view_separator`` (exported as constant
+      outputs so the runtime can rebuild the 2D tile layout without a reference
+      to the original torch weights).
+    * ``text_embeddings``: the language-model input embedding table.
+    * ``language``: the ``deepseek_v2`` (non-MLA) decoder that runs on merged
+      ``inputs_embeds``.
+
+    ``get_multimodal_embeddings`` reproduces the original
+    ``DeepseekVLV2ForCausalLM.prepare_inputs_embeds`` tile-formatting and
+    ``masked_scatter`` merge step.
+    """
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        # ``prepare_inputs_for_generation`` only forwards the image tensors on the
+        # prefill step, so on decode steps ``get_multimodal_embeddings`` never
+        # reaches the merge path. This method is intentionally not used directly
+        # (the merge is handled in ``get_multimodal_embeddings``) but is kept for
+        # API completeness / potential reuse.
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        vis = self.vision_embeddings
+        vis.compile()
+        result = vis.request({vis._main_input: pixel_values})
+        return result[vis.output_names["last_hidden_state"]]
+
+    def _run_vision(self, total_tiles):
+        vis = self.vision_embeddings
+        vis.compile()
+        if isinstance(total_tiles, torch.Tensor):
+            total_tiles = total_tiles.numpy()
+        result = vis.request({vis._main_input: total_tiles})
+        images_embeds = torch.from_numpy(np.array(result[vis.output_names["last_hidden_state"]]))
+        image_newline = torch.from_numpy(np.array(result[vis.output_names["image_newline"]]))[0]
+        view_separator = torch.from_numpy(np.array(result[vis.output_names["view_separator"]]))
+        return images_embeds, image_newline, view_separator
+
+    def get_multimodal_embeddings(
+        self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        from einops import rearrange, repeat
+
+        images = pixel_values
+        images_seq_mask = kwargs.get("images_seq_mask")
+        images_spatial_crop = kwargs.get("images_spatial_crop")
+
+        inputs_embeds = kwargs.get("inputs_embeds")
+        if inputs_embeds is None:
+            inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
+        if isinstance(inputs_embeds, np.ndarray):
+            inputs_embeds = torch.from_numpy(inputs_embeds)
+
+        # Decode steps (single token) or purely textual prompts: nothing to merge.
+        if (
+            images is None
+            or images_spatial_crop is None
+            or images_seq_mask is None
+            or (input_ids is not None and input_ids.shape[1] == 1)
+        ):
+            return inputs_embeds, attention_mask, position_ids
+
+        if isinstance(images, np.ndarray):
+            images = torch.from_numpy(images)
+        if isinstance(images_spatial_crop, np.ndarray):
+            images_spatial_crop = torch.from_numpy(images_spatial_crop)
+        if isinstance(images_seq_mask, np.ndarray):
+            images_seq_mask = torch.from_numpy(images_seq_mask)
+
+        if images_spatial_crop.sum() == 0:
+            return inputs_embeds, attention_mask, position_ids
+
+        bs, max_n_images, _ = images_spatial_crop.shape
+        batch_num_tiles = [0 for _ in range(bs)]
+        total_tiles = []
+        for idx in range(bs):
+            for jdx in range(max_n_images):
+                num_width_tiles, num_height_tiles = images_spatial_crop[idx, jdx]
+                if num_width_tiles == 0 or num_height_tiles == 0:
+                    break
+                batch_num_tiles[idx] += 1 + int(num_width_tiles * num_height_tiles)
+            total_tiles.append(images[idx, : batch_num_tiles[idx]])
+
+        total_tiles = torch.cat(total_tiles, dim=0)
+        if total_tiles.shape[0] == 0:
+            return inputs_embeds, attention_mask, position_ids
+
+        images_embeds, image_newline, view_separator = self._run_vision(total_tiles)
+        _, hw, n_dim = images_embeds.shape
+        h = w = int(hw**0.5)
+
+        tile_index = 0
+        for idx in range(bs):
+            images_in_this_batch = []
+            for jdx in range(max_n_images):
+                num_width_tiles, num_height_tiles = images_spatial_crop[idx, jdx]
+                if num_width_tiles == 0 or num_height_tiles == 0:
+                    break
+                num_tiles_in_image = int(num_width_tiles * num_height_tiles)
+
+                global_features = images_embeds[tile_index]
+                local_features = images_embeds[tile_index + 1 : tile_index + 1 + num_tiles_in_image]
+                tile_index += num_tiles_in_image + 1
+
+                # global view + newline
+                global_features = global_features.view(h, w, n_dim)
+                new_lines_in_global = repeat(image_newline, "d -> h 1 d", h=h)
+                global_features = torch.cat([global_features, new_lines_in_global], dim=1)
+                global_features = global_features.view(-1, n_dim)
+
+                # local view + newline
+                local_features = rearrange(
+                    local_features,
+                    "(th tw) (h w) d -> (th h) (tw w) d",
+                    th=int(num_height_tiles),
+                    tw=int(num_width_tiles),
+                    h=h,
+                    w=w,
+                )
+                new_lines_in_local = repeat(
+                    image_newline,
+                    "d -> (th h) 1 d",
+                    th=int(num_height_tiles),
+                    h=h,
+                )
+                local_features = torch.cat([local_features, new_lines_in_local], dim=1)
+                local_features = local_features.view(-1, n_dim)
+
+                if self.config.global_view_pos == "head":
+                    global_local_features = torch.cat([global_features, view_separator, local_features], dim=0)
+                else:
+                    global_local_features = torch.cat([local_features, view_separator, global_features], dim=0)
+
+                images_in_this_batch.append(global_local_features)
+
+            if len(images_in_this_batch) > 0:
+                images_in_this_batch = torch.cat(images_in_this_batch, dim=0).to(inputs_embeds.dtype)
+                inputs_embeds[idx] = inputs_embeds[idx].masked_scatter(
+                    images_seq_mask[idx].unsqueeze(-1), images_in_this_batch
+                )
+
+        return inputs_embeds, attention_mask, position_ids
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        image_sizes=None,
+        attention_mask=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            image_sizes=image_sizes,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        # Only forward the image tensors during prefill; on decode steps they must
+        # be dropped so ``get_multimodal_embeddings`` skips the merge path.
+        if past_key_values is None:
+            images = pixel_values if pixel_values is not None else kwargs.get("images")
+            model_inputs["pixel_values"] = images
+            model_inputs["images_seq_mask"] = kwargs.get("images_seq_mask")
+            model_inputs["images_spatial_crop"] = kwargs.get("images_spatial_crop")
+        else:
+            model_inputs["pixel_values"] = None
+            model_inputs["images_seq_mask"] = None
+            model_inputs["images_spatial_crop"] = None
+        return model_inputs
+
+    def _validate_model_kwargs(self, model_kwargs):
+        # ``images_seq_mask`` / ``images_spatial_crop`` are consumed through
+        # ``get_multimodal_embeddings`` (via ``prepare_inputs_for_generation``)
+        # and are not part of the language-model forward signature, so exclude
+        # them from the generic unused-kwargs validation.
+        ignore = {"images_seq_mask", "images_spatial_crop"}
+        filtered = {k: v for k, v in model_kwargs.items() if k not in ignore}
+        return super()._validate_model_kwargs(filtered)
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required for deepseek_vl_v2 preprocessing.")
+        if video is not None:
+            raise ValueError("Video input is not supported for deepseek_vl_v2.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported for deepseek_vl_v2.")
+
+        images = image
+        if images is not None and not isinstance(images, (list, tuple)):
+            images = [images]
+        images = [img for img in images if img is not None] if images else []
+
+        num_images = len(images)
+        existing = text.count("<image>")
+        if existing < num_images:
+            text = ("<image>\n") * (num_images - existing) + text
+        elif existing > num_images:
+            raise ValueError(
+                f"Prompt has {existing} '<image>' placeholders but {num_images} image(s) provided."
+            )
+
+        conversation = [
+            {"role": "<|User|>", "content": text},
+            {"role": "<|Assistant|>", "content": ""},
+        ]
+        prepared = processor(
+            conversations=conversation,
+            images=images,
+            force_batchify=True,
+            inference_mode=True,
+        )
+        return {
+            "input_ids": prepared.input_ids,
+            "attention_mask": prepared.attention_mask,
+            "images": prepared.images,
+            "images_seq_mask": prepared.images_seq_mask,
+            "images_spatial_crop": prepared.images_spatial_crop,
+        }
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
@@ -7394,4 +7635,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_omni_moe": _OVQwen3OmniMoeForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
+    "deepseek_vl_v2": _OVDeepseekVLV2ForCausalLM,
 }

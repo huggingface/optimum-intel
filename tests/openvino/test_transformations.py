@@ -263,6 +263,27 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
+    # DeepSeek-VL2 is a vision-language model whose language tower is a
+    # DeepSeek-V2 (non-MLA) mixture-of-experts decoder with GPT-NeoX-style RoPE.
+    # Its MoE routing is exported through the ``deepseek_moe_infer`` vectorized
+    # helper (same as the native ``deepseek`` architecture); this does not match
+    # OpenVINO's tiled-MoE gather-matmul pattern, so only the RoPE/SDPA fusions
+    # are asserted here.
+    "deepseek_vl_v2": {
+        "model_class": "OVModelForVisualCausalLM",
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "CommonFusions",
+        ],
+        "compile": [
+            "SDPASubgraphFusion",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+        ],
+    },
 }
 
 if is_transformers_version(">=", "5.0.0"):

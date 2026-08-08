@@ -4113,6 +4113,67 @@ def deepseek_moe_infer(self, x, topk_ids, topk_weight):
     return final_out
 
 
+class DeepseekVLV2LanguageModelPatcher(OVDecoderModelPatcher):
+    """Language-model patcher for the DeepSeek-VL2 (``deepseek_vl_v2``) family.
+
+    The bundled DeepSeek-VL2 language model is a ``deepseek_v2`` decoder running
+    with ``use_mla=False`` and a self-contained, already trace-friendly
+    multi-head attention. Only the mixture-of-experts routing (``moe_infer``)
+    contains data-dependent Python control flow that must be replaced with the
+    vectorized :func:`deepseek_moe_infer` used for the standalone ``deepseek_v2``
+    export. Attention is intentionally left untouched (unlike
+    :class:`DeepseekPatcher`, whose ``deepseek_v2_attn_forward`` targets the MLA
+    attention layout that this non-MLA model does not use).
+    """
+
+    def __enter__(self):
+        super().__enter__()
+        for block in self._model.model.layers:
+            if hasattr(block.mlp, "moe_infer"):
+                block.mlp._org_moe_infer = block.mlp.moe_infer
+                block.mlp.moe_infer = types.MethodType(deepseek_moe_infer, block.mlp)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for block in self._model.model.layers:
+            if hasattr(block.mlp, "_org_moe_infer"):
+                block.mlp.moe_infer = block.mlp._org_moe_infer
+                del block.mlp._org_moe_infer
+
+
+def _deepseek_vl_v2_vision_embed_forward(self, pixel_values):
+    """Vision + projector forward for the DeepSeek-VL2 vision embeddings submodel.
+
+    ``pixel_values`` is the flat batch of image tiles ``[num_tiles, 3, H, W]``.
+    Returns the per-tile projected patch embeddings together with the two learned
+    structural parameters (``image_newline`` and ``view_separator``) so the
+    OpenVINO runtime can reproduce the tile-formatting/merge step without holding
+    a reference to the original torch weights.
+    """
+    images_embeds = self.projector(self.vision(pixel_values))
+    return {
+        "last_hidden_state": images_embeds,
+        "image_newline": self.image_newline.unsqueeze(0),
+        "view_separator": self.view_seperator.unsqueeze(0),
+    }
+
+
+class DeepseekVLV2ImageEmbeddingsModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(_deepseek_vl_v2_vision_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
 class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
