@@ -339,6 +339,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "minicpmo",
     "videochat_flash_qwen",
     "qwen3_omni_moe",
+    "deepseek_vl_v2",
 ]
 
 SSM_MODELS = [

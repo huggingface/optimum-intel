@@ -144,6 +144,214 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+def _create_tiny_deepseek_vl_v2_model():
+    """Generate a tiny random DeepSeek-VL2 (``deepseek_vl_v2``) model for testing.
+
+    The real ``deepseek-ai/deepseek-vl2-tiny`` checkpoint ships no ``auto_map``
+    and the architecture is bundled inside optimum-intel
+    (``optimum.exporters.openvino.deepseek_vl_v2``). This helper builds a small
+    random model that preserves the real architecture (SigLIP ViT vision tower +
+    ``downsample_mlp_gelu`` projector + ``deepseek_v2`` MoE, non-MLA language
+    model), copies the bundled modeling/processing code into the fixture and
+    sets an ``auto_map`` so it loads as a self-contained remote-code model via
+    ``trust_remote_code=True``. The result is cached under the system temp dir.
+    """
+    import shutil
+
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_deepseek_vl_v2"
+    marker_file = output_dir / "TINY_CACHE_MARKER"
+    config_file = output_dir / "config.json"
+    cache_marker = "deepseek_vl_v2_v5"
+    if marker_file.exists() and config_file.exists() and marker_file.read_text().strip() == cache_marker:
+        try:
+            cached = json.load(open(config_file))
+            has_weights = any(f.suffix in {".safetensors", ".bin"} for f in output_dir.iterdir())
+            if (
+                cached.get("model_type") == "deepseek_vl_v2"
+                and cached.get("language_config", {}).get("model_type") == "deepseek_v2"
+                and has_weights
+            ):
+                return str(output_dir)
+        except Exception:
+            pass
+
+    from transformers import AutoTokenizer
+
+    import optimum.exporters.openvino  # noqa: F401 (ensures deepseek_vl_v2 registration)
+    from optimum.exporters.openvino import deepseek_vl_v2 as _dsv2_pkg
+    from optimum.exporters.openvino.deepseek_vl_v2.modeling_deepseek_vl_v2 import (
+        DeepseekVLV2Config,
+        DeepseekVLV2ForCausalLM,
+    )
+    from optimum.exporters.openvino.deepseek_vl_v2.processing_deepseek_vl_v2 import DeepseekVLV2Processor
+
+    original_model_id = "deepseek-ai/deepseek-vl2-tiny"
+    bundled_dir = Path(_dsv2_pkg.__file__).parent
+    bundled_files = [
+        "configuration_deepseek.py",
+        "modeling_deepseek.py",
+        "modeling_deepseek_vl_v2.py",
+        "siglip_vit.py",
+        "processing_deepseek_vl_v2.py",
+        "conversation.py",
+    ]
+
+    torch.manual_seed(SEED)
+
+    IMAGE_SIZE = 32
+    PATCH_SIZE = 16
+    DOWNSAMPLE = 2
+    VISION_WIDTH = 64
+    HIDDEN = 32  # language hidden size == projector n_embed
+
+    vision_config = dict(
+        model_name="siglip_so400m_patch14_384",
+        image_size=IMAGE_SIZE,
+        patch_size=PATCH_SIZE,
+        width=VISION_WIDTH,
+        layers=2,
+        heads=4,
+        mlp_ratio=4,
+        global_pool="map",
+        ignore_head=True,
+        class_token=False,
+    )
+    projector_config = dict(
+        projector_type="downsample_mlp_gelu",
+        input_dim=VISION_WIDTH,
+        n_embed=HIDDEN,
+        depth=2,
+        mlp_ratio=1,
+        downsample_ratio=DOWNSAMPLE,
+    )
+    language_config = dict(
+        model_type="deepseek_v2",
+        architectures=["DeepseekV2ForCausalLM"],
+        vocab_size=129280,
+        hidden_size=HIDDEN,
+        intermediate_size=128,
+        moe_intermediate_size=32,
+        num_hidden_layers=2,
+        first_k_dense_replace=1,
+        moe_layer_freq=1,
+        n_routed_experts=4,
+        n_shared_experts=2,
+        num_experts_per_tok=2,
+        n_group=1,
+        topk_group=1,
+        topk_method="greedy",
+        scoring_func="softmax",
+        norm_topk_prob=False,
+        routed_scaling_factor=1.0,
+        num_attention_heads=4,
+        num_key_value_heads=4,
+        max_position_embeddings=4096,
+        use_mla=False,
+        q_lora_rank=None,
+        kv_lora_rank=None,
+        qk_nope_head_dim=0,
+        qk_rope_head_dim=0,
+        v_head_dim=0,
+        first_k_dense_replace_moe=None,
+        bos_token_id=0,
+        eos_token_id=1,
+        rope_theta=10000.0,
+        lm_head=True,
+        torch_dtype="float32",
+        # Keep random weights small so the tiny model's fp32 logits stay
+        # low-magnitude. This keeps the OpenVINO-vs-transformers logits
+        # comparison (atol=4e-3 in test_seq2seq) comfortably within tolerance
+        # and avoids flaky failures from OpenVINO kernel-selection noise on a
+        # random MoE decoder.
+        initializer_range=0.01,
+    )
+
+    config = DeepseekVLV2Config(
+        tile_tag="2D",
+        global_view_pos="head",
+        candidate_resolutions=((IMAGE_SIZE, IMAGE_SIZE),),
+        vision_config=vision_config,
+        projector_config=projector_config,
+        language_config=language_config,
+        torch_dtype="float32",
+    )
+    config._attn_implementation = "eager"
+    config.language_config._attn_implementation = "eager"
+
+    model = DeepseekVLV2ForCausalLM(config).to(torch.float32).eval()
+
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    config.auto_map = {
+        "AutoConfig": "modeling_deepseek_vl_v2.DeepseekVLV2Config",
+        "AutoModel": "modeling_deepseek_vl_v2.DeepseekVLV2ForCausalLM",
+        "AutoModelForCausalLM": "modeling_deepseek_vl_v2.DeepseekVLV2ForCausalLM",
+    }
+    model.save_pretrained(output_dir, safe_serialization=True)
+
+    # Normalise every effective precision field to float32.
+    _cfg = json.load(open(config_file))
+    for _c in [
+        _cfg,
+        _cfg.get("language_config", {}),
+        _cfg.get("vision_config", {}),
+        _cfg.get("projector_config", {}),
+    ]:
+        _c["dtype"] = "float32"
+        _c["torch_dtype"] = "float32"
+    json.dump(_cfg, open(config_file, "w"), indent=2)
+
+    for f in bundled_files:
+        shutil.copy(bundled_dir / f, output_dir / f)
+
+    tokenizer = AutoTokenizer.from_pretrained(original_model_id)
+    tokenizer.save_pretrained(output_dir)
+
+    processor = DeepseekVLV2Processor(
+        tokenizer=tokenizer,
+        candidate_resolutions=((IMAGE_SIZE, IMAGE_SIZE),),
+        patch_size=PATCH_SIZE,
+        downsample_ratio=DOWNSAMPLE,
+        image_mean=(0.5, 0.5, 0.5),
+        image_std=(0.5, 0.5, 0.5),
+        normalize=True,
+        image_token="<image>",
+        pad_token="<\uff5c\u2581pad\u2581\uff5c>",
+        add_special_token=False,
+        sft_format="deepseek",
+        mask_prompt=False,
+        ignore_id=-100,
+    )
+    processor.save_pretrained(output_dir)
+
+    pc_path = output_dir / "processor_config.json"
+    pc = json.load(open(pc_path)) if pc_path.exists() else {}
+    pc.update(
+        {
+            "processor_class": "DeepseekVLV2Processor",
+            "auto_map": {"AutoProcessor": "processing_deepseek_vl_v2.DeepseekVLV2Processor"},
+            "candidate_resolutions": [[IMAGE_SIZE, IMAGE_SIZE]],
+            "patch_size": PATCH_SIZE,
+            "downsample_ratio": DOWNSAMPLE,
+            "image_token": "<image>",
+            "pad_token": "<\uff5c\u2581pad\u2581\uff5c>",
+            "image_mean": [0.5, 0.5, 0.5],
+            "image_std": [0.5, 0.5, 0.5],
+            "normalize": True,
+            "add_special_token": False,
+            "sft_format": "deepseek",
+            "mask_prompt": False,
+            "ignore_id": -100,
+        }
+    )
+    json.dump(pc, open(pc_path, "w"), indent=2, ensure_ascii=False)
+
+    marker_file.write_text(cache_marker)
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -189,6 +397,7 @@ HUB_MODEL_NAMES = {
     "deberta-v2": "optimum-intel-internal-testing/tiny-random-DebertaV2Model",
     "decilm": "optimum-intel-internal-testing/tiny-random-decilm",
     "deepseek": "optimum-intel-internal-testing/tiny-random-deepseek-v3",
+    "deepseek_vl_v2": _create_tiny_deepseek_vl_v2_model(),
     "deit": "optimum-intel-internal-testing/tiny-random-DeiTModel",
     "convnext": "optimum-intel-internal-testing/tiny-random-convnext",
     "convnextv2": "optimum-intel-internal-testing/tiny-random-ConvNextV2Model",
@@ -480,6 +689,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 9,
     },
+    "deepseek_vl_v2": {
+        "lm_model": 56,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 11,
+    },
     "llava_next": {
         "lm_model": 30,
         "text_embeddings_model": 1,
@@ -668,6 +882,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_asr",
     "fun_asr",
     "videochat_flash_qwen",
+    "deepseek_vl_v2",
 )
 
 if is_transformers_version("<", "5"):
