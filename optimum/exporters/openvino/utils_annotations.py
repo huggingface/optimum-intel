@@ -37,6 +37,11 @@ def _discover_decoder_stack(source_model, decoder_config) -> Sequence[str]:
     # Transformers accepts either a decoder-layer class directly or an OutputRecorder wrapper.
     decoder_layer_class = getattr(recorder, "target_class", recorder)
     if not isinstance(decoder_layer_class, type):
+        text_model = getattr(getattr(source_model, "model", None), "language_model", None)
+        recorders = getattr(text_model, "can_record_outputs", {})
+        recorder = recorders.get("hidden_states") if isinstance(recorders, dict) else None
+        decoder_layer_class = getattr(recorder, "target_class", recorder)
+    if not isinstance(decoder_layer_class, type):
         raise ValueError("Transformers does not declare a decoder-layer class for hidden_states.")
     # Composite wrappers can contain multiple decoder stacks; validate one contiguous stack.
     stacks = defaultdict(dict)
