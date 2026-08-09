@@ -45,6 +45,13 @@ fix, then rerun the exact failing command. Do not repeatedly change package
 versions until a traceback disappears, and never patch a similarly named class
 when the traceback identifies a different one.
 
+When a model-compatible Transformers version is inside Optimum Intel's
+declared supported range but the local source imports an API available only in
+a newer version, treat it as an Optimum Intel compatibility defect rather than
+an unrecoverable environment failure. Reuse an existing version guard or
+compatibility helper, or add the smallest guarded implementation, and validate
+the model in the dedicated Preview Models Support workflow.
+
 ## Step 2 — Analyze the real architecture
 
 Inspect the original model configuration and implementation. Record:
