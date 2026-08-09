@@ -128,6 +128,12 @@ Source support without tests is incomplete. Update the applicable files:
 - `tests/openvino/test_transformations.py` for applicable graph-transformation coverage;
 - `tests/openvino/utils_tests.py` for fixtures and expected IR details.
 
+If the model requires a Transformers version that is outside the versions
+supported by the main test matrix, also add its focused tests to
+`.github/workflows/test_openvino_preview_models.yml`. Install the verified
+required Transformers version in a dedicated step and run only that model's
+tests, so existing models continue to use their supported versions.
+
 For architectures that use supported graph transformations, add the
 corresponding coverage in `tests/openvino/test_transformations.py` by following
 the existing tests for the closest supported architecture:
