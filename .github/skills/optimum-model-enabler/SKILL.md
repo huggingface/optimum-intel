@@ -211,6 +211,10 @@ embedding insertion, logits, and task outputs to find the first divergence.
 Add the supported model type to `docs/source/openvino/models.mdx` using the
 existing format.
 
-Inspect `git diff --name-only` before reporting success. Remove scratch files,
-debug prints, absolute local paths, and unrelated edits. Do not commit, push,
-or open a pull request unless explicitly requested.
+Inspect the complete diff before reporting success. Search the touched areas
+for existing helpers, patchers, configurations, and tests with the same
+behavior as newly added code. Replace semantic duplicates with reuse,
+subclassing, configuration, or a minimal shared generalization when safe, and
+remove now-redundant code. Then remove scratch files, debug prints, absolute
+local paths, and unrelated edits. Do not commit, push, or open a pull request
+unless explicitly requested.

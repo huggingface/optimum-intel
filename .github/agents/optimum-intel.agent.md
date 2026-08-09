@@ -34,6 +34,10 @@ missing required input before proceeding.
 4. Rerun the exact failing reproducer after each targeted fix.
 5. Finish only after export, real generation, targeted repository tests, and
    the supported-model documentation pass.
+6. Before finishing, review the complete diff for semantically duplicated
+   helpers, patchers, configuration, and test logic. Reuse or minimally
+   generalize existing repository code and remove duplicate code introduced by
+   the change whenever behavior can be preserved.
 
 Do not report support as complete when required tests fail, are deselected, or
 are blocked by an invalid/inaccessible tiny fixture. Repair the implementation
@@ -57,4 +61,6 @@ Report:
 - Never modify system files or system-wide package installations.
 - Do not upload newly created tiny models to the Hugging Face Hub.
 - Preserve existing behavior and keep changes scoped to the requested model.
+- Reuse existing helpers and implementations instead of adding semantically
+  equivalent model-specific copies.
 - Do not commit, push, or create a pull request unless explicitly requested.
