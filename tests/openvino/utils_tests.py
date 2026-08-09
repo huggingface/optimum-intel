@@ -30,6 +30,21 @@ from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import is_transformers_version
 
 
+def is_qwen3_omni_available() -> bool:
+    """Whether the dense Qwen3-Omni architecture can actually be exercised.
+
+    A version check alone is not enough: the dense ``qwen3_omni`` architecture only ships in the
+    4.57.0 dev line of transformers, and other builds that satisfy ``>=4.57.0.dev0`` (e.g. 5.0.0)
+    carry the MoE variant instead, without ``transformers.models.qwen3_omni``. Tests that load or
+    export a dense model must gate on this helper so they skip cleanly on such builds.
+    """
+    import importlib.util
+
+    return is_transformers_version(">=", "4.57.0.dev0") and (
+        importlib.util.find_spec("transformers.models.qwen3_omni") is not None
+    )
+
+
 def _create_tiny_kokoro_model():
     """Generate a tiny random Kokoro TTS model for testing and return its local path.
 
@@ -301,6 +316,9 @@ HUB_MODEL_NAMES = {
     "qwen3_vl": "optimum-intel-internal-testing/tiny-random-qwen3-vl",
     "qwen3_vl_embedding": "optimum-intel-internal-testing/tiny-random-qwen3-vl-embedding",
     "qwen3_omni_moe": "optimum-intel-internal-testing/tiny-random-qwen3-omni",
+    # qwen3_omni (dense) is generated locally and injected into MODEL_NAMES by the
+    # qwen3_omni_model_path fixture in conftest.py; this hub id is only a fallback.
+    "qwen3_omni": "optimum-intel-internal-testing/tiny-random-qwen3-omni",
     "qwen3_next": "optimum-intel-internal-testing/tiny-random-qwen3-next",
     "qwen3_5": "optimum-intel-internal-testing/tiny-random-qwen3.5",
     "qwen3_5_moe": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
@@ -554,6 +572,18 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "talker_projections_model": 4,
         "code_predictor_model": 16,
         "code2wav_model": 53,
+    },
+    "qwen3_omni": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 34,
+        "vision_embeddings_pos_model": 1,
+        "audio_encoder_model": 10,
+        "talker_model": 30,
+        "talker_text_embeddings_model": 1,
+        "talker_projections_model": 5,
+        "code_predictor_model": 18,
+        "code2wav_model": 68,
     },
     "sana": {
         "transformer": 58,

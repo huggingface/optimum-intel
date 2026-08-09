@@ -89,6 +89,7 @@ from utils_tests import (
     check_compression_state_per_model,
     get_supported_model_for_library,
     is_model_type_transformers_compatible,
+    is_qwen3_omni_available,
     TEST_NAME_TO_MODEL_TYPE,
     OPENVINO_DEVICE,
     HUB_MODEL_NAMES,
@@ -502,6 +503,38 @@ class OVQuantizerTest(unittest.TestCase):
         for config in SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET
         if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
     ]
+
+    # Dense Qwen3-Omni only exists in transformers builds that ship the qwen3_omni module.
+    if is_qwen3_omni_available():
+        SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET.extend(
+            [
+                (
+                    OVModelForVisualCausalLM,
+                    "qwen3_omni",
+                    OVQuantizationConfig(
+                        bits=8,
+                        dataset="contextual",
+                        num_samples=1,
+                    ),
+                    {
+                        "lm_model": 14,
+                        "text_embeddings_model": 0,
+                        "vision_embeddings_model": 1,
+                        "vision_embeddings_merger_model": 44,
+                        "vision_embeddings_pos_model": 0,
+                        "audio_encoder_model": 0,
+                    },
+                    {
+                        "lm_model": {"int8": 15},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 1},
+                        "vision_embeddings_merger_model": {"int8": 32},
+                        "vision_embeddings_pos_model": {"int8": 1},
+                        "audio_encoder_model": {"int8": 10},
+                    },
+                ),
+            ]
+        )
 
     @staticmethod
     def get_calibration_dataset(
@@ -1028,6 +1061,27 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForVisualCausalLM,
+            "qwen3_omni",
+            False,
+            dict(
+                bits=4,
+                group_size=8,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+            ),
+            {
+                "lm_model": {"int8": 12, "int4": 18},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 32},
+                "vision_embeddings_pos_model": {"int8": 1},
+                "audio_encoder_model": {"int8": 10},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
             "phi3_v",
             True,
             dict(
@@ -1195,6 +1249,11 @@ class OVWeightCompressionTest(unittest.TestCase):
         in get_supported_model_for_library("transformers") | get_supported_model_for_library("funasr")
     ]
 
+    # Dense Qwen3-Omni only exists in transformers builds that ship the qwen3_omni module, so it can't
+    # live in the statically-filtered list above.
+    if is_qwen3_omni_available():
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen3_omni", False))
+
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl", 84, 331),
@@ -1343,6 +1402,9 @@ class OVWeightCompressionTest(unittest.TestCase):
             )
             if not is_model_type_transformers_compatible(model_type)
         }
+        # Dense Qwen3-Omni is filtered out on builds that don't ship the qwen3_omni module.
+        if not is_qwen3_omni_available():
+            expected.add("qwen3_omni")
         if is_transformers_version(">=", "5"):
             expected.update({"llama4", "llava_next_video", "minicpmv", "internvl_chat", "exaone4"})
 
