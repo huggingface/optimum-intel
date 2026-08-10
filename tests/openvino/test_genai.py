@@ -582,7 +582,7 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
     }
     SPECULATIVE_DECODING_MODELS = [
         (model_arch, model_pair, "Eagle3", None, "2026.0") for model_arch, model_pair in EAGLE3_MODELS.items()
-    ] + [(model_arch, model_pair, "DFlash", "4.57", "2026.999") for model_arch, model_pair in DFLASH_MODELS.items()]
+    ] + [(model_arch, model_pair, "DFlash", "4.57", "2026.4") for model_arch, model_pair in DFLASH_MODELS.items()]
 
     @parameterized.expand(SPECULATIVE_DECODING_MODELS)
     def test_compare_outputs(
