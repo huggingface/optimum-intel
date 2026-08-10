@@ -144,6 +144,107 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+def _create_tiny_falcon_h1_model():
+    """Generate a tiny random FalconH1 (``falcon_h1``) model and return its local path.
+
+    FalconH1 is a fully-parallel hybrid architecture: every decoder layer contains both a
+    Mamba2 mixer (conv + ssm states) and a self-attention block (key + value cache). The
+    reduced config below preserves that architecture identity and every coupling invariant
+    (attention ``head_dim`` / GQA grouping, ``mamba_d_ssm == mamba_n_heads * mamba_d_head``,
+    conv/state/group coupling, all MuP multipliers and special-token ids) while shrinking
+    scale dimensions so the artifact stays well under 100 MiB. No original weights are
+    downloaded. The result is cached on disk, so repeated test collection is cheap.
+    """
+    from transformers import AutoConfig, AutoTokenizer, FalconH1ForCausalLM
+
+    original_model_id = "tiiuae/Falcon-H1-0.5B-Instruct"
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_falcon_h1"
+    cache_version = "falcon_h1-tiny-v2"
+    marker = output_dir / ".tiny_cache_marker.json"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+
+    # Reuse a valid cache only after checking the version marker and key invariants.
+    if marker.exists() and config_file.exists() and weights_file.exists():
+        try:
+            meta = json.loads(marker.read_text())
+            cfg = AutoConfig.from_pretrained(output_dir)
+            if (
+                meta.get("cache_version") == cache_version
+                and cfg.model_type == "falcon_h1"
+                and cfg.mamba_d_ssm == cfg.mamba_n_heads * cfg.mamba_d_head
+            ):
+                return str(output_dir)
+        except Exception:
+            pass
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    torch.manual_seed(SEED)
+
+    original_cfg = AutoConfig.from_pretrained(original_model_id)
+    cfg = original_cfg.to_dict()
+
+    head_dim = cfg["head_dim"]  # preserve attention head_dim (64)
+    cfg["hidden_size"] = 256
+    cfg["num_attention_heads"] = 4  # 4 * 64 == 256 == hidden_size
+    cfg["num_key_value_heads"] = 1  # GQA grouping preserved
+    cfg["head_dim"] = head_dim
+    cfg["intermediate_size"] = 512
+    cfg["num_hidden_layers"] = 2
+
+    mamba_d_head = 32
+    mamba_n_heads = 8
+    cfg["mamba_d_head"] = mamba_d_head
+    cfg["mamba_n_heads"] = mamba_n_heads
+    cfg["mamba_d_ssm"] = mamba_n_heads * mamba_d_head  # 256
+    cfg["mamba_d_state"] = 32
+    cfg["mamba_n_groups"] = 1
+    cfg["mamba_d_conv"] = 4
+    cfg["mamba_chunk_size"] = 16
+    cfg["max_position_embeddings"] = 512
+    cfg["torch_dtype"] = "float32"
+
+    model_type = cfg.pop("model_type")
+    cfg.pop("architectures", None)
+    tiny_cfg = AutoConfig.for_model(model_type, **cfg)
+    tiny_cfg.architectures = original_cfg.architectures
+
+    assert tiny_cfg.model_type == "falcon_h1"
+    assert tiny_cfg.mamba_d_ssm == tiny_cfg.mamba_n_heads * tiny_cfg.mamba_d_head
+
+    model = FalconH1ForCausalLM(tiny_cfg).to(torch.float32)
+    # Wider output-head init (with narrower embeddings) so the tiny model produces
+    # well-separated logits. This keeps greedy decoding stable under the small numeric
+    # differences between the PyTorch reference and the OpenVINO mamba SSD kernels, so the
+    # HF-vs-OpenVINO comparison test is not flipped by a razor-thin top-1/top-2 margin.
+    with torch.no_grad():
+        model.lm_head.weight.normal_(mean=0.0, std=0.5)
+        model.model.embed_tokens.weight.normal_(mean=0.0, std=0.05)
+    model.eval()
+
+    model.save_pretrained(output_dir, safe_serialization=True)
+    AutoTokenizer.from_pretrained(original_model_id).save_pretrained(output_dir)
+    try:
+        from transformers import GenerationConfig
+
+        GenerationConfig.from_pretrained(original_model_id).save_pretrained(output_dir)
+    except Exception:
+        pass
+
+    marker.write_text(
+        json.dumps(
+            {
+                "cache_version": cache_version,
+                "model_type": tiny_cfg.model_type,
+                "architectures": tiny_cfg.architectures,
+                "num_hidden_layers": tiny_cfg.num_hidden_layers,
+                "mamba_d_ssm": tiny_cfg.mamba_d_ssm,
+            }
+        )
+    )
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -213,6 +314,7 @@ HUB_MODEL_NAMES = {
     "gemma4_unified": "optimum-intel-internal-testing/tiny-random-gemma4-unified",
     "falcon": "optimum-intel-internal-testing/really-tiny-falcon-testing",
     "falcon-40b": "optimum-intel-internal-testing/tiny-random-falcon-40b",
+    "falcon_h1": _create_tiny_falcon_h1_model(),
     "falcon_mamba": "optimum-intel-internal-testing/tiny-falcon-mamba",
     "flaubert": "optimum-intel-internal-testing/tiny-random-flaubert",
     "flux": "optimum-intel-internal-testing/tiny-random-flux",
@@ -595,6 +697,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "resampler_model": 6,
     },
     "zamba2": {"model": 44},
+    "falcon_h1": {"model": 44},
     "exaone4": {"model": 16},
     "lfm2": {"model": 52 if is_transformers_version("<", "5") else 54},
     "lfm2_moe": {"model": 46},

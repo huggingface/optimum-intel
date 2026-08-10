@@ -131,6 +131,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "granitemoehybrid",
         "mamba",
         "falcon_mamba",
+        "falcon_h1",
         "zamba2",
         "lfm2",
         "lfm2_moe",
@@ -221,6 +222,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "qwen3_moe": 2,
         "mamba": 0,
         "falcon_mamba": 0,
+        "falcon_h1": 2,
         "arcee": 2,
         "smollm3": 2,
         "gpt_oss": 2,
@@ -317,6 +319,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "pegasus",
         ) and is_openvino_version(">=", "2026.1.0"):
             self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
+        if model_arch == "falcon_h1":
+            # FalconH1 stateful decode is validated to match Transformers greedily for
+            # (right-aligned / unpadded) generation. This test additionally exercises a
+            # left-padded batch: the stateful mamba conv/ssm recurrence has no per-position
+            # padding mask during single-token decode, so left-padded rows diverge (the same
+            # hybrid-mamba limitation for which zamba2/granitemoehybrid are skipped above).
+            self.skipTest("FalconH1: left-padded batched stateful mamba decode is not bit-exact")
         self.mock_torch_compile(model_arch)
         model_id = MODEL_NAMES[model_arch]
 
@@ -428,7 +437,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
             # CVS-177964 GraniteMoeHybrid, Qwen3-Next fail due to lack of support for beam search for hybrid models in OpenVINO
             # For this support, we expect changes in IRs to have connected beam_idx with Mamba/Linear attention states
-            num_beams=1 if model_arch in ["chatglm4", "lfm2", "granitemoehybrid", "qwen3_next"] else 2,
+            # FalconH1 is a fully-parallel mamba+attention hybrid with the same beam-search limitation.
+            num_beams=1
+            if model_arch in ["chatglm4", "lfm2", "granitemoehybrid", "qwen3_next", "falcon_h1"]
+            else 2,
             do_sample=False,
         )
 
@@ -470,6 +482,71 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         self.assertTrue(
             torch.allclose(ov_outputs, transformers_outputs),
+            f"OV output {ov_outputs}\nTransformers output  {transformers_outputs}",
+        )
+
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+    def test_falcon_h1_stateful_decode_matches_transformers(self):
+        # Focused regression test for the FalconH1 stateful single-token decode fix.
+        #
+        # `test_compare_to_transformers` skips falcon_h1 because it also exercises a
+        # left-padded batch, which is a genuine hybrid-mamba limitation (the stateful
+        # conv/ssm recurrence has no per-position padding mask during single-token
+        # decode, the same reason zamba2/granitemoehybrid are skipped there). That skip
+        # left the exact bug this PR fixes without an automated OV-vs-Transformers
+        # assertion: during stateful decode the patched forward previously passed no
+        # `cache_position` and only a length-1 attention mask, so every decode token was
+        # placed at RoPE position 0 and its causal mask attended to a single key instead
+        # of the full KV context.
+        #
+        # This test drives an *unpadded*, right-aligned single prompt through greedy
+        # (num_beams=1) generation over multiple decode steps, which is exactly the path
+        # the fix corrects, and asserts bit-exact greedy token-id agreement with the
+        # Transformers reference. The documented left-padded-batch and beam-search
+        # limitations remain unchanged (this test uses neither padding nor beam search).
+        model_arch = "falcon_h1"
+        self.mock_torch_compile(model_arch)
+        model_id = MODEL_NAMES[model_arch]
+
+        set_seed(SEED)
+        ov_model = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        self.assertTrue(ov_model.stateful)
+
+        set_seed(SEED)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32)
+
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        # Single, unpadded prompt (batch size 1) so no per-position padding mask is
+        # involved; this isolates the cache_position / full-context attention-mask path.
+        tokens = tokenizer("What is the capital of France?", return_tensors="pt")
+
+        # Disable EOS so generation always runs the full number of decode steps and the
+        # RoPE-position / KV-context regression is exercised across many decode steps
+        # (not just prefill).
+        ov_model.generation_config.eos_token_id = None
+        transformers_model.generation_config.eos_token_id = None
+        ov_model.config.eos_token_id = None
+        transformers_model.config.eos_token_id = None
+        gen_config = GenerationConfig(
+            max_new_tokens=20,
+            min_new_tokens=20,
+            num_beams=1,
+            do_sample=False,
+        )
+
+        set_seed(SEED)
+        with torch.no_grad():
+            transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
+        set_seed(SEED)
+        ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
+
+        self.assertTrue(
+            torch.equal(ov_outputs, transformers_outputs),
             f"OV output {ov_outputs}\nTransformers output  {transformers_outputs}",
         )
 
@@ -673,7 +750,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             return
 
         # LFM2, LFM2-MoE and GraniteMoeHybrid generate wrong output with beam search, ticket: CVS-185664
-        if model_arch in ["lfm2", "lfm2_moe", "granitemoehybrid"]:
+        # FalconH1 is a mamba+attention hybrid with the same beam-search limitation (mamba states are
+        # not reordered by beam_idx in the stateful OpenVINO model).
+        if model_arch in ["lfm2", "lfm2_moe", "granitemoehybrid", "falcon_h1"]:
             return
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49

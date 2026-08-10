@@ -135,6 +135,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "lfm2_moe"),
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon_mamba"),
+        ("text-generation-with-past", "falcon_h1"),
         ("text-to-image", "flux.2-klein"),
     ]
     # filter architectures depending on min/max transformers supported versions
@@ -175,6 +176,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "clip": 2,
         "mamba": 2,
         "falcon_mamba": 2,
+        "falcon_h1": 2,
         "qwen3": 2,
         "qwen3_omni_moe": 2,
         "zamba2": 2,

@@ -344,6 +344,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
 SSM_MODELS = [
     "mamba",
     "falcon_mamba",
+    "falcon_h1",
     "zamba2",
     "lfm2",
     "lfm2_moe",

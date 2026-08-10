@@ -1699,6 +1699,77 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         return past_key_values
 
 
+class FalconH1DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    """
+    Generates dummy cache_params inputs for FalconH1 architectures.
+
+    FalconH1 is a fully-parallel hybrid architecture: every decoder layer contains
+    both a Mamba2 mixer (conv + ssm states) and a self-attention block (key + value
+    cache). Therefore the number of mamba layers and the number of attention layers
+    are both equal to ``num_hidden_layers``.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("cache_params",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+
+        config = normalized_config.config
+        self.intermediate_size = (
+            config.mamba_d_ssm
+            if getattr(config, "mamba_d_ssm", None) is not None
+            else int(config.mamba_expand * config.hidden_size)
+        )
+        self.conv_kernel_size = config.mamba_d_conv
+        self.mamba_d_state = config.mamba_d_state
+        self.n_mamba_heads = config.mamba_n_heads
+        self.mamba_ngroups = config.mamba_n_groups
+        self.mamba_headdim = config.mamba_d_head
+        self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
+        self.num_key_value_heads = config.num_key_value_heads
+        # every layer is hybrid: both mamba and attention states exist per layer
+        self.num_mamba_layers = config.num_hidden_layers
+        self.num_attention_layers = config.num_hidden_layers
+        # past attention cache starts empty (sequence_length == 0), states are appended during decode
+        self.sequence_length = 0
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        past_key_values = []
+        for i in range(self.num_mamba_layers):
+            conv_state_shape = (
+                self.batch_size,
+                self.intermediate_size + 2 * self.mamba_ngroups * self.mamba_d_state,
+                self.conv_kernel_size,
+            )
+            conv_state = self.random_float_tensor(conv_state_shape, framework=framework, dtype=float_dtype)
+            past_key_values.append(conv_state)
+            ssm_state_shape = (self.batch_size, self.n_mamba_heads, self.mamba_headdim, self.mamba_d_state)
+            ssm_state = self.random_float_tensor(ssm_state_shape, framework=framework, dtype=float_dtype)
+            past_key_values.append(ssm_state)
+
+        for i in range(self.num_attention_layers):
+            kv_shape = (self.batch_size, self.num_key_value_heads, self.sequence_length, self.head_dim)
+            k = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            v = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            past_key_values.append(k)
+            past_key_values.append(v)
+
+        return past_key_values
+
+
 class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     """
     Generates dummy past_key_values inputs for Lfm2 architectures.

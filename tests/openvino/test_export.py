@@ -116,6 +116,7 @@ class ExportModelTest(unittest.TestCase):
         "fun_asr": OVModelForSpeechSeq2Seq,
         "mamba": OVModelForCausalLM,
         "falcon_mamba": OVModelForCausalLM,
+        "falcon_h1": OVModelForCausalLM,
         "gemma4": OVModelForVisualCausalLM,
         "gemma4_moe": OVModelForVisualCausalLM,
         "qwen3_5": OVModelForVisualCausalLM,

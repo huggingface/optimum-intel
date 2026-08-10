@@ -86,6 +86,7 @@ from optimum.exporters.openvino.input_generators import (
     LTX2TransformerDummyInputGenerator,
     LTX2VaeDummyInputGenerator,
     LTX2VocoderDummyInputGenerator,
+    FalconH1DummyPastKeyValuesGenerator,
     LTXTransformerDummyInputGenerator,
     LTXVaeDummyInputGenerator,
     MambaCacheDummyInputGenerator,
@@ -111,6 +112,7 @@ from optimum.exporters.openvino.model_patcher import (
     DBRXModelPatcher,
     DeciLMModelPatcher,
     DeepseekPatcher,
+    FalconH1ModelPatcher,
     FalconModelPatcher,
     FluxTransformerModelPatcher,
     FunASRModelPatcher,
@@ -5816,6 +5818,55 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
             self.add_past_key_values(common_inputs, direction="inputs")
         else:
             common_inputs["attention_mask"] = {0: "batch_size", 1: "sequence_length"}
+        return common_inputs
+
+
+@register_in_tasks_manager(
+    "falcon_h1", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class FalconH1OpenVINOConfig(MambaOpenVINOConfig):
+    # FalconH1 is a fully-parallel hybrid: every decoder layer contains both a Mamba2 mixer
+    # (conv + ssm states) and a self-attention block (key + value cache).
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, FalconH1DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = FalconH1DummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    MIN_TRANSFORMERS_VERSION = "4.53.0"
+    _MODEL_PATCHER = FalconH1ModelPatcher
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _warn_potential_accuracy_issue_ov_2026_1("falcon_h1")
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            cache_name_prefix = "cache_params.past"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            cache_name_prefix = "cache_params.present"
+
+        num_hidden_layers = self._normalized_config.num_layers
+        for i in range(num_hidden_layers):
+            # [batch_size, conv_dim, conv_kernel_size]
+            inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
+            # [batch_size, mamba_n_heads, mamba_d_head, mamba_d_state]
+            inputs_or_outputs[f"{cache_name_prefix}.ssm.{i}"] = {0: "batch_size"}
+
+        for i in range(num_hidden_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            self.add_past_key_values(common_inputs, direction="inputs")
         return common_inputs
 
 
