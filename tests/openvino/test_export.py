@@ -122,6 +122,7 @@ class ExportModelTest(unittest.TestCase):
         "qwen3_5_moe": OVModelForVisualCausalLM,
         "gemma4_unified": OVModelForVisualCausalLM,
         "gemma3n": OVModelForVisualCausalLM,
+        "paddleocr_vl": OVModelForVisualCausalLM,
         "flux.2-klein": OVFlux2KleinPipeline,
         "qwen3_omni_moe": OVModelForMultimodalLM,
     }
@@ -176,6 +177,10 @@ class ExportModelTest(unittest.TestCase):
             model = MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
                 model_name, **loading_kwargs
             )
+        elif model_type == "paddleocr_vl":
+            from transformers import AutoModelForCausalLM
+
+            model = AutoModelForCausalLM.from_pretrained(model_name, **loading_kwargs)
         elif model_type == "qwen3_asr":
             from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
 

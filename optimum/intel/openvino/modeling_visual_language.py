@@ -7363,6 +7363,386 @@ if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.rot_pos_emb = Qwen3_5VisionModel.rot_pos_emb
 
 
+class _OVPaddleOCRVLForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = ["vision_embeddings_merger"]
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = None,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+        self.rope_deltas = None
+        vision_config = self.config.vision_config
+        self._vision_hidden_size = vision_config.hidden_size
+        self._vision_num_heads = vision_config.num_attention_heads
+        self._vision_head_dim = self._vision_hidden_size // self._vision_num_heads
+        self._spatial_merge_size = vision_config.spatial_merge_size
+        self._patch_size = vision_config.patch_size
+        self._num_positions = (vision_config.image_size // self._patch_size) ** 2
+        self._rope_theta = 10000.0
+
+    def _bilinear_matrix(self, out_size, in_size):
+        m = np.zeros((out_size, in_size), dtype=np.float32)
+        scale = in_size / out_size
+        for i in range(out_size):
+            src = max(0.0, (i + 0.5) * scale - 0.5)
+            lo = int(np.floor(src))
+            hi = min(lo + 1, in_size - 1)
+            frac = src - lo
+            m[i, lo] += 1.0 - frac
+            m[i, hi] += frac
+        return torch.from_numpy(m)
+
+    def _vision_rope(self, h, w, t):
+        # 2D rope for the SigLIP-variant tower (matches remote code PaddleOCREncoder.forward)
+        image_pids = torch.arange(t * h * w) % (h * w)
+        hpos = image_pids // w
+        wpos = image_pids % w
+        pids = torch.stack([hpos, wpos], dim=-1)  # [N, 2]
+        max_grid_size = int(pids.max().item()) + 1
+        dim = self._vision_head_dim // 2
+        inv_freq = 1.0 / (self._rope_theta ** (torch.arange(0, dim, 2, dtype=torch.float) / dim))
+        seq = torch.arange(max_grid_size, dtype=torch.float)
+        freqs = torch.outer(seq, inv_freq)  # [max_grid, dim//2]
+        rope_emb = freqs[pids].flatten(1)  # [N, 2*(dim//2)] = [N, head_dim//2]
+        rope_emb = rope_emb.repeat(1, 2)  # [N, head_dim]
+        return rope_emb.cos(), rope_emb.sin()
+
+    def _merge_index(self, t, h, w):
+        # 2x2 spatial merge reorder: (t h p1 w p2) -> (t h w) blocks of (p1 p2)
+        m = self._spatial_merge_size
+        idx = torch.arange(t * h * w).reshape(t, h // m, m, w // m, m)
+        idx = idx.permute(0, 1, 3, 2, 4).reshape(-1)
+        return idx.to(torch.int64)
+
+    def get_vision_embeddings(self, pixel_values, image_grid_thw=None, **kwargs):
+        image_embeds_list = []
+        start = 0
+        pixel_values = torch.as_tensor(pixel_values)
+        for grid in image_grid_thw:
+            t, h, w = int(grid[0]), int(grid[1]), int(grid[2])
+            numel = t * h * w
+            pv = pixel_values[start : start + numel]
+            start += numel
+            sqrt_num = int(round(self._num_positions**0.5))
+            interp_h = self._bilinear_matrix(h, sqrt_num)
+            interp_w = self._bilinear_matrix(w, sqrt_num)
+            hidden = torch.from_numpy(
+                self.vision_embeddings(
+                    pv.numpy(),
+                    interp_h=interp_h.numpy(),
+                    interp_w=interp_w.numpy(),
+                ).last_hidden_state
+            )
+            cos, sin = self._vision_rope(h, w, t)
+            attention_mask = torch.zeros((1, numel, numel), dtype=torch.float32)
+            merge_index = self._merge_index(t, h, w)
+            merged = self.vision_embeddings_merger(
+                hidden.numpy(),
+                attention_mask=attention_mask.numpy(),
+                rope_emb_cos=cos.numpy(),
+                rope_emb_sin=sin.numpy(),
+                merge_index=merge_index.numpy(),
+            ).last_hidden_state
+            image_embeds_list.append(torch.from_numpy(merged))
+        return torch.cat(image_embeds_list, dim=0)
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        cache_position=None,
+        **kwargs,
+    ):
+        inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
+        if pixel_values is not None and input_ids.shape[1] != 1:
+            image_embeds = self.get_vision_embeddings(pixel_values, image_grid_thw=image_grid_thw)
+            image_mask = input_ids == self.config.image_token_id
+            inputs_embeds[image_mask] = image_embeds.to(inputs_embeds.dtype)
+
+        if (
+            (position_ids is None or position_ids.ndim < 3)
+            and input_ids is not None
+            and (attention_mask is None or attention_mask.ndim == 2)
+        ):
+            if (cache_position is not None and cache_position[0] == 0) or self.rope_deltas is None:
+                position_ids, rope_deltas = self.get_rope_index(
+                    input_ids,
+                    image_grid_thw,
+                    video_grid_thw,
+                    None,
+                    attention_mask,
+                )
+                self.rope_deltas = rope_deltas
+            else:
+                batch_size, seq_length, _ = inputs_embeds.shape
+                delta = cache_position[0] + self.rope_deltas if cache_position is not None else 0
+                position_ids = torch.arange(seq_length, device=inputs_embeds.device)
+                position_ids = position_ids.view(1, -1).expand(batch_size, -1)
+                if cache_position is not None:
+                    delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
+                position_ids = position_ids.add(delta)
+                position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        cache_position=None,
+        position_ids=None,
+        use_cache=True,
+        pixel_values=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        **kwargs,
+    ):
+        # The language model is stateful: it tracks the processed length internally, so we
+        # derive the current position from that rather than from a (always-None) cache object.
+        past_len = self.language_model._get_past_length(past_key_values)
+        if past_len > 0:
+            if inputs_embeds is not None and input_ids.shape[1] == 0:
+                inputs_embeds = inputs_embeds[:, -(input_ids.shape[1] or 1) :]
+            elif input_ids.shape[1] > 1:
+                input_ids = input_ids[:, past_len:]
+
+        cache_position = torch.arange(past_len, past_len + input_ids.shape[1], device=input_ids.device)
+
+        if past_len != 0:
+            pixel_values = None
+            pixel_values_videos = None
+
+        if inputs_embeds is not None and past_len == 0:
+            model_inputs = {"inputs_embeds": inputs_embeds, "input_ids": None}
+        else:
+            model_inputs = {"input_ids": input_ids, "inputs_embeds": None}
+
+        model_inputs.update(
+            {
+                "position_ids": position_ids,
+                "past_key_values": past_key_values,
+                "use_cache": use_cache,
+                "attention_mask": attention_mask,
+                "pixel_values": pixel_values,
+                "pixel_values_videos": pixel_values_videos,
+                "image_grid_thw": image_grid_thw,
+                "video_grid_thw": video_grid_thw,
+                "cache_position": cache_position,
+            }
+        )
+        return model_inputs
+
+    def _update_model_kwargs_for_generation(self, outputs, model_kwargs, is_encoder_decoder=False, num_new_tokens=1):
+        model_kwargs = super()._update_model_kwargs_for_generation(
+            outputs=outputs,
+            model_kwargs=model_kwargs,
+            is_encoder_decoder=is_encoder_decoder,
+            num_new_tokens=num_new_tokens,
+        )
+        if getattr(outputs, "rope_deltas", None) is not None:
+            model_kwargs["rope_deltas"] = outputs.rope_deltas
+        return model_kwargs
+
+    def forward(
+        self,
+        input_ids,
+        pixel_values=None,
+        past_key_values=None,
+        inputs_embeds=None,
+        attention_mask=None,
+        position_ids=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        rope_deltas=None,
+        **kwargs,
+    ):
+        result = super().forward(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            pixel_values_videos=pixel_values_videos,
+            image_grid_thw=image_grid_thw,
+            video_grid_thw=video_grid_thw,
+            **kwargs,
+        )
+        return ModelOutput(logits=result.logits, past_key_values=result.past_key_values, rope_deltas=self.rope_deltas)
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+        inputs = processor(images=image, text=text_prompt, return_tensors="pt")
+        return inputs
+
+
+# get_rope_index copied from PaddleOCR-VL remote code (PaddleOCRVLForConditionalGeneration.get_rope_index)
+# so the runtime can reproduce the 3D mrope position ids without loading the original model.
+def _paddleocr_get_rope_index(
+    self,
+    input_ids=None,
+    image_grid_thw=None,
+    video_grid_thw=None,
+    second_per_grid_ts=None,
+    attention_mask=None,
+):
+    spatial_merge_size = self.config.vision_config.spatial_merge_size
+    image_token_id = self.config.image_token_id
+    video_token_id = self.config.video_token_id
+    vision_start_token_id = self.config.vision_start_token_id
+    mrope_position_deltas = []
+    if input_ids is not None and (image_grid_thw is not None or video_grid_thw is not None):
+        total_input_ids = input_ids
+        if attention_mask is None:
+            attention_mask = torch.ones_like(total_input_ids)
+        position_ids = torch.ones(
+            3, input_ids.shape[0], input_ids.shape[1], dtype=input_ids.dtype, device=input_ids.device
+        )
+        image_index, video_index = 0, 0
+        attention_mask = attention_mask.to(total_input_ids.device)
+        for i, input_ids_i in enumerate(total_input_ids):
+            input_ids_i = input_ids_i[attention_mask[i] == 1]
+            vision_start_indices = torch.argwhere(input_ids_i == vision_start_token_id).squeeze(1)
+            vision_tokens = input_ids_i[vision_start_indices + 1]
+            image_nums = (vision_tokens == image_token_id).sum()
+            video_nums = (vision_tokens == video_token_id).sum()
+            input_tokens = input_ids_i.tolist()
+            llm_pos_ids_list = []
+            st = 0
+            remain_images, remain_videos = image_nums, video_nums
+            for _ in range(image_nums + video_nums):
+                if image_token_id in input_tokens and remain_images > 0:
+                    ed_image = input_tokens.index(image_token_id, st)
+                else:
+                    ed_image = len(input_tokens) + 1
+                if video_token_id in input_tokens and remain_videos > 0:
+                    ed_video = input_tokens.index(video_token_id, st)
+                else:
+                    ed_video = len(input_tokens) + 1
+                if ed_image < ed_video:
+                    t, h, w = (
+                        image_grid_thw[image_index][0],
+                        image_grid_thw[image_index][1],
+                        image_grid_thw[image_index][2],
+                    )
+                    second_per_grid_t = 0
+                    image_index += 1
+                    remain_images -= 1
+                    ed = ed_image
+                else:
+                    t, h, w = (
+                        video_grid_thw[video_index][0],
+                        video_grid_thw[video_index][1],
+                        video_grid_thw[video_index][2],
+                    )
+                    second_per_grid_t = 1.0
+                    video_index += 1
+                    remain_videos -= 1
+                    ed = ed_video
+                llm_grid_t, llm_grid_h, llm_grid_w = (
+                    int(t),
+                    int(h) // spatial_merge_size,
+                    int(w) // spatial_merge_size,
+                )
+                text_len = ed - st
+                st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
+                llm_pos_ids_list.append(torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx)
+
+                range_tensor = torch.arange(llm_grid_t).view(-1, 1)
+                expanded_range = range_tensor.expand(-1, llm_grid_h * llm_grid_w)
+                time_tensor = expanded_range * second_per_grid_t * self.config.vision_config.tokens_per_second
+                t_index = time_tensor.long().flatten()
+                h_index = torch.arange(llm_grid_h).view(1, -1, 1).expand(llm_grid_t, -1, llm_grid_w).flatten()
+                w_index = torch.arange(llm_grid_w).view(1, 1, -1).expand(llm_grid_t, llm_grid_h, -1).flatten()
+                llm_pos_ids_list.append(torch.stack([t_index, h_index, w_index]) + text_len + st_idx)
+                st = ed + llm_grid_t * llm_grid_h * llm_grid_w
+
+            if st < len(input_tokens):
+                st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
+                text_len = len(input_tokens) - st
+                llm_pos_ids_list.append(torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx)
+
+            llm_positions = torch.cat(llm_pos_ids_list, dim=1).reshape(3, -1)
+            position_ids[..., i, attention_mask[i] == 1] = llm_positions.to(position_ids.device)
+            mrope_position_deltas.append(llm_positions.max() + 1 - len(total_input_ids[i]))
+        mrope_position_deltas = torch.tensor(mrope_position_deltas, device=input_ids.device).unsqueeze(1)
+        return position_ids, mrope_position_deltas
+    else:
+        if attention_mask is not None:
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            position_ids = position_ids.unsqueeze(0).expand(3, -1, -1).to(attention_mask.device)
+            max_position_ids = position_ids.max(0, keepdim=False)[0].max(-1, keepdim=True)[0]
+            mrope_position_deltas = max_position_ids + 1 - attention_mask.shape[-1]
+        else:
+            position_ids = (
+                torch.arange(input_ids.shape[1], device=input_ids.device)
+                .view(1, 1, -1)
+                .expand(3, input_ids.shape[0], -1)
+            )
+            mrope_position_deltas = torch.zeros(
+                [input_ids.shape[0], 1], device=input_ids.device, dtype=input_ids.dtype
+            )
+        return position_ids, mrope_position_deltas
+
+
+_OVPaddleOCRVLForCausalLM.get_rope_index = _paddleocr_get_rope_index
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
@@ -7394,4 +7774,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_omni_moe": _OVQwen3OmniMoeForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
+    "paddleocr_vl": _OVPaddleOCRVLForCausalLM,
 }

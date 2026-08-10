@@ -16,6 +16,7 @@ import functools
 import inspect
 import logging
 import math
+import sys
 import types
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -4415,13 +4416,255 @@ class Qwen2_5_VLVisionEmbMergerPatcher(ModelPatcher):
             block.attn.forward = block.attn._orig_forward
 
 
+def _paddleocr_create_causal_mask_compat(orig_fn):
+    def _wrapped(*args, **kwargs):
+        if "inputs_embeds" in kwargs and "input_embeds" not in kwargs:
+            kwargs["input_embeds"] = kwargs.pop("inputs_embeds")
+        return orig_fn(*args, **kwargs)
+
+    return _wrapped
+
+
+class PaddleOCRVLLanguageModelPatcher(OVDecoderModelPatcher):
+    """Language-model patcher for PaddleOCR-VL (Ernie4.5 decoder).
+
+    Wraps the top-level ``PaddleOCRVLForConditionalGeneration.forward`` so it can be
+    traced with pre-computed multimodal ``inputs_embeds`` and 3D ``position_ids``, and
+    fixes the ``create_causal_mask(inputs_embeds=...)`` remote-code call that breaks with
+    transformers>=4.56 (renamed to ``input_embeds``).
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def forward_wrap(
+            self,
+            attention_mask,
+            position_ids=None,
+            past_key_values=None,
+            inputs_embeds=None,
+            input_ids=None,
+            use_cache=True,
+        ):
+            if is_transformers_version("<", "5"):
+                new_past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                new_past_key_values = DynamicCache(past_key_values)
+
+            result = self.__orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=new_past_key_values,
+                inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+            )
+            if past_key_values is not None:
+                result["past_key_values"] = postprocess_past_key_values(result["past_key_values"])
+            return result
+
+        model.forward = types.MethodType(forward_wrap, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+        module = sys.modules.get(type(self._model).__module__)
+        self._ccm_module = None
+        if module is not None and hasattr(module, "create_causal_mask"):
+            self._ccm_module = module
+            self._orig_ccm = module.create_causal_mask
+            module.create_causal_mask = _paddleocr_create_causal_mask_compat(self._orig_ccm)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        if getattr(self, "_ccm_module", None) is not None:
+            self._ccm_module.create_causal_mask = self._orig_ccm
+
+
+class PaddleOCRVLVisionEmbeddingsPatcher(ModelPatcher):
+    """Patches the SigLIP-variant patch embedding to a traceable conv + flatten + pos.
+
+    The learned position embedding is interpolated to the image grid via precomputed
+    bilinear interpolation matrices (``interp_h``/``interp_w``) supplied by the runtime,
+    so the whole submodel stays dynamic-shape friendly while keeping the learned
+    ``position_embedding`` weight inside the traced graph.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        # Capture the learned position-embedding weight as a plain tensor in the closure.
+        # ``self.position_embedding`` is an ``nn.Embedding`` whose lookup ``forward`` is never
+        # called here (only its ``weight`` is used for interpolation). During TorchScript-based
+        # export the unused module gets pruned/frozen, which silently replaces the accessed
+        # ``weight`` with zeros. Binding the value into the closure keeps the real weight in the
+        # traced graph as a constant.
+        pos_embed_weight = model.position_embedding.weight.detach().clone()
+
+        def patch_embed_forward(
+            self,
+            pixel_values: torch.Tensor,
+            interp_h: torch.Tensor,
+            interp_w: torch.Tensor,
+        ) -> torch.Tensor:
+            # pixel_values: [seq_len, C, patch, patch]; seq_len == t * h * w (single grid)
+            target_dtype = self.patch_embedding.weight.dtype
+            patch_embeds = self.patch_embedding(pixel_values.to(dtype=target_dtype))
+            embeddings = patch_embeds.flatten(-2).squeeze(-1)  # [seq_len, dim]
+
+            dim = embeddings.shape[-1]
+            num_positions = int(pos_embed_weight.shape[0])
+            sqrt_num = int(round(num_positions**0.5))
+            grid = pos_embed_weight.reshape(sqrt_num, sqrt_num, dim).to(embeddings.dtype)
+            # interp_h: [h, sqrt_num], interp_w: [w, sqrt_num]
+            pos = torch.einsum("hi,ijd->hjd", interp_h.to(embeddings.dtype), grid)
+            pos = torch.einsum("wj,hjd->hwd", interp_w.to(embeddings.dtype), pos)
+            pos = pos.reshape(-1, dim)  # [h*w, dim]
+            # Tile over the temporal dimension so pos aligns with the flattened [t*(h*w), dim]
+            # embeddings. Reshaping to [-1, h*w, dim] and broadcasting keeps the position
+            # tensor connected to the graph output (a dynamic ``Tensor.repeat`` gets traced
+            # incorrectly and silently drops the position embedding).
+            grid_len = pos.shape[0]
+            embeddings = embeddings.reshape(-1, grid_len, dim)  # [t, h*w, dim]
+            embeddings = embeddings + pos.unsqueeze(0)  # broadcast over t
+            embeddings = embeddings.reshape(-1, dim)  # [t*h*w, dim]
+            return embeddings
+
+        model.forward = types.MethodType(patch_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class PaddleOCRVLVisionEmbMergerPatcher(ModelPatcher):
+    """Patches the SigLIP encoder + post layernorm + 2x2 projector into a traceable graph.
+
+    Data-dependent pieces (position-embedding interpolation, 2D rope, block-diagonal
+    attention mask across images, and the 2x2 spatial-merge reordering) are computed in
+    the runtime and passed in as tensors.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def rotate_half(x):
+            x1 = x[..., : x.shape[-1] // 2]
+            x2 = x[..., x.shape[-1] // 2 :]
+            return torch.cat((-x2, x1), dim=-1)
+
+        def apply_rope(q, k, cos, sin):
+            orig_q_dtype, orig_k_dtype = q.dtype, k.dtype
+            q, k = q.float(), k.float()
+            cos_e = cos.unsqueeze(0).unsqueeze(-2).float()
+            sin_e = sin.unsqueeze(0).unsqueeze(-2).float()
+            q_embed = (q * cos_e) + (rotate_half(q) * sin_e)
+            k_embed = (k * cos_e) + (rotate_half(k) * sin_e)
+            return q_embed.to(orig_q_dtype), k_embed.to(orig_k_dtype)
+
+        def attn_forward(self, hidden_states, attention_mask, cos, sin):
+            batch_size, seq_length, embed_dim = hidden_states.shape
+            queries = self.q_proj(hidden_states).view(batch_size, seq_length, self.num_heads, self.head_dim)
+            keys = self.k_proj(hidden_states).view(batch_size, seq_length, self.num_heads, self.head_dim)
+            values = (
+                self.v_proj(hidden_states).view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
+            )
+            queries, keys = apply_rope(queries, keys, cos, sin)
+            queries = queries.transpose(1, 2)
+            keys = keys.transpose(1, 2)
+            attn_output = torch.nn.functional.scaled_dot_product_attention(
+                queries, keys, values, attn_mask=attention_mask, dropout_p=0.0
+            )
+            attn_output = attn_output.transpose(1, 2).reshape(batch_size, seq_length, embed_dim)
+            attn_output = self.out_proj(attn_output)
+            return attn_output
+
+        def layer_forward(self, hidden_states, attention_mask, cos, sin):
+            residual = hidden_states
+            hidden_states = self.layer_norm1(hidden_states)
+            hidden_states = self.self_attn(hidden_states, attention_mask=attention_mask, cos=cos, sin=sin)
+            hidden_states = residual + hidden_states
+            residual = hidden_states
+            hidden_states = self.layer_norm2(hidden_states)
+            hidden_states = self.mlp(hidden_states)
+            hidden_states = residual + hidden_states
+            return hidden_states
+
+        def merger_forward(
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: torch.Tensor,
+            rope_emb_cos: torch.Tensor,
+            rope_emb_sin: torch.Tensor,
+            merge_index: torch.Tensor,
+        ) -> torch.Tensor:
+            vision_model = self.visual.vision_model
+            hidden_states = hidden_states.unsqueeze(0)
+            for encoder_layer in vision_model.encoder.layers:
+                hidden_states = encoder_layer(
+                    hidden_states, attention_mask=attention_mask, cos=rope_emb_cos, sin=rope_emb_sin
+                )
+            hidden_states = vision_model.post_layernorm(hidden_states)
+            hidden_states = hidden_states.squeeze(0)
+            projector = self.mlp_AR
+            merge_unit = projector.merge_kernel_size[0] * projector.merge_kernel_size[1]
+            hidden_states = projector.pre_norm(hidden_states)
+            hidden_states = torch.index_select(hidden_states, 0, merge_index)
+            hidden_states = hidden_states.reshape(-1, merge_unit * projector.vision_config.hidden_size)
+            hidden_states = projector.linear_1(hidden_states)
+            hidden_states = projector.act(hidden_states)
+            hidden_states = projector.linear_2(hidden_states)
+            return hidden_states
+
+        model.forward = types.MethodType(merger_forward, model)
+        self._layer_forward = layer_forward
+        self._attn_forward = attn_forward
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+        vision_model = self._model.visual.vision_model
+        for layer in vision_model.encoder.layers:
+            layer._orig_forward = layer.forward
+            layer.forward = types.MethodType(self._layer_forward, layer)
+            layer.self_attn._orig_forward = layer.self_attn.forward
+            layer.self_attn.forward = types.MethodType(self._attn_forward, layer.self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        vision_model = self._model.visual.vision_model
+        for layer in vision_model.encoder.layers:
+            layer.forward = layer._orig_forward
+            layer.self_attn.forward = layer.self_attn._orig_forward
+
+
 class Qwen3VLVisionEmbMergerPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OpenVINOConfig",
-        model: Union["PreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any] = None,
     ):
+        super().__init__(config, model, model_kwargs)
+
         model.__orig_forward = model.forward
 
         # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1118
