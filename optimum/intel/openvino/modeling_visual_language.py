@@ -7406,26 +7406,39 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
         feats = self.vision_embeddings(pixel_values=pixel_values, image_grid_thw=grid).last_hidden_state
         return torch.from_numpy(feats) if isinstance(feats, np.ndarray) else feats
 
-    def merge_vision_text_embeddings(
-        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        **kwargs,
     ):
+        inputs_embeds = self.get_text_embeddings(input_ids)
         inputs_embeds = (
             torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
         )
-        vision_embeds = (
-            torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
-        )
-        B, N, C = inputs_embeds.shape
-        flat = inputs_embeds.reshape(B * N, C)
-        ids = input_ids.reshape(B * N)
-        # <image> and <video> placeholder positions receive vision features in order.
-        image_token_id = self.config.image_token_id
-        video_token_id = getattr(self.config, "video_token_id", None)
-        selected = ids == image_token_id
-        if video_token_id is not None:
-            selected = selected | (ids == video_token_id)
-        flat[selected] = vision_embeds.reshape(-1, C).to(flat.dtype)
-        return flat.reshape(B, N, C), attention_mask, position_ids
+        is_prefill = input_ids is not None and input_ids.shape[1] != 1
+        # Images and videos share the same vision graph (video_grid_thw plays the role
+        # of image_grid_thw); each modality is scattered into its own placeholder token.
+        if is_prefill and pixel_values is not None:
+            image_embeds = self.get_vision_embeddings(
+                pixel_values, input_ids=input_ids, image_grid_thw=image_grid_thw
+            )
+            if image_embeds is not None:
+                image_mask = input_ids == self.config.image_token_id
+                inputs_embeds[image_mask] = image_embeds.to(inputs_embeds.dtype)
+        if is_prefill and pixel_values_videos is not None:
+            video_embeds = self.get_vision_embeddings(
+                pixel_values_videos, input_ids=input_ids, image_grid_thw=video_grid_thw
+            )
+            if video_embeds is not None:
+                video_mask = input_ids == self.config.video_token_id
+                inputs_embeds[video_mask] = video_embeds.to(inputs_embeds.dtype)
+        return inputs_embeds, attention_mask, position_ids
 
     @staticmethod
     def preprocess_inputs(
