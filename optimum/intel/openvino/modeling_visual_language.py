@@ -7363,46 +7363,50 @@ if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.rot_pos_emb = Qwen3_5VisionModel.rot_pos_emb
 
 
-class _OVOnyxForCausalLM(OVModelForVisualCausalLM):
-    """OpenVINO runtime for the Onyx VLM (custom trust_remote_code architecture).
+class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
+    """OpenVINO runtime for the native MuseGlimmer VLM.
 
-    The vision stack is exported as a single graph that consumes one temporal
-    group ``[patch_temporal*3, H, W]`` and returns its projected per-patch
-    features. The HF ``OnyxProcessor`` emits ``pixel_values`` as a list of such
-    per-image / per-video-group tensors, so ``get_vision_embeddings`` runs each
-    through the vision model and concatenates the features in list order (the
-    encoder's block-diagonal attention makes images/groups independent, so this
-    matches the eager model exactly). Features are then scattered into the
-    positions of the ``<|patch|>`` / ``<|video|>`` tokens in the prompt.
+    The vision stack is exported as a single graph that consumes flattened patches
+    ``pixel_values`` ``[num_patches, patch_dim]`` plus ``image_grid_thw``
+    ``[num_images, 3]`` and returns the projected per-token features
+    ``[num_out_tokens, text_hidden]`` (vision tower -> adapter -> projection ->
+    perception norm, with the 2x2 patch merge). Features are scattered into the
+    positions of the ``<image>`` / ``<video>`` tokens in the prompt.
     """
 
-    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+    def get_experts_implementation(self):
+        # transformers>=5.15 `generate` queries the experts implementation to decide
+        # on a decode-time MoE kernel swap; that swap is a no-op on CPU (OpenVINO),
+        # so we just report the config values without touching the compiled graph.
+        experts_implementation = {"": getattr(self.config, "_experts_implementation", None)}
+        for subconfig_key in getattr(self.config, "sub_configs", []):
+            subconfig = getattr(self.config, subconfig_key, None)
+            if subconfig is not None:
+                experts_implementation[subconfig_key] = getattr(subconfig, "_experts_implementation", None)
+        return experts_implementation
+
+    def set_experts_implementation(self, experts_implementation):
+        # No-op: the MoE kernel is baked into the exported OpenVINO graph.
+        return
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, image_grid_thw=None, **kwargs):
         # Vision features are only consumed on the prefill step.
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
         if pixel_values is None:
             return None
-        groups = pixel_values if isinstance(pixel_values, (list, tuple)) else [pixel_values]
-        # The vision graph consumes one temporal group [patch_temporal*3, H, W].
-        # OnyxImageProcessor returns images as a single frame [3, H, W]; replicate
-        # it patch_temporal times to match (the encoder's image branch does the
-        # same internally). Video groups already have patch_temporal*3 channels.
-        patch_temporal = getattr(self.config, "vision_patch_temporal", 2)
-        features = []
-        for group in groups:
-            group = torch.as_tensor(group) if not isinstance(group, torch.Tensor) else group
-            group = group.float()
-            if group.ndim == 4 and group.shape[0] == 1:
-                group = group.squeeze(0)
-            if group.shape[0] == 3:
-                group = group.repeat(patch_temporal, 1, 1)
-            # The sparse windowed-attention mask is built inside the vision graph
-            # from the (traced) grid, so pixel_values is the only input.
-            feats = self.vision_embeddings(pixel_values=group).last_hidden_state
-            features.append(torch.from_numpy(feats) if isinstance(feats, np.ndarray) else feats)
-        if not features:
-            return None
-        return torch.cat(features, dim=0)
+        from optimum.exporters.openvino.utils import get_muse_glimmer_vision_inputs
+
+        pixel_values = pixel_values if isinstance(pixel_values, torch.Tensor) else torch.as_tensor(pixel_values)
+        pixel_values = pixel_values.float()
+        if image_grid_thw is None:
+            raise ValueError("image_grid_thw is required for MuseGlimmer vision embeddings.")
+        grid = image_grid_thw if isinstance(image_grid_thw, torch.Tensor) else torch.as_tensor(image_grid_thw)
+        # Recompute the grid-derived tensors the exported graph consumes as inputs.
+        aux = get_muse_glimmer_vision_inputs(grid, self.config.vision_config)
+        request_inputs = {"pixel_values": pixel_values, **aux}
+        feats = self.vision_embeddings(**request_inputs).last_hidden_state
+        return torch.from_numpy(feats) if isinstance(feats, np.ndarray) else feats
 
     def merge_vision_text_embeddings(
         self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
@@ -7416,8 +7420,12 @@ class _OVOnyxForCausalLM(OVModelForVisualCausalLM):
         B, N, C = inputs_embeds.shape
         flat = inputs_embeds.reshape(B * N, C)
         ids = input_ids.reshape(B * N)
-        # <|patch|> (image) and <|video|> positions receive vision features in order.
-        selected = (ids == self.config.patch_token_id) | (ids == self.config.video_token_id)
+        # <image> and <video> placeholder positions receive vision features in order.
+        image_token_id = self.config.image_token_id
+        video_token_id = getattr(self.config, "video_token_id", None)
+        selected = ids == image_token_id
+        if video_token_id is not None:
+            selected = selected | (ids == video_token_id)
         flat[selected] = vision_embeds.reshape(-1, C).to(flat.dtype)
         return flat.reshape(B, N, C), attention_mask, position_ids
 
@@ -7454,7 +7462,7 @@ class _OVOnyxForCausalLM(OVModelForVisualCausalLM):
 
 
 MODEL_TYPE_TO_CLS_MAPPING = {
-    "onyx": _OVOnyxForCausalLM,
+    "muse_glimmer": _OVMuseGlimmerForCausalLM,
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
     "llava_next_video": _OVLlavaNextVideoForCausalLM,
