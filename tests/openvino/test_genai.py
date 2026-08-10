@@ -571,7 +571,7 @@ class Text2SpeechPipelineTestCase(unittest.TestCase):
         torch.testing.assert_close(transformers_output, genai_output, rtol=1e-2, atol=1e-3)
 
 
-# NOTE: DFlash wasn't merge yet to an official release so skipping the tests for now
+# NOTE: DFlash has been merged to 2026.4 release
 @pytest.mark.skipif(OPENVINO_DEVICE == "NPU", reason="Speculative decoding tests are not yet supported on NPU")
 class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
     GEN_KWARGS = {
