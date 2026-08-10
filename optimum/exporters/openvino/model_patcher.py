@@ -11060,12 +11060,14 @@ class MuseGlimmerVisionEmbeddingsModelPatcher(ModelPatcher):
     """Export the native MuseGlimmer vision stack as one resolution-agnostic graph.
 
     Reimplements ``vision_tower`` -> ``vision_adapter`` -> ``vision_projection`` ->
-    ``perception_emb_norm`` consuming ``pixel_values`` and the grid-derived tensors
-    (``attention_mask`` / ``window_attention_mask`` / ``window_index`` /
-    ``position_ids`` / ``bilinear_indices`` / ``bilinear_weights`` /
-    ``pixel_shuffle_index``) as inputs. The runtime computes those tensors from
-    ``image_grid_thw`` and feeds them in, yielding a single
-    ``[num_out_tokens, text_hidden]`` output.
+    ``perception_emb_norm`` consuming only ``pixel_values`` and ``image_grid_thw``.
+    All grid-derived tensors (attention masks, rotary position ids, bilinear
+    position gathers, pixel-shuffle permutation) are recomputed *inside* the graph
+    from ``image_grid_thw`` with pure tensor arithmetic, so no ``.tolist()`` /
+    ``int()`` / dynamic-reshape ops bake the resolution and no extra inputs are
+    needed. Window attention is expressed as a block-diagonal equality mask in the
+    original patch order (equivalent to the native reorder-attend-reverse) so the
+    untraceable window-index gather is avoided.
     """
 
     def __init__(self, config, model, model_kwargs=None):
@@ -11097,47 +11099,115 @@ class MuseGlimmerVisionEmbeddingsModelPatcher(ModelPatcher):
 
         model.__orig_forward = model.forward
 
-        def image_embed_forward(
-            self,
-            pixel_values,
-            attention_mask,
-            window_attention_mask,
-            window_index,
-            position_ids,
-            bilinear_indices,
-            bilinear_weights,
-            pixel_shuffle_index,
-        ):
+        def image_embed_forward(self, pixel_values, image_grid_thw):
             vision_model = self.model
             vision_tower = vision_model.vision_tower
             patch_embedder = vision_tower.patch_embedder
+            cfg = vision_tower.config
+            device = pixel_values.device
 
-            target_dtype = patch_embedder.patch_embedding.weight.dtype
+            # --- per-patch grid coordinates (vectorised over all images/frames) ---
+            grid = image_grid_thw
+            counts = grid[:, 0] * grid[:, 1] * grid[:, 2]
+            per_h = torch.repeat_interleave(grid[:, 1], counts)
+            per_w = torch.repeat_interleave(grid[:, 2], counts)
+            img_start = torch.repeat_interleave(
+                torch.nn.functional.pad(counts.cumsum(0)[:-1], (1, 0)), counts
+            )
             seq_len = pixel_values.shape[0]
+            ar = torch.arange(seq_len, device=device)
+            within = ar - img_start
+            hw = per_h * per_w
+            frame = within // hw
+            within_frame = within - frame * hw
+            row = within_frame // per_w
+            col = within_frame - row * per_w
+            # absolute start index of this patch's (image, frame) segment -> unique full-attn id
+            seg_id = img_start + frame * hw
+            window = cfg.pos_emb_height  # window size in patches (spatial_merge_size == 1)
+            win_r = row // window
+            win_c = col // window
+
+            # --- learned position-embedding bilinear resample (raster order) ---
+            # Native uses a custom grid_sample(align_corners=False, padding="zeros")
+            # equivalent: half-pixel sample centres + zeroed out-of-bounds corners.
+            side = patch_embedder.num_grid_per_side
+            h_grid = (row.float() + 0.5) * (side / per_h.float()) - 0.5
+            w_grid = (col.float() + 0.5) * (side / per_w.float()) - 0.5
+            h_floor = torch.floor(h_grid)
+            w_floor = torch.floor(w_grid)
+            h_ceil = h_floor + 1
+            w_ceil = w_floor + 1
+            h_frac = h_grid - h_floor
+            w_frac = w_grid - w_floor
+            h_fv = (h_floor >= 0) & (h_floor <= side - 1)
+            h_cv = (h_ceil >= 0) & (h_ceil <= side - 1)
+            w_fv = (w_floor >= 0) & (w_floor <= side - 1)
+            w_cv = (w_ceil >= 0) & (w_ceil <= side - 1)
+            h_fl = h_floor.clamp(0, side - 1).long()
+            h_cl = h_ceil.clamp(0, side - 1).long()
+            w_fl = w_floor.clamp(0, side - 1).long()
+            w_cl = w_ceil.clamp(0, side - 1).long()
+            bilinear_indices = torch.stack(
+                [h_fl * side + w_fl, h_fl * side + w_cl, h_cl * side + w_fl, h_cl * side + w_cl], dim=1
+            )
+            bilinear_weights = torch.stack(
+                [
+                    (1 - h_frac) * (1 - w_frac) * (h_fv & w_fv),
+                    (1 - h_frac) * w_frac * (h_fv & w_cv),
+                    h_frac * (1 - w_frac) * (h_cv & w_fv),
+                    h_frac * w_frac * (h_cv & w_cv),
+                ],
+                dim=1,
+            )
+
+            # --- additive attention masks (block-diagonal, original patch order) ---
+            neg = torch.finfo(pixel_values.dtype).min
+            same_seg = seg_id[:, None] == seg_id[None, :]
+            full_mask = torch.zeros(seq_len, seq_len, dtype=pixel_values.dtype, device=device).masked_fill(
+                ~same_seg, neg
+            )[None, None]
+            same_win = same_seg & (win_r[:, None] == win_r[None, :]) & (win_c[:, None] == win_c[None, :])
+            window_mask = torch.zeros(seq_len, seq_len, dtype=pixel_values.dtype, device=device).masked_fill(
+                ~same_win, neg
+            )[None, None]
+
+            # --- rotary position ids (raster (h, w) flipped + 1, matches native) ---
+            position_ids = torch.stack([row, col], dim=-1).flip(-1) + 1
+            position_ids = position_ids[None]
+
+            # --- pixel-shuffle gather (merge_size x merge_size block reorder) ---
+            factor = cfg.merge_size
+            blocks_w = per_w // factor
+            ps_in_col = within_frame % factor
+            ps_in_row = (within_frame // factor) % factor
+            ps_block_col = (within_frame // (factor * factor)) % blocks_w
+            ps_block_row = within_frame // (factor * factor * blocks_w)
+            ps_src = (ps_block_row * factor + ps_in_row) * per_w + (ps_block_col * factor + ps_in_col)
+            pixel_shuffle_index = seg_id + ps_src
+
+            # --- encoder ---
+            target_dtype = patch_embedder.patch_embedding.weight.dtype
             patch_embeds = patch_embedder.patch_embedding(pixel_values.to(dtype=target_dtype))
             embeddings = patch_embeds.reshape(seq_len, -1)
             pos_embeds = (
                 patch_embedder.position_embedding_table(bilinear_indices) * bilinear_weights[:, :, None]
-            ).sum(0)
+            ).sum(1)
             hidden_states = embeddings + pos_embeds.to(embeddings.dtype)
 
             hidden_states = vision_tower.ln_pre(hidden_states)
-            hidden_states = hidden_states[window_index, :]
             position_embeddings = vision_tower.rotary_emb(hidden_states, position_ids)
 
-            layer_types = vision_tower.config.layer_types
+            layer_types = cfg.layer_types
             for i, block in enumerate(vision_tower.layers):
-                mask = attention_mask if layer_types[i] == "full_attention" else window_attention_mask
+                mask = full_mask if layer_types[i] == "full_attention" else window_mask
                 hidden_states = hidden_states + _vision_attention(
                     block.attn, block.norm1(hidden_states), mask, position_embeddings
                 )
                 hidden_states = hidden_states + block.mlp(block.norm2(hidden_states))
 
-            reverse_indices = torch.argsort(window_index)
-            hidden_states = hidden_states[reverse_indices, :]
             hidden_states = vision_tower.ln_post(hidden_states)
 
-            factor = vision_tower.config.merge_size
             dim = hidden_states.shape[-1]
             hidden_states = hidden_states[pixel_shuffle_index]
             hidden_states = hidden_states.view(-1, factor * factor, dim).permute(0, 2, 1).reshape(

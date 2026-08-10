@@ -7395,17 +7395,15 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
             return None
         if pixel_values is None:
             return None
-        from optimum.exporters.openvino.utils import get_muse_glimmer_vision_inputs
 
         pixel_values = pixel_values if isinstance(pixel_values, torch.Tensor) else torch.as_tensor(pixel_values)
         pixel_values = pixel_values.float()
         if image_grid_thw is None:
             raise ValueError("image_grid_thw is required for MuseGlimmer vision embeddings.")
         grid = image_grid_thw if isinstance(image_grid_thw, torch.Tensor) else torch.as_tensor(image_grid_thw)
-        # Recompute the grid-derived tensors the exported graph consumes as inputs.
-        aux = get_muse_glimmer_vision_inputs(grid, self.config.vision_config)
-        request_inputs = {"pixel_values": pixel_values, **aux}
-        feats = self.vision_embeddings(**request_inputs).last_hidden_state
+        # The exported graph recomputes every grid-derived tensor internally, so it
+        # only needs the flattened patches and image_grid_thw.
+        feats = self.vision_embeddings(pixel_values=pixel_values, image_grid_thw=grid).last_hidden_state
         return torch.from_numpy(feats) if isinstance(feats, np.ndarray) else feats
 
     def merge_vision_text_embeddings(

@@ -2318,20 +2318,15 @@ class MuseGlimmerOpenVINOConfig(BaseVLMOpenVINOConfig):
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return {}
-        # Native vision stack consumes flattened patches [num_patches, patch_dim].
-        # Every tensor the native forward derives from image_grid_thw (bilinear
-        # position gathers, window reordering, rotary position ids, per-window
-        # attention masks and the pixel-shuffle permutation) is supplied as an
-        # explicit input so the exported graph stays resolution-agnostic.
+        # Native vision stack consumes flattened patches [num_patches, patch_dim]
+        # plus image_grid_thw. Every tensor the native forward derives from the
+        # grid (bilinear position gathers, window/full attention masks, rotary
+        # position ids and the pixel-shuffle permutation) is recomputed inside the
+        # exported graph with traceable tensor arithmetic, so the graph stays
+        # resolution-agnostic without any extra grid-derived inputs.
         return {
             "pixel_values": {0: "num_patches"},
-            "attention_mask": {2: "num_patches", 3: "num_patches"},
-            "window_attention_mask": {2: "num_patches", 3: "num_patches"},
-            "window_index": {0: "num_patches"},
-            "position_ids": {1: "num_patches"},
-            "bilinear_indices": {1: "num_patches"},
-            "bilinear_weights": {1: "num_patches"},
-            "pixel_shuffle_index": {0: "num_patches"},
+            "image_grid_thw": {0: "num_images"},
         }
 
     @property

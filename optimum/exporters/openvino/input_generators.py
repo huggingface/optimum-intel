@@ -2195,22 +2195,14 @@ class DummyMuseGlimmerVisionInputGenerator(DummyVisionInputGenerator):
     """Dummy input for the native MuseGlimmer vision stack.
 
     The native ``MuseGlimmerVisionModel`` consumes already-flattened patches as a
-    ``[num_patches, patch_size**2 * 3 * patch_temporal]`` tensor. Every tensor the
-    native forward derives from ``image_grid_thw`` with untraceable ops (bilinear
-    position gathers, window reordering, rotary position ids, per-window attention
-    masks and the pixel-shuffle permutation) is supplied here as an explicit input
-    so the exported graph is resolution-agnostic.
+    ``[num_patches, patch_size**2 * 3 * patch_temporal]`` tensor plus
+    ``image_grid_thw``. Every tensor the native forward derives from the grid is
+    recomputed inside the exported graph, so only these two inputs are generated.
     """
 
     SUPPORTED_INPUT_NAMES = (
         "pixel_values",
-        "attention_mask",
-        "window_attention_mask",
-        "window_index",
-        "position_ids",
-        "bilinear_indices",
-        "bilinear_weights",
-        "pixel_shuffle_index",
+        "image_grid_thw",
     )
 
     def __init__(
@@ -2225,7 +2217,7 @@ class DummyMuseGlimmerVisionInputGenerator(DummyVisionInputGenerator):
         self.patch_size = cfg.patch_size
         self.patch_temporal = cfg.patch_temporal
         self.merge_size = cfg.merge_size
-        # A single 2x2-window image: grid t=1, h=w=2*merge_size keeps it small yet
+        # A single small image: grid t=1, h=w=2*merge_size keeps it small yet
         # valid for the patch-merge downsample.
         self.grid_t = 1
         self.grid_h = self.merge_size * 2
@@ -2233,19 +2225,14 @@ class DummyMuseGlimmerVisionInputGenerator(DummyVisionInputGenerator):
         self.patch_dim = self.patch_size * self.patch_size * 3 * self.patch_temporal
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        from optimum.exporters.openvino.utils import get_muse_glimmer_vision_inputs
-
         num_patches = self.grid_t * self.grid_h * self.grid_w
         if input_name == "pixel_values":
             shape = [num_patches, self.patch_dim]
             return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
-
-        grid = torch.tensor([[self.grid_t, self.grid_h, self.grid_w]], dtype=torch.long)
-        aux = get_muse_glimmer_vision_inputs(grid, self.vision_config, dtype=DTYPE_MAPPER.pt(float_dtype))
-        if input_name in aux:
-            tensor = aux[input_name]
+        if input_name == "image_grid_thw":
+            grid = torch.tensor([[self.grid_t, self.grid_h, self.grid_w]], dtype=DTYPE_MAPPER.pt(int_dtype))
             if framework != "pt":
-                return tensor.numpy()
-            return tensor
+                return grid.numpy()
+            return grid
         raise ValueError(f"Unsupported input name {input_name}")
 
