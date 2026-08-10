@@ -9769,7 +9769,7 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DynamicCache
+        from transformers.cache_utils import Cache
 
         from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
 
@@ -9786,26 +9786,39 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
             self._text_model = self._model.model
             self._text_config = self._model.model.config
 
-        class Qwen3_5DynamicCacheWrap(Qwen3_5DynamicCache):
+        # NOTE: In transformers < 5.6 the Qwen3.5 backbone shipped a dedicated
+        # ``Qwen3_5DynamicCache`` class. Starting with transformers 5.6/5.7 the
+        # hybrid (linear + full attention) cache is expressed through the generic
+        # ``DynamicCache`` composed of per-layer cache mixins, and the dedicated
+        # class was removed. This wrapper reimplements only the pieces the export
+        # graph needs (flat conv/ssm/key/value state lists indexed by their
+        # per-kind position, plus ``update``/``get_seq_length``/``has_previous_state``)
+        # so it stays compatible with both cache generations. The linear-attention
+        # layers are fully replaced by ``qwen3_5_gated_delta_net_forward`` which
+        # reads/writes ``conv_states``/``recurrent_states`` directly, while the
+        # full-attention layers call ``update``.
+        class Qwen3_5DynamicCacheWrap(Cache):
             def __init__(self, config, conv_states, recurrent_states, key_cache, value_cache):
-                # Call parent constructor with all required arguments
-                super().__init__(config=config)
-
+                self.layer_types = list(config.layer_types)
                 self.conv_states = conv_states
                 self.recurrent_states = recurrent_states
                 self.key_cache = key_cache
                 self.value_cache = value_cache
                 self.full_attn_mapping = {}
                 self.linear_attn_mapping = {}
+                self.transformer_layers = []
+                self.last_linear_layer = -1
                 full_attn_layer_idx = 0
                 linear_attn_layer_idx = 0
-                for i in range(len(config.layer_types)):
+                for i in range(len(self.layer_types)):
                     if self.layer_types[i] == "full_attention":
                         self.full_attn_mapping[i] = full_attn_layer_idx
                         full_attn_layer_idx += 1
+                        self.transformer_layers.append(i)
                     elif self.layer_types[i] == "linear_attention":
                         self.linear_attn_mapping[i] = linear_attn_layer_idx
                         linear_attn_layer_idx += 1
+                        self.last_linear_layer = i
 
             def update(
                 self,
@@ -9834,11 +9847,43 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
                     return 0
                 return self.key_cache[layer_idx].shape[-2]
 
-            @property
-            def has_previous_state(self):
-                """We have a previous state if the last linear (conv) layer was already updated."""
+            def has_previous_state(self, layer_idx: Optional[int] = None):
+                """We have a previous state if the last linear (conv) layer was already updated.
+
+                transformers < 5.6 accessed this as a property, while transformers >= 5.6
+                calls it as a method (optionally per-layer). Implemented as a method that
+                ignores ``layer_idx`` to stay compatible with both cache generations.
+                """
+                if self.last_linear_layer < 0:
+                    return False
                 layer_idx = self.linear_attn_mapping[self.last_linear_layer]
                 return self.conv_states[layer_idx] is not None
+
+            def get_mask_sizes(self, query_length: int, layer_idx: int = 0) -> tuple:
+                """Return ``(kv_length, kv_offset)`` for the causal-mask machinery.
+
+                transformers >= 5.6 asks the cache for the key/value length through
+                ``get_mask_sizes`` (previously it read the KV tensors directly). This
+                wrapper stores the full-attention key cache in ``key_cache`` indexed by
+                full-attention position, so derive the past length from the first
+                available full-attention layer.
+
+                Following the canonical ``DynamicLayer.get_mask_sizes`` contract, the
+                full-attention keys always start at absolute position 0, so ``kv_offset``
+                must be 0 and ``kv_length`` is the total number of cached keys plus the
+                current query length. The query's absolute offset is provided separately
+                by ``get_seq_length`` in ``create_causal_mask``. Returning
+                ``kv_offset = past_length`` here would shift the key positions past the
+                query and mask out every previously cached token during decode.
+                """
+                past_length = 0
+                for kv in self.key_cache:
+                    if kv is not None:
+                        past_length = kv.shape[-2]
+                        break
+                kv_length = query_length + past_length
+                kv_offset = 0
+                return kv_length, kv_offset
 
         # the patch is needed to include KV-cache, Conv, and SSM states in the inputs and outputs.
         def patched_forward(
@@ -9983,6 +10028,129 @@ class Qwen3_5VisionEmbMergerPatcher(ModelPatcher):
         for block in self._model.blocks:
             block.forward = block._orig_forward
             block.attn.forward = block.attn._orig_forward
+
+
+def _minicpmv4_6_vision_attention(attn, hidden_states, attention_mask):
+    """Trace-friendly dense attention for the MiniCPM-V-4.6 vision encoder / window merger.
+
+    The upstream ``MiniCPMV4_6VisionAttention`` uses ``cu_seqlens`` to split the
+    NaViT-packed sequence into per-image (or per-window) chunks and runs
+    attention on each chunk. That data-dependent splitting cannot be traced, so
+    the OpenVINO runtime precomputes an additive block-diagonal ``attention_mask``
+    (0 inside a chunk, ``-inf`` across chunks) and this helper runs a single dense
+    attention with that mask, which is numerically identical.
+
+    Original PyTorch code (``MiniCPMV4_6VisionAttention.forward``):
+    https://github.com/huggingface/transformers/blob/main/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py
+    """
+    input_shape = hidden_states.shape[:-1]
+    hidden_shape = (*input_shape, -1, attn.head_dim)
+    query_states = attn.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+    key_states = attn.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+    value_states = attn.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+    attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) * attn.scaling
+    if attention_mask is not None:
+        attn_weights = attn_weights + attention_mask
+    attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+    attn_output = torch.matmul(attn_weights, value_states).transpose(1, 2).reshape(*input_shape, -1)
+    return attn.out_proj(attn_output)
+
+
+class MiniCPMV4_6VisionEmbeddingsModelPatcher(ModelPatcher):
+    """Exports the full MiniCPM-V-4.6 image feature extractor (NaViT SigLIP encoder,
+    ViT window-attention merger, and downsample merger) into a single traceable graph.
+
+    All data-dependent index / mask computation (NaViT packing ``cu_seqlens``,
+    patch position ids, window reordering indices, and spatial-merge gather indices)
+    is precomputed on the Python side by ``_OVMiniCPMV4_6ForCausalLM`` and passed in
+    as plain tensors, so the graph itself only contains fixed tensor ops.
+
+    Traced forward reproduces the upstream ``MiniCPMV4_6VisionModel.forward`` +
+    ``MiniCPMV4_6ViTWindowAttentionMerger.forward`` + ``MiniCPMV4_6Merger.forward``:
+    https://github.com/huggingface/transformers/blob/main/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        # ``model`` here is the top-level MiniCPMV4_6Model so that we can reach the
+        # vision tower (with its vit_merger) and the downsample merger together.
+        def image_features_forward(
+            self,
+            pixel_values,
+            pos_ids,
+            encoder_attention_mask,
+            downsampled_attention_mask,
+            window_index,
+            reverse_window_index,
+            window_attention_mask,
+            merge_gather_index,
+            final_gather_index,
+        ):
+            vt = self.vision_tower
+            merger = vt.vit_merger
+            window_h, window_w = merger.window_kernel_size
+            merge_h, merge_w = self.merger.merge_kernel_size
+
+            hidden_states = vt.embeddings.patch_embedding(pixel_values).flatten(2).transpose(1, 2)
+            hidden_states = hidden_states + vt.embeddings.position_embedding(pos_ids).unsqueeze(0)
+
+            embed_dim = hidden_states.shape[-1]
+            insert_layer_id = vt.config.insert_layer_id
+            for layer_index, encoder_layer in enumerate(vt.encoder.layers):
+                mask = encoder_attention_mask if layer_index <= insert_layer_id else downsampled_attention_mask
+                residual = hidden_states
+                hidden_states = encoder_layer.layer_norm1(hidden_states)
+                hidden_states = _minicpmv4_6_vision_attention(encoder_layer.self_attn, hidden_states, mask)
+                hidden_states = residual + hidden_states
+                residual = hidden_states
+                hidden_states = encoder_layer.layer_norm2(hidden_states)
+                hidden_states = encoder_layer.mlp(hidden_states)
+                hidden_states = residual + hidden_states
+
+                if layer_index == insert_layer_id:
+                    residual = hidden_states
+                    windowed = merger.layer_norm1(hidden_states)
+                    windowed = windowed[:, window_index, :]
+                    windowed = _minicpmv4_6_vision_attention(merger.self_attn, windowed, window_attention_mask)
+                    windowed = windowed[:, reverse_window_index, :]
+                    hidden_states = residual + windowed
+
+                    # NaViT packs one or more image tiles (each with its own grid) into a
+                    # single sequence. ``merge_gather_index`` reorders patches so that every
+                    # ``window_h * window_w`` block is contiguous, so a ``-1`` row dimension
+                    # collapses all tiles at once and is independent of the per-tile grid.
+                    patch = hidden_states[0]
+                    gathered = patch[merge_gather_index]
+                    merged = gathered.reshape(-1, window_h * window_w * embed_dim)
+                    merge_residual = gathered.reshape(-1, window_h * window_w, embed_dim).mean(dim=1)
+                    merged = merger.pre_norm(merged)
+                    merged = merger.linear_1(merged)
+                    merged = merger.act(merged)
+                    merged = merger.linear_2(merged)
+                    hidden_states = (merged + merge_residual).unsqueeze(0)
+
+            hidden_states = vt.post_layernorm(hidden_states)
+
+            patch = hidden_states[0]
+            final_embed_dim = patch.shape[-1]
+            gathered = patch[final_gather_index]
+            merged = gathered.reshape(-1, merge_h * merge_w * final_embed_dim)
+            image_features = self.merger.mlp[0](merged)
+            return image_features
+
+        model.forward = types.MethodType(image_features_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
 
 
 # Patched forward for MobileNetV5MultiScaleFusionAdapter (MSFA) used by the Gemma3n vision tower.
