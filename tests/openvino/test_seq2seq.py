@@ -600,6 +600,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5",
         "qwen3_5_moe",
         "qwen3_omni_moe",
+        "deepseek_vl_v2",
     ]
     SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl", "qwen2_5_vl", "qwen3_vl", "videochat_flash_qwen"]
     SUPPORT_AUDIO = ["qwen3_omni_moe"]
@@ -633,6 +634,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "phi4mm",
         "videochat_flash_qwen",
         "gemma3n",
+        "deepseek_vl_v2",
     ]
     IMAGE = Image.open(
         requests.get(

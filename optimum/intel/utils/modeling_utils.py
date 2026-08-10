@@ -205,7 +205,13 @@ def _infer_library_from_model_or_model_class(
         library_name = "funasr"
     elif model.__module__.startswith("optimum"):
         # for wrapped models like timm in optimum.intel.openvino.modeling_timm
-        library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
+        if hasattr(model, "model"):
+            library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
+        else:
+            # Bundled transformers-compatible architectures shipped inside the
+            # optimum namespace (e.g. the vendored ``deepseek_vl_v2`` modeling)
+            # are plain ``PreTrainedModel`` subclasses without a ``.model`` wrapper.
+            library_name = "transformers"
     else:
         try:
             library_name = TasksManager._infer_library_from_model_or_model_class(model=model)

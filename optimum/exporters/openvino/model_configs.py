@@ -134,6 +134,8 @@ from optimum.exporters.openvino.model_patcher import (
     InternLMModelPatcher,
     InternVL2ChatLangModelPatcher,
     InternVLChatImageEmbeddingModelPatcher,
+    DeepseekVLV2ImageEmbeddingsModelPatcher,
+    DeepseekVLV2LanguageModelPatcher,
     JaisModelPatcher,
     KokoroModelPatcher,
     Lfm2ModelPatcher,
@@ -2221,6 +2223,145 @@ class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return InternVLChatImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+
+# Register the bundled ``deepseek_vl_v2`` architecture with the transformers
+# Auto* factories at import time so that ``AutoConfig``/``AutoModel*`` resolve the
+# ``deepseek_vl_v2`` ``model_type`` for the unmodified Hub checkpoints (which ship
+# no ``auto_map``/remote code).
+try:
+    from .deepseek_vl_v2 import register as _register_deepseek_vl_v2
+
+    _register_deepseek_vl_v2()
+except Exception as _deepseek_vl_v2_register_error:  # pragma: no cover - defensive
+    logger.debug(f"Could not register deepseek_vl_v2 architecture: {_deepseek_vl_v2_register_error}")
+
+
+@register_in_tasks_manager("deepseek_vl_v2", *["image-text-to-text"], library_name="transformers")
+class DeepseekVLV2OpenVINOConfig(BaseVLMOpenVINOConfig):
+    # The bundled DeepSeek-VL2 modeling code is patched to run on modern
+    # transformers releases (validated with transformers 5.5.4); the standalone
+    # `deepseek_v2` language export path used for the LANGUAGE submodel requires
+    # transformers >= 4.51.
+    MIN_TRANSFORMERS_VERSION = "4.51.0"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if not self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        # DeepSeek-VL2 feeds a flat batch of image tiles through the SigLIP vision
+        # tower; the first axis is the (dynamic) number of tiles.
+        return {"pixel_values": {0: "num_tiles", 2: "height", 3: "width"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if not self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        # ``last_hidden_state`` holds the per-tile projected patch embeddings.
+        # ``image_newline`` / ``view_separator`` are the learned structural tokens
+        # exported as constants so the runtime can rebuild the tile layout.
+        return {
+            "last_hidden_state": {0: "num_tiles", 1: "patch_seq_len"},
+            "image_newline": {},
+            "view_separator": {},
+        }
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VLMConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            model_type = self._orig_config.language_config.model_type
+            return get_vlm_text_embeddings_config(
+                model_type,
+                self._orig_config.language_config,
+                self.int_dtype,
+                self.float_dtype,
+            )
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            model_type = self._orig_config.language_config.model_type
+            # The bundled DeepSeek-VL2 language model is a non-MLA (``use_mla=False``)
+            # ``deepseek_v2`` decoder: its KV cache uses the standard multi-head
+            # layout (head_dim = hidden_size // num_attention_heads). The default
+            # ``deepseek_v2`` past-key-value generator assumes the MLA layout
+            # (``qk_nope_head_dim`` / ``v_head_dim``), which are 0 here and produce
+            # degenerate zero-width cache tensors. Override the dummy PKV generator
+            # with the standard multi-head one so export tracing gets valid shapes.
+            internal_export_config = get_vlm_internal_text_generation_config(
+                model_type,
+                self._orig_config.language_config,
+                self.int_dtype,
+                self.float_dtype,
+            )
+            internal_export_config.DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+            internal_export_config.DUMMY_INPUT_GENERATOR_CLASSES = (
+                DummyTextInputGenerator,
+                MistralDummyPastKeyValuesGenerator,
+            )
+            export_config = LMInputEmbedsConfigHelper(
+                internal_export_config,
+                patcher_cls=DeepseekVLV2LanguageModelPatcher,
+            )
+            export_config._normalized_config = internal_export_config._normalized_config
+            return export_config
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return model.language
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return model
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.language.get_input_embeddings()
+            text_embedding.config = model.language.config
+            return text_embedding
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return DeepseekVLV2ImageEmbeddingsModelPatcher(self, model, model_kwargs)
 
 
 @register_in_tasks_manager(
