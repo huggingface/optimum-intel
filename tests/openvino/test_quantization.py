@@ -1171,6 +1171,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForFeatureExtraction, "qwen3_vl_embedding", False),
         (OVModelForVisualCausalLM, "qwen3_omni_moe", False),
         (OVModelForCausalLM, "exaone4", True),
+        (OVModelForCausalLM, "ouro", True),
         (OVModelForVisualCausalLM, "llava_next_video", False),
         (OVModelForVisualCausalLM, "minicpmv", True),
         (OVModelForSpeechSeq2Seq, "qwen3_asr", True),
