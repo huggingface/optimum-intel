@@ -7377,13 +7377,8 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
     def get_experts_implementation(self):
         # transformers>=5.15 `generate` queries the experts implementation to decide
         # on a decode-time MoE kernel swap; that swap is a no-op on CPU (OpenVINO),
-        # so we just report the config values without touching the compiled graph.
-        experts_implementation = {"": getattr(self.config, "_experts_implementation", None)}
-        for subconfig_key in getattr(self.config, "sub_configs", []):
-            subconfig = getattr(self.config, subconfig_key, None)
-            if subconfig is not None:
-                experts_implementation[subconfig_key] = getattr(subconfig, "_experts_implementation", None)
-        return experts_implementation
+        # since the MoE kernel is baked into the exported graph.
+        return "openvino_impl"
 
     def set_experts_implementation(self, experts_implementation):
         # No-op: the MoE kernel is baked into the exported OpenVINO graph.

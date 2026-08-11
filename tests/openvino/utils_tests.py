@@ -482,6 +482,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 9,
     },
+    "muse_glimmer": {
+        "lm_model": 66,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 30,
+    },
     "llava_next": {
         "lm_model": 30,
         "text_embeddings_model": 1,
