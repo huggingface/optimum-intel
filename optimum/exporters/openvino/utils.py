@@ -339,7 +339,9 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "minicpmo",
     "videochat_flash_qwen",
     "qwen3_omni_moe",
+    "muse_glimmer",
 ]
+
 
 SSM_MODELS = [
     "mamba",
