@@ -57,7 +57,15 @@ from transformers import (
 )
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
-from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TENSOR_ALIAS_TO_TYPE, TEST_IMAGE_URL
+from utils_tests import (
+    F32_CONFIG,
+    HUB_MODEL_NAMES,
+    MODEL_NAMES,
+    OPENVINO_DEVICE,
+    SEED,
+    TENSOR_ALIAS_TO_TYPE,
+    TEST_IMAGE_URL,
+)
 
 from optimum.intel import (
     OVDiffusionPipeline,
@@ -99,7 +107,7 @@ from optimum.intel.openvino.utils import (
     TemporaryDirectory,
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import _langchain_hf_available, is_transformers_version
+from optimum.intel.utils.import_utils import _langchain_hf_available, is_datasets_version, is_transformers_version
 from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
@@ -220,10 +228,6 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     def test_load_from_hub_and_save_visual_language_model(self):
         model_ids = [self.OV_VLM_MODEL_ID]
-        if is_transformers_version(">=", "4.51") and is_transformers_version("<", "4.57"):
-            # the phi4 auto-processor can't be loaded in offline mode
-            # anymore due to an internal bug in transformers
-            model_ids.append("katuni4ka/phi-4-multimodal-ov")
         for model_id in model_ids:
             processor = AutoProcessor.from_pretrained(model_id)
             prompt = "What is shown in this image?"
@@ -630,7 +634,7 @@ class OVModelIntegrationTest(unittest.TestCase):
     @parameterized.expand(("stable-diffusion", "stable-diffusion-openvino"))
     def test_find_files_matching_pattern_sd(self, model_arch):
         pattern = r"(.*)?openvino(.*)?\_model(.*)?.xml$"
-        model_id = MODEL_NAMES[model_arch]
+        model_id = HUB_MODEL_NAMES[model_arch]
         # hub model
         ov_files = _find_files_matching_pattern(model_id, pattern=pattern)
         self.assertTrue(len(ov_files) > 0 if "openvino" in model_id else len(ov_files) == 0)
@@ -707,7 +711,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         gc.collect()
 
     def test_export_dtype(self):
-        model_id = "optimum-intel-internal-testing/tiny-random-GemmaForCausalLM"
+        model_id = "optimum-intel-internal-testing/tiny-random-PhiForCausalLM"
         for dtype in ["f32", "f16", "bf16"]:
             torch_dtype = OV_TO_PT_TYPE[dtype]
             ov_dtype = STR_TO_OV_TYPE[dtype]
@@ -933,8 +937,8 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     @pytest.mark.skipif(
-        is_transformers_version(">=", "5.3"),
-        reason="requires transformers < v5.3 since question-answering pipeline is deprecated in v5.3",
+        is_transformers_version(">=", "5.3") or is_datasets_version("<", "4"),
+        reason="requires datasets >= 4 or transformers < v5.3 since question-answering pipeline is deprecated in v5.3",
     )
     def test_metric(self):
         model_id = "distilbert-base-cased-distilled-squad"
@@ -1037,10 +1041,10 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         "distilbert",
         "roberta",
         "sentence-transformers-bert",
+        "qwen3",
     )
-
-    if is_transformers_version(">=", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("qwen3",)
+    if is_transformers_version("<", "5.4") or is_transformers_version(">=", "5.6"):
+        SUPPORTED_ARCHITECTURES += ("qwen3_vl_embedding",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1056,7 +1060,12 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         tokens = tokenizer(inputs, return_tensors="pt")
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
-        for input_type in ["pt", "np"]:
+
+        input_types = ["pt", "np"]
+        # Original PyTorch Qwen3-VL-Embedding model fails to infer with numpy inputs
+        if model_arch in ["qwen3_vl_embedding"]:
+            input_types = ["pt"]
+        for input_type in input_types:
             tokens = tokenizer(inputs, return_tensors=input_type)
             ov_outputs = ov_model(**tokens)
             self.assertIn("last_hidden_state", ov_outputs)
@@ -1100,6 +1109,10 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         from Sentence Transformers then an appropriate exception raises.
         """
         model_id = MODEL_NAMES[model_arch]
+        if model_arch in ["qwen3_vl_embedding"]:
+            self.skipTest(
+                "Qwen3-VL-Embedding requires support of sentence-transformers==5.4 and as OVSentenceTransformer is planned to be deprecated, support of this interface won't be added for new models."
+            )
         with TemporaryDirectory() as tmp_dir:
             save_dir = str(tmp_dir)
             OVSentenceTransformer.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE).save_pretrained(
@@ -1115,7 +1128,6 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "albert",
         "bert",
         "camembert",
-        "convbert",
         "deberta",
         "deberta-v2",
         "distilbert",
@@ -1132,13 +1144,12 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "xlm-roberta",
     )
 
-    # accuracy issue, need additional investigation
-    if is_transformers_version("<", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("nystromformer",)
-
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("data2vec-text", "flaubert", "xlm")
+
+    if is_transformers_version("!=", "5.2"):
+        SUPPORTED_ARCHITECTURES += ("convbert",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1671,8 +1682,8 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
 
 
 class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
-    OV_MODEL_ID = MODEL_NAMES["open-clip"]
-    OV_MODEL_ID_IR = MODEL_NAMES["open-clip-ov"]
+    OV_MODEL_ID = HUB_MODEL_NAMES["open-clip"]
+    OV_MODEL_ID_IR = HUB_MODEL_NAMES["open-clip-ov"]
 
     def _get_sample_image(self):
         url = TEST_IMAGE_URL
