@@ -600,8 +600,16 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5",
         "qwen3_5_moe",
         "qwen3_omni_moe",
+        "muse_glimmer",
     ]
-    SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl", "qwen2_5_vl", "qwen3_vl", "videochat_flash_qwen"]
+    SUPPORT_VIDEO = [
+        "llava_next_video",
+        "qwen2_vl",
+        "qwen2_5_vl",
+        "qwen3_vl",
+        "videochat_flash_qwen",
+        "muse_glimmer",
+    ]
     SUPPORT_AUDIO = ["qwen3_omni_moe"]
     # "llama" is registered for image-text-to-text
     # to support VLM Eagle3 draft models (tested separately in test_genai.py).
@@ -661,6 +669,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "qwen3_5",
             "qwen3_5_moe",
             "gemma4_unified",
+            "muse_glimmer",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -754,6 +763,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
         if "llama4" in model_arch:
             loading_kwargs = {"_attn_implementation": "sdpa"}
+        if model_arch == "muse_glimmer":
+            # the tiny reference checkpoint is stored in bfloat16, force fp32 to match the OpenVINO model
+            loading_kwargs = {"dtype": torch.float32}
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(
             model_id, trust_remote_code=trust_remote_code, **loading_kwargs
         )

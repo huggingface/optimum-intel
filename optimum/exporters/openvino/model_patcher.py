@@ -3118,6 +3118,296 @@ class FluxTransformerModelPatcher(ModelPatcher):
             self._model.pos_embed.forward = self._model.pos_embed._orig_forward
 
 
+# Patching is needed, as OpenVINO PyTorch frontend fails to trace torch.cat with Complex tensors,
+# so the Rotary embeddings related calculations are rewritten in float values.
+# Original code: https://github.com/huggingface/diffusers/blob/f27949dad9f88a34eb22ff80956bbbb940cdbd2b/src/diffusers/models/transformers/transformer_qwenimage.py#L94
+def _qwenimage_apply_rotary_emb(x, freqs):
+    # Real-valued equivalent of the complex rotary embedding used by QwenImage, written so that the
+    # traced subgraph is recognized by OpenVINO's GPT-NeoX `RoPEFusion` matcher and collapsed into the
+    # dedicated `ov::op::internal::RoPE` operation at compile time.
+    #
+    # QwenImage rotates *interleaved* pairs (dims 2j, 2j+1) with frequency j. That matcher only accepts
+    # the *contiguous* rotate-half convention (first half vs. second half, dims j and j+D/2). The two are
+    # related by the fixed "de-interleave" permutation P that sends even dims to the first half and odd
+    # dims to the second half. Applying P to `x` up front and rotating contiguously reproduces the
+    # interleaved rotation exactly, and because the identical permutation is applied to both query and
+    # key (and never undone) it cancels in the q.k^T attention score, leaving the model numerically
+    # unchanged while exposing a fusable subgraph.
+    #
+    # The matched region is: `xp` (de-interleaved) fed into both `xp * cos` and the two half-slices, with
+    # the rotate expressed as Slice + Multiply(-1) + Concat, then `xp * cos + rotate_half(xp) * sin`.
+    # Note the negation must be `x2 * -1.0` (an Eltwise Multiply); a unary `-x` traces to a `Negative`
+    # op which the matcher does not recognize.
+    cos, sin = freqs  # each [1, seq, 1, head_dim] with the half-width table duplicated onto both halves
+    x_even = x[..., 0::2]  # even dims -> first contiguous half
+    x_odd = x[..., 1::2]  # odd dims  -> second contiguous half
+    xp = torch.cat([x_even, x_odd], dim=-1)  # de-interleaved [batch, seq, heads, head_dim]
+    half = xp.shape[-1] // 2
+    x1 = xp[..., :half]
+    x2 = xp[..., half:]
+    rot = torch.cat([x2 * -1.0, x1], dim=-1)  # contiguous rotate-half
+    return (xp * cos + rot * sin).type_as(x)
+
+
+# Patching is needed to use _qwenimage_apply_rotary_emb instead of original method that uses complex values.
+# Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L270
+def _qwenimage_attn_processor_call(
+    self,
+    attn,
+    hidden_states,
+    encoder_hidden_states=None,
+    encoder_hidden_states_mask=None,
+    attention_mask=None,
+    image_rotary_emb=None,
+):
+    # Patched QwenDoubleStreamAttnProcessor2_0 that consumes precomputed real rotary embeddings
+    # (image and text cos/sin tensors) instead of complex tensors so the model can be traced for OpenVINO.
+    seq_txt = encoder_hidden_states.shape[1]
+
+    img_query = attn.to_q(hidden_states).unflatten(-1, (attn.heads, -1))
+    img_key = attn.to_k(hidden_states).unflatten(-1, (attn.heads, -1))
+    img_value = attn.to_v(hidden_states).unflatten(-1, (attn.heads, -1))
+
+    txt_query = attn.add_q_proj(encoder_hidden_states).unflatten(-1, (attn.heads, -1))
+    txt_key = attn.add_k_proj(encoder_hidden_states).unflatten(-1, (attn.heads, -1))
+    txt_value = attn.add_v_proj(encoder_hidden_states).unflatten(-1, (attn.heads, -1))
+
+    if attn.norm_q is not None:
+        img_query = attn.norm_q(img_query)
+    if attn.norm_k is not None:
+        img_key = attn.norm_k(img_key)
+    if attn.norm_added_q is not None:
+        txt_query = attn.norm_added_q(txt_query)
+    if attn.norm_added_k is not None:
+        txt_key = attn.norm_added_k(txt_key)
+
+    img_freqs, txt_freqs = image_rotary_emb
+    img_query = _qwenimage_apply_rotary_emb(img_query, img_freqs)
+    img_key = _qwenimage_apply_rotary_emb(img_key, img_freqs)
+    txt_query = _qwenimage_apply_rotary_emb(txt_query, txt_freqs)
+    txt_key = _qwenimage_apply_rotary_emb(txt_key, txt_freqs)
+
+    joint_query = torch.cat([txt_query, img_query], dim=1).transpose(1, 2)
+    joint_key = torch.cat([txt_key, img_key], dim=1).transpose(1, 2)
+    joint_value = torch.cat([txt_value, img_value], dim=1).transpose(1, 2)
+
+    joint_hidden_states = F.scaled_dot_product_attention(joint_query, joint_key, joint_value, attn_mask=attention_mask)
+    joint_hidden_states = joint_hidden_states.transpose(1, 2).flatten(2, 3).to(joint_query.dtype)
+
+    txt_attn_output = joint_hidden_states[:, :seq_txt, :]
+    img_attn_output = joint_hidden_states[:, seq_txt:, :]
+
+    img_attn_output = attn.to_out[0](img_attn_output)
+    if len(attn.to_out) > 1:
+        img_attn_output = attn.to_out[1](img_attn_output)
+    txt_attn_output = attn.to_add_out(txt_attn_output)
+
+    return img_attn_output, txt_attn_output
+
+
+# Patching is needed, as OpenVINO PyTorch frontend fails to trace torch.cat with Complex tensors,
+# so the Rotary embeddings related calculations are rewritten in float values.
+# Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L237
+def _qwenimage_rope_freqs(positions, inv_freq):
+    # positions: (seq,) float tensor of per-token positions along one axis
+    # inv_freq:  (dim // 2,) constant tensor of inverse frequencies
+    # returns real (cos, sin) of shape (seq, dim // 2), matching the real part / imaginary part
+    # of the complex `torch.polar(1, outer(positions, inv_freq))` used by diffusers' QwenEmbedRope.
+    # NOTE: use an explicit broadcast multiply instead of `torch.outer`. `torch.outer` traces to a
+    # MatMul whose constant `inv_freq` input is treated as a weight and gets int8-quantized by the
+    # default weight compression applied to models > 1B params. Quantizing `inv_freq` (values spanning
+    # 1.0 down to ~1e-4) destroys the low-magnitude frequencies and corrupts the rotary embeddings. An
+    # elementwise multiply is an Eltwise op, which weight compression leaves untouched.
+    angles = positions.float().unsqueeze(-1) * inv_freq.unsqueeze(0)
+    return torch.cos(angles), torch.sin(angles)
+
+
+# Patching is needed, as OpenVINO PyTorch frontend fails to trace torch.cat with Complex tensors,
+# so the Rotary embeddings related calculations are rewritten in float values.
+# Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L196
+def _qwenimage_expand_rope_freq(freq):
+    # Turn a half-width per-position table `freq` [seq, head_dim // 2] into the full-width table
+    # [1, seq, 1, head_dim] consumed by `_qwenimage_apply_rotary_emb`. Because the rotary apply
+    # de-interleaves `x` into two contiguous halves (see that function), each frequency must land at
+    # position j and position j + head_dim // 2, i.e. the half-width table is simply duplicated onto both
+    # halves. The singleton batch/head axes broadcast over the [batch, seq, heads, head_dim] tensor.
+    full = torch.cat([freq, freq], dim=-1)  # [seq, head_dim]
+    return full[None, :, None, :]  # [1, seq, 1, head_dim]
+
+
+def _qwenimage_build_rotary_emb(axes_dim, theta, image_seq_len, height, width, txt_seq_len, device):
+    # Reproduces diffusers' QwenEmbedRope (scale_rope=True, single image block, frame=1) using real
+    # trigonometric math instead of complex arithmetic, so it can be traced for OpenVINO while keeping
+    # the image resolution (`height`/`width`) as runtime tensor inputs rather than baked-in constants.
+    inv_freqs = [
+        1.0 / torch.pow(torch.tensor(float(theta), device=device), torch.arange(0, d, 2, device=device).float() / d)
+        for d in axes_dim
+    ]
+
+    # Per-token (frame, height, width) index arithmetic over the packed image sequence. Avoiding
+    # `view`/`expand` with tensor-derived sizes keeps `height`/`width` as genuine dynamic inputs.
+    hw = height * width
+    token = torch.arange(image_seq_len, device=device)
+    frame_idx = torch.div(token, hw, rounding_mode="floor")
+    rem = token % hw
+    height_idx = torch.div(rem, width, rounding_mode="floor")
+    width_idx = rem % width
+
+    h_half = height // 2
+    w_half = width // 2
+    # scale_rope centered positions: value - (size - size // 2)
+    pos_frame = frame_idx.float()
+    pos_height = height_idx.float() - (height - h_half).float()
+    pos_width = width_idx.float() - (width - w_half).float()
+
+    img_cos_parts, img_sin_parts = [], []
+    for pos, inv_freq in zip((pos_frame, pos_height, pos_width), inv_freqs):
+        cos, sin = _qwenimage_rope_freqs(pos, inv_freq)
+        img_cos_parts.append(cos)
+        img_sin_parts.append(sin)
+    img_cos = torch.cat(img_cos_parts, dim=-1)
+    img_sin = torch.cat(img_sin_parts, dim=-1)
+
+    # Text tokens share a single position across all three axes, offset by the max image index.
+    max_vid_index = torch.maximum(h_half, w_half)
+    txt_pos = torch.arange(txt_seq_len, device=device).float() + max_vid_index.float()
+    txt_cos_parts, txt_sin_parts = [], []
+    for inv_freq in inv_freqs:
+        cos, sin = _qwenimage_rope_freqs(txt_pos, inv_freq)
+        txt_cos_parts.append(cos)
+        txt_sin_parts.append(sin)
+    txt_cos = torch.cat(txt_cos_parts, dim=-1)
+    txt_sin = torch.cat(txt_sin_parts, dim=-1)
+
+    # Expand to the full-width, broadcast layout so the rotary apply traces to a RoPE-fusable subgraph.
+    img_cos = _qwenimage_expand_rope_freq(img_cos)
+    img_sin = _qwenimage_expand_rope_freq(img_sin)
+    txt_cos = _qwenimage_expand_rope_freq(txt_cos)
+    txt_sin = _qwenimage_expand_rope_freq(txt_sin)
+
+    return (img_cos, img_sin), (txt_cos, txt_sin)
+
+
+# Patching is needed to use [height, width] instead of original img_shapes, that fails to be scripted with torch.script.
+# Only first element is used, so it is valid to use only one shape: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L206
+# Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L545
+def _qwenimage_transformer_forward(
+    self,
+    hidden_states,
+    encoder_hidden_states,
+    encoder_hidden_states_mask,
+    timestep,
+    height,
+    width,
+    guidance=None,
+):
+    # Patched QwenImageTransformer2DModel forward. The original forward builds the rotary embeddings
+    # from python-list `img_shapes` using complex arithmetic inside `self.pos_embed`, which bakes a
+    # fixed resolution into the trace. Here the embeddings are computed inside the model from the
+    # `height`/`width` runtime tensor inputs using real math, so a single exported model serves any
+    # resolution while matching the original implementation numerically.
+    hidden_states = self.img_in(hidden_states)
+    timestep = timestep.to(hidden_states.dtype)
+
+    encoder_hidden_states = self.txt_norm(encoder_hidden_states)
+    encoder_hidden_states = self.txt_in(encoder_hidden_states)
+
+    if guidance is not None:
+        guidance = guidance.to(hidden_states.dtype) * 1000
+
+    temb = (
+        self.time_text_embed(timestep, hidden_states)
+        if guidance is None
+        else self.time_text_embed(timestep, guidance, hidden_states)
+    )
+
+    image_rotary_emb = _qwenimage_build_rotary_emb(
+        list(self.config.axes_dims_rope),
+        10000,
+        hidden_states.shape[1],
+        height,
+        width,
+        encoder_hidden_states.shape[1],
+        hidden_states.device,
+    )
+
+    batch_size, image_seq_len = hidden_states.shape[:2]
+    image_mask = torch.ones((batch_size, image_seq_len), dtype=torch.bool, device=hidden_states.device)
+    joint_attention_mask = torch.cat([encoder_hidden_states_mask.to(torch.bool), image_mask], dim=1)
+    attention_mask = joint_attention_mask[:, None, None, :]
+
+    for block in self.transformer_blocks:
+        encoder_hidden_states, hidden_states = block(
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_hidden_states_mask=None,
+            temb=temb,
+            image_rotary_emb=image_rotary_emb,
+            joint_attention_kwargs={"attention_mask": attention_mask},
+        )
+
+    hidden_states = self.norm_out(hidden_states, temb)
+    output = self.proj_out(hidden_states)
+    return output
+
+
+class QwenImageTransformerModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        self._model._orig_forward = self._model.forward
+        self._model.forward = types.MethodType(_qwenimage_transformer_forward, self._model)
+        # Python resolves __call__ on the type, so the attention processor class (shared by all blocks)
+        # is patched at the class level rather than per-instance.
+        processor_cls = type(self._model.transformer_blocks[0].attn.processor)
+        self._processor_cls = processor_cls
+        self._orig_processor_call = processor_cls.__call__
+        processor_cls.__call__ = _qwenimage_attn_processor_call
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model._orig_forward
+        del self._model._orig_forward
+        self._processor_cls.__call__ = self._orig_processor_call
+
+
+class QwenImageVaeModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        from diffusers.models.autoencoders.autoencoder_kl_qwenimage import QwenImageUpsample
+
+        # OpenVINO has no "nearest-exact" upsampling op; "nearest" is identical for the integer
+        # scale factor of 2 used here.
+        # Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/autoencoders/autoencoder_kl_qwenimage.py#L151
+        self._patched_upsamplers = []
+        for module in self._model.modules():
+            if isinstance(module, QwenImageUpsample) and module.mode == "nearest-exact":
+                module.mode = "nearest"
+                self._patched_upsamplers.append(module)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for module in self._patched_upsamplers:
+            module.mode = "nearest-exact"
+
+
+class QwenImageTextEncoderModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+        self._model.config._attn_implementation = "sdpa"
+        if is_transformers_version(">=", "4.53"):
+            # starting from 4.53, we get unmatching outputs if we use the boolean mask
+            # (an OpenVINO inconsistency between boolean and float masks)
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+        del self._model.config._orig_attn_implementation
+        if is_transformers_version(">=", "4.53"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
+
+
 def _minicpmv_resampler_forward(self, image_feature, pos_embed, key_padding_mask):
     bs = image_feature.shape[0]
     image_feature = self.kv_proj(image_feature)  # B * L * D
@@ -10751,3 +11041,226 @@ class LTX2TransformerPatcher(ModelPatcher):
         for name, module in self._model.named_modules():
             if name in self._orig_processors and hasattr(module, "set_processor"):
                 module.set_processor(self._orig_processors[name])
+
+
+# ------------------------------------------------------------------------------
+# MuseGlimmer (native transformers VLM) export patchers.
+#
+# The native MuseGlimmer model already applies rotary embeddings with real-valued
+# cos/sin tensors (``apply_rotary_pos_emb`` / ``apply_rotary_pos_emb_vision``), so
+# unlike the earlier flat trust_remote_code "onyx" model there is no complex-RoPE
+# to work around. The language patcher only rewires the forward to consume
+# ``inputs_embeds`` + a legacy KV tuple for the stateful text-generation export.
+# The vision patcher reimplements the encoder over ``pixel_values`` plus the
+# grid-derived tensors (attention masks, window reordering, rotary position ids,
+# bilinear position gathers and the pixel-shuffle permutation) passed as inputs,
+# so the graph is resolution-agnostic and free of the untraceable grid ops.
+# ------------------------------------------------------------------------------
+class MuseGlimmerVisionEmbeddingsModelPatcher(ModelPatcher):
+    """Export the native MuseGlimmer vision stack as one resolution-agnostic graph.
+
+    Reimplements ``vision_tower`` -> ``vision_adapter`` -> ``vision_projection`` ->
+    ``perception_emb_norm`` consuming only ``pixel_values`` and ``image_grid_thw``.
+    All grid-derived tensors (attention masks, rotary position ids, bilinear
+    position gathers, pixel-shuffle permutation) are recomputed *inside* the graph
+    from ``image_grid_thw`` with pure tensor arithmetic, so no ``.tolist()`` /
+    ``int()`` / dynamic-reshape ops bake the resolution and no extra inputs are
+    needed. Window attention is expressed as a block-diagonal equality mask in the
+    original patch order (equivalent to the native reorder-attend-reverse) so the
+    untraceable window-index gather is avoided.
+    """
+
+    def __init__(self, config, model, model_kwargs=None):
+        from transformers.models.muse_glimmer.modeling_muse_glimmer import apply_rotary_pos_emb_vision
+
+        output_names = list(config.outputs.keys())
+
+        def _vision_attention(attn, hidden_states, attention_mask, position_embeddings):
+            seq_length = hidden_states.shape[0]
+            query_states = attn.q_proj(hidden_states).reshape(1, seq_length, -1, attn.head_dim)
+            key_states = attn.k_proj(hidden_states).reshape(1, seq_length, -1, attn.head_dim)
+            value_states = attn.v_proj(hidden_states).reshape(1, seq_length, -1, attn.head_dim)
+
+            cos, sin = position_embeddings
+            query_states, key_states = apply_rotary_pos_emb_vision(query_states, key_states, cos, sin)
+
+            query_states = query_states.transpose(2, 1)
+            key_states = key_states.transpose(2, 1)
+            value_states = value_states.transpose(2, 1)
+
+            attn_weights = torch.matmul(query_states, key_states.transpose(-1, -2)) * attn.scaling
+            attn_weights = attn_weights + attention_mask.to(attn_weights.dtype)
+            attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(
+                query_states.dtype
+            )
+            attn_output = torch.matmul(attn_weights, value_states)
+            attn_output = attn_output.transpose(2, 1).reshape(seq_length, -1)
+            return attn.proj(attn_output)
+
+        model.__orig_forward = model.forward
+
+        def image_embed_forward(self, pixel_values, image_grid_thw):
+            vision_model = self.model
+            vision_tower = vision_model.vision_tower
+            patch_embedder = vision_tower.patch_embedder
+            cfg = vision_tower.config
+            device = pixel_values.device
+
+            # --- per-patch grid coordinates (vectorised over all images/frames) ---
+            grid = image_grid_thw
+            counts = grid[:, 0] * grid[:, 1] * grid[:, 2]
+            per_h = torch.repeat_interleave(grid[:, 1], counts)
+            per_w = torch.repeat_interleave(grid[:, 2], counts)
+            img_start = torch.repeat_interleave(torch.nn.functional.pad(counts.cumsum(0)[:-1], (1, 0)), counts)
+            seq_len = pixel_values.shape[0]
+            ar = torch.arange(seq_len, device=device)
+            within = ar - img_start
+            hw = per_h * per_w
+            frame = within // hw
+            within_frame = within - frame * hw
+            row = within_frame // per_w
+            col = within_frame - row * per_w
+            # absolute start index of this patch's (image, frame) segment -> unique full-attn id
+            seg_id = img_start + frame * hw
+            window = cfg.pos_emb_height  # window size in patches (spatial_merge_size == 1)
+            win_r = row // window
+            win_c = col // window
+
+            # --- learned position-embedding bilinear resample (raster order) ---
+            # Native uses a custom grid_sample(align_corners=False, padding="zeros")
+            # equivalent: half-pixel sample centres + zeroed out-of-bounds corners.
+            side = patch_embedder.num_grid_per_side
+            h_grid = (row.float() + 0.5) * (side / per_h.float()) - 0.5
+            w_grid = (col.float() + 0.5) * (side / per_w.float()) - 0.5
+            h_floor = torch.floor(h_grid)
+            w_floor = torch.floor(w_grid)
+            h_ceil = h_floor + 1
+            w_ceil = w_floor + 1
+            h_frac = h_grid - h_floor
+            w_frac = w_grid - w_floor
+            h_fv = (h_floor >= 0) & (h_floor <= side - 1)
+            h_cv = (h_ceil >= 0) & (h_ceil <= side - 1)
+            w_fv = (w_floor >= 0) & (w_floor <= side - 1)
+            w_cv = (w_ceil >= 0) & (w_ceil <= side - 1)
+            h_fl = h_floor.clamp(0, side - 1).long()
+            h_cl = h_ceil.clamp(0, side - 1).long()
+            w_fl = w_floor.clamp(0, side - 1).long()
+            w_cl = w_ceil.clamp(0, side - 1).long()
+            bilinear_indices = torch.stack(
+                [h_fl * side + w_fl, h_fl * side + w_cl, h_cl * side + w_fl, h_cl * side + w_cl], dim=1
+            )
+            bilinear_weights = torch.stack(
+                [
+                    (1 - h_frac) * (1 - w_frac) * (h_fv & w_fv),
+                    (1 - h_frac) * w_frac * (h_fv & w_cv),
+                    h_frac * (1 - w_frac) * (h_cv & w_fv),
+                    h_frac * w_frac * (h_cv & w_cv),
+                ],
+                dim=1,
+            )
+
+            # --- additive attention masks (block-diagonal, original patch order) ---
+            neg = torch.finfo(pixel_values.dtype).min
+            same_seg = seg_id[:, None] == seg_id[None, :]
+            full_mask = torch.zeros(seq_len, seq_len, dtype=pixel_values.dtype, device=device).masked_fill(
+                ~same_seg, neg
+            )[None, None]
+            same_win = same_seg & (win_r[:, None] == win_r[None, :]) & (win_c[:, None] == win_c[None, :])
+            window_mask = torch.zeros(seq_len, seq_len, dtype=pixel_values.dtype, device=device).masked_fill(
+                ~same_win, neg
+            )[None, None]
+
+            # --- rotary position ids (raster (h, w) flipped + 1, matches native) ---
+            position_ids = torch.stack([row, col], dim=-1).flip(-1) + 1
+            position_ids = position_ids[None]
+
+            # --- pixel-shuffle gather (merge_size x merge_size block reorder) ---
+            factor = cfg.merge_size
+            blocks_w = per_w // factor
+            ps_in_col = within_frame % factor
+            ps_in_row = (within_frame // factor) % factor
+            ps_block_col = (within_frame // (factor * factor)) % blocks_w
+            ps_block_row = within_frame // (factor * factor * blocks_w)
+            ps_src = (ps_block_row * factor + ps_in_row) * per_w + (ps_block_col * factor + ps_in_col)
+            pixel_shuffle_index = seg_id + ps_src
+
+            # --- encoder ---
+            target_dtype = patch_embedder.patch_embedding.weight.dtype
+            patch_embeds = patch_embedder.patch_embedding(pixel_values.to(dtype=target_dtype))
+            embeddings = patch_embeds.reshape(seq_len, -1)
+            pos_embeds = (
+                patch_embedder.position_embedding_table(bilinear_indices) * bilinear_weights[:, :, None]
+            ).sum(1)
+            hidden_states = embeddings + pos_embeds.to(embeddings.dtype)
+
+            hidden_states = vision_tower.ln_pre(hidden_states)
+            position_embeddings = vision_tower.rotary_emb(hidden_states, position_ids)
+
+            layer_types = cfg.layer_types
+            for i, block in enumerate(vision_tower.layers):
+                mask = full_mask if layer_types[i] == "full_attention" else window_mask
+                hidden_states = hidden_states + _vision_attention(
+                    block.attn, block.norm1(hidden_states), mask, position_embeddings
+                )
+                hidden_states = hidden_states + block.mlp(block.norm2(hidden_states))
+
+            hidden_states = vision_tower.ln_post(hidden_states)
+
+            dim = hidden_states.shape[-1]
+            hidden_states = hidden_states[pixel_shuffle_index]
+            hidden_states = (
+                hidden_states.view(-1, factor * factor, dim).permute(0, 2, 1).reshape(-1, dim * factor * factor)
+            )
+
+            vision_features = vision_model.vision_adapter(hidden_states)
+            vision_features = vision_model.vision_projection(vision_features)
+            vision_features = vision_model.perception_emb_norm(vision_features)
+            return {output_names[0]: vision_features}
+
+        model.forward = types.MethodType(image_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class MuseGlimmerLanguageModelPatcher(OVDecoderModelPatcher):
+    """Patch the MuseGlimmer language model to consume ``inputs_embeds`` + a legacy
+    KV tuple for the stateful text-generation export (native real-valued RoPE)."""
+
+    def __init__(self, config, model, model_kwargs=None):
+        model.__orig_forward = model.forward
+
+        def forward_wrap(
+            self,
+            attention_mask,
+            position_ids=None,
+            past_key_values=None,
+            inputs_embeds=None,
+            input_ids=None,
+            use_cache=True,
+        ):
+            if is_transformers_version("<", "5"):
+                new_past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                new_past_key_values = DynamicCache(past_key_values)
+
+            result = self.__orig_forward(
+                input_ids=input_ids,
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=new_past_key_values,
+                use_cache=use_cache,
+            )
+            if past_key_values is not None:
+                result["past_key_values"] = postprocess_past_key_values(result["past_key_values"])
+            return result
+
+        model.forward = types.MethodType(forward_wrap, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
