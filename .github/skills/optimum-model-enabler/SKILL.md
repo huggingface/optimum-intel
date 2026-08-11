@@ -144,6 +144,10 @@ supported by the main test matrix, also add its focused tests to
 `.github/workflows/test_openvino_preview_models.yml`. Install the verified
 required Transformers version in a dedicated step and run only that model's
 tests, so existing models continue to use their supported versions.
+Compare the model's complete supported version interval with the actual
+versions in the main CI matrix. A model belongs in the preview workflow when
+none of those matrix versions is compatible, even if its required version is
+inside Optimum Intel's broader package dependency range.
 The workflow change must be additive: never rename, replace, or delete an
 existing model's validation step to add the requested model.
 
@@ -153,11 +157,15 @@ the existing tests for the closest supported architecture:
 
 - for models with MoE blocks, verify the applicable transformation such as
   `ConvertTiledMoEBlockToGatherMatmuls`;
-- for models with RoPE blocks, verify `RoPEFusion`.
+- for models with RoPE blocks, add the architecture to the appropriate
+  `ARCH_TO_EXPECTED_TRANSFORMATIONS` version guard and verify `RoPEFusion`.
 
-Add these tests only when the architecture actually exercises the corresponding
-pattern. Reuse existing transformation-test helpers and patterns instead of
-duplicating equivalent test logic.
+Treat this transformation coverage as required when the architecture exercises
+the corresponding pattern. Do not omit it silently. If an expected
+transformation cannot apply, record the exported-graph evidence and exact reason
+in the handoff and leave the support incomplete for maintainer review. Reuse
+existing transformation-test helpers and patterns instead of duplicating
+equivalent test logic.
 
 For a new architecture, invoke the **tiny-model-creator** agent and follow the
 Kokoro pattern in `tests/openvino/utils_tests.py`:
