@@ -20,7 +20,7 @@ from pathlib import Path
 import nncf
 import openvino as ov
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
 from utils_tests import MODEL_NAMES
 
 from optimum.exporters.openvino import export_from_model
@@ -59,13 +59,8 @@ class DFlashExportTest(unittest.TestCase):
             resolved_outputs.add(identity)
         return locators
 
-    @parameterized.expand(("qwen3", "qwen3_moe", "qwen3_5", "qwen3_5_moe"))
+    @parameterized.expand(("qwen3", "qwen3_moe"))
     def test_export_hidden_state_locators_for_representative_decoder_models(self, model_type):
-        if model_type in {"qwen3_5", "qwen3_5_moe"} and not (
-            is_transformers_version(">=", "5.2.0") and is_transformers_version("<=", "5.2.99")
-        ):
-            self.skipTest("Qwen3.5 hidden-state locator coverage requires Transformers >= 5.2.0 and <= 5.2.99")
-
         with TemporaryDirectory() as tmpdirname:
             tmpdirname = Path(tmpdirname)
             annotated_dir = tmpdirname / "annotated"
@@ -79,6 +74,30 @@ class DFlashExportTest(unittest.TestCase):
             )
 
             annotated_model = ov.Core().read_model(annotated_dir / "openvino_model.xml")
+            self._assert_hidden_state_rt_info_is_valid(annotated_model)
+
+    @parameterized.expand(("qwen3_5", "qwen3_5_moe", "gemma4"))
+    def test_export_hidden_state_locators_for_representative_multi_modal_models(self, model_type):
+        if model_type in {"qwen3_5", "qwen3_5_moe"} and not (
+            is_transformers_version(">=", "5.2.0") and is_transformers_version("<=", "5.2.99")
+        ):
+            self.skipTest("Qwen3.5 hidden-state locator coverage requires Transformers >= 5.2.0 and <= 5.2.99")
+        if model_type == "gemma4" and not is_transformers_version(">=", "5.5.0"):
+            self.skipTest("Gemma 4 hidden-state locator coverage requires Transformers >= 5.5.0")
+
+        with TemporaryDirectory() as tmpdirname:
+            tmpdirname = Path(tmpdirname)
+            annotated_dir = tmpdirname / "annotated"
+            model = AutoModelForImageTextToText.from_pretrained(MODEL_NAMES[model_type])
+            export_from_model(
+                model=model,
+                output=annotated_dir,
+                task="image-text-to-text",
+                preprocessors=None,
+                stateful=False,
+            )
+
+            annotated_model = ov.Core().read_model(annotated_dir / "openvino_language_model.xml")
             self._assert_hidden_state_rt_info_is_valid(annotated_model)
 
     def test_hidden_state_locators_survive_weight_compression(self):
