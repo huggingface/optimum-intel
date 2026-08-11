@@ -2235,4 +2235,3 @@ class DummyMuseGlimmerVisionInputGenerator(DummyVisionInputGenerator):
                 return grid.numpy()
             return grid
         raise ValueError(f"Unsupported input name {input_name}")
-

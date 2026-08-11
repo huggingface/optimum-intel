@@ -7418,16 +7418,12 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
         **kwargs,
     ):
         inputs_embeds = self.get_text_embeddings(input_ids)
-        inputs_embeds = (
-            torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
-        )
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
         is_prefill = input_ids is not None and input_ids.shape[1] != 1
         # Images and videos share the same vision graph (video_grid_thw plays the role
         # of image_grid_thw); each modality is scattered into its own placeholder token.
         if is_prefill and pixel_values is not None:
-            image_embeds = self.get_vision_embeddings(
-                pixel_values, input_ids=input_ids, image_grid_thw=image_grid_thw
-            )
+            image_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, image_grid_thw=image_grid_thw)
             if image_embeds is not None:
                 image_mask = input_ids == self.config.image_token_id
                 inputs_embeds[image_mask] = image_embeds.to(inputs_embeds.dtype)
