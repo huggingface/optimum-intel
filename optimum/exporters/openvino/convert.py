@@ -153,6 +153,7 @@ def _save_model(
         "qwen3_5_moe",
         "qwen3_5_text",
         "qwen3_5_moe_text",
+        "gemma4",
     }:
         add_hidden_states_rt_info(source_model, model, config)
 
