@@ -67,3 +67,21 @@ For INT8 and INT4 models, remember that compressed operations are quantized
 while uncompressed operations still use floating-point tensors. Diagnose the
 floating residual path separately when a quantized model exposes an
 `f16`/`bf16`/`f32` mismatch.
+
+## Quantized export environment preflight
+
+Before attributing an INT8/INT4 export failure to the requested model:
+
+1. Record `python`, OpenVINO, NNCF, NumPy, and Optimum Intel versions from the
+   exact export interpreter.
+2. Run `nncf.compress_weights` on a tiny unrelated OpenVINO MatMul model.
+3. If the same error reproduces, classify it as an environment failure and do
+   not patch model-support source.
+4. If OpenVINO is a nightly `.dev` build, reproduce the dependency pairing in
+   `.github/workflows/test_openvino_nightly.yml` by placing NNCF from
+   `https://github.com/openvinotoolkit/nncf.git` in an isolated overlay. Prepend
+   the overlay to `PYTHONPATH`, record its resolved revision, and rerun the
+   smoke test before the real INT8 and INT4 exports.
+5. Do not modify the shared environment, downgrade unrelated core packages, or
+   try arbitrary version combinations. If the official nightly pairing still
+   fails, preserve the command and traceback as an environment blocker.

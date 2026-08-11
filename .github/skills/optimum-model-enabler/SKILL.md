@@ -1,9 +1,6 @@
 ---
 name: optimum-model-enabler
 description: "Add and validate support for a Hugging Face model architecture in the Optimum Intel OpenVINO backend, including exporter configuration, patching, repository tests, and documentation."
-disable-model-invocation: false
-user-invocable: true
-argument-hint: "<model_id> <task>"
 ---
 
 # Optimum Intel Model Enabler
@@ -92,6 +89,13 @@ Do not copy an existing implementation into a new model-specific helper merely
 to change names or small constants. When new code is required, document why the
 closest existing implementation cannot be reused safely.
 
+For VLMs, compare the requested behavior with the existing language-model
+patchers, MLA/attention helpers, vision rotary/window-index helpers, multimodal
+embedding insertion, generation input preparation, and dummy generators before
+adding a new implementation. An empty subclass or a copied method body is not a
+model integration; use the existing class directly, subclass only the differing
+behavior, or extract the common operation into one shared helper.
+
 Depending on the reproduced failure, update only the required integration
 points:
 
@@ -140,6 +144,8 @@ supported by the main test matrix, also add its focused tests to
 `.github/workflows/test_openvino_preview_models.yml`. Install the verified
 required Transformers version in a dedicated step and run only that model's
 tests, so existing models continue to use their supported versions.
+The workflow change must be additive: never rename, replace, or delete an
+existing model's validation step to add the requested model.
 
 For architectures that use supported graph transformations, add the
 corresponding coverage in `tests/openvino/test_transformations.py` by following
@@ -215,6 +221,16 @@ Follow the task-specific end-to-end validation instructions supplied for
 `<task>`. Use [inference-validation.md](inference-validation.md) for common
 accuracy-diagnosis guidance.
 
+Before INT8 or INT4 real-model export, run a small `nncf.compress_weights`
+smoke test on an unrelated OpenVINO MatMul model in the exact export
+interpreter. Record the OpenVINO, NNCF, NumPy, Python, and Optimum Intel
+versions. If the smoke test fails, repair that isolated validation environment
+before changing model code. In particular, when OpenVINO is a nightly `.dev`
+build, follow `.github/workflows/test_openvino_nightly.yml`: test it with NNCF
+from `https://github.com/openvinotoolkit/nncf.git` in an isolated overlay, then
+rerun the smoke test and both quantized exports. Preserve the base environment,
+record the resolved NNCF revision, and do not try arbitrary dependency versions.
+
 Loading, saving, conversion alone, or a forward-only call does not prove
 support. If quality differs, compare preprocessing tensors, submodel outputs,
 embedding insertion, logits, and task outputs to find the first divergence.
@@ -228,6 +244,12 @@ Inspect the complete diff before reporting success. Search the touched areas
 for existing helpers, patchers, configurations, and tests with the same
 behavior as newly added code. Replace semantic duplicates with reuse,
 subclassing, configuration, or a minimal shared generalization when safe, and
-remove now-redundant code. Then remove scratch files, debug prints, absolute
-local paths, and unrelated edits. Do not commit, push, or open a pull request
-unless explicitly requested.
+remove now-redundant code. Inspect every deletion against the current upstream
+base. Supported-model lists, registry tables, repository-test parameter lists,
+documentation model lists, and Preview Models workflow steps are additive for
+a new architecture: restore any unrelated model, test, import, or workflow line
+that was removed or replaced. Keep dependency workarounds out of global imports;
+never add a broad `except Exception` fallback merely to make this model's
+environment importable. Then remove scratch files, debug prints, absolute local
+paths, and unrelated edits. Do not commit, push, or open a pull request unless
+explicitly requested.

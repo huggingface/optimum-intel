@@ -38,6 +38,11 @@ missing required input before proceeding.
    helpers, patchers, configuration, and test logic. Reuse or minimally
    generalize existing repository code and remove duplicate code introduced by
    the change whenever behavior can be preserved.
+7. Inspect every deleted line against the current upstream base. New model
+   registrations, supported-model tables, test parameters, documentation, and
+   Preview Models workflow steps must be additive; never replace another model
+   or remove unrelated coverage. Keep dependency experiments in isolated
+   environments rather than global source imports.
 
 Do not report support as complete when required tests fail, are deselected, or
 are blocked by an invalid/inaccessible tiny fixture. Repair the implementation
@@ -63,4 +68,7 @@ Report:
 - Preserve existing behavior and keep changes scoped to the requested model.
 - Reuse existing helpers and implementations instead of adding semantically
   equivalent model-specific copies.
+- Do not return success with an empty subclass, an exact copy of an existing
+  method, removed support for another architecture, or a replaced preview-test
+  step.
 - Do not commit, push, or create a pull request unless explicitly requested.
