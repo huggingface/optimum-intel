@@ -2270,6 +2270,7 @@ class MuseGlimmerTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     """
 
     DEFAULT_ONNX_OPSET = 14
+    MIN_TRANSFORMERS_VERSION = "5.15.0"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -2290,6 +2291,7 @@ class MuseGlimmerOpenVINOConfig(BaseVLMOpenVINOConfig):
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyMuseGlimmerVisionInputGenerator,)
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    MIN_TRANSFORMERS_VERSION = "5.15.0"
 
     def __init__(
         self,

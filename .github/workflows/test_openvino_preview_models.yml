@@ -71,3 +71,8 @@ jobs:
           uv pip install "transformers>=5.10,<5.11"
           pytest tests/openvino/${{ matrix.test-pattern }} -k gemma4_unified --durations=0
 
+      - name: Muse-Glimmer Validation
+        run: |
+          uv pip install "transformers>=5.15,<5.16"
+          pytest tests/openvino/${{ matrix.test-pattern }} -k "muse_glimmer" --durations=0
+
