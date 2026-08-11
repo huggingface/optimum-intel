@@ -697,6 +697,7 @@ ARCH_TO_MODEL_CLASS = {
     "qwen3_5_moe": "OVModelForVisualCausalLM",
     "gemma4_moe": "OVModelForVisualCausalLM",
     "gemma4_unified": "OVModelForVisualCausalLM",
+    "muse_glimmer": "OVModelForVisualCausalLM",
     "qwen3_omni_moe": "OVModelForMultimodalLM",
     "stable-diffusion": "OVDiffusionPipeline",
     "whisper": "OVModelForSpeechSeq2Seq",
