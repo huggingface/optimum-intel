@@ -125,6 +125,7 @@ class ExportModelTest(unittest.TestCase):
         "gemma3n": OVModelForVisualCausalLM,
         "flux.2-klein": OVFlux2KleinPipeline,
         "qwen3_omni_moe": OVModelForMultimodalLM,
+        "muse_glimmer": OVModelForVisualCausalLM,
     }
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = {
@@ -168,6 +169,10 @@ class ExportModelTest(unittest.TestCase):
 
         if model_type in REMOTE_CODE_MODELS:
             loading_kwargs["trust_remote_code"] = True
+
+        if model_type == "muse_glimmer":
+            # the tiny checkpoint is stored in bfloat16, force fp32 so tracing does not mix dtypes
+            loading_kwargs["dtype"] = torch.float32
 
         if library_name == "timm":
             model_class = TasksManager.get_model_class_for_task(task, library=library_name)
