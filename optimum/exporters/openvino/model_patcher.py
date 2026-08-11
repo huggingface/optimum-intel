@@ -11111,9 +11111,7 @@ class MuseGlimmerVisionEmbeddingsModelPatcher(ModelPatcher):
             counts = grid[:, 0] * grid[:, 1] * grid[:, 2]
             per_h = torch.repeat_interleave(grid[:, 1], counts)
             per_w = torch.repeat_interleave(grid[:, 2], counts)
-            img_start = torch.repeat_interleave(
-                torch.nn.functional.pad(counts.cumsum(0)[:-1], (1, 0)), counts
-            )
+            img_start = torch.repeat_interleave(torch.nn.functional.pad(counts.cumsum(0)[:-1], (1, 0)), counts)
             seq_len = pixel_values.shape[0]
             ar = torch.arange(seq_len, device=device)
             within = ar - img_start
@@ -11210,8 +11208,8 @@ class MuseGlimmerVisionEmbeddingsModelPatcher(ModelPatcher):
 
             dim = hidden_states.shape[-1]
             hidden_states = hidden_states[pixel_shuffle_index]
-            hidden_states = hidden_states.view(-1, factor * factor, dim).permute(0, 2, 1).reshape(
-                -1, dim * factor * factor
+            hidden_states = (
+                hidden_states.view(-1, factor * factor, dim).permute(0, 2, 1).reshape(-1, dim * factor * factor)
             )
 
             vision_features = vision_model.vision_adapter(hidden_states)
@@ -11266,5 +11264,3 @@ class MuseGlimmerLanguageModelPatcher(OVDecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
-
-
