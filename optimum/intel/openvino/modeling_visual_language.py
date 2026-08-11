@@ -7363,7 +7363,108 @@ if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.rot_pos_emb = Qwen3_5VisionModel.rot_pos_emb
 
 
+class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
+    """OpenVINO runtime for the native MuseGlimmer VLM.
+
+    The vision stack is exported as a single graph that consumes flattened patches
+    ``pixel_values`` ``[num_patches, patch_dim]`` plus ``image_grid_thw``
+    ``[num_images, 3]`` and returns the projected per-token features
+    ``[num_out_tokens, text_hidden]`` (vision tower -> adapter -> projection ->
+    perception norm, with the 2x2 patch merge). Features are scattered into the
+    positions of the ``<image>`` / ``<video>`` tokens in the prompt.
+    """
+
+    def get_experts_implementation(self):
+        # transformers>=5.15 `generate` queries the experts implementation to decide
+        # on a decode-time MoE kernel swap; that swap is a no-op on CPU (OpenVINO),
+        # since the MoE kernel is baked into the exported graph.
+        return "openvino_impl"
+
+    def set_experts_implementation(self, experts_implementation):
+        # No-op: the MoE kernel is baked into the exported OpenVINO graph.
+        return
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, image_grid_thw=None, **kwargs):
+        # Vision features are only consumed on the prefill step.
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        if pixel_values is None:
+            return None
+
+        pixel_values = pixel_values if isinstance(pixel_values, torch.Tensor) else torch.as_tensor(pixel_values)
+        pixel_values = pixel_values.float()
+        if image_grid_thw is None:
+            raise ValueError("image_grid_thw is required for MuseGlimmer vision embeddings.")
+        grid = image_grid_thw if isinstance(image_grid_thw, torch.Tensor) else torch.as_tensor(image_grid_thw)
+        # The exported graph recomputes every grid-derived tensor internally, so it
+        # only needs the flattened patches and image_grid_thw.
+        feats = self.vision_embeddings(pixel_values=pixel_values, image_grid_thw=grid).last_hidden_state
+        return torch.from_numpy(feats) if isinstance(feats, np.ndarray) else feats
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        **kwargs,
+    ):
+        inputs_embeds = self.get_text_embeddings(input_ids)
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        is_prefill = input_ids is not None and input_ids.shape[1] != 1
+        # Images and videos share the same vision graph (video_grid_thw plays the role
+        # of image_grid_thw); each modality is scattered into its own placeholder token.
+        if is_prefill and pixel_values is not None:
+            image_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, image_grid_thw=image_grid_thw)
+            if image_embeds is not None:
+                image_mask = input_ids == self.config.image_token_id
+                inputs_embeds[image_mask] = image_embeds.to(inputs_embeds.dtype)
+        if is_prefill and pixel_values_videos is not None:
+            video_embeds = self.get_vision_embeddings(
+                pixel_values_videos, input_ids=input_ids, image_grid_thw=video_grid_thw
+            )
+            if video_embeds is not None:
+                video_mask = input_ids == self.config.video_token_id
+                inputs_embeds[video_mask] = video_embeds.to(inputs_embeds.dtype)
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+
+        content = []
+        if image is not None:
+            content.append({"type": "image"})
+        if video is not None:
+            content.append({"type": "video"})
+        content.append({"type": "text", "text": text})
+        messages = [{"role": "user", "content": content}]
+        prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = processor(
+            text=prompt,
+            images=[image] if image is not None else None,
+            videos=[video] if video is not None else None,
+            return_tensors="pt",
+        )
+        return inputs
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
+    "muse_glimmer": _OVMuseGlimmerForCausalLM,
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
     "llava_next_video": _OVLlavaNextVideoForCausalLM,
