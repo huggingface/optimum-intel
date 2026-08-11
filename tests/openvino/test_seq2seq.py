@@ -600,6 +600,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5",
         "qwen3_5_moe",
         "qwen3_omni_moe",
+        "mistral3",
     ]
     SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl", "qwen2_5_vl", "qwen3_vl", "videochat_flash_qwen"]
     SUPPORT_AUDIO = ["qwen3_omni_moe"]
@@ -661,6 +662,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "qwen3_5",
             "qwen3_5_moe",
             "gemma4_unified",
+            "mistral3",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -758,6 +760,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             model_id, trust_remote_code=trust_remote_code, **loading_kwargs
         )
         transformers_model.eval()
+        # the tiny mistral3 checkpoint is stored in 16-bit, which clashes with the fp32 pixel_values
+        # produced by the processor; cast the reference model to fp32 so its vision tower runs on CPU
+        if model_arch == "mistral3":
+            transformers_model = transformers_model.float()
         if "internvl_chat" in model_arch:
             tokenizer = AutoTokenizer.from_pretrained(model_id, trast_remote_code=trust_remote_code)
             img_context_token_id = tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")
