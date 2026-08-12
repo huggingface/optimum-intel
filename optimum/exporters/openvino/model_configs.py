@@ -41,6 +41,8 @@ from optimum.exporters.openvino.input_generators import (
     ChatGLM2DummyPastKeyValuesGenerator,
     DeciDummyPastKeyValuesGenerator,
     DummyAudioPhi4MMInputGenerator,
+    DummyDeepseekOCR2VisionInputGenerator,
+    DummyDeepseekOCR2VisionTilesInputGenerator,
     DummyFluxTextInputGenerator,
     DummyFluxTransformerInputGenerator,
     DummyGemma4UnifiedVisionInputGenerator,
@@ -4854,29 +4856,6 @@ class DeepseekOCR2ConfigBehavior(str, enum.Enum):
     VISION_EMBEDDINGS = "vision_embeddings"
     VISION_EMBEDDINGS_TILES = "vision_embeddings_tiles"
     TEXT_EMBEDDINGS = "text_embeddings"
-
-
-class DummyDeepseekOCR2VisionInputGenerator(DummyVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("pixel_values",)
-
-    def __init__(self, task, normalized_config, batch_size=1, num_channels=3, image_size=1024, **kwargs):
-        self.task = task
-        self.num_channels = num_channels
-        self.image_size = image_size
-        self.batch_size = batch_size
-        self.height = self.width = image_size
-
-    def generate(self, input_name, framework="pt", int_dtype="int64", float_dtype="fp32"):
-        return self.random_float_tensor(
-            shape=[self.batch_size, self.num_channels, self.height, self.width],
-            framework=framework,
-            dtype=float_dtype,
-        )
-
-
-class DummyDeepseekOCR2VisionTilesInputGenerator(DummyDeepseekOCR2VisionInputGenerator):
-    def __init__(self, task, normalized_config, batch_size=1, num_channels=3, image_size=768, **kwargs):
-        super().__init__(task, normalized_config, batch_size=batch_size, num_channels=num_channels, image_size=768)
 
 
 @register_in_tasks_manager("deepseek_ocr2", *["image-text-to-text"], library_name="transformers")

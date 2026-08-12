@@ -2235,3 +2235,17 @@ class DummyMuseGlimmerVisionInputGenerator(DummyVisionInputGenerator):
                 return grid.numpy()
             return grid
         raise ValueError(f"Unsupported input name {input_name}")
+
+
+class DummyDeepseekOCR2VisionInputGenerator(DummyVisionInputGenerator):
+    def __init__(self, task, normalized_config, batch_size=1, num_channels=3, **kwargs):
+        super().__init__(
+            task, normalized_config, batch_size=batch_size, num_channels=num_channels, width=1024, height=1024
+        )
+
+
+class DummyDeepseekOCR2VisionTilesInputGenerator(DummyVisionInputGenerator):
+    def __init__(self, task, normalized_config, batch_size=1, num_channels=3, **kwargs):
+        super().__init__(
+            task, normalized_config, batch_size=batch_size, num_channels=num_channels, width=768, height=768
+        )
