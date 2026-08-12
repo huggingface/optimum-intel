@@ -4772,6 +4772,7 @@ class Qwen3OmniMoeTalkerLanguageModelPatcher(_Qwen3OmniMoeLMPatcherMixin, OVDeco
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
 
+
 class Qwen3OmniMoeCodePredictorPatcher(OVDecoderModelPatcher):
     # Single-step CodePredictor graph: one call runs one inner step and grows the KV cache.
     # The Python-side loop (OVCodePredictorDecoder) invokes it num_code_groups-1 times.
@@ -4962,103 +4963,6 @@ class DeepseekOCR2VisionEmbeddingsPatcher(ModelPatcher):
             return {output_name: embeds}
 
         self.patched_forward = patched_forward
-
-
-# Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-Gemma-3/src/transformers/models/gemma3/modeling_gemma3.py#L1147
-def _gemma3_mm_update_causal_mask(
-    self, attention_mask, token_type_ids, past_key_values, cache_position, input_tensor, is_training: bool = False
-):
-    if attention_mask is not None and attention_mask.dim() == 4:
-        # In this case we assume that the mask comes already in inverted
-        # form and requires no inversion or slicing.
-        return attention_mask
-        model_kwargs: Optional[Dict[str, Any]] = None,
-    ):
-        code_predictor = model.talker.code_predictor
-        # Dummy inputs are float32; upcasting the module avoids dtype mismatches during tracing.
-        code_predictor.float()
-
-        # Per-step lm_head / codec_embedding are selected by a runtime `step` index, so their
-        # weights are stacked into a single tensor that index_select can gather from during tracing.
-        stacked_heads = torch.stack([head.weight for head in code_predictor.lm_head])
-        stacked_codec_embeds = torch.stack([emb.weight for emb in code_predictor.model.codec_embedding])
-
-        def _seeded_uniform(seed, shape, dtype, device):
-            # Traceable PRNG: pure arithmetic on the seed tensor, no CPU fallback.
-            # Emits a (0, 1) uniform tensor of the requested shape; identical seeds
-            # produce identical draws run to run, independent of batch or device state.
-            idx = torch.arange(shape[-1], device=device, dtype=torch.float32)
-            seed_f = seed.to(torch.float32)
-            # Two-term hash keeps correlations low across adjacent indices.
-            raw = torch.sin(seed_f * 12.9898 + idx * 78.233) * 43758.5453
-            u = raw - torch.floor(raw)  # fractional part ~ uniform(0, 1)
-            return u.clamp(min=1e-20, max=1.0 - 1e-20).to(dtype).expand(shape)
-
-        def _gumbel_sample(logits, top_k, seed):
-            # argmax(logits + Gumbel(0,1)) ~ Categorical(softmax(logits)). Top-k masking uses
-            # sort + index_select so top_k can be a runtime int64 tensor (torch.topk requires
-            # a Python int for k, which breaks tracing).
-            sorted_logits, _ = torch.sort(logits, dim=-1, descending=True)
-            top_k_idx = torch.clamp(top_k.reshape(1) - 1, min=0)
-            threshold = torch.index_select(sorted_logits, -1, top_k_idx)
-            logits = torch.where(logits < threshold, torch.full_like(logits, float("-inf")), logits)
-            u = _seeded_uniform(seed, logits.shape, logits.dtype, logits.device)
-            gumbel = -torch.log(-torch.log(u))
-            return (logits + gumbel).argmax(dim=-1)
-
-        def cp_forward(
-            self,
-            inputs_embeds,
-            attention_mask,
-            position_ids,
-            step,
-            seed,
-            temperature,
-            top_k,
-            past_key_values=None,
-            **kwargs,
-        ):
-            # inputs_embeds: prefill [B, 2, hidden] = concat(prefix_hidden[:, -1:], first_code_embed),
-            #                decode  [B, 1, hidden] = previous step's codec embedding.
-            # step: scalar int64 index into lm_head / codec_embedding; seed: scalar int64;
-            # temperature: scalar float32; top_k: scalar int64.
-
-            # KV cache passed in as legacy tuples; wrapped for the Transformers 5.x DynamicCache API.
-            pkv = DynamicCache(past_key_values)
-
-            outputs = self.talker.code_predictor.model(
-                inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                use_cache=True,
-                past_key_values=pkv,
-            )
-            hidden_states = outputs.last_hidden_state
-            present = postprocess_past_key_values(outputs.past_key_values)
-
-            # Gather the per-step lm_head / codec_embedding weights via the runtime step index.
-            step_idx = step.reshape(1)
-            head_weight = torch.index_select(stacked_heads, 0, step_idx).squeeze(0)
-            embed_weight = torch.index_select(stacked_codec_embeds, 0, step_idx).squeeze(0)
-
-            # Original: self.lm_head[step](hidden_states), then torch.multinomial() sampling.
-            step_logits = torch.nn.functional.linear(hidden_states[:, -1, :], head_weight)
-            step_logits = step_logits / torch.clamp(temperature, min=1e-6)
-            token = _gumbel_sample(step_logits, top_k, seed)
-
-            # Original: self.model.codec_embedding[step](token). Emitted so the caller can both
-            # feed it as the next step's input and accumulate it into codec_hiddens_sum.
-            token_embed = torch.nn.functional.embedding(token, embed_weight).unsqueeze(1)
-            code = token.unsqueeze(-1)  # [B, 1]
-            return (code, token_embed, present)
-
-        model.__orig_forward = model.forward
-        model.forward = types.MethodType(cp_forward, model)
-        super().__init__(config, model, model_kwargs)
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-        self._model.forward = self._model.__orig_forward
 
 
 class Qwen3OmniMoeCode2WavPatcher(ModelPatcher):
