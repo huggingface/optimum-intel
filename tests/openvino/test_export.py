@@ -36,6 +36,7 @@ from optimum.intel import (
     OVFlux2KleinPipeline,
     OVFluxPipeline,
     OVLatentConsistencyModelPipeline,
+    OVLTX2Pipeline,
     OVLTXPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
@@ -53,6 +54,7 @@ from optimum.intel import (
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
     OVModelForZeroShotImageClassification,
+    OVQwenImagePipeline,
     OVSamModel,
     OVStableDiffusion3Pipeline,
     OVStableDiffusionPipeline,
@@ -94,7 +96,9 @@ class ExportModelTest(unittest.TestCase):
         "clip": OVModelForZeroShotImageClassification,
         "stable-diffusion-3": OVStableDiffusion3Pipeline,
         "flux": OVFluxPipeline,
+        "qwenimage": OVQwenImagePipeline,
         "ltx-video": OVLTXPipeline,
+        "ltx2": OVLTX2Pipeline,
         "kokoro": OVModelForTextToSpeechSeq2Seq,
         "cohere2": OVModelForCausalLM,
         "granitemoehybrid": OVModelForCausalLM,
@@ -103,6 +107,7 @@ class ExportModelTest(unittest.TestCase):
         "qwen3": OVModelForFeatureExtraction,
         "zamba2": OVModelForCausalLM,
         "exaone4": OVModelForCausalLM,
+        "ouro": OVModelForCausalLM,
         "lfm2": OVModelForCausalLM,
         "afmoe": OVModelForCausalLM,
         "qwen3_next": OVModelForCausalLM,
@@ -120,13 +125,18 @@ class ExportModelTest(unittest.TestCase):
         "gemma3n": OVModelForVisualCausalLM,
         "flux.2-klein": OVFlux2KleinPipeline,
         "qwen3_omni_moe": OVModelForMultimodalLM,
+        "muse_glimmer": OVModelForVisualCausalLM,
     }
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = {
         model_type: model_cls
         for model_type, model_cls in SUPPORTED_ARCHITECTURES.items()
         if TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type)
-        in get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
+        in (
+            get_supported_model_for_library("transformers")
+            | get_supported_model_for_library("diffusers")
+            | get_supported_model_for_library("funasr")
+        )
     }
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
@@ -136,6 +146,7 @@ class ExportModelTest(unittest.TestCase):
         "flux.2-klein": {"transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "stable-diffusion-xl-refiner": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "ltx-video": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
+        "ltx2": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
     }
 
     GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
@@ -158,6 +169,10 @@ class ExportModelTest(unittest.TestCase):
 
         if model_type in REMOTE_CODE_MODELS:
             loading_kwargs["trust_remote_code"] = True
+
+        if model_type == "muse_glimmer":
+            # the tiny checkpoint is stored in bfloat16, force fp32 so tracing does not mix dtypes
+            loading_kwargs["dtype"] = torch.float32
 
         if library_name == "timm":
             model_class = TasksManager.get_model_class_for_task(task, library=library_name)

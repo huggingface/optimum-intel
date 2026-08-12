@@ -236,13 +236,15 @@ class Eagle3DummyGenerator(DummyInputGenerator):
         self.batch_size = batch_size
         self.sequence_length = sequence_length
         self.hidden_size = normalized_config.hidden_size
+        dflash_config = getattr(normalized_config.config, "dflash_config", {}) or {}
+        self.num_hidden_state_layers = len(dflash_config.get("target_layer_ids", [])) or 3
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        # hidden_states is provided as a concatenation of three hidden-layer outputs from the main model
+        # hidden_states is provided as a concatenation of hidden-layer outputs from the main model
         shape = (
             self.batch_size,
             self.sequence_length,
-            self.hidden_size * 3,
+            self.hidden_size * self.num_hidden_state_layers,
         )
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
@@ -799,7 +801,7 @@ class LTXVaeDummyInputGenerator(DummyVisionInputGenerator):
 
 
 class LTXTransformerDummyInputGenerator(DummyVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("hidden_states", "width", "height", "num_frames", "rope_interpolation_scale")
+    SUPPORTED_INPUT_NAMES = ("hidden_states", "width", "height", "num_frames", "rope_interpolation_scale", "timestep")
 
     def __init__(
         self,
@@ -842,6 +844,191 @@ class LTXTransformerDummyInputGenerator(DummyVisionInputGenerator):
                     self.vae_spatial_compression_ratio,
                 ]
             )
+        if input_name == "timestep":
+            seq_len = self.num_frames * self.height * self.width
+            return self.random_float_tensor([self.batch_size, seq_len], framework=framework, dtype=float_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class LTX2VaeDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "pixel_mask", "sample", "latent_sample", "timestep")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        # Small spatial dims to speed up tracing; the exported model uses dynamic shapes at runtime.
+        width: int = 16,
+        height: int = 8,
+        num_frames: int = 1,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        self.num_frames = num_frames
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name in ["sample", "latent_sample"]:
+            return self.random_float_tensor(
+                [self.batch_size, self.num_channels, self.num_frames, self.height, self.width]
+            )
+        if input_name == "timestep":
+            return self.random_int_tensor([1], max_value=20, min_value=1, framework=framework, dtype=int_dtype)
+
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "hidden_states",
+        "audio_hidden_states",
+        "num_frames",
+        "height",
+        "width",
+        "fps",
+        "audio_num_frames",
+        "video_coords",
+        "audio_coords",
+        "audio_encoder_hidden_states",
+        "audio_encoder_attention_mask",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        # Small spatial/temporal dims to speed up tracing; the exported model uses dynamic shapes at runtime.
+        width: int = 16,
+        height: int = 8,
+        num_frames: int = 2,
+        frame_rate: int = 24,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        self.num_frames = num_frames
+        self.frame_rate = frame_rate
+        self.vae_scale_factors = normalized_config.config.vae_scale_factors
+        self.audio_in_channels = normalized_config.config.audio_in_channels
+        self.audio_scale_factor = normalized_config.config.audio_scale_factor
+        self.cross_attention_dim = normalized_config.config.cross_attention_dim
+        self.caption_channels = normalized_config.config.caption_channels
+        self.encoder_seq_length = kwargs.get("sequence_length", DEFAULT_DUMMY_SHAPES["sequence_length"])
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        import torch
+
+        if input_name == "hidden_states":
+            return self.random_float_tensor(
+                [self.batch_size, self.num_frames * self.height * self.width, self.num_channels]
+            )
+        if input_name == "audio_hidden_states":
+            audio_num_frames = max(1, self.num_frames)
+            audio_mel_bins = 64 // self.audio_scale_factor
+            return self.random_float_tensor(
+                [self.batch_size, audio_num_frames * audio_mel_bins, self.audio_in_channels]
+            )
+        if input_name == "width":
+            return torch.tensor(self.width)
+        if input_name == "height":
+            return torch.tensor(self.height)
+        if input_name == "num_frames":
+            return torch.tensor(self.num_frames)
+        if input_name == "fps":
+            return torch.tensor(float(self.frame_rate))
+        if input_name == "audio_num_frames":
+            return torch.tensor(max(1, self.num_frames))
+        if input_name == "video_coords":
+            return self.random_float_tensor([self.batch_size, 3, self.num_frames * self.height * self.width, 2])
+        if input_name == "audio_coords":
+            audio_num_frames = max(1, self.num_frames)
+            audio_mel_bins = 64 // self.audio_scale_factor
+            return self.random_float_tensor([self.batch_size, 1, audio_num_frames * audio_mel_bins, 2])
+        if input_name == "audio_encoder_hidden_states":
+            return self.random_float_tensor([self.batch_size, self.encoder_seq_length, self.caption_channels])
+        if input_name == "audio_encoder_attention_mask":
+            return self.random_float_tensor([self.batch_size, self.encoder_seq_length])
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class LTX2ConnectorsDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("text_encoder_hidden_states", "attention_mask")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, **kwargs)
+        num_registers = getattr(normalized_config.config, "num_learnable_registers", 128)
+        self.sequence_length = max(sequence_length, num_registers)
+        self.sequence_length = (self.sequence_length // num_registers) * num_registers
+        self.caption_channels = normalized_config.config.caption_channels
+        text_proj_in_factor = getattr(normalized_config.config, "text_proj_in_factor", 1)
+        self.input_channels = self.caption_channels * text_proj_in_factor
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "text_encoder_hidden_states":
+            return self.random_float_tensor([self.batch_size, self.sequence_length, self.input_channels])
+        if input_name == "attention_mask":
+            import torch
+
+            return torch.ones(self.batch_size, self.sequence_length, dtype=torch.float32)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class LTX2AudioVaeDecoderDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("latent_sample",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        # Small dims to speed up tracing; the exported model uses dynamic shapes at runtime.
+        num_channels: int = 8,
+        num_frames: int = 2,
+        mel_bins: int = 16,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, **kwargs)
+        self.latent_channels = getattr(normalized_config.config, "latent_channels", 8)
+        self.num_frames = num_frames
+        self.mel_bins = mel_bins
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "latent_sample":
+            return self.random_float_tensor([self.batch_size, self.latent_channels, self.num_frames, self.mel_bins])
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class LTX2VocoderDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("hidden_states",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        # Small dims to speed up tracing; the exported model uses dynamic shapes at runtime.
+        num_channels: int = 2,
+        num_frames: int = 8,
+        mel_bins: int = 64,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, **kwargs)
+        self.out_channels = getattr(normalized_config.config, "out_channels", 2)
+        self.num_frames = num_frames
+        self.mel_bins = mel_bins
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "hidden_states":
+            return self.random_float_tensor([self.batch_size, self.out_channels, self.num_frames, self.mel_bins])
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
@@ -1937,3 +2124,114 @@ class DummyQwen3OmniMoeVisionInputGenerator(DummyQwen3VLVisionEmbedInputGenerato
             return self.random_float_tensor([seq_len, self.embed_dim], framework=framework, dtype=float_dtype)
 
         return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyQwenImageTransformerVisionInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("hidden_states",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"] // 8,
+        height: int = DEFAULT_DUMMY_SHAPES["height"] // 8,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width=width, height=height, **kwargs)
+        self.in_channels = normalized_config.config.in_channels
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "hidden_states":
+            shape = [self.batch_size, (self.height // 2) * (self.width // 2), self.in_channels]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyQwenImageTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("encoder_hidden_states", "encoder_hidden_states_mask")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.hidden_size = self.normalized_config.config.joint_attention_dim
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "encoder_hidden_states":
+            shape = [self.batch_size, self.sequence_length, self.hidden_size]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "encoder_hidden_states_mask":
+            shape = [self.batch_size, self.sequence_length]
+            return self.random_int_tensor(shape, min_value=1, max_value=2, framework=framework, dtype=int_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyQwenImageResolutionInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("height", "width")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"] // 8,
+        height: int = DEFAULT_DUMMY_SHAPES["height"] // 8,
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        # packed latent resolution (matches the packed image sequence of `hidden_states`)
+        self.packed_height = height // 2
+        self.packed_width = width // 2
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        value = self.packed_height if input_name == "height" else self.packed_width
+        return self.constant_tensor([], value=value, dtype=getattr(torch, int_dtype), framework=framework)
+
+
+class DummyMuseGlimmerVisionInputGenerator(DummyVisionInputGenerator):
+    """Dummy input for the native MuseGlimmer vision stack.
+
+    The native ``MuseGlimmerVisionModel`` consumes already-flattened patches as a
+    ``[num_patches, patch_size**2 * 3 * patch_temporal]`` tensor plus
+    ``image_grid_thw``. Every tensor the native forward derives from the grid is
+    recomputed inside the exported graph, so only these two inputs are generated.
+    """
+
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "image_grid_thw",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 1,
+        **kwargs,
+    ):
+        self.vision_config = normalized_config.config
+        cfg = self.vision_config
+        self.patch_size = cfg.patch_size
+        self.patch_temporal = cfg.patch_temporal
+        self.merge_size = cfg.merge_size
+        # A single small image: grid t=1, h=w=2*merge_size keeps it small yet
+        # valid for the patch-merge downsample.
+        self.grid_t = 1
+        self.grid_h = self.merge_size * 2
+        self.grid_w = self.merge_size * 2
+        self.patch_dim = self.patch_size * self.patch_size * 3 * self.patch_temporal
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        num_patches = self.grid_t * self.grid_h * self.grid_w
+        if input_name == "pixel_values":
+            shape = [num_patches, self.patch_dim]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "image_grid_thw":
+            grid = torch.tensor([[self.grid_t, self.grid_h, self.grid_w]], dtype=DTYPE_MAPPER.pt(int_dtype))
+            if framework != "pt":
+                return grid.numpy()
+            return grid
+        raise ValueError(f"Unsupported input name {input_name}")
