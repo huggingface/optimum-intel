@@ -76,3 +76,7 @@ jobs:
           uv pip install "transformers>=5.15,<5.16"
           pytest tests/openvino/${{ matrix.test-pattern }} -k "muse_glimmer" --durations=0
 
+      - name: Deepseek-OCR-2 Validation
+        run: |
+          uv pip install "transformers>=5.11,<5.12"
+          pytest tests/openvino/${{ matrix.test-pattern }} -k deepseek_ocr2 --durations=0
