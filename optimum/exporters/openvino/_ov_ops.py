@@ -169,8 +169,12 @@ def convert_recurrent_selective_ssm_cell(context):
     B_5d = ops.unsqueeze(B, ops.constant(3, dtype=np.int32))  # [B, T, G, 1, N]
     C_5d = ops.unsqueeze(C, ops.constant(3, dtype=np.int32))  # [B, T, G, 1, N]
     tile_shape = ops.concat(
-        [ops.constant([1, 1, 1], dtype=np.int64), ops.unsqueeze(heads_per_group, const_zero_axis),
-         ops.constant([1], dtype=np.int64)], 0
+        [
+            ops.constant([1, 1, 1], dtype=np.int64),
+            ops.unsqueeze(heads_per_group, const_zero_axis),
+            ops.constant([1], dtype=np.int64),
+        ],
+        0,
     )
     B_tiled = ops.tile(B_5d, tile_shape)  # [B, T, G, H/G, N]
     C_tiled = ops.tile(C_5d, tile_shape)  # [B, T, G, H/G, N]
@@ -178,8 +182,7 @@ def convert_recurrent_selective_ssm_cell(context):
     # Reshape [B, T, G, H/G, N] → [B, T, H, N]
     x_shape = ops.shape_of(x)
     N = ops.gather(B_shape, ops.constant(3, dtype=np.int32), const_zero_axis)
-    BC_shape = ops.concat([ops.constant([0, 0, -1], dtype=np.int64),
-                           ops.unsqueeze(N, const_zero_axis)], 0)
+    BC_shape = ops.concat([ops.constant([0, 0, -1], dtype=np.int64), ops.unsqueeze(N, const_zero_axis)], 0)
     B = ops.reshape(B_tiled, BC_shape, True)  # [B, T, H, N]
     C = ops.reshape(C_tiled, BC_shape, True)  # [B, T, H, N]
 

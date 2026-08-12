@@ -227,9 +227,7 @@ def sdpa_mask_without_vmap(**kwargs):
         q_length = kwargs.pop("q_length", None)
         q_offset = kwargs.pop("q_offset", 0)
         cache_position = torch.arange(q_offset, q_offset + q_length)
-        return sdpa_mask(
-            q_length=cache_position.shape[0], q_offset=cache_position[0], use_vmap=False, **kwargs
-        )
+        return sdpa_mask(q_length=cache_position.shape[0], q_offset=cache_position[0], use_vmap=False, **kwargs)
     else:
         return sdpa_mask(use_vmap=False, **kwargs)
 
