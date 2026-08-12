@@ -1188,6 +1188,9 @@ class OVWeightCompressionTest(unittest.TestCase):
     if is_openvino_version(">=", "2026.2.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "gemma3n", False))
 
+    if is_transformers_version(">=", "5.11"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "deepseek_ocr2", False))
+
     # filter models type depending on min max transformers version
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = [
         config

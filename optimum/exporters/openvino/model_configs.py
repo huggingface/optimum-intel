@@ -4860,7 +4860,7 @@ class DeepseekOCR2ConfigBehavior(str, enum.Enum):
 
 @register_in_tasks_manager("deepseek_ocr2", *["image-text-to-text"], library_name="transformers")
 class DeepseekOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = "5.10.0"
+    MIN_TRANSFORMERS_VERSION = "5.11"
     SUPPORTED_BEHAVIORS = [behavior.value for behavior in DeepseekOCR2ConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyDeepseekOCR2VisionInputGenerator,)

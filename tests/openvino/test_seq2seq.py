@@ -631,7 +631,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         if TEST_NAME_TO_MODEL_TYPE.get(arch, arch) in get_supported_model_for_library("transformers")
     ]
 
-    if is_transformers_version(">=", "5.10.0"):
+    if is_transformers_version(">=", "5.11"):
         SUPPORTED_ARCHITECTURES += ["deepseek_ocr2"]
 
     REMOTE_CODE_MODELS = [
