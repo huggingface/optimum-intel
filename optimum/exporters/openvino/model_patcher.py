@@ -4885,9 +4885,6 @@ class DeepseekOCR2LMPatcher(OVDecoderModelPatcher):
     vision branch and merges image features. For the text-generation part we drive only the
     underlying ``DeepseekOcr2TextModel`` (a standard MHA/GQA decoder with cos/sin RoPE) from
     ``inputs_embeds`` and apply ``lm_head``, bypassing the vision code entirely.
-
-    The MoE blocks use the newer transformers 3D-experts implementation; we route them through
-    the OpenVINO-friendly ``ov_batched_mm`` experts function via :func:`register_ov_batched_mm`.
     """
 
     def __init__(
@@ -4905,11 +4902,7 @@ class DeepseekOCR2LMPatcher(OVDecoderModelPatcher):
             input_ids=None,
             use_cache=True,
         ):
-            if is_transformers_version("<", "5"):
-                pkv = DynamicCache.from_legacy_cache(past_key_values)
-            else:
-                pkv = DynamicCache(past_key_values)
-
+            pkv = DynamicCache(past_key_values)
             outputs = self.model.language_model(
                 input_ids=None,
                 inputs_embeds=inputs_embeds,
@@ -4943,8 +4936,7 @@ class DeepseekOCR2VisionEmbeddingsPatcher(ModelPatcher):
     Exposes the composed ``multi_modal_projector(vision_tower(pixel_values))`` pipeline as the
     traced forward, returning ``{"last_hidden_state": embeds}``. Two streams exist with
     different (static) input sizes: the 1024x1024 global view (256 query tokens) and the
-    768x768 crop tiles (144 query tokens). The native ``deepseek_ocr2`` implementation traces
-    cleanly at a fixed input size, so no additional static patching is required.
+    768x768 crop tiles (144 query tokens).
     """
 
     def __init__(

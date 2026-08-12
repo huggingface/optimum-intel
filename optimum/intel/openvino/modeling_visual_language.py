@@ -5688,10 +5688,6 @@ class _OVGotOCR2ForCausalLM(OVModelForVisualCausalLM):
         return processed_inputs
 
 
-# Image token placeholder id used by DeepSeek-OCR-2 (fallback when config lacks image_token_id).
-_DEEPSEEK_OCR2_IMAGE_TOKEN_ID = 128815
-
-
 class _OVDeepseekOCR2ForCausalLM(OVModelForVisualCausalLM):
     """OpenVINO inference for DeepSeek-OCR-2 (``model_type == "deepseek_ocr2"``).
 
@@ -5706,9 +5702,12 @@ class _OVDeepseekOCR2ForCausalLM(OVModelForVisualCausalLM):
 
     additional_parts = ["vision_embeddings_tiles"]
 
+    # Image token placeholder id used by DeepSeek-OCR-2 (fallback when config lacks image_token_id).
+    _DEEPSEEK_OCR2_IMAGE_TOKEN_ID = 128815
+
     @property
     def image_token_id(self):
-        return getattr(self.config, "image_token_id", _DEEPSEEK_OCR2_IMAGE_TOKEN_ID)
+        return getattr(self.config, "image_token_id", self._DEEPSEEK_OCR2_IMAGE_TOKEN_ID)
 
     @property
     def view_separator(self):
