@@ -864,9 +864,9 @@ TEST_NAME_TO_MODEL_TYPE = {
 def get_transformers_versions(model_type, library_name="transformers"):
     supported_model_type = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES[library_name]
     export_config = next(iter(supported_model_type[model_type]["openvino"].values()))
-    min_transformers = str(getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", "0"))
-    max_transformers = str(getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", "999"))
-    return min_transformers, max_transformers
+    min_transformers = getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", None) or "0"
+    max_transformers = getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", None) or "999"
+    return str(min_transformers), str(max_transformers)
 
 
 def is_model_type_transformers_compatible(model_type, library_name="transformers"):
