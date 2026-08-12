@@ -1163,20 +1163,6 @@ class OVCacheWithMambaStates(MambaCache):
             self.mamba_headdim = getattr(config, "mamba_d_head", None)
             self.num_mamba_layers = layer_types.count("mamba")
             self.num_attn_layers = layer_types.count("attention")
-        elif config.model_type == "nemotron_h":
-            # NemotronH is a hybrid Mamba2 + Attention + MoE model. `config.intermediate_size`
-            # refers to the (MoE) MLP size, while the mamba intermediate size is derived from
-            # the mamba head configuration.
-            layers_block_type = getattr(config, "layers_block_type", None)
-            self.num_key_value_heads = getattr(config, "num_key_value_heads", None)
-            self.head_dim = getattr(config, "head_dim", self.hidden_size // self.num_attention_heads)
-            self.mamba_ngroups = getattr(config, "n_groups", None)
-            self.n_mamba_heads = getattr(config, "mamba_num_heads", None)
-            self.ssm_state_size = getattr(config, "ssm_state_size", None)
-            self.mamba_headdim = getattr(config, "mamba_head_dim", None)
-            self.mamba_intermediate_size = self.n_mamba_heads * self.mamba_headdim
-            self.num_mamba_layers = layers_block_type.count("mamba")
-            self.num_attn_layers = layers_block_type.count("attention")
         else:
             # Mamba 2 specific parameters
             hybrid_layer_ids = getattr(config, "hybrid_layer_ids", None)
@@ -1197,14 +1183,7 @@ class OVCacheWithMambaStates(MambaCache):
             self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
 
         self.conv_states = conv_states
-        if self.conv_states is None and config.model_type == "nemotron_h":
-            self.conv_states = []
-            conv_dim = self.mamba_intermediate_size + 2 * self.mamba_ngroups * self.ssm_state_size
-            for _ in range(self.num_mamba_layers):
-                conv_state_shape = (self.max_batch_size, conv_dim, self.conv_kernel_size)
-                conv_state: torch.Tensor = torch.zeros(conv_state_shape, device=self.device, dtype=dtype)
-                self.conv_states.append(conv_state)
-        elif self.conv_states is None and config.model_type == "granitemoehybrid":
+        if self.conv_states is None and config.model_type == "granitemoehybrid":
             self.conv_states = []
             intermediate_size = int(self.mamba_expand * self.hidden_size)
             conv_dim = intermediate_size + 2 * self.mamba_ngroups * self.ssm_state_size
@@ -1236,7 +1215,7 @@ class OVCacheWithMambaStates(MambaCache):
                 self.conv_states.append(conv_state)
 
         self.ssm_states = ssm_states
-        if self.ssm_states is None and config.model_type in ("nemotron_h", "granitemoehybrid"):
+        if self.ssm_states is None and config.model_type == "granitemoehybrid":
             self.ssm_states = []
             for _ in range(self.num_mamba_layers):
                 ssm_state_shape = (
@@ -1564,9 +1543,8 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                     "qwen3_next",
                     "qwen3_5_text",
                     "qwen3_5_moe_text",
-                    "nemotron_h",
                 ]:
-                    # LFM2, GraniteMoeHybrid (Granite-4.0), Qwen3-Next and NemotronH require the attention mask
+                    # LFM2, GraniteMoeHybrid (Granite-4.0) and Qwen3-Next require the attention mask
                     # to be the length of the full context, so default mask from OVModelForCausalLM needs to be used.
                     # Other models like Mamba typically do not require an attention_mask
                     # for the decoding step after the first token so use attention mask of ones.

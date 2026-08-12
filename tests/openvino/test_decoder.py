@@ -135,7 +135,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "lfm2",
         "lfm2_moe",
         "qwen3_next",
-        "nemotron_h",
     )
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
     # filter architectures depending on min/max transformers supported versions
@@ -230,7 +229,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "bitnet": 6,
         "hunyuan_v1_dense": 2,
         "qwen3_next": 1,
-        "nemotron_h": 2,
     }
     TASK = "text-generation"
 
@@ -430,7 +428,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
             # CVS-177964 GraniteMoeHybrid, Qwen3-Next fail due to lack of support for beam search for hybrid models in OpenVINO
             # For this support, we expect changes in IRs to have connected beam_idx with Mamba/Linear attention states
-            num_beams=1 if model_arch in ["chatglm4", "lfm2", "granitemoehybrid", "qwen3_next", "nemotron_h"] else 2,
+            num_beams=1 if model_arch in ["chatglm4", "lfm2", "granitemoehybrid", "qwen3_next"] else 2,
             do_sample=False,
         )
 
@@ -674,10 +672,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in ["qwen", "chatglm", "chatglm4"]:
             return
 
-        # LFM2, LFM2-MoE, GraniteMoeHybrid and NemotronH generate wrong output with beam search, ticket: CVS-185664
+        # LFM2, LFM2-MoE and GraniteMoeHybrid generate wrong output with beam search, ticket: CVS-185664
         # Hybrid recurrent/attention models lack beam search support in OpenVINO (beam_idx not connected
         # to the Mamba/recurrent states), see CVS-177964.
-        if model_arch in ["lfm2", "lfm2_moe", "granitemoehybrid", "nemotron_h"]:
+        if model_arch in ["lfm2", "lfm2_moe", "granitemoehybrid"]:
             return
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49
@@ -955,32 +953,19 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
             cache = Qwen3NextDynamicCache(config=transformers_model.config)
 
-        if model_arch == "nemotron_h":
-            # The NemotronH Mamba2 mixer `torch_forward` does not correctly carry the inter-chunk
-            # SSM state from the cache across multiple multi-token prefill chunks, so a chunked
-            # transformers reference diverges from a full-context one. The OpenVINO recurrent
-            # implementation does carry the state correctly, so we validate it against a single
-            # full-context transformers forward here.
+        past_len = 0
+        for chunk_ids in chunks:
+            cur_len = chunk_ids.shape[1]
+            attn_mask = torch.ones((1, past_len + cur_len), dtype=torch.int64)
             with torch.no_grad():
                 tf_out = transformers_model(
-                    input_ids=full_input_ids,
-                    attention_mask=torch.ones_like(full_input_ids),
-                    use_cache=False,
+                    input_ids=chunk_ids, attention_mask=attn_mask, past_key_values=cache, use_cache=True
                 )
-        else:
-            past_len = 0
-            for chunk_ids in chunks:
-                cur_len = chunk_ids.shape[1]
-                attn_mask = torch.ones((1, past_len + cur_len), dtype=torch.int64)
-                with torch.no_grad():
-                    tf_out = transformers_model(
-                        input_ids=chunk_ids, attention_mask=attn_mask, past_key_values=cache, use_cache=True
-                    )
-                cache = tf_out.past_key_values
-                past_len += cur_len
+            cache = tf_out.past_key_values
+            past_len += cur_len
 
-        # The last OV chunk only returns logits for its own tokens, while the NemotronH reference
-        # is a full-context forward; compare the last (next-token) position in that case.
+        # The last OV chunk only returns logits for its own tokens; compare the last
+        # (next-token) position.
         ov_logits = ov_out.logits[:, -1]
         tf_logits = tf_out.logits[:, -1]
 

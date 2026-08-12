@@ -134,7 +134,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
-        ("text-generation-with-past", "nemotron_h"),
     ]
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = [
@@ -164,7 +163,6 @@ class OVCLIExportTestCase(unittest.TestCase):
             2 if is_openvino_version(">=", "2026.0") else 0
         ),  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
         "lfm2_moe": 2,
-        "nemotron_h": 2,
         "llava": 2,
         "sana": 2,
         "ltx-video": 2,

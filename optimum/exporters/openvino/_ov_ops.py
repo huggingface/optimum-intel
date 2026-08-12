@@ -117,7 +117,7 @@ def convert_recurrent_attention_cell(context):
 #
 # This generalizes the recurrent-cell-to-`ov::Loop` approach (originally introduced for the
 # GatedDeltaNet block, see `convert_recurrent_attention_cell` above) to the Mamba2 selective
-# state-space recurrence used by hybrid Mamba2 models such as NemotronH.
+# state-space recurrence used by hybrid Mamba2 models such as GraniteMoeHybrid (Granite-4.0).
 #
 # The Mamba2 single-step recurrence follows the standard Mamba-2 discretization:
 #       state_t = state_{t-1} * dA_t + dBx_t             # [B, H, P, N]
