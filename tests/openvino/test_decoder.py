@@ -312,7 +312,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in (
             "xglm",
             "zamba2",
-            "granitemoehybrid",
             "llama4",
             "afmoe",
             "opt",
