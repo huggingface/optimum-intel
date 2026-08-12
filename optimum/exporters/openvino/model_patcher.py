@@ -8007,8 +8007,6 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
         ]
 
     def __enter__(self):
-        from transformers.models.granitemoehybrid.modeling_granitemoehybrid import GraniteMoeHybridMambaLayer
-
         def patch_sparse_moe(sparse_moe_layer):
             sparse_moe_layer.router._orig_forward = sparse_moe_layer.router.forward
             sparse_moe_layer.router.forward = types.MethodType(
