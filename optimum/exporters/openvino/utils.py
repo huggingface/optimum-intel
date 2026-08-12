@@ -336,7 +336,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llama4",
     "minicpmo",
     "videochat_flash_qwen",
-    "deepseek_vl_v2",
+    "deepseek_ocr2",
 ]
 
 SSM_MODELS = [

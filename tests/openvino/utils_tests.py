@@ -187,7 +187,7 @@ MODEL_NAMES = {
     "deberta-v2": "optimum-intel-internal-testing/tiny-random-DebertaV2Model",
     "decilm": "optimum-intel-internal-testing/tiny-random-decilm",
     "deepseek": "optimum-intel-internal-testing/tiny-random-deepseek-v3",
-    "deepseek_vl_v2": "optimum-intel-internal-testing/tiny-random-deepseek-ocr2",
+    "deepseek_ocr2": "optimum-intel-internal-testing/tiny-random-deepseek-ocr-2",
     "deit": "optimum-intel-internal-testing/tiny-random-DeiTModel",
     "convnext": "optimum-intel-internal-testing/tiny-random-convnext",
     "convnextv2": "optimum-intel-internal-testing/tiny-random-ConvNextV2Model",
@@ -467,7 +467,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 1,
         "vision_embeddings_merger_model": 10,
     },
-    "deepseek_vl_v2": {
+    "deepseek_ocr2": {
         "lm_model": 30,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 1,

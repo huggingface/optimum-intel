@@ -3767,7 +3767,7 @@ class GotOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
 
-class DeepseekVLV2ConfigBehavior(str, enum.Enum):
+class DeepseekOCR2ConfigBehavior(str, enum.Enum):
     LANGUAGE = "language"
     VISION_EMBEDDINGS = "vision_embeddings"
     VISION_EMBEDDINGS_TILES = "vision_embeddings_tiles"
@@ -3797,18 +3797,17 @@ class DummyDeepseekOCR2VisionTilesInputGenerator(DummyDeepseekOCR2VisionInputGen
         super().__init__(task, normalized_config, batch_size=batch_size, num_channels=num_channels, image_size=768)
 
 
-@register_in_tasks_manager("deepseek_vl_v2", *["image-text-to-text"], library_name="transformers")
-class Deepseek_VL_V2_OpenVINOConfig(BaseVLMOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = "4.46.0"
-    MAX_TRANSFORMERS_VERSION = "4.53.3"
-    SUPPORTED_BEHAVIORS = [behavior.value for behavior in DeepseekVLV2ConfigBehavior]
+@register_in_tasks_manager("deepseek_ocr2", *["image-text-to-text"], library_name="transformers")
+class DeepseekOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "5.10.0"
+    SUPPORTED_BEHAVIORS = [behavior.value for behavior in DeepseekOCR2ConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyDeepseekOCR2VisionInputGenerator,)
     # Global view (1024x1024 -> 256 image tokens) for VISION_EMBEDDINGS,
     # crop tiles (768x768 -> 144 image tokens) for VISION_EMBEDDINGS_TILES.
     _VISION_INPUT_SIZE = {
-        DeepseekVLV2ConfigBehavior.VISION_EMBEDDINGS: 1024,
-        DeepseekVLV2ConfigBehavior.VISION_EMBEDDINGS_TILES: 768,
+        DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS: 1024,
+        DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS_TILES: 768,
     }
 
     def __init__(
@@ -3817,7 +3816,7 @@ class Deepseek_VL_V2_OpenVINOConfig(BaseVLMOpenVINOConfig):
         task: str = "feature-extraction",
         int_dtype: str = "int64",
         float_dtype: str = "fp32",
-        behavior: DeepseekVLV2ConfigBehavior = DeepseekVLV2ConfigBehavior.VISION_EMBEDDINGS,
+        behavior: DeepseekOCR2ConfigBehavior = DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
         **kwargs,
     ):
@@ -3828,18 +3827,17 @@ class Deepseek_VL_V2_OpenVINOConfig(BaseVLMOpenVINOConfig):
             float_dtype=float_dtype,
             preprocessors=preprocessors,
         )
-        if isinstance(behavior, str) and not isinstance(behavior, DeepseekVLV2ConfigBehavior):
-            behavior = DeepseekVLV2ConfigBehavior(behavior)
+        if isinstance(behavior, str) and not isinstance(behavior, DeepseekOCR2ConfigBehavior):
+            behavior = DeepseekOCR2ConfigBehavior(behavior)
         self._behavior = behavior
         self._orig_config = config
-        # The language model (DeepseekV2 with use_mla=False) is standard MHA, so it exports through
-        # the llama text-generation path. Its config fields live at the top level of the OCR config, so
-        # the OCR config itself is reused as the text config (see with_behavior). We intentionally do not
-        # assign ``config.text_config`` to avoid serializing a duplicate sub-config into the saved config.
+        # The language model (DeepseekV2 MoE with standard MHA/GQA attention) exports through the
+        # llama text-generation path using ``config.text_config`` (see with_behavior). The MoE experts
+        # are routed through the OpenVINO-friendly implementation by the language-model patcher.
         if self._behavior in self._VISION_INPUT_SIZE and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
-            if self._behavior == DeepseekVLV2ConfigBehavior.VISION_EMBEDDINGS_TILES:
+            if self._behavior == DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS_TILES:
                 self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyDeepseekOCR2VisionTilesInputGenerator,)
 
     @property
@@ -3855,45 +3853,45 @@ class Deepseek_VL_V2_OpenVINOConfig(BaseVLMOpenVINOConfig):
         return {}
 
     @staticmethod
-    def get_model_for_behavior(model, behavior: Union[str, DeepseekVLV2ConfigBehavior]):
-        if isinstance(behavior, str) and not isinstance(behavior, DeepseekVLV2ConfigBehavior):
-            behavior = DeepseekVLV2ConfigBehavior(behavior)
+    def get_model_for_behavior(model, behavior: Union[str, DeepseekOCR2ConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, DeepseekOCR2ConfigBehavior):
+            behavior = DeepseekOCR2ConfigBehavior(behavior)
 
-        if behavior == DeepseekVLV2ConfigBehavior.LANGUAGE:
+        if behavior == DeepseekOCR2ConfigBehavior.LANGUAGE:
             return model
 
         if behavior in (
-            DeepseekVLV2ConfigBehavior.VISION_EMBEDDINGS,
-            DeepseekVLV2ConfigBehavior.VISION_EMBEDDINGS_TILES,
+            DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS,
+            DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS_TILES,
         ):
             return model
 
-        if behavior == DeepseekVLV2ConfigBehavior.TEXT_EMBEDDINGS:
+        if behavior == DeepseekOCR2ConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = model.get_input_embeddings()
-            text_embedding.config = model.config
+            text_embedding.config = model.config.text_config
             return text_embedding
 
-    def with_behavior(self, behavior: Union[str, DeepseekVLV2ConfigBehavior]):
-        if isinstance(behavior, str) and not isinstance(behavior, DeepseekVLV2ConfigBehavior):
-            behavior = DeepseekVLV2ConfigBehavior(behavior)
+    def with_behavior(self, behavior: Union[str, DeepseekOCR2ConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, DeepseekOCR2ConfigBehavior):
+            behavior = DeepseekOCR2ConfigBehavior(behavior)
 
-        if behavior == DeepseekVLV2ConfigBehavior.TEXT_EMBEDDINGS:
+        if behavior == DeepseekOCR2ConfigBehavior.TEXT_EMBEDDINGS:
             return get_vlm_text_embeddings_config(
-                "llama", self._orig_config, self.int_dtype, self.float_dtype
+                "llama", self._orig_config.text_config, self.int_dtype, self.float_dtype
             )
 
-        if behavior == DeepseekVLV2ConfigBehavior.LANGUAGE:
+        if behavior == DeepseekOCR2ConfigBehavior.LANGUAGE:
             return get_vlm_text_generation_config(
                 "llama",
-                self._orig_config,
+                self._orig_config.text_config,
                 self.int_dtype,
                 self.float_dtype,
                 model_patcher=DeepseekOCR2LMPatcher,
             )
 
         if behavior in (
-            DeepseekVLV2ConfigBehavior.VISION_EMBEDDINGS,
-            DeepseekVLV2ConfigBehavior.VISION_EMBEDDINGS_TILES,
+            DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS,
+            DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS_TILES,
         ):
             return self.__class__(
                 self._orig_config,
@@ -3906,10 +3904,11 @@ class Deepseek_VL_V2_OpenVINOConfig(BaseVLMOpenVINOConfig):
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
-        if self._behavior == DeepseekVLV2ConfigBehavior.VISION_EMBEDDINGS:
-            return DeepseekOCR2VisionEmbeddingsPatcher(self, model, model_kwargs, n_query=256)
-        if self._behavior == DeepseekVLV2ConfigBehavior.VISION_EMBEDDINGS_TILES:
-            return DeepseekOCR2VisionEmbeddingsPatcher(self, model, model_kwargs, n_query=144)
+        if self._behavior in (
+            DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS,
+            DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS_TILES,
+        ):
+            return DeepseekOCR2VisionEmbeddingsPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
 
 
