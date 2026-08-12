@@ -5899,10 +5899,11 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
     DUMMY_PKV_GENERATOR_CLASS = Zamba2DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = GraniteMoeHybridModelPatcher
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _warn_potential_accuracy_issue_ov_2026_1("granitemoehybrid")
+    MIN_TRANSFORMERS_VERSION = "5.5.0"
+    # `MambaOpenVINOConfig` caps transformers at 5.3.0 for the plain `mamba`/`falcon_mamba`
+    # models; GraniteMoeHybrid export and inference are validated on newer versions, so drop
+    # the inherited cap here.
+    MAX_TRANSFORMERS_VERSION = None
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
