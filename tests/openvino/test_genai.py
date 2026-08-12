@@ -23,6 +23,7 @@ import requests
 import torch
 from openvino_genai import (
     LLMPipeline,
+    SchedulerConfig,
     Text2SpeechPipeline,
     VLMPipeline,
     WhisperPipeline,
@@ -41,6 +42,7 @@ from transformers import (
 )
 from utils_tests import (
     DFLASH_MODELS,
+    DFLASH_VLM_MODELS,
     EAGLE3_MODELS,
     EAGLE3_VLM_MODELS,
     F32_CONFIG,
@@ -583,6 +585,35 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
     SPECULATIVE_DECODING_MODELS = [
         (model_arch, model_pair, "Eagle3", None, "2026.0") for model_arch, model_pair in EAGLE3_MODELS.items()
     ] + [(model_arch, model_pair, "DFlash", "4.57", "2026.4") for model_arch, model_pair in DFLASH_MODELS.items()]
+    SPECULATIVE_DECODING_VLM_MODELS = [
+        (
+            "qwen3_vl_eagle3",
+            EAGLE3_VLM_MODELS["qwen3_vl_eagle3"],
+            "Eagle3",
+            "4.57",
+            "5.0.0",
+            "2026.999",
+            "image-text-to-text",
+        ),
+        (
+            "qwen3_5_dflash",
+            DFLASH_VLM_MODELS["qwen3_5_dflash"],
+            "DFlash",
+            "5.2.0",
+            "5.2.999",
+            "2026.4",
+            "text-generation-with-past",
+        ),
+        (
+            "qwen3_5_moe_dflash",
+            DFLASH_VLM_MODELS["qwen3_5_moe_dflash"],
+            "DFlash",
+            "5.2.0",
+            "5.2.999",
+            "2026.4",
+            "text-generation-with-past",
+        ),
+    ]
 
     @parameterized.expand(SPECULATIVE_DECODING_MODELS)
     def test_compare_outputs(
@@ -647,24 +678,33 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         # compare outputs
         self.assertEqual(genai_speculative_output, genai_output)
 
-    @parameterized.expand(EAGLE3_VLM_MODELS.items())
-    def test_compare_outputs_vlm(self, model_arch, model_pair):
-        if is_transformers_version(">=", "5.0.0"):
-            self.skipTest("Eagle3 VLM requires transformers >= 4.57 and < 5.0.0")
-        if is_openvino_version("<", "2026.999"):
-            self.skipTest(
-                "Eagle3 requires openvino-genai >= 2026.999. Need to get PR https://github.com/openvinotoolkit/openvino.genai/pull/3330 merged."
-            )
+    @parameterized.expand(SPECULATIVE_DECODING_VLM_MODELS)
+    def test_compare_outputs_vlm(
+        self,
+        model_arch,
+        model_pair,
+        speculative_decoding_type,
+        min_transformers_version,
+        max_transformers_version,
+        min_openvino_version,
+        draft_task,
+    ):
+        if is_transformers_version("<", min_transformers_version):
+            self.skipTest(f"{speculative_decoding_type} VLM requires transformers >= {min_transformers_version}")
+        if max_transformers_version is not None and is_transformers_version(">=", max_transformers_version):
+            self.skipTest(f"{speculative_decoding_type} VLM requires transformers < {max_transformers_version}")
+        if is_openvino_version("<", min_openvino_version):
+            self.skipTest(f"{speculative_decoding_type} VLM requires openvino-genai >= {min_openvino_version}")
 
         draft_model_id, target_model_id = model_pair
-        trust_remote_code = model_arch in REMOTE_CODE_MODELS
+        trust_remote_code = model_arch in REMOTE_CODE_MODELS or speculative_decoding_type == "DFlash"
 
-        # export main (VLM) and draft (Eagle3) models
+        # export main (VLM) and speculative draft models
         draft_model_path = Path(self.temp_dir) / "draft_model"
         main_model_path = Path(self.temp_dir) / "main_model"
         main_export(
             model_name_or_path=draft_model_id,
-            task="image-text-to-text",
+            task=draft_task,
             trust_remote_code=trust_remote_code,
             convert_tokenizer=False,
             output=draft_model_path,
@@ -676,30 +716,47 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
             output=main_model_path,
         )
 
-        # Use a small deterministic random video tensor: (num_frames, H, W, 3) uint8
         rng = np.random.default_rng(42)
-        input_video = ov.Tensor(rng.integers(0, 256, size=(5, 32, 32, 3), dtype=np.uint8))
+        inputs = {"videos": [ov.Tensor(rng.integers(0, 256, size=(5, 32, 32, 3), dtype=np.uint8))]}
         question = "Why is this video funny?"
 
-        # Phase 1: generate with Eagle3 speculative decoding
+        speculative_pipeline_kwargs = dict(TEST_CONFIG)
+        if speculative_decoding_type == "DFlash":
+            scheduler_config = SchedulerConfig()
+            scheduler_config.enable_prefix_caching = False
+            speculative_pipeline_kwargs["scheduler_config"] = scheduler_config
+
+        # Phase 1: generate with speculative decoding
         ov_draft_model = draft_model(draft_model_path, "CPU")
-        ov_eagle3_pipe = VLMPipeline(main_model_path, OPENVINO_DEVICE, draft_model=ov_draft_model, **TEST_CONFIG)
-        genai_eagle3_output = ov_eagle3_pipe.generate(prompt=question, videos=[input_video], **self.GEN_KWARGS).texts[
-            0
-        ]
-        del ov_eagle3_pipe
+        ov_speculative_pipe = VLMPipeline(
+            main_model_path,
+            OPENVINO_DEVICE,
+            draft_model=ov_draft_model,
+            **speculative_pipeline_kwargs,
+        )
+        genai_speculative_output = ov_speculative_pipe.generate(
+            prompt=question,
+            **inputs,
+            **self.GEN_KWARGS,
+        ).texts[0]
+        del ov_speculative_pipe
         del ov_draft_model
         gc.collect()
 
-        # Phase 2: generate without Eagle3
-        ov_pipe = VLMPipeline(main_model_path, OPENVINO_DEVICE, **TEST_CONFIG)
-        genai_output = ov_pipe.generate(prompt=question, videos=[input_video], **self.GEN_KWARGS).texts[0]
+        # Phase 2: generate without speculative decoding
+        baseline_pipeline_kwargs = dict(TEST_CONFIG)
+        if speculative_decoding_type == "DFlash":
+            scheduler_config = SchedulerConfig()
+            scheduler_config.enable_prefix_caching = False
+            baseline_pipeline_kwargs["scheduler_config"] = scheduler_config
+        ov_pipe = VLMPipeline(main_model_path, OPENVINO_DEVICE, **baseline_pipeline_kwargs)
+        genai_output = ov_pipe.generate(prompt=question, **inputs, **self.GEN_KWARGS).texts[0]
         del ov_pipe
         gc.collect()
 
         # assert they are not empty
-        self.assertTrue(genai_eagle3_output)
+        self.assertTrue(genai_speculative_output)
         self.assertTrue(genai_output)
 
         # compare outputs
-        self.assertEqual(genai_eagle3_output, genai_output)
+        self.assertEqual(genai_speculative_output, genai_output)

@@ -399,6 +399,19 @@ DFLASH_MODELS = {
     )
 }
 
+
+DFLASH_VLM_MODELS = {
+    "qwen3_5_dflash": (
+        "optimum-intel-internal-testing/tiny-random-qwen3.5-dflash",
+        "optimum-intel-internal-testing/tiny-random-qwen3.5",
+    ),
+    "qwen3_5_moe_dflash": (
+        "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-dflash",
+        "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
+    ),
+}
+
+
 # VLM-based Eagle3 draft models (AngelSlim Eagle3LlamaForCausalLM architecture).
 # These use Qwen3-VL MRoPE and target VLM models for speculative decoding.
 # Only used in the decoder test (not genai, since the VLM target needs image-text-to-text export).
