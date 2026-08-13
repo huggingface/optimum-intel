@@ -4864,11 +4864,9 @@ class DeepseekOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [behavior.value for behavior in DeepseekOCR2ConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyDeepseekOCR2VisionInputGenerator,)
-    # Global view (1024x1024 -> 256 image tokens) for VISION_EMBEDDINGS,
-    # crop tiles (768x768 -> 144 image tokens) for VISION_EMBEDDINGS_TILES.
-    _VISION_INPUT_SIZE = {
-        DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS: 1024,
-        DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS_TILES: 768,
+    _VISION_EMBEDDINGS_BEHAVIORS = {
+        DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS,
+        DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS_TILES,
     }
 
     def __init__(
@@ -4895,7 +4893,7 @@ class DeepseekOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
         # The language model (DeepseekV2 MoE with standard MHA/GQA attention) exports through the
         # llama text-generation path using ``config.text_config`` (see with_behavior). The MoE experts
         # are routed through the OpenVINO-friendly implementation by the language-model patcher.
-        if self._behavior in self._VISION_INPUT_SIZE and hasattr(config, "vision_config"):
+        if self._behavior in self._VISION_EMBEDDINGS_BEHAVIORS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             if self._behavior == DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS_TILES:
@@ -4903,13 +4901,13 @@ class DeepseekOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        if self._behavior in self._VISION_INPUT_SIZE:
+        if self._behavior in self._VISION_EMBEDDINGS_BEHAVIORS:
             return {"pixel_values": {0: "batch_size"}}
         return {}
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        if self._behavior in self._VISION_INPUT_SIZE:
+        if self._behavior in self._VISION_EMBEDDINGS_BEHAVIORS:
             return {"last_hidden_state": {0: "batch_size"}}
         return {}
 
