@@ -237,7 +237,6 @@ from optimum.utils.normalized_config import (
     NormalizedVisionConfig,
 )
 
-
 COMMON_TEXT_TASKS = [
     "feature-extraction",
     "fill-mask",
@@ -6412,6 +6411,11 @@ class DonutSwinOpenVINOConfig(ViTOpenVINOConfig):
 
 @register_in_tasks_manager("convnext", *["feature-extraction", "image-classification"])
 class ConvNextOpenVINOConfig(ViTOpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager("dinov3_convnext", *["feature-extraction"])
+class DINOv3ConvNextOpenVINOConfig(ViTOpenVINOConfig):
     pass
 
 
