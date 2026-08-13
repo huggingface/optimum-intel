@@ -96,6 +96,41 @@ adding a new implementation. An empty subclass or a copied method body is not a
 model integration; use the existing class directly, subclass only the differing
 behavior, or extract the common operation into one shared helper.
 
+### Mandatory reuse audit
+
+Treat reuse analysis as a completion gate, not a suggestion. Perform it once
+before implementation and again on the complete diff before reporting success.
+Scope the audit to every added or materially changed production/test symbol and
+the nearest supported architecture families; do not refactor unrelated legacy
+duplication merely because the audit finds it.
+
+For each new class, method, function, fixture helper, configuration block, and
+test helper:
+
+1. Search for the exact symbol name and for the behavior it implements. Search
+   concepts and tensor operations as well as names; renamed copies are still
+   duplicates.
+2. Compare it with at least the closest supported architecture and any shared
+   base/helper used by that architecture.
+3. Classify it as one of: reused unchanged, configured/subclassed, shared helper
+   extracted, or genuinely model-specific.
+4. For genuinely model-specific code, record the concrete incompatible input,
+   output, cache layout, tensor shape, module API, or runtime behavior that makes
+   reuse unsafe. A different model name is not sufficient justification.
+5. Replace semantic duplicates with direct reuse, a narrow subclass/override,
+   or a minimal shared generalization. Preserve existing behavior with targeted
+   tests when extracting shared code.
+
+At minimum, audit model patchers, attention/MLA logic, rotary-position
+generation, window-index and attention-mask construction, dummy inputs,
+multimodal embedding insertion, preprocessing, generation-input preparation,
+exporter behavior routing, tiny-model fixtures, and repository-test utilities.
+
+Include a concise reuse-audit table in the handoff with columns for the new
+symbol, closest existing implementation, decision, and model-specific reason
+when not reused. Do not declare the implementation complete while an avoidable
+semantic duplicate remains or any new symbol lacks a classification.
+
 Depending on the reproduced failure, update only the required integration
 points:
 
@@ -249,15 +284,12 @@ embedding insertion, logits, and task outputs to find the first divergence.
 Add the supported model type to `docs/source/openvino/models.mdx` using the
 existing format.
 
-Inspect the complete diff before reporting success. Search the touched areas
-for existing helpers, patchers, configurations, and tests with the same
-behavior as newly added code. Replace semantic duplicates with reuse,
-subclassing, configuration, or a minimal shared generalization when safe, and
-remove now-redundant code. Inspect every deletion against the current upstream
-base. Supported-model lists, registry tables, repository-test parameter lists,
-documentation model lists, and Preview Models workflow steps are additive for
-a new architecture: restore any unrelated model, test, import, or workflow line
-that was removed or replaced. Keep dependency workarounds out of global imports;
+Inspect the complete diff and finish the mandatory reuse audit before reporting
+success. Inspect every deletion against the current upstream base. Supported-
+model lists, registry tables, repository-test parameter lists, documentation
+model lists, and Preview Models workflow steps are additive for a new
+architecture: restore any unrelated model, test, import, or workflow line that
+was removed or replaced. Keep dependency workarounds out of global imports;
 never add a broad `except Exception` fallback merely to make this model's
 environment importable. Then remove scratch files, debug prints, absolute local
 paths, and unrelated edits. Do not commit, push, or open a pull request unless
