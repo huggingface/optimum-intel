@@ -132,7 +132,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "ouro"),
         ("text-generation-with-past", "bitnet"),
         ("text-generation-with-past", "qwen3_next"),
-        ("image-text-to-text", "qwen3_vl_eagle3"),
         ("text-generation", "lfm2_moe"),
         ("text-generation-with-past", "lfm2_moe"),
         ("text-generation-with-past", "mamba"),
@@ -147,6 +146,12 @@ class OVCLIExportTestCase(unittest.TestCase):
         if TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type)
         in get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
     ]
+
+    # Add custom model types
+    if is_transformers_version("==", "4.57.6"):
+        SUPPORTED_ARCHITECTURES.append(
+            ("text-generation-with-past", "qwen3_vl_eagle3"),
+        )
 
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
