@@ -126,10 +126,8 @@ class ExportModelTest(unittest.TestCase):
         "flux.2-klein": OVFlux2KleinPipeline,
         "qwen3_omni_moe": OVModelForMultimodalLM,
         "muse_glimmer": OVModelForVisualCausalLM,
+        "deepseek_ocr2": OVModelForVisualCausalLM,
     }
-
-    if is_transformers_version(">=", "5.11"):
-        SUPPORTED_ARCHITECTURES.update({"deepseek_ocr2": OVModelForVisualCausalLM})
 
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = {

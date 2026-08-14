@@ -601,6 +601,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5_moe",
         "qwen3_omni_moe",
         "muse_glimmer",
+        "deepseek_ocr2",
     ]
     SUPPORT_VIDEO = [
         "llava_next_video",
@@ -630,9 +631,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         for arch in SUPPORTED_ARCHITECTURES
         if TEST_NAME_TO_MODEL_TYPE.get(arch, arch) in get_supported_model_for_library("transformers")
     ]
-
-    if is_transformers_version(">=", "5.11"):
-        SUPPORTED_ARCHITECTURES += ["deepseek_ocr2"]
 
     REMOTE_CODE_MODELS = [
         "internvl_chat",
