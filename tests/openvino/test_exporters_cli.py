@@ -1095,8 +1095,6 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_int8(self, task: str, model_type: str):
         if model_type in ["bitnet"]:
             self.skipTest("CVS-176501 INT8 compression fails for BitNet; need to compress remaining BF16 weights")
-        if model_type == "qwen3_vl_eagle3":
-            self.skipTest("Skipped, no compression and quantiozation are needed for the draft Eagle3 model.")
         with TemporaryDirectory() as tmpdir:
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":
@@ -1118,32 +1116,6 @@ class OVCLIExportTestCase(unittest.TestCase):
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
                 del expected_int8["decoder_with_past"]
             check_compression_state_per_model(self, model.ov_models, expected_int8)
-
-    @parameterized.expand(["fp16", "int8", "int4"])
-    def test_exporters_cli_eagle3_vlm_quantization(self, weight_format: str):
-        # Regression test: exporting the VLM-flavored Eagle3 draft model (e.g. AngelSlim's
-        # Qwen3-VL eagle3 checkpoints) with any weight format used to fail with
-        # `KeyError: 'input_ids'` in `generate_dummy_inputs` because `eagle3_vlm` configs
-        # replace `input_ids` with `inputs_embeds` (see model_configs.py LlamaOpenVINOConfig).
-        model_type = "qwen3_vl_eagle3"
-        task = "text-generation-with-past"
-        with TemporaryDirectory() as tmpdir:
-            add_ops = "--group-size 16" if weight_format == "int4" else ""
-            subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} "
-                f"--trust-remote-code --weight-format {weight_format} {add_ops} {tmpdir}",
-                shell=True,
-                check=True,
-            )
-            # Must be loaded with OVModelForCausalLM: it is a standalone draft causal LM,
-            # not a multi-component VLM, even though its config carries VLM-oriented fields.
-            model = OVModelForCausalLM.from_pretrained(tmpdir, use_cache=True)
-            self.assertTrue(model.stateful)
-
-            # Loading the same export with OVModelForVisualCausalLM must raise a clear,
-            # actionable error instead of a bare `KeyError: 'llama'`.
-            with self.assertRaisesRegex(ValueError, "OVModelForCausalLM"):
-                OVModelForVisualCausalLM.from_pretrained(tmpdir, use_cache=True)
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)
     def test_exporters_cli_hybrid_quantization(

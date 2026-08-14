@@ -352,7 +352,7 @@ class OpenVINOConfigWithPast(OpenVINOConfig, ABC):
             and self.PAD_ATTENTION_MASK_TO_PAST
             and self.use_cache_branch is not False
             and "attention_mask" in dummy_inputs
-            and self.task in ("text-generation", "image-text-to-text")
+            and self.task == "text-generation"
         ):
             # VLM Eagle3 uses inputs_embeds instead of input_ids
             main_input = dummy_inputs.get("input_ids", dummy_inputs.get("inputs_embeds"))
