@@ -896,6 +896,19 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             trust_remote_code (`bool`, *optional*, defaults to `False`):
                 Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
+        if config.model_type not in MODEL_TYPE_TO_CLS_MAPPING:
+            archs = getattr(config, "architectures", None) or []
+            if archs and "eagle3" in archs[0].lower():
+                raise ValueError(
+                    f"Model with architecture '{archs[0]}' (model_type='{config.model_type}') is a standalone "
+                    "Eagle3 speculative-decoding draft model, not a multi-component VLM, even though its "
+                    "config declares a VLM-oriented `modal_type`/`target_model_type`. Please load it with "
+                    "`OVModelForCausalLM` instead of `OVModelForVisualCausalLM`."
+                )
+            raise ValueError(
+                f"Unsupported model_type '{config.model_type}' for `OVModelForVisualCausalLM`. Supported "
+                f"model types are: {sorted(MODEL_TYPE_TO_CLS_MAPPING)}."
+            )
         model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
         model_file_names = model_cls._all_ov_model_paths.copy()
         for k in tuple(model_file_names):
