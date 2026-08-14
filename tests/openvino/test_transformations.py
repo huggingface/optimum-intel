@@ -300,6 +300,32 @@ if is_transformers_version(">=", "5.0.0"):
     )
 
 
+if is_transformers_version(">=", "5.11"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["deepseek_ocr2"] = {
+        "model_class": "OVModelForVisualCausalLM",
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "TransposeMatMul",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    }
+
+
 # filter architectures depending on min/max transformers supported versions
 ARCH_TO_EXPECTED_TRANSFORMATIONS = {
     arch: v

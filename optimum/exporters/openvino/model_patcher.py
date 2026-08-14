@@ -4878,6 +4878,85 @@ class Qwen3OmniMoeCodePredictorPatcher(OVDecoderModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
+class DeepseekOCR2LMPatcher(OVDecoderModelPatcher):
+    """Language-model patcher for DeepSeek-OCR-2 (model_type ``deepseek_ocr2``).
+
+    The exported model is ``DeepseekOcr2ForConditionalGeneration`` whose ``forward`` runs the
+    vision branch and merges image features. For the text-generation part we drive only the
+    underlying ``DeepseekOcr2TextModel`` (a standard MHA/GQA decoder with cos/sin RoPE) from
+    ``inputs_embeds`` and apply ``lm_head``, bypassing the vision code entirely.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        def lm_forward(
+            self,
+            attention_mask,
+            position_ids=None,
+            past_key_values=None,
+            inputs_embeds=None,
+            input_ids=None,
+            use_cache=True,
+        ):
+            pkv = DynamicCache(past_key_values)
+            outputs = self.model.language_model(
+                input_ids=None,
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=pkv,
+                use_cache=use_cache,
+            )
+            hidden_states = outputs[0]
+            logits = self.lm_head(hidden_states)
+            return (logits, postprocess_past_key_values(outputs.past_key_values))
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(lm_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+        # Route the MoE experts through the OpenVINO-friendly batched-matmul implementation.
+        register_ov_batched_mm(self)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class DeepseekOCR2VisionEmbeddingsPatcher(ModelPatcher):
+    """Vision-encoder patcher for DeepSeek-OCR-2 (model_type ``deepseek_ocr2``).
+
+    Exposes the composed ``multi_modal_projector(vision_tower(pixel_values))`` pipeline as the
+    traced forward, returning ``{"last_hidden_state": embeds}``. Two streams exist with
+    different (static) input sizes: the 1024x1024 global view (256 query tokens) and the
+    768x768 crop tiles (144 query tokens).
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        super().__init__(config, model, model_kwargs)
+        vision_root = model.model if hasattr(model, "model") else model
+        output_name = list(config.outputs.keys())[0]
+
+        def patched_forward(pixel_values):
+            vision_outputs = vision_root.vision_tower(pixel_values)
+            embeds = vision_root.multi_modal_projector(vision_outputs.last_hidden_state)
+            return {output_name: embeds}
+
+        self.patched_forward = patched_forward
+
+
 class Qwen3OmniMoeCode2WavPatcher(ModelPatcher):
     def __init__(
         self,

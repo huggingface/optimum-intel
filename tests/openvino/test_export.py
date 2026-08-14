@@ -127,6 +127,10 @@ class ExportModelTest(unittest.TestCase):
         "qwen3_omni_moe": OVModelForMultimodalLM,
         "muse_glimmer": OVModelForVisualCausalLM,
     }
+
+    if is_transformers_version(">=", "5.11"):
+        SUPPORTED_ARCHITECTURES.update({"deepseek_ocr2": OVModelForVisualCausalLM})
+
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = {
         model_type: model_cls

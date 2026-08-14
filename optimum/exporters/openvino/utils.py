@@ -338,6 +338,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llama4",
     "minicpmo",
     "videochat_flash_qwen",
+    "deepseek_ocr2",
     "qwen3_omni_moe",
     "muse_glimmer",
 ]
