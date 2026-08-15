@@ -133,6 +133,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "bitnet"),
         ("text-generation-with-past", "qwen3_next"),
         ("image-text-to-text", "qwen3_vl_eagle3"),
+        ("image-text-to-text", "minicpm_v_4_eagle3"),
         ("text-generation", "lfm2_moe"),
         ("text-generation-with-past", "lfm2_moe"),
         ("text-generation-with-past", "mamba"),
@@ -187,6 +188,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "smollm3": 2,
         "ouro": 2,
         "qwen3_vl_eagle3": 0,
+        "minicpm_v_4_eagle3": 0,
         "qwen3_vl_embedding": 2,
         "muse_glimmer": 2,
     }
@@ -842,7 +844,7 @@ class OVCLIExportTestCase(unittest.TestCase):
 
         # VLM Eagle3 exports a single causal LM (not a multi-component VLM)
         # so it must be loaded with OVModelForCausalLM rather than OVModelForVisualCausalLM.
-        if model_type == "qwen3_vl_eagle3":
+        if model_type in ("qwen3_vl_eagle3", "minicpm_v_4_eagle3"):
             model_cls_name = "OVModelForCausalLM"
         elif task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS:
             model_cls_name = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
@@ -1096,6 +1098,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         if model_type in ["bitnet"]:
             self.skipTest("CVS-176501 INT8 compression fails for BitNet; need to compress remaining BF16 weights")
         if model_type == "qwen3_vl_eagle3":
+            self.skipTest("Skipped, no compression and quantiozation are needed for the draft Eagle3 model.")
+        if model_type == "minicpm_v_4_eagle3":
             self.skipTest("Skipped, no compression and quantiozation are needed for the draft Eagle3 model.")
         with TemporaryDirectory() as tmpdir:
             add_ops = ""
