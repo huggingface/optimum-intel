@@ -43,11 +43,17 @@ versions until a traceback disappears, and never patch a similarly named class
 when the traceback identifies a different one.
 
 When a model-compatible Transformers version is inside Optimum Intel's
-declared supported range but the local source imports an API available only in
-a newer version, treat it as an Optimum Intel compatibility defect rather than
-an unrecoverable environment failure. Reuse an existing version guard or
-compatibility helper, or add the smallest guarded implementation, and validate
-the model in the dedicated Preview Models Support workflow.
+declared supported dependency range but the local source imports an API
+available only in a newer version, treat it as an Optimum Intel compatibility
+defect rather than an unrecoverable environment failure. Reuse an existing
+version guard or compatibility helper, or add the smallest guarded
+implementation, and validate the model using a compatible Transformers version
+inside the declared supported dependency range.
+
+Do not add the model to the Preview Models Support workflow solely because the
+default CI matrix does not currently exercise that exact compatible version.
+Preview-workflow routing is decided separately from Optimum Intel's declared
+Transformers dependency range.
 
 ## Step 2 — Analyze the real architecture
 
@@ -174,16 +180,26 @@ Source support without tests is incomplete. Update the applicable files:
 - `tests/openvino/test_transformations.py` for applicable graph-transformation coverage;
 - `tests/openvino/utils_tests.py` for fixtures and expected IR details.
 
-If none of the exact Transformers versions exercised by the main test matrix
-falls inside the model's verified compatibility interval, also add its focused tests to
-`.github/workflows/test_openvino_preview_models.yml`. Install the verified
-required Transformers version in a dedicated step and run only that model's
-tests, so existing models continue to use their supported versions.
-This workflow also hosts version-specific validation; using it does not imply
-that the model itself is a preview model. Compare the model's interval with the
-exact CI matrix versions, not only with Optimum Intel's broader package
-dependency range. Do not add a dedicated step when an existing matrix version
-already falls inside the model's verified interval.
+Before deciding whether version-specific CI coverage belongs in
+`.github/workflows/test_openvino_preview_models.yml`, read Optimum Intel's
+declared Transformers dependency range from the repository packaging metadata
+(for example `setup.py` or `pyproject.toml`).
+
+Compare the model's verified Transformers compatibility interval against the
+declared Optimum Intel dependency range.
+
+- If at least one verified model-compatible Transformers version is inside
+  Optimum Intel's declared supported dependency range, do NOT add the model to
+  `.github/workflows/test_openvino_preview_models.yml` solely because the
+  default CI matrix does not currently test that exact version. Validate the
+  model with a compatible version inside the supported dependency range and
+  keep normal repository tests/model registration additive.
+
+- Use `.github/workflows/test_openvino_preview_models.yml` only when the model
+  requires a Transformers version outside Optimum Intel's currently declared
+  supported dependency range, or when the repository already explicitly
+  classifies that architecture/version-specific coverage as preview-only.
+
 The workflow change must be additive: never rename, replace, or delete an
 existing model's validation step to add the requested model.
 
