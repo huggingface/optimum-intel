@@ -4457,6 +4457,136 @@ class Qwen3VLVisionEmbMergerPatcher(ModelPatcher):
             block.attn.forward = block.attn._orig_forward
 
 
+class HunYuanVLVisionEmbeddingsPatcher(ModelPatcher):
+    """Patch the HunYuanVL vision tower (``HunYuanVLVisionTransformer``) for OpenVINO export.
+
+    The original tower derives per-image ``cu_seqlens`` from ``grid_thw`` values and iterates over
+    images in Python, which cannot be traced generically. This patcher replaces the forward with a
+    single-image traceable variant that:
+
+    * takes a precomputed SDPA ``attention_mask`` instead of ``cu_seqlens``;
+    * reads the patch grid ``(h, w)`` from the *shape* of a helper ``grid_hw`` tensor so the
+      interpolated positional embedding and the conv-based patch merger keep dynamic spatial dims;
+    * returns the merged image features ready to be scattered into the text embeddings.
+
+    Modeling reference:
+    https://github.com/huggingface/transformers/blob/v5.13.1/src/transformers/models/hunyuan_vl/modeling_hunyuan_vl.py
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def sdpa_vision_attn_forward(self, hidden_states, attention_mask):
+            batch_size, seq_len, _ = hidden_states.shape
+            query = self.q_proj(hidden_states).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+            key = self.k_proj(hidden_states).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+            value = self.v_proj(hidden_states).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+            attn_output = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_mask=attention_mask, dropout_p=0.0, scale=self.scaling
+            )
+            attn_output = attn_output.transpose(1, 2).reshape(batch_size, seq_len, -1).contiguous()
+            return self.o_proj(attn_output), None
+
+        def block_forward(self, hidden_states, attention_mask):
+            residual = hidden_states
+            hidden_states = self.layer_norm1(hidden_states)
+            hidden_states, _ = self.self_attn(hidden_states=hidden_states, attention_mask=attention_mask)
+            hidden_states = residual + hidden_states
+            residual = hidden_states
+            hidden_states = self.layer_norm2(hidden_states)
+            hidden_states = self.mlp(hidden_states)
+            hidden_states = residual + hidden_states
+            return hidden_states
+
+        # `interpolate_pos_encoding` reads ``position_embedding.weight`` directly (not via the
+        # embedding forward). Under 16-bit export ``__make_16bit_traceable`` stashes ``nn.Embedding``
+        # weights as FP32 zero placeholders (the real tensor is only emitted through the module's
+        # forward). A plain reference to ``position_embedding.weight`` stays identity-linked to that
+        # stashed parameter, so during 16-bit tracing the converter resolves it to the FP32 zero
+        # placeholder and the interpolated positional embedding is baked as zeros, corrupting the
+        # vision output. Capture a *detached FP32 copy* here (before any 16-bit patching): an
+        # independent, non-registered constant that keeps the real values for both FP32 and 16-bit
+        # exports and is immune to the placeholder swap.
+        pos_embed_weight = model.embeddings.position_embedding.weight.detach().clone().float()
+        position_edge = model.embeddings.position_edge
+        embed_dim = model.embeddings.embed_dim
+        interpolate_mode = model.embeddings.config.interpolate_mode
+
+        def interpolate_pos_encoding(embeddings, height, width):
+            patch_pos_embed = pos_embed_weight[1:, :].reshape(1, position_edge, position_edge, embed_dim)
+            patch_pos_embed = patch_pos_embed.permute(0, 3, 1, 2).float()
+            patch_pos_embed = torch.nn.functional.interpolate(
+                patch_pos_embed, size=(height, width), mode=interpolate_mode, align_corners=False
+            )
+            return patch_pos_embed.permute(0, 2, 3, 1).reshape(1, -1, embed_dim).to(embeddings.dtype)
+
+        def patch_embed_forward(patch_embed, pixel_values, height, width):
+            num_patches = pixel_values.shape[0]
+            pixel_values = pixel_values.reshape(
+                num_patches, patch_embed.config.num_channels, patch_embed.patch_size, patch_embed.patch_size
+            )
+            target_dtype = patch_embed.patch_embedding.weight.dtype
+            patch_embeds = patch_embed.patch_embedding(pixel_values.to(dtype=target_dtype))
+            embeddings = patch_embeds.flatten(-2).squeeze(-1)
+            position_embedding = interpolate_pos_encoding(embeddings, height, width).squeeze(0)
+            return (embeddings + position_embedding).unsqueeze(0)
+
+        def merger_forward(merger, hidden_states, height, width):
+            hidden_states = merger.before_rms(hidden_states)
+            dtype = hidden_states.dtype
+            hidden_states = hidden_states.permute(0, 2, 1).reshape(hidden_states.shape[0], -1, height, width)
+            hidden_states = merger.proj_conv(hidden_states)
+            hidden_states = merger.proj_act(hidden_states)
+            hidden_states = merger.proj_out(hidden_states)
+            batch_size, channels, out_h, out_w = hidden_states.shape
+            hidden_states = torch.cat(
+                [
+                    hidden_states,
+                    merger.image_newline.reshape(1, channels, 1, 1)
+                    .expand(batch_size, channels, out_h, 1)
+                    .to(dtype),
+                ],
+                dim=-1,
+            )
+            hidden_states = hidden_states.reshape(batch_size, channels, -1).permute(0, 2, 1)
+            hidden_states = merger.mlp(hidden_states)
+            begin = merger.image_begin.reshape(1, 1, -1).expand(batch_size, 1, hidden_states.shape[-1]).to(dtype)
+            end = merger.image_end.reshape(1, 1, -1).expand(batch_size, 1, hidden_states.shape[-1]).to(dtype)
+            hidden_states = torch.cat([begin, hidden_states, end], dim=1)
+            return merger.after_rms(hidden_states)
+
+        def vision_forward(self, pixel_values, attention_mask, grid_hw):
+            # `grid_hw` is a helper tensor whose shape encodes the patch grid (h, w). Reading the
+            # dimensions from `.shape` keeps them dynamic through interpolation and reshape after tracing.
+            height = grid_hw.shape[0]
+            width = grid_hw.shape[1]
+            hidden_states = patch_embed_forward(self.embeddings, pixel_values, height, width)
+            for layer in self.layers:
+                hidden_states = block_forward(layer, hidden_states, attention_mask)
+            return merger_forward(self.patch_merger, hidden_states, height, width)
+
+        for layer in model.layers:
+            layer._orig_forward = layer.forward
+            layer.forward = types.MethodType(block_forward, layer)
+            layer.self_attn._orig_forward = layer.self_attn.forward
+            layer.self_attn.forward = types.MethodType(sdpa_vision_attn_forward, layer.self_attn)
+
+        model.forward = types.MethodType(vision_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        for layer in self._model.layers:
+            layer.forward = layer._orig_forward
+            layer.self_attn.forward = layer.self_attn._orig_forward
+
+
 class Qwen3OmniMoeVisionMergerPatcher(ModelPatcher):
     # Patches Qwen3OmniMoeVisionMerger.forward to return both last_hidden_state and stacked deepstack features
     # Original: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/qwen3_omni_moe/modeling_qwen3_omni_moe.py#L1542

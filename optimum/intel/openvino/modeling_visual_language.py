@@ -3677,6 +3677,160 @@ if is_transformers_version(">=", "4.57"):
     _OVQwen2_5_VLForCausalLM.get_vision_position_ids = getattr(Qwen2_5_VLModel, "get_vision_position_ids", None)
 
 
+def _hunyuan_vl_num_mrope_axes(config) -> int:
+    text_config = getattr(config, "text_config", config)
+    for attr in ("rope_parameters", "rope_scaling"):
+        rope = getattr(text_config, attr, None)
+        if isinstance(rope, dict):
+            section = rope.get("mrope_section") or rope.get("xdrope_section")
+            if section:
+                return len(section)
+    return 4
+
+
+class _OVHunYuanVLForCausalLM(_OVQwen2VLForCausalLM):
+    """OpenVINO runtime for HunYuanVL (e.g. ``tencent/HunyuanOCR``).
+
+    Reuses the Qwen2VL generation plumbing (cache handling, ``prepare_inputs_for_generation`` with
+    ``mm_token_type_ids`` / ``image_grid_thw``, rope-deltas bookkeeping) but replaces the vision path
+    with HunYuanVL's single-graph vision tower and its multimodal RoPE index (3- or 4-axis).
+    """
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = None,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        if is_transformers_version("<", "5.13"):
+            raise Exception("HunYuanVL is not supported in transformers versions earlier than 5.13.")
+
+        # Skip _OVQwen2VLForCausalLM.__init__ (it builds a Qwen-specific vision rotary embedding that
+        # relies on config fields absent from HunYuanVL) and call the base VLM initializer directly.
+        OVModelForVisualCausalLM.__init__(
+            self,
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+        self.rope_deltas = None
+
+    def get_vision_embeddings(self, pixel_values, image_grid_thw=None, **kwargs):
+        if image_grid_thw is None:
+            raise ValueError("`image_grid_thw` is required to run the HunYuanVL vision tower.")
+        grids = image_grid_thw.tolist() if torch.is_tensor(image_grid_thw) else list(image_grid_thw)
+        features = []
+        start = 0
+        for t, h, w in grids:
+            num_patches = int(t) * int(h) * int(w)
+            image_pixels = pixel_values[start : start + num_patches]
+            start += num_patches
+            # Full (block) attention over a single image: an all-zero additive SDPA mask.
+            attention_mask = torch.zeros((1, 1, num_patches, num_patches), dtype=torch.float32)
+            # Only the shape of `grid_hw` matters: it carries the patch grid (h, w) to the graph.
+            grid_hw = torch.zeros((int(h), int(w)), dtype=torch.int64)
+            out = self.vision_embeddings(
+                image_pixels, attention_mask=attention_mask, grid_hw=grid_hw
+            ).last_hidden_state
+            out = torch.from_numpy(out) if not torch.is_tensor(out) else out
+            features.append(out.reshape(-1, out.shape[-1]))
+        return torch.cat(features, dim=0)
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        image_grid_thw=None,
+        cache_position=None,
+        **kwargs,
+    ):
+        inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
+        if pixel_values is not None and input_ids.shape[1] != 1:
+            image_embeds = self.get_vision_embeddings(pixel_values, image_grid_thw)
+            image_mask = input_ids == self.config.image_token_id
+            inputs_embeds[image_mask] = image_embeds.to(inputs_embeds.dtype)
+
+        num_axes = _hunyuan_vl_num_mrope_axes(self.config)
+        if (
+            (position_ids is None or position_ids.ndim < 3)
+            and input_ids is not None
+            and (attention_mask is None or attention_mask.ndim == 2)
+        ):
+            if (cache_position is not None and cache_position[0] == 0) or self.rope_deltas is None:
+                mm_token_type_ids = kwargs.get("mm_token_type_ids")
+                if mm_token_type_ids is None:
+                    mm_token_type_ids = torch.zeros_like(input_ids, dtype=torch.int32)
+                    mm_token_type_ids[input_ids == self.config.image_token_id] = 1
+                position_ids, rope_deltas = self.get_rope_index(
+                    input_ids, mm_token_type_ids, image_grid_thw, attention_mask
+                )
+                self.rope_deltas = rope_deltas
+            else:
+                batch_size, seq_length, _ = inputs_embeds.shape
+                delta = cache_position[0] + self.rope_deltas if cache_position is not None else 0
+                position_ids = torch.arange(seq_length, device=inputs_embeds.device)
+                position_ids = position_ids.view(1, -1).expand(batch_size, -1)
+                if cache_position is not None:
+                    delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
+                position_ids = position_ids.add(delta)
+                position_ids = position_ids.unsqueeze(0).expand(num_axes, -1, -1)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        content = []
+        if image is not None:
+            content.append({"type": "image", "image": image})
+        content.append({"type": "text", "text": text})
+        messages = [{"role": "user", "content": content}]
+        inputs = processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
+        return inputs
+
+
+if is_transformers_version(">=", "5.13"):
+    from transformers.models.hunyuan_vl.modeling_hunyuan_vl import HunYuanVLModel
+
+    _OVHunYuanVLForCausalLM.get_rope_index = HunYuanVLModel.get_rope_index
+    _OVHunYuanVLForCausalLM.get_vision_position_ids = getattr(HunYuanVLModel, "get_vision_position_ids", None)
+
+
 class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
     additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
 
@@ -7620,6 +7774,8 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_5_moe": _OVQwen3_5ForCausalLM,
     "qwen3_5_moe_text": _OVQwen3_5ForCausalLM,
     "qwen3_omni_moe": _OVQwen3OmniMoeForCausalLM,
+    "hunyuan_vl": _OVHunYuanVLForCausalLM,
+    "hunyuan_vl_text": _OVHunYuanVLForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
     "deepseek_ocr2": _OVDeepseekOCR2ForCausalLM,
