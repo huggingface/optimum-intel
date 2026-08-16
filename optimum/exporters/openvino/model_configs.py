@@ -78,6 +78,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyVideoChatFlashQwenProjectorInputGenerator,
     DummyVisionPositionIdsInputGenerator,
     DummyVisionPositionIdsPhi4InputGenerator,
+    DummyYoutuVLVisionEmbedInputGenerator,
     Eagle3DummyGenerator,
     Eagle3VLMDummyGenerator,
     FunASRDummyAudioInputGenerator,
@@ -200,6 +201,7 @@ from optimum.exporters.openvino.model_patcher import (
     SpeechT5ModelPatcher,
     VideoChatFlashQwenVisionEmbeddingModelPatcher,
     XverseModelPatcher,
+    YoutuVLVisionEmbeddingsPatcher,
     Zamba2ModelPatcher,
     _get_model_attribute,
 )
@@ -1947,6 +1949,10 @@ class BaseVLMOpenVINOConfig(OpenVINOConfig):
             preprocessors=preprocessors,
         )
         self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -3829,6 +3835,126 @@ class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
         if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return Qwen2_5_VLVisionEmbMergerPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
+
+
+@register_in_tasks_manager(
+    "youtu_vl", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class YoutuVLTextOpenVINOConfig(MiniCPM3OpenVINOConfig):
+    """Language-model export config for Youtu-VL.
+
+    The Youtu-VL text decoder uses DeepSeek-V2/MiniCPM3-style Multi-head Latent Attention (MLA), so the
+    KV-cache layout is identical to MiniCPM3 (key head dim == ``qk_nope_head_dim + qk_rope_head_dim``,
+    value head dim == ``v_head_dim``); ``OVMiniCPM3DummyPastKeyValuesGenerator`` is reused verbatim.
+    Unlike MiniCPM3/DeepSeek, Youtu-VL's remote ``YoutuMLAttention.forward`` already uses the modern
+    Transformers attention signature (precomputed ``position_embeddings`` + SDPA attention interface)
+    and traces cleanly, so the base ``OVDecoderModelPatcher`` is used without a custom MLA attention
+    forward. This config only exports the language behavior of the VLM (selected via ``with_behavior``).
+    """
+
+    MIN_TRANSFORMERS_VERSION = "4.56.0"
+    MAX_TRANSFORMERS_VERSION = "5.0"
+    _MODEL_PATCHER = OVDecoderModelPatcher
+
+
+@register_in_tasks_manager("youtu_vl", *["image-text-to-text"], library_name="transformers")
+class YoutuVLOpenVINOConfig(BaseVLMOpenVINOConfig):
+    """Image-text-to-text export config for Youtu-VL (``YoutuVLForConditionalGeneration``).
+
+    Youtu-VL is a flat-config VLM: a Siglip2 windowed vision encoder (Qwen2.5-VL-style) plus a
+    ``VLPatchMerger`` produce image embeddings that are scattered into the text embeddings at
+    ``config.image_token_id``; the text decoder is DeepSeek/MiniCPM3-style MLA. The model is split into
+    three OpenVINO submodels exactly like the other VLMs:
+
+    * ``text_embeddings`` -- token embedding lookup (reuses the shared ``InputEmbed`` config);
+    * ``language`` -- the MLA decoder consuming ``inputs_embeds`` (reuses ``youtu_vl`` text-gen config);
+    * ``vision_embeddings`` -- vision encoder + merger, with data-dependent window bookkeeping computed
+      on the runtime side (see ``YoutuVLVisionEmbeddingsPatcher``).
+    """
+
+    MIN_TRANSFORMERS_VERSION = "4.56.0"
+    MAX_TRANSFORMERS_VERSION = "5.0"
+    SUPPORTED_BEHAVIORS = [behavior.value for behavior in VLMConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyYoutuVLVisionEmbedInputGenerator,)
+
+    # ``__init__`` (``_orig_config`` bookkeeping + VISION_EMBEDDINGS vision-config swap) is inherited
+    # unchanged from ``BaseVLMOpenVINOConfig``; only the flat-config behavior routing differs below.
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            # Return the whole model so the vision patcher can access both ``siglip2`` and ``merger``.
+            return model
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.config
+            return text_embedding
+
+    def with_behavior(self, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "youtu_vl",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "youtu_vl",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return YoutuVLVisionEmbeddingsPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {0: "sequence_length"},
+                "attention_mask": {1: "sequence_length", 2: "sequence_length"},
+                "window_attention_mask": {1: "sequence_length", 2: "sequence_length"},
+                "window_index": {0: "unit_sequence_length"},
+                "rotary_pos_emb": {0: "sequence_length"},
+            }
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "sequence_length"}}
+        return {}
 
 
 @register_in_tasks_manager(

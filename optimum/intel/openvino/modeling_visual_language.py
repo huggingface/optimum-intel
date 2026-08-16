@@ -7590,6 +7590,211 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
         return inputs
 
 
+class _OVYoutuVLForCausalLM(OVModelForVisualCausalLM):
+    """OpenVINO inference for Youtu-VL (``model_type == "youtu_vl"``).
+
+    Youtu-VL couples a Siglip2 windowed vision encoder (Qwen2.5-VL-style) plus a ``VLPatchMerger``
+    with a DeepSeek/MiniCPM3-style MLA text decoder. The data-dependent vision bookkeeping
+    (``window_index``, ``cu_seqlens`` and per-window attention masks) is computed here from
+    ``spatial_shapes`` and fed to the single ``vision_embeddings`` submodel; the image features are
+    then scattered into the text embeddings at ``config.image_token_id`` (mirroring the native
+    ``YoutuVLForConditionalGeneration.forward``). Position ids are plain 1-D (no mRoPE), so the base
+    ``prepare_inputs_for_generation`` is reused for the language path.
+
+    The vision window/rotary helpers mirror ``_OVQwen2_5_VLForCausalLM`` but operate on 2-column
+    ``spatial_shapes`` (patch grid ``[h, w]``) instead of 3-column ``grid_thw``.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        vision_config = self.config.vision_config
+        self._spatial_merge_size = getattr(vision_config, "spatial_merge_size", 2)
+        self._patch_size = vision_config.patch_size
+        # window_size defaults to patch_size * 2 * 8 in the Siglip2 encoder implementation.
+        self._window_size = getattr(vision_config, "window_size", self._patch_size * 2 * 8)
+        head_dim = vision_config.hidden_size // vision_config.num_attention_heads
+
+        class _YoutuVisionRope(torch.nn.Module):
+            def __init__(self, dim: int, theta: float = 10000.0) -> None:
+                super().__init__()
+                inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float) / dim))
+                self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+            def forward(self, seqlen: int) -> torch.Tensor:
+                seq = torch.arange(seqlen, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
+                return torch.outer(seq, self.inv_freq)
+
+        self._rotary_pos_emb = _YoutuVisionRope(head_dim // 2)
+
+    def rot_pos_emb(self, spatial_shapes):
+        # Mirrors modeling_siglip2.Siglip2Encoder.rot_pos_emb.
+        pos_ids = []
+        merge = self._spatial_merge_size
+        for h, w in spatial_shapes:
+            h, w = int(h), int(w)
+            hpos_ids = torch.arange(h).unsqueeze(1).expand(-1, w)
+            hpos_ids = hpos_ids.reshape(h // merge, merge, w // merge, merge)
+            hpos_ids = hpos_ids.permute(0, 2, 1, 3).flatten()
+            wpos_ids = torch.arange(w).unsqueeze(0).expand(h, -1)
+            wpos_ids = wpos_ids.reshape(h // merge, merge, w // merge, merge)
+            wpos_ids = wpos_ids.permute(0, 2, 1, 3).flatten()
+            pos_ids.append(torch.stack([hpos_ids, wpos_ids], dim=-1))
+        pos_ids = torch.cat(pos_ids, dim=0)
+        max_grid_size = int(spatial_shapes.max())
+        rotary_pos_emb_full = self._rotary_pos_emb(max_grid_size)
+        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+        return rotary_pos_emb
+
+    def get_window_index(self, spatial_shapes):
+        # Mirrors modeling_siglip2.Siglip2Encoder.get_window_index.
+        window_index: list = []
+        cu_window_seqlens: list = [0]
+        window_index_id = 0
+        merge = self._spatial_merge_size
+        spatial_merge_unit = merge * merge
+        vit_merger_window_size = self._window_size // merge // self._patch_size
+
+        for grid_h, grid_w in spatial_shapes:
+            grid_h, grid_w = int(grid_h), int(grid_w)
+            llm_grid_h, llm_grid_w = grid_h // merge, grid_w // merge
+            index = torch.arange(llm_grid_h * llm_grid_w).reshape(1, llm_grid_h, llm_grid_w)
+            pad_h = (vit_merger_window_size - llm_grid_h % vit_merger_window_size) % vit_merger_window_size
+            pad_w = (vit_merger_window_size - llm_grid_w % vit_merger_window_size) % vit_merger_window_size
+            num_windows_h = (llm_grid_h + pad_h) // vit_merger_window_size
+            num_windows_w = (llm_grid_w + pad_w) // vit_merger_window_size
+            index_padded = torch.nn.functional.pad(index, (0, pad_w, 0, pad_h), "constant", -100)
+            index_padded = index_padded.reshape(
+                1, num_windows_h, vit_merger_window_size, num_windows_w, vit_merger_window_size
+            )
+            index_padded = index_padded.permute(0, 1, 3, 2, 4).reshape(
+                1, num_windows_h * num_windows_w, vit_merger_window_size, vit_merger_window_size
+            )
+            seqlens = (index_padded != -100).sum([2, 3]).reshape(-1)
+            index_padded = index_padded.reshape(-1)
+            index_new = index_padded[index_padded != -100]
+            window_index.append(index_new + window_index_id)
+            cu_seqlens_tmp = seqlens.cumsum(0) * spatial_merge_unit + cu_window_seqlens[-1]
+            cu_window_seqlens.extend(cu_seqlens_tmp.tolist())
+            window_index_id += llm_grid_h * llm_grid_w
+        window_index = torch.cat(window_index, dim=0)
+        return window_index, cu_window_seqlens
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        # Skip vision on cached decode steps.
+        if input_ids is not None and input_ids.shape[1] == 1 and kwargs.get("past_key_values") is not None:
+            return None
+
+        spatial_shapes = kwargs.get("spatial_shapes")
+        if spatial_shapes is None:
+            raise ValueError("`spatial_shapes` is required for Youtu-VL vision embeddings.")
+        spatial_shapes = torch.as_tensor(spatial_shapes)
+        pixel_values = torch.as_tensor(pixel_values) if not isinstance(pixel_values, torch.Tensor) else pixel_values
+        # The Siglip2 patch embedding consumes flattened patches ``(sequence_length, in_features)``.
+        pixel_values = pixel_values.reshape(-1, pixel_values.shape[-1]).to(torch.float32)
+        seq_len = pixel_values.shape[0]
+
+        rotary_pos_emb = self.rot_pos_emb(spatial_shapes)
+        window_index, cu_window_seqlens = self.get_window_index(spatial_shapes)
+        cu_window_seqlens = torch.tensor(cu_window_seqlens, dtype=torch.int32)
+        cu_window_seqlens = torch.unique_consecutive(cu_window_seqlens)
+        cu_seqlens = torch.repeat_interleave(spatial_shapes[:, 0] * spatial_shapes[:, 1], 1).cumsum(
+            dim=0, dtype=torch.int32
+        )
+        cu_seqlens = torch.nn.functional.pad(cu_seqlens, (1, 0), value=0)
+
+        attention_mask = torch.zeros((1, seq_len, seq_len), dtype=torch.bool)
+        for i in range(1, len(cu_seqlens)):
+            attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = True
+        causal_mask = torch.zeros_like(attention_mask, dtype=torch.float32)
+        causal_mask.masked_fill_(torch.logical_not(attention_mask), float("-inf"))
+
+        window_attention_mask = torch.zeros((1, seq_len, seq_len), dtype=torch.bool)
+        for i in range(1, len(cu_window_seqlens)):
+            window_attention_mask[
+                ..., cu_window_seqlens[i - 1] : cu_window_seqlens[i], cu_window_seqlens[i - 1] : cu_window_seqlens[i]
+            ] = True
+        window_causal_mask = torch.zeros_like(window_attention_mask, dtype=torch.float32)
+        window_causal_mask.masked_fill_(torch.logical_not(window_attention_mask), float("-inf"))
+
+        res = self.vision_embeddings(
+            pixel_values=pixel_values,
+            attention_mask=causal_mask,
+            window_attention_mask=window_causal_mask,
+            window_index=window_index,
+            rotary_pos_emb=rotary_pos_emb,
+        )[0]
+        return res
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        vision_embeds = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        image_token_id = self.config.image_token_id
+        mask = (input_ids == image_token_id).unsqueeze(-1).expand_as(inputs_embeds)
+        inputs_embeds = inputs_embeds.masked_scatter(mask, vision_embeds.to(inputs_embeds.dtype))
+        return inputs_embeds, attention_mask, position_ids
+
+    def forward(self, input_ids, pixel_values=None, spatial_shapes=None, pixel_attention_mask=None, **kwargs):
+        return super().forward(
+            input_ids,
+            pixel_values=pixel_values,
+            spatial_shapes=spatial_shapes,
+            pixel_attention_mask=pixel_attention_mask,
+            **kwargs,
+        )
+
+    def prepare_inputs_for_generation(
+        self, input_ids, past_key_values=None, inputs_embeds=None, pixel_values=None, attention_mask=None, **kwargs
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        # The Siglip2 image inputs are only consumed on the prefill step.
+        if past_key_values is None:
+            model_inputs["spatial_shapes"] = kwargs.get("spatial_shapes")
+            model_inputs["pixel_attention_mask"] = kwargs.get("pixel_attention_mask")
+        else:
+            model_inputs["pixel_values"] = None
+            model_inputs["spatial_shapes"] = None
+            model_inputs["pixel_attention_mask"] = None
+        return model_inputs
+
+    @staticmethod
+    def preprocess_inputs(
+        text: Optional[str] = None,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("processor is required")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        conversation = [{"role": "user", "content": []}]
+        if image is not None:
+            conversation[0]["content"].append({"type": "image", "image": image})
+        conversation[0]["content"].append({"type": "text", "text": text or ""})
+        inputs = processor.apply_chat_template(
+            conversation,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
+        return inputs
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "muse_glimmer": _OVMuseGlimmerForCausalLM,
     "llava": _OVLlavaForCausalLM,
@@ -7623,4 +7828,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
     "deepseek_ocr2": _OVDeepseekOCR2ForCausalLM,
+    "youtu_vl": _OVYoutuVLForCausalLM,
 }
