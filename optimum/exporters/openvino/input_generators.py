@@ -2265,3 +2265,67 @@ class DummyDeepseekOCR2VisionTilesInputGenerator(DummyVisionInputGenerator):
         super().__init__(
             task, normalized_config, batch_size=batch_size, num_channels=num_channels, width=768, height=768
         )
+
+
+class DummyYoutuVLVisionEmbedInputGenerator(DummyVisionInputGenerator):
+    """Dummy inputs for the Youtu-VL vision tower (Siglip2 windowed encoder + patch merger).
+
+    Mirrors the Qwen2.5-VL windowed-vision split (see ``DummyQwen2VLVisionEmbedInputGenerator``):
+    the data-dependent ``window_index``/``cu_seqlens`` and attention masks are computed on the
+    runtime side and passed to the graph as tensors, so the exported graph is static-shape traceable.
+    Youtu-VL differs from Qwen2.5-VL in that its patch embedding is a plain ``nn.Linear`` operating on
+    already-flattened patches ``(sequence_length, in_features)`` (from the Siglip2 image processor), so
+    the graph consumes ``pixel_values`` directly instead of a conv-based ``hidden_states``.
+    """
+
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "attention_mask",
+        "window_attention_mask",
+        "window_index",
+        "rotary_pos_emb",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 1,
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        # 448x448 image -> 28x28 patches at patch_size=16, divisible by the merge window (16).
+        width: int = 448,
+        height: int = 448,
+        **kwargs,
+    ):
+        self.batch_size = batch_size
+        self.height = height
+        self.width = width
+        self.num_channels = num_channels
+        self.patch_size = normalized_config.config.patch_size
+        self.hidden_size = normalized_config.config.hidden_size
+        self.num_heads = normalized_config.config.num_attention_heads
+        self.spatial_merge_size = getattr(normalized_config.config, "spatial_merge_size", 2)
+        self.in_features = getattr(
+            normalized_config.config, "in_features", self.num_channels * self.patch_size * self.patch_size
+        )
+        if self.in_features is None or self.in_features <= 0:
+            self.in_features = self.num_channels * self.patch_size * self.patch_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        grid_h, grid_w = self.height // self.patch_size, self.width // self.patch_size
+        seq_len = grid_h * grid_w
+
+        if input_name == "pixel_values":
+            return self.random_float_tensor([seq_len, self.in_features], framework=framework, dtype=float_dtype)
+
+        if input_name in ["attention_mask", "window_attention_mask"]:
+            return self.random_mask_tensor([1, seq_len, seq_len], framework=framework, dtype=float_dtype)
+
+        if input_name == "rotary_pos_emb":
+            dim = self.hidden_size // self.num_heads // 2
+            return self.random_float_tensor([seq_len, dim], framework=framework, dtype=float_dtype)
+
+        if input_name == "window_index":
+            spatial_merge_unit = self.spatial_merge_size * self.spatial_merge_size
+            unit_len = seq_len // spatial_merge_unit
+            return self.random_int_tensor([unit_len], max_value=unit_len)

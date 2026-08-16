@@ -634,6 +634,12 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     if is_transformers_version(">=", "5.11"):
         SUPPORTED_ARCHITECTURES += ["deepseek_ocr2"]
 
+    # Youtu-VL is a trust-remote-code architecture (not registered natively in Transformers), so it
+    # is excluded by the ``get_supported_model_for_library`` filter above and must be appended here.
+    # Its remote code targets Transformers 4.56-4.57.x.
+    if is_transformers_version(">=", "4.56") and is_transformers_version("<", "5.0"):
+        SUPPORTED_ARCHITECTURES += ["youtu_vl"]
+
     REMOTE_CODE_MODELS = [
         "internvl_chat",
         "minicpmv",
@@ -644,6 +650,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "phi4mm",
         "videochat_flash_qwen",
         "gemma3n",
+        "youtu_vl",
     ]
     IMAGE = Image.open(
         requests.get(

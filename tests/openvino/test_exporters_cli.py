@@ -148,6 +148,11 @@ class OVCLIExportTestCase(unittest.TestCase):
         in get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
     ]
 
+    # Youtu-VL is a trust-remote-code architecture (not natively registered in Transformers) and is
+    # excluded by the filter above; append it explicitly for the supported Transformers range.
+    if is_transformers_version(">=", "4.56") and is_transformers_version("<", "5.0"):
+        SUPPORTED_ARCHITECTURES.append(("image-text-to-text", "youtu_vl"))
+
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
         "t5": 2,
@@ -189,6 +194,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "qwen3_vl_eagle3": 0,
         "qwen3_vl_embedding": 2,
         "muse_glimmer": 2,
+        "youtu_vl": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {

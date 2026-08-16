@@ -143,6 +143,12 @@ class ExportModelTest(unittest.TestCase):
         )
     }
 
+    # Youtu-VL is a trust-remote-code architecture (not natively registered in Transformers), so it is
+    # excluded by the filter above and must be appended here. Its remote code targets Transformers
+    # 4.56-4.57.x.
+    if is_transformers_version(">=", "4.56") and is_transformers_version("<", "5.0"):
+        SUPPORTED_ARCHITECTURES.update({"youtu_vl": OVModelForVisualCausalLM})
+
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "stable-diffusion-3": {"text_encoder_3": "8.0"},
@@ -186,6 +192,12 @@ class ExportModelTest(unittest.TestCase):
             model = MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
                 model_name, **loading_kwargs
             )
+        elif model_type == "youtu_vl":
+            # Youtu-VL's remote code registers only AutoModelForCausalLM (its auto_map maps the VLM
+            # to AutoModelForCausalLM), not AutoModelForImageTextToText.
+            from transformers import AutoModelForCausalLM
+
+            model = AutoModelForCausalLM.from_pretrained(model_name, **loading_kwargs)
         elif model_type == "qwen3_asr":
             from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
 

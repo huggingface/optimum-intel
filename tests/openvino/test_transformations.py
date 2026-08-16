@@ -334,6 +334,33 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
 }
 
 
+# Youtu-VL is a trust-remote-code architecture (not registered natively in Transformers), so it is
+# excluded by the filter above and added here with an explicit ``model_class``. Its DeepSeek/MiniCPM3
+# MLA decoder exercises the same RoPE fusion path as the other stateful VLMs (verified via
+# ``RoPEFusion``/``RoPEFusionGPTNEOX`` on the exported language model).
+if is_transformers_version(">=", "4.56") and is_transformers_version("<", "5.0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["youtu_vl"] = {
+        "model_class": "OVModelForVisualCausalLM",
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    }
+
+
 # Diffusion architectures are loaded through a pipeline class and live in the diffusers library (not
 # transformers), so they are added after the transformers filter above with an explicit `model_class`.
 # QwenImage's real-valued rotary embedding is written so the traced subgraph matches the GPT-NeoX

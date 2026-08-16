@@ -144,6 +144,164 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+_YOUTU_VL_SOURCE_ID = "tencent/Youtu-VL-4B-Instruct"
+_YOUTU_VL_CACHE_VERSION = 1
+# Keep every added token with id <= this cutoff. This preserves all special /
+# image / vision / video tokens (128000-128265) while dropping the ~155k
+# dense-prediction coordinate tokens that image-text-to-text does not need,
+# keeping both the embedding table and the tokenizer.json fixture small.
+_YOUTU_VL_VOCAB_CUTOFF = 128300
+
+
+def _create_tiny_youtu_vl_model():
+    """Generate a tiny, architecture-faithful random Youtu-VL model for testing.
+
+    Youtu-VL (``model_type="youtu_vl"``, ``YoutuVLForConditionalGeneration``) is a flat-config VLM:
+    a Siglip2 windowed vision encoder (Qwen2.5-VL-style) plus a ``VLPatchMerger`` feed a
+    DeepSeek/MiniCPM3-style MLA text decoder. This helper downloads only the config, remote code,
+    tokenizer and processor assets from the Hub (never the original weights), reduces the scale
+    parameters while preserving every architectural invariant (``model_type``/``architectures``,
+    the MLA head-dim contract ``qk_head_dim == qk_nope_head_dim + qk_rope_head_dim``, the
+    siglip2 vision sub-config, and the image/vision special-token IDs), instantiates random weights
+    through the real architecture and caches the result on disk. Requires ``trust_remote_code`` and a
+    Transformers version in ``[4.56, 5.0)`` (matching the released checkpoint's remote code).
+    """
+    import shutil
+
+    from huggingface_hub import snapshot_download
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_youtu_vl"
+    marker_file = output_dir / ".tiny_model_marker.json"
+
+    def _cache_valid():
+        if not (output_dir / "config.json").exists() or not marker_file.exists():
+            return False
+        try:
+            with open(marker_file) as f:
+                if json.load(f).get("version") != _YOUTU_VL_CACHE_VERSION:
+                    return False
+            saved = AutoConfig.from_pretrained(output_dir, trust_remote_code=True)
+        except Exception:
+            return False
+        return (
+            saved.model_type == "youtu_vl"
+            and saved.architectures == ["YoutuVLForConditionalGeneration"]
+            and saved.vision_config.model_type == "siglip2_vision_model"
+            and saved.qk_head_dim == saved.qk_nope_head_dim + saved.qk_rope_head_dim
+            and saved.image_token_id == 128264
+        )
+
+    if _cache_valid():
+        return str(output_dir)
+
+    # Download config / remote code / tokenizer / processor assets only (no weights).
+    src_dir = Path(
+        snapshot_download(
+            _YOUTU_VL_SOURCE_ID,
+            allow_patterns=["*.json", "*.py", "*.jinja", "tokenizer.json"],
+        )
+    )
+
+    cfg = AutoConfig.from_pretrained(src_dir, trust_remote_code=True)
+    # Language (MLA) decoder: reduce scale, preserve the MLA head-dim contract.
+    cfg.num_hidden_layers = 2
+    cfg.hidden_size = 64
+    cfg.intermediate_size = 128
+    cfg.num_attention_heads = 4
+    cfg.num_key_value_heads = 4
+    cfg.max_position_embeddings = 4096
+    cfg.qk_nope_head_dim = 32
+    cfg.qk_rope_head_dim = 16
+    cfg.qk_head_dim = cfg.qk_nope_head_dim + cfg.qk_rope_head_dim
+    cfg.head_dim = cfg.qk_rope_head_dim
+    cfg.v_head_dim = 32
+    cfg.q_lora_rank = 128
+    cfg.kv_lora_rank = 64
+    cfg.vocab_size = _YOUTU_VL_VOCAB_CUTOFF + 1
+    cfg.use_cache = True
+
+    # Siglip2 vision tower: reduce scale, keep a perfect-square patch count.
+    vc = cfg.vision_config
+    vc.num_hidden_layers = 2
+    vc.hidden_size = 128
+    vc.intermediate_size = 256
+    vc.num_attention_heads = 4
+    vc.patch_size = 16
+    vc.num_patches = 256
+    vc.out_hidden_size = cfg.hidden_size
+    vc.vision_use_head = False
+    vc.fullatt_block_indexes = [1]
+
+    # Force float32 everywhere (verify the effective nested precision fields).
+    for c in (cfg, vc):
+        c.torch_dtype = "float32"
+        if hasattr(c, "dtype"):
+            c.dtype = "float32"
+
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    torch.manual_seed(SEED)
+    model = AutoModelForCausalLM.from_config(cfg, trust_remote_code=True).to(torch.float32).eval()
+    # Tied random embeddings collapse greedy decoding to a self-reproducing token; scale the
+    # (tied) embedding table down so the fixture stays well-conditioned and input-sensitive.
+    with torch.no_grad():
+        model.get_input_embeddings().weight.mul_(0.05)
+    model.tie_weights()
+    model.save_pretrained(output_dir, safe_serialization=True)
+
+    # Build a trimmed source dir so the tokenizer/processor load with the reduced vocab.
+    trimmed_src = Path(str(output_dir) + "_trimmed_src")
+    if trimmed_src.exists():
+        shutil.rmtree(trimmed_src)
+    trimmed_src.mkdir(parents=True, exist_ok=True)
+    asset_files = [
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "preprocessor_config.json",
+        "processor_config.json",
+        "chat_template.json",
+        "chat_template.jinja",
+        "generation_config.json",
+        "processing_youtu_vl.py",
+        "image_processing_siglip2_fast.py",
+        "configuration_youtu_vl.py",
+        "configuration_siglip2.py",
+        "modeling_youtu_vl.py",
+        "modeling_siglip2.py",
+        "config.json",
+    ]
+    for fname in asset_files:
+        s = src_dir / fname
+        if s.is_file():
+            shutil.copy2(s, trimmed_src / fname)
+    with open(src_dir / "tokenizer.json") as f:
+        tok_json = json.load(f)
+    tok_json["added_tokens"] = [t for t in tok_json["added_tokens"] if t["id"] <= _YOUTU_VL_VOCAB_CUTOFF]
+    with open(trimmed_src / "tokenizer.json", "w") as f:
+        json.dump(tok_json, f)
+
+    AutoProcessor.from_pretrained(trimmed_src, trust_remote_code=True).save_pretrained(output_dir)
+    AutoTokenizer.from_pretrained(trimmed_src, trust_remote_code=True).save_pretrained(output_dir)
+    shutil.rmtree(trimmed_src, ignore_errors=True)
+
+    # Ensure remote-code python + chat template assets are present in the fixture.
+    for fname in asset_files:
+        s, d = src_dir / fname, output_dir / fname
+        if s.is_file() and not d.is_file() and fname.endswith((".py", ".jinja", ".json")):
+            if fname != "config.json":
+                shutil.copy2(s, d)
+    # Re-save reduced config last so precision/scale fields persist.
+    cfg.save_pretrained(output_dir)
+
+    with open(marker_file, "w") as f:
+        json.dump({"version": _YOUTU_VL_CACHE_VERSION}, f)
+
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -355,6 +513,7 @@ HUB_MODEL_NAMES = {
     "xlm-roberta": "optimum-intel-internal-testing/tiny-random-xlm-roberta",
     "xglm": "optimum-intel-internal-testing/tiny-random-XGLMForCausalLM",
     "xverse": "optimum-intel-internal-testing/tiny-random-xverse",
+    "youtu_vl": _create_tiny_youtu_vl_model(),
     "glm4": "optimum-intel-internal-testing/tiny-random-glm4",
     "glm": "optimum-intel-internal-testing/tiny-random-glm-edge",
     "open-clip": "optimum-intel-internal-testing/tiny-open-clip-model",
@@ -523,6 +682,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 32,
         "vision_embeddings_tiles_model": 32,
     },
+    "youtu_vl": {
+        "lm_model": 34,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 15,
+    },
     "qwen3_vl": {
         "lm_model": 30,
         "text_embeddings_model": 1,
@@ -683,6 +847,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_asr",
     "fun_asr",
     "videochat_flash_qwen",
+    "youtu_vl",
 )
 
 if is_transformers_version("<", "5"):
