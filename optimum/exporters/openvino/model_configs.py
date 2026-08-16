@@ -47,6 +47,8 @@ from optimum.exporters.openvino.input_generators import (
     DummyFluxTransformerInputGenerator,
     DummyGemma4UnifiedVisionInputGenerator,
     DummyGemma4VisionInputGenerator,
+    DummyHunYuanVLLMInputGenerator,
+    DummyHunYuanVLVisionEmbedInputGenerator,
     DummyKokoroInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMVImageInputGenerator,
@@ -132,6 +134,7 @@ from optimum.exporters.openvino.model_patcher import (
     GptOssModelPatcher,
     GraniteMoeHybridModelPatcher,
     GraniteMoEModelPatcher,
+    HunYuanVLVisionEmbeddingsPatcher,
     IBertModelPatcher,
     Idefics3ImageEmbeddingsModelPatcher,
     InputEmbeddingPatcher,
@@ -3956,6 +3959,124 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
                 "qwen3_vl_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
             ).outputs
         raise Exception("Unknown Qwen3VL behavior type.")
+
+
+@register_in_tasks_manager("hunyuan_vl", *["image-text-to-text"], library_name="transformers")
+class HunYuanVLOpenVINOConfig(BaseVLMOpenVINOConfig):
+    """OpenVINO export config for HunYuanVL (e.g. ``tencent/HunyuanOCR``).
+
+    The model is split into three components, mirroring the other VLMs:
+
+    * ``vision_embeddings`` – the full ``HunYuanVLVisionTransformer`` (patch embed + interpolated
+      positional embedding + attention blocks + conv patch merger), exported as a single graph that
+      returns the merged image features. See :class:`HunYuanVLVisionEmbeddingsPatcher`.
+    * ``text_embeddings`` / ``language`` – the HunYuan dense text backbone, reused through the
+      ``hunyuan_v1_dense`` text-generation config. The language model consumes multimodal RoPE
+      ``position_ids`` of shape ``(num_mrope_axes, batch, seq)`` (4 axes for HunyuanOCR).
+    """
+
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in VLMConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyHunYuanVLVisionEmbedInputGenerator,)
+    # HunYuanVL (hunyuan_vl) was added to Transformers in 5.13.0.
+    MIN_TRANSFORMERS_VERSION = "5.13.0"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            behavior=behavior,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    def with_behavior(self, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "hunyuan_v1_dense",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+            )
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "hunyuan_v1_dense",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Qwen2VLLanguageModelPatcher,
+                dummy_input_generator=DummyHunYuanVLLMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                task=self.task,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+            )
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.config.text_config
+            return text_embedding
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            vision_tower = _get_model_attribute(model, "vision_tower")
+            vision_tower.config = model.config.vision_config
+            return vision_tower
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return HunYuanVLVisionEmbeddingsPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {0: "patch_thw_grid"},
+                "attention_mask": {2: "sequence_length", 3: "sequence_length"},
+                "grid_hw": {0: "grid_h", 1: "grid_w"},
+            }
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
+        return {}
 
 
 class Qwen3OmniMoeConfigBehavior(str, enum.Enum):

@@ -80,3 +80,9 @@ jobs:
         run: |
           uv pip install "transformers>=5.15,<5.16"
           pytest tests/openvino/${{ matrix.test-pattern }} -k "muse_glimmer" --durations=0
+
+      - name: HunYuanVL Validation
+        run: |
+          uv pip install "transformers>=5.13,<5.14"
+          pytest tests/openvino/${{ matrix.test-pattern }} -k "hunyuan_vl" --durations=0
+

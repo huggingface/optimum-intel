@@ -1412,6 +1412,90 @@ class DummyQwen3VLVisionEmbedInputGenerator(DummyQwen2VLVisionEmbedInputGenerato
             )
 
 
+def _hunyuan_vl_num_mrope_axes(config) -> int:
+    """Return the number of multimodal RoPE axes for a HunYuanVL text config.
+
+    HunYuanVL stores the section split under ``rope_parameters``/``rope_scaling`` as
+    ``mrope_section`` (canonical) or the legacy ``xdrope_section``. HunyuanOCR uses a
+    4-axis ``(position, width, height, image_index)`` layout.
+    """
+    for attr in ("rope_parameters", "rope_scaling"):
+        rope = getattr(config, attr, None)
+        if isinstance(rope, dict):
+            section = rope.get("mrope_section") or rope.get("xdrope_section")
+            if section:
+                return len(section)
+    return 4
+
+
+class DummyHunYuanVLLMInputGenerator(DummyTextInputGenerator):
+    """Language-model dummy inputs for HunYuanVL.
+
+    Mirrors ``DummyQwen2VLLMInputGenerator`` but expands ``position_ids`` to the number of
+    multimodal RoPE axes declared by the model config (4 for HunyuanOCR) instead of a fixed 3.
+    """
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        generated_input = super().generate(input_name, framework, int_dtype, float_dtype)
+        if input_name == "position_ids":
+            num_axes = _hunyuan_vl_num_mrope_axes(self.normalized_config.config)
+            return generated_input.unsqueeze(0).expand(num_axes, -1, -1)
+        return generated_input
+
+
+class DummyHunYuanVLVisionEmbedInputGenerator(DummyVisionInputGenerator):
+    """Dummy inputs for the HunYuanVL vision tower export.
+
+    The HunYuanVL vision tower is exported as a single component taking the flat per-patch
+    pixel tensor, a precomputed (block-diagonal) SDPA attention mask, and a ``grid_hw`` helper
+    tensor whose *shape* encodes the patch grid ``(h, w)`` so that the interpolated positional
+    embedding and the conv-based patch merger keep dynamic spatial dimensions after tracing.
+    """
+
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "attention_mask",
+        "grid_hw",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 1,
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = 448,
+        height: int = 448,
+        **kwargs,
+    ):
+        self.batch_size = batch_size
+        self.height = height
+        self.width = width
+        self.num_channels = getattr(normalized_config.config, "num_channels", num_channels)
+        self.patch_size = normalized_config.config.patch_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        grid_h, grid_w = self.height // self.patch_size, self.width // self.patch_size
+        num_patches = grid_h * grid_w
+
+        if input_name == "pixel_values":
+            return self.random_float_tensor(
+                [num_patches, self.num_channels * self.patch_size * self.patch_size],
+                framework=framework,
+                dtype=float_dtype,
+            )
+
+        if input_name == "attention_mask":
+            return self.constant_tensor(
+                [1, 1, num_patches, num_patches], framework=framework, value=0.0, dtype=DTYPE_MAPPER.pt(float_dtype)
+            )
+
+        if input_name == "grid_hw":
+            return self.constant_tensor(
+                [grid_h, grid_w], framework=framework, value=0, dtype=DTYPE_MAPPER.pt(int_dtype)
+            )
+
+
 class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummySeq2SeqPastKeyValuesGenerator):
     """Custom KV cache generator for Qwen3-ASR with GQA (num_key_value_heads != num_attention_heads).
     Qwen3-ASR has no cross-attention, so only self-attention KV cache is generated (2 per layer)."""

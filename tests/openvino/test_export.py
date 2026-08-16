@@ -126,6 +126,7 @@ class ExportModelTest(unittest.TestCase):
         "flux.2-klein": OVFlux2KleinPipeline,
         "qwen3_omni_moe": OVModelForMultimodalLM,
         "muse_glimmer": OVModelForVisualCausalLM,
+        "hunyuan_vl": OVModelForVisualCausalLM,
     }
 
     if is_transformers_version(">=", "5.11"):

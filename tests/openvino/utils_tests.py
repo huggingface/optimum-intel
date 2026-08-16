@@ -144,6 +144,141 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+def _create_tiny_hunyuan_vl_model():
+    """Generate a tiny random HunYuanVL (``hunyuan_vl``) model for testing and return its local path.
+
+    Preserves the real ``tencent/HunyuanOCR`` architecture
+    (``HunYuanVLForConditionalGeneration`` / ``model_type='hunyuan_vl'``): the vision-tower +
+    text-backbone + conv patch-merger topology, image placeholder-token contract and multimodal
+    RoPE layout, only scaled down so it can serve as a local repository test fixture. HunYuanVL is
+    only available in transformers>=5.13; on older versions this returns the original Hub id so
+    module import does not fail (the corresponding tests are skipped on those versions).
+
+    The processor/tokenizer/chat-template assets are copied from the original repo (no original
+    weights are downloaded). The result is cached on disk under the system temp dir.
+    """
+    original_model_id = "tencent/HunyuanOCR"
+    if is_transformers_version("<", "5.13"):
+        return original_model_id
+
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_hunyuan_vl"
+    marker = output_dir / ".tiny_marker"
+    cache_version = "tiny_hunyuan_vl_v1"
+    if marker.exists() and marker.read_text().strip() == cache_version and (output_dir / "config.json").exists():
+        return str(output_dir)
+
+    from huggingface_hub import hf_hub_download
+    from transformers import (
+        AutoProcessor,
+        AutoTokenizer,
+        GenerationConfig,
+        HunYuanVLConfig,
+        HunYuanVLForConditionalGeneration,
+    )
+
+    vocab_size = 120818
+    text_head_dim = 64
+    text_config = {
+        "model_type": "hunyuan_vl_text",
+        "vocab_size": vocab_size,
+        "hidden_size": 64,
+        "intermediate_size": 256,
+        "num_hidden_layers": 2,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "head_dim": text_head_dim,
+        "hidden_act": "silu",
+        "max_position_embeddings": 4096,
+        "rms_norm_eps": 1e-5,
+        "attention_bias": False,
+        "attention_dropout": 0.0,
+        "use_cache": True,
+        # The original checkpoint ties the embeddings; for a random-weight fixture tied embeddings
+        # make greedy decoding collapse to a repeated token, so the LM head is untied here.
+        "tie_word_embeddings": False,
+        "pad_token_id": 120002,
+        "bos_token_id": 120000,
+        "eos_token_id": 120007,
+        "eod_token_id": 120020,
+        "sep_token_id": 0,
+        "rope_parameters": {
+            "rope_type": "dynamic",
+            "type": "dynamic",
+            "rope_theta": 10000.0,
+            "alpha": 1000.0,
+            "beta_fast": 32,
+            "beta_slow": 1,
+            "factor": 1.0,
+            "mscale": 1.0,
+            "mscale_all_dim": 1.0,
+            "mrope_section": [8, 8, 8, 8],
+        },
+    }
+    vision_config = {
+        "model_type": "hunyuan_vl_vision",
+        "hidden_act": "gelu",
+        "hidden_size": 64,
+        "intermediate_size": 256,
+        "num_hidden_layers": 2,
+        "num_attention_heads": 8,
+        "num_key_value_heads": 8,
+        "num_channels": 3,
+        "patch_size": 16,
+        "spatial_merge_size": 2,
+        "temporal_patch_size": 1,
+        "out_hidden_size": 64,
+        "text_hidden_size": 64,
+        "max_image_size": 512,
+        "min_image_size": 256,
+        "img_max_token_num": 4096,
+        "max_vit_seq_len": 16384,
+        "rms_norm_eps": 1e-5,
+        "attention_dropout": 0.0,
+        "interpolate_mode": "bilinear",
+    }
+    config = HunYuanVLConfig(
+        text_config=text_config,
+        vision_config=vision_config,
+        image_token_id=120120,
+        im_start_id=120118,
+        im_end_id=120119,
+        im_newline_id=120121,
+        tie_word_embeddings=False,
+        bos_token_id=120000,
+        eos_token_id=[120007, 120020],
+        pad_token_id=120002,
+        dtype="float32",
+    )
+
+    if output_dir.exists():
+        import shutil
+
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    torch.manual_seed(SEED)
+    model = HunYuanVLForConditionalGeneration(config).to(torch.float32).eval()
+    model.save_pretrained(output_dir, safe_serialization=True)
+
+    AutoTokenizer.from_pretrained(original_model_id, trust_remote_code=True).save_pretrained(output_dir)
+    AutoProcessor.from_pretrained(original_model_id, trust_remote_code=True).save_pretrained(output_dir)
+    try:
+        GenerationConfig.from_pretrained(original_model_id).save_pretrained(output_dir)
+    except Exception:  # pragma: no cover
+        pass
+    try:
+        import shutil
+
+        src = hf_hub_download(original_model_id, "chat_template.jinja")
+        shutil.copy(src, output_dir / "chat_template.jinja")
+    except Exception:  # pragma: no cover
+        pass
+
+    marker.write_text(cache_version)
+    del model
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -233,6 +368,7 @@ HUB_MODEL_NAMES = {
     "granitemoehybrid": "optimum-intel-internal-testing/tiny-random-granitemoehybrid",
     "hubert": "optimum-intel-internal-testing/tiny-random-HubertModel",
     "hunyuan_v1_dense": "optimum-intel-internal-testing/tiny-random-hunyuan-v1-dense",
+    "hunyuan_vl": _create_tiny_hunyuan_vl_model(),
     "ibert": "optimum-intel-internal-testing/tiny-random-ibert",
     "idefics3": "optimum-intel-internal-testing/tiny-random-Idefics3ForConditionalGeneration",
     "internlm": "optimum-intel-internal-testing/tiny-random-internlm",
@@ -511,6 +647,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 15,
     },
+    "hunyuan_vl": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 16,
+    },
     "qwen2_vl": {
         "lm_model": 30,
         "text_embeddings_model": 1,
@@ -705,6 +846,7 @@ ARCH_TO_MODEL_CLASS = {
     "gemma4_moe": "OVModelForVisualCausalLM",
     "gemma4_unified": "OVModelForVisualCausalLM",
     "muse_glimmer": "OVModelForVisualCausalLM",
+    "hunyuan_vl": "OVModelForVisualCausalLM",
     "qwen3_omni_moe": "OVModelForMultimodalLM",
     "stable-diffusion": "OVDiffusionPipeline",
     "whisper": "OVModelForSpeechSeq2Seq",

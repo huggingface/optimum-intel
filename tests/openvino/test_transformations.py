@@ -37,6 +37,23 @@ from optimum.intel.utils.import_utils import is_diffusers_version, is_transforme
 # Architectures are filtered by get_supported_model_for_library and will be excluded if
 # export config MIN/MAX_TRANSFORMERS_VERSION don't match the installed transformers version.
 ARCH_TO_EXPECTED_TRANSFORMATIONS = {
+    "hunyuan_vl": {
+        # HunYuanVL (e.g. tencent/HunyuanOCR) language model: dense GQA backbone with a
+        # multi-axis (mrope) rotary embedding that OpenVINO fuses through the GPT-NeoX
+        # rotate-half matcher into the dedicated RoPE op.
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+        ],
+    },
     "qwen3_moe": {
         "convert": [
             "SDPAFusion",
