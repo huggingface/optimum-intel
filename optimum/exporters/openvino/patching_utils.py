@@ -211,6 +211,23 @@ def sdpa_mask_without_vmap(**kwargs):
         q_offset = kwargs.pop("q_offset", 0)
         cache_position = torch.arange(q_offset, q_offset + q_length, device=q_length.device)
         return sdpa_mask(q_length=cache_position, use_vmap=False, **kwargs)
+    elif is_transformers_version(">=", "5.9"):
+        # transformers >= 5.9 feeds the query position into `sdpa_mask` as the bare scalar
+        # `q_offset = past_key_values.get_seq_length()`, so the causal mask traces to
+        # `q_arange = arange(q_length) + q_offset` with `q_offset` a plain scalar. transformers 5.5.4
+        # instead materialized the offset as `cache_position[0]` (an explicit
+        # `arange(q_offset, q_offset + q_length)` followed by a select), producing an extra `Range` +
+        # `Gather` feeding the mask. The two are numerically identical, but the OpenVINO conversion is
+        # tuned for the 5.5.4 mask topology. Re-derive `q_offset` as `cache_position[0]` here so the
+        # traced mask subgraph matches 5.5.4 exactly on newer transformers versions. (The tensor
+        # `q_length` BC path that the 5.4-5.9 branch relies on was removed in 5.9, so we build the
+        # `cache_position` tensor and feed `sdpa_mask` the scalars it derived from it in 5.5.4:
+        # `q_length = cache_position.shape[0]` (an `aten::size` -> Squeeze) and
+        # `q_offset = cache_position[0]` (a select/Gather).)
+        q_length = kwargs.pop("q_length", None)
+        q_offset = kwargs.pop("q_offset", 0)
+        cache_position = torch.arange(q_offset, q_offset + q_length)
+        return sdpa_mask(q_length=cache_position.shape[0], q_offset=cache_position[0], use_vmap=False, **kwargs)
     else:
         return sdpa_mask(use_vmap=False, **kwargs)
 
