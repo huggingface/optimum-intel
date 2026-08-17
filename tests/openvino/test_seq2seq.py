@@ -601,6 +601,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5_moe",
         "qwen3_omni_moe",
         "muse_glimmer",
+        "deepseek_ocr2",
     ]
     SUPPORT_VIDEO = [
         "llava_next_video",
@@ -694,6 +695,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             from transformers import AutoModel
 
             return AutoModel
+        if model_arch == "deepseek_ocr2":
+            from transformers import AutoModelForImageTextToText
+
+            return AutoModelForImageTextToText
         return AutoModelForCausalLM
 
     def _check_device_and_request(self, ov_model, expected_device, has_request):
@@ -990,8 +995,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         outputs = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
         self.assertIsInstance(outputs[0], str)
 
-        # GOT-OCR2 does not support text-only input
-        if model_arch != "got_ocr2":
+        # GOT-OCR2 and DeepSeek-OCR-2 are OCR models that do not support text-only input
+        if model_arch not in ("got_ocr2", "deepseek_ocr2"):
             # No input image case
             question = "Hi, how are you?"
             inputs = model.preprocess_inputs(**preprocessors, text=question, image=None)

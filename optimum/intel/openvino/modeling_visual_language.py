@@ -732,6 +732,7 @@ MODEL_PARTS_CLS_MAPPING = {
     "vision_resampler": OVVisionResampler,
     "multi_modal_projector": OVMultiModalProjector,
     "vision_embeddings_merger": OVVisionEmbedding,
+    "vision_embeddings_tiles": OVVisionEmbedding,
     "vision_embeddings_pos": OVVisionProjection,
     "audio_embeddings": OVAudioEmbeddings,
     "audio_forward_embeddings": OVAudioEmbeddings,
@@ -5687,6 +5688,132 @@ class _OVGotOCR2ForCausalLM(OVModelForVisualCausalLM):
         return processed_inputs
 
 
+class _OVDeepseekOCR2ForCausalLM(OVModelForVisualCausalLM):
+    """OpenVINO inference for DeepSeek-OCR-2 (``model_type == "deepseek_ocr2"``).
+
+    The vision encoder is exported as two static-shape submodels: ``vision_embeddings`` for the
+    1024x1024 global view (256 image tokens) and ``vision_embeddings_tiles`` for the 768x768 crop
+    tiles (144 image tokens each). Both submodels already include the multimodal projector, so
+    their output lives in the text-embedding space. The per-image visual feature is
+    ``cat([local_tiles, global, view_separator])`` (mirroring the native
+    ``DeepseekOcr2Model.get_image_features``), which is scattered into the text embeddings at the
+    image placeholder positions (``config.image_token_id``).
+    """
+
+    additional_parts = ["vision_embeddings_tiles"]
+
+    # Image token placeholder id used by DeepSeek-OCR-2 (fallback when config lacks image_token_id).
+    _DEEPSEEK_OCR2_IMAGE_TOKEN_ID = 128815
+
+    @property
+    def image_token_id(self):
+        return getattr(self.config, "image_token_id", self._DEEPSEEK_OCR2_IMAGE_TOKEN_ID)
+
+    @property
+    def view_separator(self):
+        if getattr(self, "_view_separator", None) is None:
+            self._view_separator = torch.tensor(self.config.view_separator, dtype=torch.float32)
+        return self._view_separator
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        # Skip vision on cached decode steps.
+        if input_ids is not None and input_ids.shape[1] == 1 and kwargs.get("past_key_values") is not None:
+            return None
+
+        pixel_values = torch.as_tensor(pixel_values) if not isinstance(pixel_values, torch.Tensor) else pixel_values
+        pixel_values_local = kwargs.get("pixel_values_local")
+        num_local_patches = kwargs.get("num_local_patches")
+
+        global_features = self.vision_embeddings(pixel_values.to(torch.float32)).last_hidden_state
+        global_features = torch.from_numpy(global_features).to(torch.float32)  # (B, 256, txt)
+        batch_size, hidden = global_features.shape[0], global_features.shape[-1]
+
+        per_image_local = [None] * batch_size
+        if pixel_values_local is not None and num_local_patches is not None:
+            num_local_patches = torch.as_tensor(num_local_patches).reshape(-1).tolist()
+            pixel_values_local = (
+                torch.as_tensor(pixel_values_local)
+                if not isinstance(pixel_values_local, torch.Tensor)
+                else pixel_values_local
+            )
+            if pixel_values_local.shape[0] > 0:
+                local_features = self.vision_embeddings_tiles(pixel_values_local.to(torch.float32)).last_hidden_state
+                local_features = torch.from_numpy(local_features).to(torch.float32)  # (total, 144, txt)
+                per_image_local = list(torch.split(local_features, num_local_patches, dim=0))
+
+        view_sep = self.view_separator[None, :]  # (1, txt)
+        features = []
+        for idx in range(batch_size):
+            global_flat = global_features[idx].reshape(-1, hidden)
+            if per_image_local[idx] is not None:
+                local_flat = per_image_local[idx].reshape(-1, per_image_local[idx].shape[-1])
+                features.append(torch.cat([local_flat, global_flat, view_sep], dim=0))
+            else:
+                features.append(torch.cat([global_flat, view_sep], dim=0))
+        return torch.cat(features, dim=0)
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        vision_embeds = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        mask = (input_ids == self.image_token_id).unsqueeze(-1).expand_as(inputs_embeds)
+        inputs_embeds = inputs_embeds.masked_scatter(mask, vision_embeds.to(inputs_embeds.dtype))
+        return inputs_embeds, attention_mask, position_ids
+
+    def forward(self, input_ids, pixel_values=None, pixel_values_local=None, num_local_patches=None, **kwargs):
+        return super().forward(
+            input_ids,
+            pixel_values=pixel_values,
+            pixel_values_local=pixel_values_local,
+            num_local_patches=num_local_patches,
+            **kwargs,
+        )
+
+    def prepare_inputs_for_generation(
+        self, input_ids, past_key_values=None, inputs_embeds=None, pixel_values=None, attention_mask=None, **kwargs
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        # Carry the extra DeepSeek-OCR-2 local-tile inputs on the prefill step only.
+        if past_key_values is None:
+            model_inputs["pixel_values_local"] = kwargs.get("pixel_values_local")
+            model_inputs["num_local_patches"] = kwargs.get("num_local_patches")
+        else:
+            model_inputs["pixel_values"] = None
+            model_inputs["pixel_values_local"] = None
+            model_inputs["num_local_patches"] = None
+        return model_inputs
+
+    @staticmethod
+    def preprocess_inputs(
+        text: Optional[str] = None,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("processor is required")
+        if video is not None or audio is not None:
+            raise ValueError("Video/audio inputs are not supported")
+        if image is None:
+            raise ValueError("Image input is required for DeepSeek-OCR-2")
+        if text is None:
+            text = "Free OCR."
+        if "<image>" not in text:
+            text = "<image>\n" + text
+        return processor(images=image, text=text, return_tensors="pt")
+
+
 class _OVIdefics3ForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids, **kwargs):
         # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-SmolVLM-2/src/transformers/models/smolvlm/modeling_smolvlm.py#L899-L942
@@ -7495,4 +7622,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_omni_moe": _OVQwen3OmniMoeForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
+    "deepseek_ocr2": _OVDeepseekOCR2ForCausalLM,
 }
