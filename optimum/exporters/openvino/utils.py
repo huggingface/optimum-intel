@@ -338,8 +338,6 @@ def _get_qwen3_tts_submodels_fn_and_export_configs(
 
     return custom_export_configs, fn_get_submodels
 
-
-
 MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llava",
     "llava_next",
