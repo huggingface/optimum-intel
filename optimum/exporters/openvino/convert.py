@@ -133,10 +133,9 @@ def _save_model(
     ov_config: Optional["OVConfig"] = None,
     library_name: Optional[str] = None,
     config: "OpenVINOConfig" = None,
-    patch_16bit_model: bool = False,
     source_model=None,
 ):
-    compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16" and not patch_16bit_model
+    compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
     model = _add_version_info_to_model(model, library_name)
 
     runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}
@@ -420,7 +419,6 @@ def export_pytorch(
             ov_config=ov_config,
             library_name=library_name,
             config=config,
-            patch_16bit_model=patch_16bit_model,
             source_model=model,
         )
         clear_class_registry()
