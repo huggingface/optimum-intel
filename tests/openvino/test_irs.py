@@ -6,14 +6,328 @@ regressions when upgrading transformers or other dependencies.
 """
 
 import json
+
+# Import test utilities to get model mappings
+import sys
 from pathlib import Path
+from pathlib import Path as PathlibPath
 from typing import Dict, List, Optional
 
 import pytest
 from huggingface_hub import snapshot_download
 from openvino import Core, Model
 
-from optimum.intel import OVDiffusionPipeline
+from optimum.intel import (
+    OVDiffusionPipeline,
+    OVFlux2KleinPipeline,
+    OVFluxFillPipeline,
+    OVFluxPipeline,
+    OVLatentConsistencyModelPipeline,
+    OVLTX2Pipeline,
+    OVLTXPipeline,
+    OVModelForAudioClassification,
+    OVModelForCausalLM,
+    OVModelForFeatureExtraction,
+    OVModelForImageClassification,
+    OVModelForMaskedLM,
+    OVModelForMultimodalLM,
+    OVModelForPix2Struct,
+    OVModelForQuestionAnswering,
+    OVModelForSeq2SeqLM,
+    OVModelForSequenceClassification,
+    OVModelForSpeechSeq2Seq,
+    OVModelForTextToSpeechSeq2Seq,
+    OVModelForTokenClassification,
+    OVModelForVision2Seq,
+    OVModelForVisualCausalLM,
+    OVModelForZeroShotImageClassification,
+    OVModelOpenCLIPForZeroShotImageClassification,
+    OVSamModel,
+    OVSanaPipeline,
+    OVStableDiffusion3Pipeline,
+    OVStableDiffusionPipeline,
+    OVStableDiffusionXLImg2ImgPipeline,
+    OVStableDiffusionXLPipeline,
+)
+
+
+# Add tests/openvino to path to import utils_tests
+sys.path.insert(0, str(PathlibPath(__file__).parent))
+from utils_tests import ARCH_TO_MODEL_CLASS, HUB_MODEL_NAMES, REMOTE_CODE_MODELS
+
+
+# Map class name strings to actual class objects
+CLASS_NAME_TO_CLASS = {
+    "OVDiffusionPipeline": OVDiffusionPipeline,
+    "OVFlux2KleinPipeline": OVFlux2KleinPipeline,
+    "OVFluxFillPipeline": OVFluxFillPipeline,
+    "OVFluxPipeline": OVFluxPipeline,
+    "OVLatentConsistencyModelPipeline": OVLatentConsistencyModelPipeline,
+    "OVLTX2Pipeline": OVLTX2Pipeline,
+    "OVLTXPipeline": OVLTXPipeline,
+    "OVModelForAudioClassification": OVModelForAudioClassification,
+    "OVModelForCausalLM": OVModelForCausalLM,
+    "OVModelForFeatureExtraction": OVModelForFeatureExtraction,
+    "OVModelForImageClassification": OVModelForImageClassification,
+    "OVModelForMaskedLM": OVModelForMaskedLM,
+    "OVModelForMultimodalLM": OVModelForMultimodalLM,
+    "OVModelForPix2Struct": OVModelForPix2Struct,
+    "OVModelForQuestionAnswering": OVModelForQuestionAnswering,
+    "OVModelForSeq2SeqLM": OVModelForSeq2SeqLM,
+    "OVModelForSequenceClassification": OVModelForSequenceClassification,
+    "OVModelForSpeechSeq2Seq": OVModelForSpeechSeq2Seq,
+    "OVModelForTextToSpeechSeq2Seq": OVModelForTextToSpeechSeq2Seq,
+    "OVModelForTokenClassification": OVModelForTokenClassification,
+    "OVModelForVision2Seq": OVModelForVision2Seq,
+    "OVModelForVisualCausalLM": OVModelForVisualCausalLM,
+    "OVModelForZeroShotImageClassification": OVModelForZeroShotImageClassification,
+    "OVModelOpenCLIPForZeroShotImageClassification": OVModelOpenCLIPForZeroShotImageClassification,
+    "OVSamModel": OVSamModel,
+    "OVSanaPipeline": OVSanaPipeline,
+    "OVStableDiffusion3Pipeline": OVStableDiffusion3Pipeline,
+    "OVStableDiffusionPipeline": OVStableDiffusionPipeline,
+    "OVStableDiffusionXLImg2ImgPipeline": OVStableDiffusionXLImg2ImgPipeline,
+    "OVStableDiffusionXLPipeline": OVStableDiffusionXLPipeline,
+}
+
+
+# Additional architecture-to-class mappings from test_export.py, test_decoder.py, and test_quantization.py
+# Merged with ARCH_TO_MODEL_CLASS for more complete coverage
+ADDITIONAL_ARCH_MAPPINGS = {
+    # From test_export.py
+    "albert": "OVModelForSequenceClassification",
+    "bert": "OVModelForMaskedLM",
+    "blenderbot": "OVModelForFeatureExtraction",
+    "distilbert": "OVModelForQuestionAnswering",
+    "hunyuan_v1_dense": "OVModelForCausalLM",
+    "kokoro": "OVModelForTextToSpeechSeq2Seq",
+    "mamba": "OVModelForCausalLM",
+    "qwen3_next": "OVModelForCausalLM",
+    "roberta": "OVModelForTokenClassification",
+    "sam": "OVSamModel",
+    "smollm3": "OVModelForCausalLM",
+    "speecht5": "OVModelForTextToSpeechSeq2Seq",
+    "t5": "OVModelForSeq2SeqLM",
+    "vit": "OVModelForImageClassification",
+    "wav2vec2": "OVModelForAudioClassification",
+    "zamba2": "OVModelForCausalLM",
+    # From test_decoder.py - CausalLM models
+    "arcee": "OVModelForCausalLM",
+    "biogpt": "OVModelForCausalLM",
+    "bloom": "OVModelForCausalLM",
+    "codegen": "OVModelForCausalLM",
+    "cohere": "OVModelForCausalLM",
+    "falcon": "OVModelForCausalLM",
+    "falcon-40b": "OVModelForCausalLM",
+    "gemma": "OVModelForCausalLM",
+    "gemma2": "OVModelForCausalLM",
+    "gemma3_text": "OVModelForCausalLM",
+    "glm": "OVModelForCausalLM",
+    "glm4": "OVModelForCausalLM",
+    "gpt_bigcode": "OVModelForCausalLM",
+    "gpt_neo": "OVModelForCausalLM",
+    "gpt_neox": "OVModelForCausalLM",
+    "gpt_neox_japanese": "OVModelForCausalLM",
+    "gpt_oss": "OVModelForCausalLM",
+    "gpt_oss_mxfp4": "OVModelForCausalLM",
+    "gptj": "OVModelForCausalLM",
+    "granite": "OVModelForCausalLM",
+    "granitemoe": "OVModelForCausalLM",
+    "mistral-nemo": "OVModelForCausalLM",
+    "mixtral": "OVModelForCausalLM",
+    "mpt": "OVModelForCausalLM",
+    "opt": "OVModelForCausalLM",
+    "pegasus": "OVModelForCausalLM",
+    "persimmon": "OVModelForCausalLM",
+    "phi": "OVModelForCausalLM",
+    "phi3": "OVModelForCausalLM",
+    "qwen2_moe": "OVModelForCausalLM",
+    "stablelm": "OVModelForCausalLM",
+    "starcoder2": "OVModelForCausalLM",
+    "xglm": "OVModelForCausalLM",
+    # From test_seq2seq.py - Seq2SeqLM models
+    "bigbird_pegasus": "OVModelForSeq2SeqLM",
+    "blenderbot-small": "OVModelForSeq2SeqLM",
+    "longt5": "OVModelForSeq2SeqLM",
+    "m2m_100": "OVModelForSeq2SeqLM",
+    "marian": "OVModelForSeq2SeqLM",
+    "mbart": "OVModelForSeq2SeqLM",
+    "mt5": "OVModelForSeq2SeqLM",
+    # Vision models - ImageClassification
+    "audio-spectrogram-transformer": "OVModelForAudioClassification",
+    "beit": "OVModelForImageClassification",
+    "convnext": "OVModelForImageClassification",
+    "convnextv2": "OVModelForImageClassification",
+    "data2vec-vision": "OVModelForImageClassification",
+    "deit": "OVModelForImageClassification",
+    "levit": "OVModelForImageClassification",
+    "mobilenet_v1": "OVModelForImageClassification",
+    "mobilenet_v2": "OVModelForImageClassification",
+    "mobilevit": "OVModelForImageClassification",
+    "poolformer": "OVModelForImageClassification",
+    "resnet": "OVModelForImageClassification",
+    "swin": "OVModelForImageClassification",
+    # Vision models - Feature Extraction / Object Detection
+    "detr": "OVModelForFeatureExtraction",
+    "donut-swin": "OVModelForFeatureExtraction",
+    "open-clip": "OVModelOpenCLIPForZeroShotImageClassification",
+    "segformer": "OVModelForFeatureExtraction",
+    # Text models - Masked LM / Feature Extraction / Embeddings
+    "bge": "OVModelForFeatureExtraction",
+    "camembert": "OVModelForMaskedLM",
+    "convbert": "OVModelForSequenceClassification",
+    "data2vec-text": "OVModelForFeatureExtraction",
+    "deberta": "OVModelForMaskedLM",
+    "deberta-v2": "OVModelForMaskedLM",
+    "esm": "OVModelForMaskedLM",
+    "flaubert": "OVModelForMaskedLM",
+    "ibert": "OVModelForMaskedLM",
+    "mobilebert": "OVModelForMaskedLM",
+    "mpnet": "OVModelForFeatureExtraction",
+    "nystromformer": "OVModelForMaskedLM",
+    "rembert": "OVModelForMaskedLM",
+    "roformer": "OVModelForMaskedLM",
+    "sentence-transformers-bert": "OVModelForFeatureExtraction",
+    "squeezebert": "OVModelForMaskedLM",
+    "st-bert": "OVModelForFeatureExtraction",
+    "st-mpnet": "OVModelForFeatureExtraction",
+    "xlm": "OVModelForMaskedLM",
+    "xlm-roberta": "OVModelForMaskedLM",
+    # Audio models
+    "data2vec-audio": "OVModelForAudioClassification",
+    "hubert": "OVModelForAudioClassification",
+    "sew": "OVModelForAudioClassification",
+    "sew-d": "OVModelForAudioClassification",
+    "speech_to_text": "OVModelForSpeechSeq2Seq",
+    "unispeech": "OVModelForAudioClassification",
+    "unispeech-sat": "OVModelForAudioClassification",
+    "wav2vec2-conformer": "OVModelForAudioClassification",
+    "wav2vec2-hf": "OVModelForAudioClassification",
+    "wavlm": "OVModelForAudioClassification",
+    # Causal LM - Additional models
+    "bitnet": "OVModelForCausalLM",
+    "cohere2": "OVModelForCausalLM",
+    "dbrx": "OVModelForCausalLM",
+    "falcon_mamba": "OVModelForCausalLM",
+    "gemma3": "OVModelForVisualCausalLM",
+    "gemma3n_text": "OVModelForCausalLM",
+    "granitemoehybrid": "OVModelForCausalLM",
+    "olmo": "OVModelForCausalLM",
+    "olmo2": "OVModelForCausalLM",
+    "opt125m": "OVModelForCausalLM",
+    "phimoe": "OVModelForCausalLM",
+    "qwen3_5": "OVModelForVisualCausalLM",
+    # Vision-Language / Multimodal models
+    "donut": "OVModelForVision2Seq",
+    "gemma3n": "OVModelForVisualCausalLM",
+    "gemma4": "OVModelForVisualCausalLM",
+    "got_ocr2": "OVModelForVisualCausalLM",
+    "idefics3": "OVModelForVisualCausalLM",
+    "internvl_chat": "OVModelForVisualCausalLM",
+    "llava-qwen2": "OVModelForVisualCausalLM",
+    "llava_next": "OVModelForVisualCausalLM",
+    "llava_next_mistral": "OVModelForVisualCausalLM",
+    "llava_next_video": "OVModelForVisualCausalLM",
+    "maira2": "OVModelForVisualCausalLM",
+    "minicpmo": "OVModelForVisualCausalLM",
+    "minicpmv": "OVModelForVisualCausalLM",
+    "phi3_v": "OVModelForVisualCausalLM",
+    "phi4mm": "OVModelForVisualCausalLM",
+    "pix2struct": "OVModelForPix2Struct",
+    "qwen2_5_vl": "OVModelForVisualCausalLM",
+    "qwen2_vl": "OVModelForVisualCausalLM",
+    "qwen3_vl": "OVModelForVisualCausalLM",
+    "qwen3_vl_embedding": "OVModelForFeatureExtraction",
+    "smolvlm": "OVModelForVisualCausalLM",
+    "trocr": "OVModelForVision2Seq",
+    "vision-encoder-decoder": "OVModelForVision2Seq",
+    # Diffusion pipelines
+    "flux": "OVFluxPipeline",
+    "flux-fill": "OVFluxFillPipeline",
+    "flux.2-klein": "OVFlux2KleinPipeline",
+    "latent-consistency": "OVLatentConsistencyModelPipeline",
+    "ltx-video": "OVLTXPipeline",
+    "sana": "OVSanaPipeline",
+    "sana-sprint": "OVSanaPipeline",
+    "stable-diffusion-3": "OVStableDiffusion3Pipeline",
+    "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
+    "stable-diffusion-xl-refiner": "OVStableDiffusionXLImg2ImgPipeline",
+    "stable-diffusion-with-custom-variant": "OVStableDiffusionPipeline",
+    "stable-diffusion-with-safety-checker": "OVStableDiffusionPipeline",
+    "stable-diffusion-with-textual-inversion": "OVStableDiffusionPipeline",
+}
+
+
+# Generate test parameters: (model_id, model_class) for all models that don't need trust_remote_code
+def _generate_test_params():
+    """Generate test parameters from utils_tests mappings and test_export mappings."""
+    params = []
+    for arch, model_id in HUB_MODEL_NAMES.items():
+        # Skip models that need trust_remote_code
+        if arch in REMOTE_CODE_MODELS:
+            continue
+
+        if arch in { #4.57.6 models
+            "data2vec-text",
+            "got_ocr2",
+            "flaubert",
+            "idefics3",
+            "zamba2",
+            "qwen3_next",
+            "xlm",
+            "qwen2_vl",
+            "qwen2_5_vl",
+            "qwen3_vl",
+            "qwen3_vl_embedding",
+            "llava_next_video",
+            "marian",
+            "mt5",
+            "smolvlm",
+        }:
+            continue
+
+        if arch in { #max transformers 5.0 required
+            "gemma",
+            "gemma2",
+            "gemma3_text",
+            "gemma3n_text",
+            "glm",
+        }:
+            continue
+
+        if arch == "qwen3_5":  # max transformers 5.2.* required
+            continue
+
+        if arch in { #max transformers 5.3.0 required
+            "falcon_mamba",
+            "granitemoehybrid",
+            "mamba",
+        }:
+            continue
+
+        if arch in { #max transformers 5.4.0 required
+            "lfm2",
+            "lfm2_moe",
+        }:
+            continue
+
+        # Try to get model class from ARCH_TO_MODEL_CLASS first, then ADDITIONAL_ARCH_MAPPINGS
+        class_name = None
+        if arch in ARCH_TO_MODEL_CLASS:
+            class_name = ARCH_TO_MODEL_CLASS[arch]
+        elif arch in ADDITIONAL_ARCH_MAPPINGS:
+            class_name = ADDITIONAL_ARCH_MAPPINGS[arch]
+
+        # Skip if no mapping found or class not available
+        if class_name is None or class_name not in CLASS_NAME_TO_CLASS:
+            continue
+
+        model_class = CLASS_NAME_TO_CLASS[class_name]
+        params.append((model_id, model_class))
+    return params
+
+
+TEST_MODELS = _generate_test_params()
 
 
 # OpenVINO model comparison functions
@@ -111,14 +425,18 @@ def load_reference_metadata(ref_dir: Path) -> Optional[Dict]:
 
 def find_ir_files(directory: Path) -> List[Path]:
     """
-    Find all openvino_model.xml files in directory and subdirectories.
+    Find all OpenVINO IR XML files in directory and subdirectories.
+    Handles both standard naming (openvino_model.xml) and component naming
+    (openvino_language_model.xml, openvino_vision_embeddings_model.xml, etc.)
     Returns list of paths relative to the directory.
     """
     ir_files = []
-    for xml_file in directory.rglob("openvino_model.xml"):
-        # Get relative path from directory
-        rel_path = xml_file.relative_to(directory)
-        ir_files.append(rel_path)
+    # Match both openvino_model.xml and openvino_*_model.xml patterns
+    for xml_file in directory.rglob("openvino*.xml"):
+        if xml_file.name.startswith("openvino") and xml_file.name.endswith("_model.xml"):
+            # Get relative path from directory
+            rel_path = xml_file.relative_to(directory)
+            ir_files.append(rel_path)
     return sorted(ir_files)
 
 
@@ -127,33 +445,39 @@ class TestIRStability:
 
     @pytest.mark.parametrize(
         "model_id,model_class",
-        [
-            ("optimum-intel-internal-testing/tiny-random-flux", OVDiffusionPipeline),
-        ],
+        TEST_MODELS,
     )
     def test_ir_stability(self, model_id: str, model_class, tmp_path: Path):
         """Test that exported IR matches reference IR."""
 
-        # Download reference IRs from HuggingFace (openvino/ folder)
+        # Download reference IRs from HuggingFace (ov branch)
         try:
-            ref_ir_dir = (
-                Path(
-                    snapshot_download(
-                        repo_id=model_id,
-                        allow_patterns=["openvino/**"],
-                        repo_type="model",
-                    )
+            ref_ir_dir = Path(
+                snapshot_download(
+                    repo_id=model_id,
+                    revision="ov",
+                    repo_type="model",
                 )
-                / "openvino"
             )
         except Exception as e:
-            pytest.skip(f"Failed to download reference IRs from {model_id}: {e}")
+            pytest.skip(f"Failed to download reference IRs from {model_id} (ov branch): {e}")
 
         if not ref_ir_dir.exists():
-            pytest.skip(f"No openvino/ folder found in {model_id}")
+            pytest.skip(f"Reference IR directory not found for {model_id}")
 
         # Load reference metadata
         ref_metadata = load_reference_metadata(ref_ir_dir)
+
+        if ref_metadata:
+            print(
+                f"[IR-DEBUG] {model_id}: reference IR generated with "
+                f"transformers={ref_metadata.get('transformers_version', 'unknown')}, "
+                f"optimum-intel={ref_metadata.get('optimum_intel_version', 'unknown')}, "
+                f"openvino={ref_metadata.get('openvino_version', 'unknown')}, "
+                f"date={ref_metadata.get('generated_date', 'unknown')}"
+            )
+        else:
+            print(f"[IR-DEBUG] {model_id}: no reference metadata.json found in {ref_ir_dir}")
 
         # Find all IR files (handles both single models and multi-component pipelines)
         ref_ir_files = find_ir_files(ref_ir_dir)
@@ -162,11 +486,7 @@ class TestIRStability:
             pytest.skip(f"No openvino_model.xml files found in {ref_ir_dir}")
 
         # Export new IR
-        export_kwargs = {"export": True}
-        if model_class == OVDiffusionPipeline:
-            export_kwargs["trust_remote_code"] = True
-
-        model = model_class.from_pretrained(model_id, **export_kwargs)
+        model = model_class.from_pretrained(model_id, export=True)
         new_ir_dir = tmp_path / "new_ir"
         model.save_pretrained(new_ir_dir)
 
