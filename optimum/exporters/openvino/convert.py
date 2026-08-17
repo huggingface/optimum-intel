@@ -531,49 +531,6 @@ def _iter_kokoro_voice_pt_files(repo_id_or_path: str) -> Iterator[Tuple[str, Pat
             yield Path(remote_path).stem, local_pt
 
 
-
-
-def _save_qwen3_tts_config_and_assets(model, output: Path):
-    """Materialize the original Qwen3-TTS repository files alongside the talker IR.
-
-    The OpenVINO runtime (:class:`optimum.intel.openvino.modeling_text2speech._OVModelForQwen3TTS`)
-    rebuilds the full ``qwen_tts`` pipeline from these files and loads the exported
-    ``openvino_talker_model.xml`` for the offloaded decoder stack, so every original file
-    (configs, tokenizer, weights, processor assets) must be present in ``output``. OpenVINO
-    IR files that already live in the source directory are skipped to avoid clobbering the
-    freshly exported graph.
-    """
-    import shutil
-
-    repo_id = getattr(model, "_qwen3_tts_repo_id", None)
-    if repo_id is None:
-        return
-
-    output = Path(output)
-    src = Path(repo_id)
-    skip_names = {".git", ".cache", "openvino_talker_model.xml", "openvino_talker_model.bin"}
-
-    if src.is_dir():
-        for item in src.iterdir():
-            if item.name in skip_names:
-                continue
-            dest = output / item.name
-            if item.is_dir():
-                shutil.copytree(item, dest, dirs_exist_ok=True)
-            else:
-                if dest.resolve() == item.resolve():
-                    continue
-                shutil.copy2(item, dest)
-    else:
-        from huggingface_hub import snapshot_download
-
-        snapshot_download(
-            repo_id=str(repo_id),
-            local_dir=str(output),
-            ignore_patterns=["openvino_talker_model.xml", "openvino_talker_model.bin"],
-        )
-
-
 def _save_kokoro_config_and_assets(model, output: Path):
     """Save Kokoro model config.json and export voice embeddings."""
     import json
