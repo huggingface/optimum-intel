@@ -1181,15 +1181,13 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "qwen3_5_moe", False),
         (OVModelForVisualCausalLM, "gemma4", False),
         (OVModelForVisualCausalLM, "gemma4_moe", False),
+        (OVModelForVisualCausalLM, "deepseek_ocr2", False),
     ]
 
     # gemma3n openvino>=2026.2.0 because it needs erfinv operation,
     # quantization tests will be moved to openvino==2026.2.0 in CVS-189051
     if is_openvino_version(">=", "2026.2.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "gemma3n", False))
-
-    if is_transformers_version(">=", "5.11"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "deepseek_ocr2", False))
 
     # filter models type depending on min max transformers version
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = [

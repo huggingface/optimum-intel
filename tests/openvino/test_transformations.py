@@ -289,19 +289,7 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
-}
-
-if is_transformers_version(">=", "5.0.0"):
-    ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["convert"].extend(
-        [
-            "TransposeMatMul",
-            "ReshapeAMatMul",
-        ]
-    )
-
-
-if is_transformers_version(">=", "5.11"):
-    ARCH_TO_EXPECTED_TRANSFORMATIONS["deepseek_ocr2"] = {
+    "deepseek_ocr2": {
         "model_class": "OVModelForVisualCausalLM",
         "convert": [
             "SDPAFusion",
@@ -323,7 +311,16 @@ if is_transformers_version(">=", "5.11"):
             "ConvertToPowerStatic",
             "ConvertToSwishCPU",
         ],
-    }
+    },
+}
+
+if is_transformers_version(">=", "5.0.0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["convert"].extend(
+        [
+            "TransposeMatMul",
+            "ReshapeAMatMul",
+        ]
+    )
 
 
 # filter architectures depending on min/max transformers supported versions
