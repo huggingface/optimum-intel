@@ -18,7 +18,6 @@ import torch
 from transformers import Pipeline
 from transformers import pipeline as transformers_pipeline
 
-from optimum.utils import is_transformers_version
 from optimum.utils.logging import get_logger
 
 from .accelerator_utils import patch_pipelines_to_load_accelerator_model
@@ -221,9 +220,8 @@ def pipeline(  # noqa: D417
         raise ValueError(msg + " Supported list of `accelerator` is : ['openvino'].")
 
     version_dependent_kwargs = {}
-    if is_transformers_version(">=", "4.46.0"):
-        # processor argument was added in transformers v4.46.0
-        version_dependent_kwargs["processor"] = processor
+    # processor argument was added in transformers v4.46.0
+    version_dependent_kwargs["processor"] = processor
 
     with patch_pipelines_to_load_accelerator_model(accelerator=accelerator):
         pipeline_with_accelerator_model = transformers_pipeline(

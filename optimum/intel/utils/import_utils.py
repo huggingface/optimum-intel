@@ -117,6 +117,14 @@ if _kokoro_available:
     except importlib_metadata.PackageNotFoundError:
         _kokoro_available = False
 
+_funasr_available = importlib.util.find_spec("funasr") is not None
+_funasr_version = "N/A"
+if _funasr_available:
+    try:
+        _funasr_version = importlib_metadata.version("funasr")
+    except importlib_metadata.PackageNotFoundError:
+        _funasr_available = False
+
 _safetensors_version = "N/A"
 _safetensors_available = importlib.util.find_spec("safetensors") is not None
 if _safetensors_available:
@@ -302,6 +310,10 @@ def is_kokoro_available():
     return _kokoro_available
 
 
+def is_funasr_available():
+    return _funasr_available
+
+
 def is_safetensors_available():
     return _safetensors_available
 
@@ -361,7 +373,7 @@ def is_transformers_version(operation: str, version: str):
     """
     if not _transformers_available:
         return False
-    return compare_versions(parse(_transformers_version), operation, version)
+    return compare_versions(parse(parse(_transformers_version).base_version), operation, version)
 
 
 def is_tokenizers_version(operation: str, version: str):
