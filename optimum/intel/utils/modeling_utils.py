@@ -18,7 +18,7 @@ import os
 import re
 from glob import glob
 from pathlib import Path
-from typing import Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Type, Union
 
 import torch
 from huggingface_hub import HfApi, get_token, hf_hub_download

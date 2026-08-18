@@ -596,15 +596,30 @@ def _save_kokoro_config_and_assets(model, output: Path):
         logger.info(f"Exported voice {voice_name} -> {voice_bin}")
 
 
+# Checkpoint files are not copied into a Qwen3-TTS export: every parameter of the model - the
+# two decoder stacks, the embedding tables and output heads, the speaker encoder and both codec
+# directions - lives in an exported IR, and the runtime rebuilds the ``qwen_tts`` module tree
+# from its configs alone. The configs, tokenizer, and processor assets are still required and
+# are copied as usual.
+_QWEN3_TTS_WEIGHT_PATTERNS = (
+    "*.safetensors",
+    "*.safetensors.index.json",
+    "*.bin",
+    "*.bin.index.json",
+    "*.pt",
+    "*.pth",
+)
+
+
 def _save_qwen3_tts_config_and_assets(model, output: Path):
-    """Materialize the original Qwen3-TTS repository files alongside the talker IR.
+    """Materialize the original Qwen3-TTS repository files alongside the exported IRs.
 
     The OpenVINO runtime (:class:`optimum.intel.openvino.modeling_text2speech._OVModelForQwen3TTS`)
-    rebuilds the full ``qwen_tts`` pipeline from these files and loads the exported
-    ``openvino_talker_model.xml`` for the offloaded decoder stack, so every original file
-    (configs, tokenizer, weights, processor assets) must be present in ``output``. OpenVINO
-    IR files that already live in the source directory are skipped to avoid clobbering the
-    freshly exported graph.
+    rebuilds the ``qwen_tts`` pipeline from these files and loads the exported IRs for every
+    neural component, so the original configs, tokenizer and processor assets must be present
+    in ``output``. Two classes of file are left out: OpenVINO IRs that already live in the
+    source directory (so a freshly exported graph is not clobbered) and the checkpoints
+    themselves (see :data:`_QWEN3_TTS_WEIGHT_PATTERNS`).
     """
     import shutil
 
@@ -615,14 +630,15 @@ def _save_qwen3_tts_config_and_assets(model, output: Path):
     output = Path(output)
     src = Path(repo_id)
     skip_names = {".git", ".cache", "openvino_talker_model.xml", "openvino_talker_model.bin"}
+    ignore_weights = shutil.ignore_patterns(*_QWEN3_TTS_WEIGHT_PATTERNS)
 
     if src.is_dir():
         for item in src.iterdir():
-            if item.name in skip_names:
+            if item.name in skip_names or ignore_weights(str(src), [item.name]):
                 continue
             dest = output / item.name
             if item.is_dir():
-                shutil.copytree(item, dest, dirs_exist_ok=True)
+                shutil.copytree(item, dest, dirs_exist_ok=True, ignore=ignore_weights)
             else:
                 if dest.resolve() == item.resolve():
                     continue
@@ -633,7 +649,12 @@ def _save_qwen3_tts_config_and_assets(model, output: Path):
         snapshot_download(
             repo_id=str(repo_id),
             local_dir=str(output),
-            ignore_patterns=["openvino_talker_model.xml", "openvino_talker_model.bin"],
+            ignore_patterns=[
+                "openvino_talker_model.xml",
+                "openvino_talker_model.bin",
+                *_QWEN3_TTS_WEIGHT_PATTERNS,
+                *[f"speech_tokenizer/{pattern}" for pattern in _QWEN3_TTS_WEIGHT_PATTERNS],
+            ],
         )
 
 

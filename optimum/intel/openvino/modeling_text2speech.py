@@ -14,6 +14,7 @@
 
 import logging
 import os
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -915,16 +916,28 @@ class _OVModelForKokoroTextToSpeech(OVBaseModel):
 #   into codes (ICL mode) and to decode the generated codes back into a 24 kHz waveform.
 #
 # Because the generation orchestration is highly model specific, the runtime keeps the
-# original PyTorch orchestration from ``qwen_tts`` and offloads the compute-heavy talker
-# decoder stack to OpenVINO (hybrid component-wise export).
+# original PyTorch orchestration from ``qwen_tts`` and offloads all five neural components
+# to OpenVINO (hybrid component-wise export): the talker and code-predictor decoder stacks,
+# the speaker encoder, and both directions of the codec. Everything in between - sampling,
+# m-RoPE index math, ICL prompt assembly, chunked decoding - stays in PyTorch.
 # ---------------------------------------------------------------------------
 
-# File name of the serialized talker decoder stack OpenVINO IR.
+# File names of the serialized OpenVINO IRs, one per offloaded component.
 _TALKER_OV_IR_NAME = "openvino_talker_model.xml"
+_CODE_PREDICTOR_OV_IR_NAME = "openvino_code_predictor_model.xml"
+_SPEAKER_ENCODER_OV_IR_NAME = "openvino_speaker_encoder.xml"
+_CODEC_ENCODER_OV_IR_NAME = "openvino_codec_encoder.xml"
+_CODEC_DECODER_OV_IR_NAME = "openvino_codec_decoder.xml"
+_TALKER_TEXT_EMBEDDINGS_OV_IR_NAME = "openvino_talker_text_embeddings.xml"
+_TALKER_TEXT_PROJECTION_OV_IR_NAME = "openvino_talker_text_projection.xml"
+_TALKER_CODEC_EMBEDDINGS_OV_IR_NAME = "openvino_talker_codec_embeddings.xml"
+_TALKER_CODEC_HEAD_OV_IR_NAME = "openvino_talker_codec_head.xml"
+_CODE_PREDICTOR_CODEC_EMBEDDINGS_OV_IR_NAME = "openvino_code_predictor_codec_embeddings.xml"
+_CODE_PREDICTOR_LM_HEAD_OV_IR_NAME = "openvino_code_predictor_lm_head.xml"
 
 
-def _resolve_talker_ir_dir(model_id, cache_dir) -> Path:
-    """Resolve a writable directory for the talker OpenVINO IR.
+def _resolve_ir_dir(model_id, cache_dir) -> Path:
+    """Resolve a writable directory for the Qwen3-TTS OpenVINO IRs.
 
     Uses the model directory when ``model_id`` is a local path, otherwise a stable
     location under the Hugging Face cache keyed by the (sanitized) model id.
@@ -935,6 +948,291 @@ def _resolve_talker_ir_dir(model_id, cache_dir) -> Path:
     sanitized = str(model_id).replace("/", "--")
     base = Path(cache_dir) if cache_dir else Path(HUGGINGFACE_HUB_CACHE)
     return base / "openvino_qwen3_tts" / sanitized
+
+
+@contextmanager
+def _qwen3_tts_weightless_codec(model_id):
+    """Let ``qwen_tts`` build the neural codec from its config when its weights are absent.
+
+    Every codec parameter is baked into the exported ``codec_encoder`` / ``codec_decoder`` IRs,
+    so the export does not copy ``speech_tokenizer/*.safetensors``. ``Qwen3TTSTokenizer`` would
+    still insist on a checkpoint, so within this context it is built structurally instead: the
+    modules are materialized on the meta device (no allocation - nothing ever reads their
+    weights, both entry points being replaced by ``_install_ov_codec_*``) while the feature
+    extractor and config, which the surrounding Python code does read, load normally.
+
+    Outside this context - and for export directories that still carry codec weights - the
+    original loader is used unchanged.
+    """
+    from qwen_tts.inference.qwen3_tts_tokenizer import Qwen3TTSTokenizer
+
+    original_from_pretrained = Qwen3TTSTokenizer.from_pretrained
+
+    def from_config(cls, pretrained_model_name_or_path, **kwargs):
+        from qwen_tts.core import (
+            Qwen3TTSTokenizerV1Config,
+            Qwen3TTSTokenizerV1Model,
+            Qwen3TTSTokenizerV2Config,
+            Qwen3TTSTokenizerV2Model,
+        )
+        from transformers import AutoConfig, AutoFeatureExtractor, AutoModel
+
+        for config_cls, model_cls in (
+            (Qwen3TTSTokenizerV1Config, Qwen3TTSTokenizerV1Model),
+            (Qwen3TTSTokenizerV2Config, Qwen3TTSTokenizerV2Model),
+        ):
+            AutoConfig.register(config_cls.model_type, config_cls, exist_ok=True)
+            AutoModel.register(config_cls, model_cls, exist_ok=True)
+
+        instance = cls()
+        instance.config = AutoConfig.from_pretrained(pretrained_model_name_or_path)
+        with torch.device("meta"):
+            instance.model = AutoModel.from_config(instance.config)
+        instance.model.eval()
+        instance.feature_extractor = AutoFeatureExtractor.from_pretrained(pretrained_model_name_or_path)
+        # ``device`` is a plain attribute on the wrapper, so it can point at CPU even though the
+        # (unused) module parameters live on meta; the codec's own tensors all come from OpenVINO.
+        instance.device = torch.device("cpu")
+        return instance
+
+    Qwen3TTSTokenizer.from_pretrained = classmethod(from_config)
+    try:
+        yield
+    finally:
+        Qwen3TTSTokenizer.from_pretrained = original_from_pretrained
+
+
+def _qwen3_tts_codec_weights_present(model_id) -> bool:
+    """True when the model directory still ships the codec checkpoint."""
+    codec_dir = Path(str(model_id)) / "speech_tokenizer"
+    if not codec_dir.is_dir():
+        # Hub repos are resolved by ``qwen_tts`` itself; assume the original layout.
+        return True
+    return any(codec_dir.glob("*.safetensors")) or any(codec_dir.glob("*.bin"))
+
+
+def _qwen3_tts_weights_present(model_id) -> bool:
+    """True when the model directory still ships the main Qwen3-TTS checkpoint."""
+    model_dir = Path(str(model_id))
+    if not model_dir.is_dir():
+        return True
+    return any(model_dir.glob("*.safetensors")) or any(model_dir.glob("pytorch_model*.bin"))
+
+
+def _strip_qwen3_tts_weights(model: "torch.nn.Module") -> None:
+    """Turn a meta-device Qwen3-TTS module tree into a structural, weightless one.
+
+    Every parameter is swapped for an empty CPU tensor. That keeps ``model.device`` and
+    ``model.dtype`` - which ``qwen_tts`` reads when it builds its prompt tensors - reporting
+    CPU/float32 without allocating the checkpoint, and makes any weight that is unexpectedly
+    still needed fail loudly on shape rather than silently return garbage.
+
+    Rotary ``inv_freq`` buffers are the exception: they are non-persistent, derived from the
+    config at construction time, and read by the PyTorch side of the decoder-stack shims, so
+    they are recomputed on CPU.
+    """
+    for module in model.modules():
+        for name, parameter in list(module._parameters.items()):
+            if parameter is not None:
+                module._parameters[name] = nn.Parameter(torch.empty(0), requires_grad=False)
+
+    for module in model.modules():
+        if hasattr(module, "rope_init_fn"):
+            inv_freq, module.attention_scaling = module.rope_init_fn(module.config, torch.device("cpu"))
+            module.register_buffer("inv_freq", inv_freq, persistent=False)
+            module.original_inv_freq = inv_freq
+
+    remaining = [name for name, buffer in model.named_buffers() if buffer.device.type == "meta"]
+    if remaining:
+        raise RuntimeError(f"Qwen3-TTS: buffers left on the meta device and cannot be rebuilt: {remaining}")
+
+
+def _build_weightless_qwen3_tts_pipeline(model_id, generate_config_name: str = "generation_config.json"):
+    """Build the ``qwen_tts`` pipeline for an export that carries no PyTorch weights.
+
+    Mirrors ``Qwen3TTSModel.from_pretrained`` / ``Qwen3TTSForConditionalGeneration.from_pretrained``
+    but constructs the model from its config on the meta device instead of loading a
+    checkpoint, since every parameter has been exported to an OpenVINO IR. The processor,
+    configs and generation defaults - all of which the surrounding Python code really does
+    read - are loaded normally.
+    """
+    import json
+
+    from qwen_tts.core.models.configuration_qwen3_tts import Qwen3TTSConfig
+    from qwen_tts.core.models.modeling_qwen3_tts import Qwen3TTSForConditionalGeneration
+    from qwen_tts.core.models.processing_qwen3_tts import Qwen3TTSProcessor
+    from qwen_tts.inference.qwen3_tts_model import Qwen3TTSModel
+
+    model_dir = Path(str(model_id))
+    config = Qwen3TTSConfig.from_pretrained(model_dir)
+    with torch.device("meta"):
+        model = Qwen3TTSForConditionalGeneration(config)
+    _strip_qwen3_tts_weights(model)
+    model.eval()
+
+    with _qwen3_tts_weightless_codec(model_dir):
+        from qwen_tts.inference.qwen3_tts_tokenizer import Qwen3TTSTokenizer
+
+        model.load_speech_tokenizer(Qwen3TTSTokenizer.from_pretrained(model_dir / "speech_tokenizer"))
+
+    with open(model_dir / generate_config_name, encoding="utf-8") as generate_config_file:
+        model.load_generate_config(json.load(generate_config_file))
+
+    processor = Qwen3TTSProcessor.from_pretrained(model_dir, fix_mistral_regex=True)
+    return Qwen3TTSModel(model=model, processor=processor, generate_defaults=model.generate_config)
+
+
+def _as_float32_numpy(tensor) -> np.ndarray:
+    """Return a contiguous float32 numpy view of a torch tensor or array."""
+    if isinstance(tensor, np.ndarray):
+        return np.ascontiguousarray(tensor, dtype=np.float32)
+    return np.ascontiguousarray(tensor.detach().cpu().to(torch.float32).numpy())
+
+
+def _make_ov_embedding_forward(compiled, embedding_dim, step=None):
+    """Build an OpenVINO-backed ``forward`` for one embedding table.
+
+    ``qwen_tts`` looks embeddings up with 0-d, 1-d and 2-d id tensors, while the graph has a
+    fixed rank, so ids are flattened to ``[1, N]`` on the way in and the original shape is
+    restored on the way out. ``step`` selects one of the code predictor's per-depth tables.
+    """
+
+    def ov_forward(input_ids):
+        ids = input_ids.reshape(1, -1).to(torch.int64).numpy()
+        inputs = [ids] if step is None else [ids, np.array(step, dtype=np.int64)]
+        embeddings = torch.from_numpy(compiled(inputs)[0]).clone()
+        return embeddings.reshape(*input_ids.shape, embedding_dim)
+
+    return ov_forward
+
+
+def _make_ov_projection_forward(compiled, step=None):
+    """Build an OpenVINO-backed ``forward`` for one projection over hidden states.
+
+    Inputs are flattened to ``[1, N, hidden]`` for the same reason as above; the output
+    feature size is read back from the result, since it differs per projection.
+    """
+
+    def ov_forward(hidden_states):
+        hidden = hidden_states.to(torch.float32)
+        flat = hidden.reshape(1, -1, hidden.shape[-1]).numpy()
+        inputs = [flat] if step is None else [flat, np.array(step, dtype=np.int64)]
+        output = torch.from_numpy(compiled(inputs)[0]).clone()
+        return output.reshape(*hidden.shape[:-1], output.shape[-1])
+
+    return ov_forward
+
+
+def _make_ov_decoder_stack_forward(decoder_model, compiled, rope_fn):
+    """Build an OpenVINO-backed ``forward`` for one Qwen3-TTS decoder stack.
+
+    Shared by the talker and the code predictor, whose exported graphs have the same
+    stateless, KV-explicit signature and differ only in how the rotary ``cos``/``sin`` are
+    produced (``rope_fn``). The returned callable preserves the PyTorch I/O contract of
+    ``Qwen3TTS*Model.forward`` (``DynamicCache`` in and out, ``BaseModelOutputWithPast``),
+    so the ``qwen_tts`` generation loops around it are untouched.
+
+    The graph returns only the newly computed keys/values; concatenating them onto the past
+    happens here, in a per-stack store that is reset whenever a sequence starts over.
+    """
+    from transformers import DynamicCache
+    from transformers.modeling_outputs import BaseModelOutputWithPast
+
+    cfg = decoder_model.config
+    num_layers = len(decoder_model.layers)
+    num_kv = cfg.num_key_value_heads
+    head_dim = getattr(cfg, "head_dim", cfg.hidden_size // cfg.num_attention_heads)
+    neg = torch.finfo(torch.float32).min
+
+    # Per-call KV store (mirrors the HF cache, but version independent).
+    state: Dict[str, Any] = {"k": None, "v": None}
+
+    def _build_mask(bs_, seq_, past_len, attention_mask):
+        """Build the additive [B, 1, seq, kv] causal mask the graph consumes.
+
+        Both call sites hand the stack the 2D padding mask that ``generate`` maintains and
+        rely on the model to derive the causal mask, which is what happens here. A caller
+        that already built the 4D additive mask is passed straight through.
+        """
+        total = past_len + seq_
+        if attention_mask is not None and attention_mask.ndim == 4:
+            return attention_mask.to(torch.float32)
+
+        rows = torch.arange(seq_).view(seq_, 1)
+        cols = torch.arange(total).view(1, total)
+        allowed = cols <= (past_len + rows)
+        mask = torch.zeros(seq_, total, dtype=torch.float32)
+        mask = mask.masked_fill(~allowed, neg)
+        mask = mask.view(1, 1, seq_, total).expand(bs_, 1, seq_, total).clone()
+        if attention_mask is not None:
+            pad = attention_mask[:, :total] == 0
+            mask = mask.masked_fill(pad.view(bs_, 1, 1, total), neg)
+        return mask
+
+    def ov_forward(
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        past_key_values=None,
+        inputs_embeds=None,
+        use_cache=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        cache_position=None,
+        **kw,
+    ):
+        if past_key_values is None:
+            past_key_values = DynamicCache()
+        inputs_embeds = inputs_embeds.to(torch.float32)
+        bs_, seq_ = inputs_embeds.shape[0], inputs_embeds.shape[1]
+        past_len = past_key_values.get_seq_length()
+
+        if cache_position is None:
+            cache_position = torch.arange(past_len, past_len + seq_)
+
+        cos, sin = rope_fn(position_ids, cache_position, bs_, seq_, inputs_embeds)
+        mask = _build_mask(bs_, seq_, past_len, attention_mask)
+
+        if past_len == 0 or state["k"] is None:
+            past_k = torch.zeros(num_layers, bs_, num_kv, 0, head_dim, dtype=torch.float32)
+            past_v = torch.zeros(num_layers, bs_, num_kv, 0, head_dim, dtype=torch.float32)
+        else:
+            past_k = state["k"]
+            past_v = state["v"]
+
+        outputs = compiled(
+            [
+                inputs_embeds.numpy(),
+                mask.numpy(),
+                cos.numpy(),
+                sin.numpy(),
+                past_k.numpy(),
+                past_v.numpy(),
+            ]
+        )
+        hidden = torch.from_numpy(outputs[0])
+        new_k = torch.from_numpy(outputs[1])
+        new_v = torch.from_numpy(outputs[2])
+
+        if past_k.shape[3] == 0:
+            state["k"], state["v"] = new_k, new_v
+        else:
+            state["k"] = torch.cat([past_k, new_k], dim=3)
+            state["v"] = torch.cat([past_v, new_v], dim=3)
+
+        # Keep the HF cache length in sync so cache_position is computed correctly.
+        for idx in range(num_layers):
+            past_key_values.update(new_k[idx], new_v[idx], idx)
+
+        hidden_states = (hidden,) if output_hidden_states else None
+        return BaseModelOutputWithPast(
+            last_hidden_state=hidden,
+            past_key_values=past_key_values,
+            hidden_states=hidden_states,
+            attentions=None,
+        )
+
+    return ov_forward
 
 
 def _is_qwen3_tts_config(config: Optional["PretrainedConfig"]) -> bool:
@@ -968,6 +1266,11 @@ class _OVModelForQwen3TTS:
         self.config = config
         self.model_save_dir = model_save_dir
         self._device = "CPU"
+        # Populated by ``_install_ov_components``; components with no IR stay on PyTorch.
+        self._ov_ir_paths: Dict[str, str] = {}
+        # Overridden in ``from_pretrained``; exports drop both checkpoints.
+        self._codec_weights_present = True
+        self._weights_present = True
         self.sampling_rate = int(getattr(self.model, "speaker_encoder_sample_rate", 24000))
         try:
             self.sampling_rate = int(self.model.speech_tokenizer.get_output_sample_rate())
@@ -1010,15 +1313,30 @@ class _OVModelForQwen3TTS:
         load_kwargs["force_download"] = force_download
         load_kwargs["local_files_only"] = local_files_only
 
-        pipeline = Qwen3TTSModel.from_pretrained(str(model_id), **load_kwargs)
+        # An export produced by this exporter carries no weights at all - every parameter is
+        # in an IR - so the pipeline is built structurally. Original checkpoints (a Hub repo,
+        # or a directory exported by an older version) keep taking the normal loader.
+        weights_present = _qwen3_tts_weights_present(model_id)
+        codec_weights_present = _qwen3_tts_codec_weights_present(model_id)
+        if not weights_present:
+            pipeline = _build_weightless_qwen3_tts_pipeline(model_id)
+            # That path always builds the codec structurally too, whatever is on disk.
+            codec_weights_present = False
+        elif codec_weights_present:
+            pipeline = Qwen3TTSModel.from_pretrained(str(model_id), **load_kwargs)
+        else:
+            with _qwen3_tts_weightless_codec(model_id):
+                pipeline = Qwen3TTSModel.from_pretrained(str(model_id), **load_kwargs)
         pipeline.model.eval()
 
         if config is None:
             config = pipeline.model.config
 
         instance = cls(pipeline=pipeline, config=config, model_save_dir=model_id)
-        instance._ir_dir = _resolve_talker_ir_dir(model_id, cache_dir)
-        instance._install_ov_talker()
+        instance._ir_dir = _resolve_ir_dir(model_id, cache_dir)
+        instance._codec_weights_present = codec_weights_present
+        instance._weights_present = weights_present
+        instance._install_ov_components()
         return instance
 
     @property
@@ -1032,23 +1350,70 @@ class _OVModelForQwen3TTS:
     def can_generate(self) -> bool:
         return True
 
+    def _compile_ov_component(self, ir_name: str, label: str):
+        """Read and compile one exported component IR, or raise when it is not on disk."""
+        ir_dir = Path(getattr(self, "_ir_dir", None) or _resolve_ir_dir(self.model_save_dir, None))
+        ir_xml = ir_dir / ir_name
+        if not ir_xml.is_file():
+            raise FileNotFoundError(f"{label} OpenVINO IR not found at {ir_xml}")
+        core = openvino.Core()
+        logger.info(f"Qwen3-TTS: loading {label} OpenVINO IR from {ir_xml}.")
+        compiled = core.compile_model(core.read_model(ir_xml), self._device)
+        self._ov_ir_paths[label] = str(ir_xml)
+        return compiled
+
+    def _install_ov_components(self) -> None:
+        """Offload every exported Qwen3-TTS component to OpenVINO.
+
+        The components are installed independently: each one replaces the forward of the
+        corresponding PyTorch module while the ``qwen_tts`` orchestration around it is left
+        untouched, and each one falls back to PyTorch on its own when its IR is missing (or
+        anything else fails). A directory exported by an older version, holding only the
+        talker IR, therefore still runs.
+        """
+        self._install_ov_talker()
+        self._install_ov_code_predictor()
+        self._install_ov_embeddings_and_heads()
+        self._install_ov_speaker_encoder()
+        self._install_ov_codec_encoder()
+        self._install_ov_codec_decoder()
+
+        # Falling back to PyTorch is only possible where PyTorch weights exist. When the export
+        # left them out, the modules behind them are structural only, so a component whose IR
+        # is missing has to be an error rather than a silent switch to empty weights.
+        required = set()
+        if not self._codec_weights_present:
+            required |= {"codec encoder", "codec decoder"}
+        if not self._weights_present:
+            required |= {
+                "talker",
+                "code predictor",
+                "text embeddings",
+                "text projection",
+                "codec embeddings",
+                "codec head",
+                "code predictor embeddings",
+                "code predictor lm_head",
+            }
+            if self.model.speaker_encoder is not None:
+                required.add("speaker encoder")
+        missing = required - set(self._ov_ir_paths)
+        if missing:
+            raise RuntimeError(
+                f"{self.model_save_dir} ships no PyTorch weights for these components, so they can only run "
+                f"from OpenVINO, but the IR for: {', '.join(sorted(missing))} could not be loaded. "
+                "Re-export the model with `optimum-cli export openvino`."
+            )
+
     def _install_ov_talker(self) -> None:
         """Offload the talker decoder stack (28 layers, run every frame) to OpenVINO.
 
-        The talker stack is loaded from a standalone OpenVINO IR
-        (``openvino_talker_model.xml`` / ``.bin``) on disk and used for inference. The
-        original ``talker.model.forward`` is replaced by an OpenVINO-backed implementation
-        that preserves the exact I/O contract (``DynamicCache`` in/out,
-        ``BaseModelOutputWithPast``). All other orchestration stays in PyTorch. When the
-        IR is not available (or anything else fails) the model transparently falls back
-        to the original PyTorch path.
+        The rotary sections are merged outside the graph: the talker uses interleaved
+        m-RoPE, and rather than duplicating that merge, ``apply_multimodal_rotary_pos_emb``
+        is evaluated on a basis probe whose first half is 1 and second half 0 - the rotated
+        output's halves are then exactly the merged cos and sin.
         """
         try:
-            from transformers import DynamicCache
-            from transformers.modeling_outputs import BaseModelOutputWithPast
-
-            # Reuse the model's own multimodal-RoPE implementation from ``qwen_tts``
-            # instead of duplicating it here.
             from qwen_tts.core.models.modeling_qwen3_tts import apply_multimodal_rotary_pos_emb
 
             talker_model = self.model.talker.model
@@ -1056,76 +1421,24 @@ class _OVModelForQwen3TTS:
             cfg = talker_model.config
             mrope_section = cfg.rope_scaling["mrope_section"]
             mrope_interleaved = cfg.rope_scaling.get("interleaved", False)
-            num_layers = len(talker_model.layers)
-            num_kv = cfg.num_key_value_heads
             head_dim = getattr(cfg, "head_dim", cfg.hidden_size // cfg.num_attention_heads)
+            half = head_dim // 2
 
-            ir_dir = Path(getattr(self, "_ir_dir", None) or _resolve_talker_ir_dir(self.model_save_dir, None))
-            ir_xml = ir_dir / _TALKER_OV_IR_NAME
-            if not ir_xml.is_file():
-                raise FileNotFoundError(f"talker OpenVINO IR not found at {ir_xml}")
-            core = openvino.Core()
-            ov_model = core.read_model(ir_xml)
-            logger.info(f"Qwen3-TTS: loading talker OpenVINO IR from {ir_xml}.")
-            compiled = core.compile_model(ov_model, "CPU")
-            self._ov_talker_ir_path = str(ir_xml)
+            compiled = self._compile_ov_component(_TALKER_OV_IR_NAME, "talker")
 
-            neg = torch.finfo(torch.float32).min
-
-            # Per-call KV store (mirrors the HF cache, but version independent).
-            state: Dict[str, Any] = {"k": None, "v": None}
-
-            def _build_mask(bs_, seq_, past_len, attention_mask):
-                total = past_len + seq_
-                rows = torch.arange(seq_).view(seq_, 1)
-                cols = torch.arange(total).view(1, total)
-                allowed = cols <= (past_len + rows)
-                mask = torch.zeros(seq_, total, dtype=torch.float32)
-                mask = mask.masked_fill(~allowed, neg)
-                mask = mask.view(1, 1, seq_, total).expand(bs_, 1, seq_, total).clone()
-                if attention_mask is not None:
-                    pad = attention_mask[:, :total] == 0
-                    mask = mask.masked_fill(pad.view(bs_, 1, 1, total), neg)
-                return mask
-
-            def ov_forward(
-                input_ids=None,
-                attention_mask=None,
-                position_ids=None,
-                past_key_values=None,
-                inputs_embeds=None,
-                use_cache=None,
-                output_attentions=None,
-                output_hidden_states=None,
-                cache_position=None,
-                **kw,
-            ):
-                if past_key_values is None:
-                    past_key_values = DynamicCache()
-                inputs_embeds = inputs_embeds.to(torch.float32)
-                bs_, seq_ = inputs_embeds.shape[0], inputs_embeds.shape[1]
-                past_len = past_key_values.get_seq_length()
-
-                if cache_position is None:
-                    cache_position = torch.arange(past_len, past_len + seq_)
+            def merged_mrope(position_ids, cache_position, batch_size, seq_len, inputs_embeds):
                 if position_ids is None:
-                    position_ids = cache_position.view(1, 1, -1).expand(3, bs_, -1)
+                    position_ids = cache_position.view(1, 1, -1).expand(3, batch_size, -1)
                 elif position_ids.ndim == 2:
                     position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)
                 if position_ids.ndim == 3 and position_ids.shape[0] == 4:
                     position_ids = position_ids[1:]
 
                 cos, sin = talker_model.rotary_emb(inputs_embeds, position_ids)
-                # Recover the merged rotary cos/sin that the talker IR expects by reusing
-                # ``apply_multimodal_rotary_pos_emb`` on a basis probe: with the first half
-                # of the probe set to 1 and the second half to 0, the rotated output's
-                # first half equals the merged cos and its second half equals the merged
-                # sin (cos/sin both have duplicated halves), so no merge math is duplicated.
-                half = head_dim // 2
                 probe = torch.cat(
                     [
-                        torch.ones(bs_, 1, seq_, half, dtype=torch.float32),
-                        torch.zeros(bs_, 1, seq_, half, dtype=torch.float32),
+                        torch.ones(batch_size, 1, seq_len, half, dtype=torch.float32),
+                        torch.zeros(batch_size, 1, seq_len, half, dtype=torch.float32),
                     ],
                     dim=-1,
                 )
@@ -1133,54 +1446,168 @@ class _OVModelForQwen3TTS:
                     probe, probe, cos.to(torch.float32), sin.to(torch.float32), mrope_section, mrope_interleaved
                 )
                 merged = merged.squeeze(1)
-                cos_m = torch.cat([merged[..., :half], merged[..., :half]], dim=-1)
-                sin_m = torch.cat([merged[..., half:], merged[..., half:]], dim=-1)
-                mask = _build_mask(bs_, seq_, past_len, attention_mask)
-
-                if past_len == 0 or state["k"] is None:
-                    past_k = torch.zeros(num_layers, bs_, num_kv, 0, head_dim, dtype=torch.float32)
-                    past_v = torch.zeros(num_layers, bs_, num_kv, 0, head_dim, dtype=torch.float32)
-                else:
-                    past_k = state["k"]
-                    past_v = state["v"]
-
-                outputs = compiled(
-                    [
-                        inputs_embeds.numpy(),
-                        mask.numpy(),
-                        cos_m.numpy(),
-                        sin_m.numpy(),
-                        past_k.numpy(),
-                        past_v.numpy(),
-                    ]
-                )
-                hidden = torch.from_numpy(outputs[0])
-                new_k = torch.from_numpy(outputs[1])
-                new_v = torch.from_numpy(outputs[2])
-
-                if past_k.shape[3] == 0:
-                    state["k"], state["v"] = new_k, new_v
-                else:
-                    state["k"] = torch.cat([past_k, new_k], dim=3)
-                    state["v"] = torch.cat([past_v, new_v], dim=3)
-
-                # Keep the HF cache length in sync so cache_position is computed correctly.
-                for idx in range(num_layers):
-                    past_key_values.update(new_k[idx], new_v[idx], idx)
-
-                hidden_states = (hidden,) if output_hidden_states else None
-                return BaseModelOutputWithPast(
-                    last_hidden_state=hidden,
-                    past_key_values=past_key_values,
-                    hidden_states=hidden_states,
-                    attentions=None,
+                return (
+                    torch.cat([merged[..., :half], merged[..., :half]], dim=-1),
+                    torch.cat([merged[..., half:], merged[..., half:]], dim=-1),
                 )
 
-            talker_model.forward = ov_forward
+            talker_model.forward = _make_ov_decoder_stack_forward(talker_model, compiled, merged_mrope)
             self._ov_talker = compiled
             logger.info("Qwen3-TTS: talker decoder stack offloaded to OpenVINO (IR-backed).")
         except Exception as exc:  # pragma: no cover - fall back to pure PyTorch
             logger.warning(f"Qwen3-TTS: OpenVINO talker offload disabled ({exc}); using PyTorch.")
+
+    def _install_ov_code_predictor(self) -> None:
+        """Offload the code-predictor decoder stack (5 layers) to OpenVINO.
+
+        The code predictor runs ``num_code_groups - 1`` times inside every talker step, so it
+        is invoked far more often than the talker itself. Only its decoder stack moves to
+        OpenVINO: the per-depth ``lm_head`` / codec embeddings and the sampling stay in
+        PyTorch, which keeps the ``qwen_tts`` ``generate()`` semantics (multinomial sampling
+        with the ``subtalker_*`` knobs) bit-for-bit intact. This is where the design differs
+        from Qwen3-Omni, whose code predictor is a single-step stateful graph with in-graph
+        Gumbel-max sampling driven by a Python loop.
+        """
+        try:
+            code_predictor_model = self.model.talker.code_predictor.model
+            code_predictor_model.eval()
+
+            compiled = self._compile_ov_component(_CODE_PREDICTOR_OV_IR_NAME, "code predictor")
+
+            def plain_rope(position_ids, cache_position, batch_size, seq_len, inputs_embeds):
+                # Plain 1D RoPE: cos/sin already come out with duplicated halves.
+                if position_ids is None:
+                    position_ids = cache_position.view(1, -1).expand(batch_size, -1)
+                cos, sin = code_predictor_model.rotary_emb(inputs_embeds, position_ids)
+                return cos.to(torch.float32), sin.to(torch.float32)
+
+            code_predictor_model.forward = _make_ov_decoder_stack_forward(code_predictor_model, compiled, plain_rope)
+            self._ov_code_predictor = compiled
+            logger.info("Qwen3-TTS: code predictor offloaded to OpenVINO (IR-backed).")
+        except Exception as exc:  # pragma: no cover - fall back to pure PyTorch
+            logger.warning(f"Qwen3-TTS: OpenVINO code predictor offload disabled ({exc}); using PyTorch.")
+
+    def _install_ov_embeddings_and_heads(self) -> None:
+        """Offload the embedding tables and output heads that sit outside the decoder stacks.
+
+        These are the remaining parameters of the checkpoint: the talker's text and codec
+        embedding tables, its text projection and codec head, and the code predictor's
+        per-depth embeddings and ``lm_head``s. Once they run from OpenVINO, no PyTorch weight
+        is read during generation, which is what lets the export ship without the checkpoint.
+
+        The per-depth code-predictor weights live in a single stacked IR each, so the 15
+        ``nn.Module``s of each ``ModuleList`` are pointed at the same compiled model with
+        their depth index bound.
+        """
+        try:
+            talker = self.model.talker
+            talker_config = talker.model.config
+            code_predictor = talker.code_predictor
+            code_predictor_hidden = getattr(code_predictor.model.config, "embedding_dim", talker_config.hidden_size)
+
+            text_embeddings = self._compile_ov_component(_TALKER_TEXT_EMBEDDINGS_OV_IR_NAME, "text embeddings")
+            text_projection = self._compile_ov_component(_TALKER_TEXT_PROJECTION_OV_IR_NAME, "text projection")
+            codec_embeddings = self._compile_ov_component(_TALKER_CODEC_EMBEDDINGS_OV_IR_NAME, "codec embeddings")
+            codec_head = self._compile_ov_component(_TALKER_CODEC_HEAD_OV_IR_NAME, "codec head")
+            cp_embeddings = self._compile_ov_component(
+                _CODE_PREDICTOR_CODEC_EMBEDDINGS_OV_IR_NAME, "code predictor embeddings"
+            )
+            cp_lm_head = self._compile_ov_component(_CODE_PREDICTOR_LM_HEAD_OV_IR_NAME, "code predictor lm_head")
+
+            talker.get_text_embeddings().forward = _make_ov_embedding_forward(
+                text_embeddings, talker_config.text_hidden_size
+            )
+            talker.text_projection.forward = _make_ov_projection_forward(text_projection)
+            talker.get_input_embeddings().forward = _make_ov_embedding_forward(
+                codec_embeddings, talker_config.hidden_size
+            )
+            talker.codec_head.forward = _make_ov_projection_forward(codec_head)
+
+            for step, embedding in enumerate(code_predictor.get_input_embeddings()):
+                embedding.forward = _make_ov_embedding_forward(cp_embeddings, code_predictor_hidden, step=step)
+            for step, head in enumerate(code_predictor.lm_head):
+                head.forward = _make_ov_projection_forward(cp_lm_head, step=step)
+
+            logger.info("Qwen3-TTS: embedding tables and output heads offloaded to OpenVINO (IR-backed).")
+        except Exception as exc:  # pragma: no cover - fall back to pure PyTorch
+            logger.warning(f"Qwen3-TTS: OpenVINO embedding/head offload disabled ({exc}); using PyTorch.")
+
+    def _install_ov_speaker_encoder(self) -> None:
+        """Offload the ECAPA-TDNN speaker encoder (mel spectrogram -> x-vector) to OpenVINO."""
+        try:
+            speaker_encoder = self.model.speaker_encoder
+            if speaker_encoder is None:
+                raise ValueError("model has no speaker encoder (non-`base` variant)")
+            speaker_encoder.eval()
+
+            compiled = self._compile_ov_component(_SPEAKER_ENCODER_OV_IR_NAME, "speaker encoder")
+
+            def ov_forward(hidden_states):
+                mel_features = _as_float32_numpy(hidden_states)
+                return torch.from_numpy(compiled(mel_features)[0]).clone()
+
+            speaker_encoder.forward = ov_forward
+            self._ov_speaker_encoder = compiled
+            logger.info("Qwen3-TTS: speaker encoder offloaded to OpenVINO (IR-backed).")
+        except Exception as exc:  # pragma: no cover - fall back to pure PyTorch
+            logger.warning(f"Qwen3-TTS: OpenVINO speaker encoder offload disabled ({exc}); using PyTorch.")
+
+    def _install_ov_codec_encoder(self) -> None:
+        """Offload the codec encoder (reference waveform -> residual codes) to OpenVINO.
+
+        The graph is length-agnostic only for waveforms that are a whole number of codec
+        frames, so the waveform is zero-padded up to the next frame boundary here. That
+        matches what the causal convolutions pad internally, and produces the same
+        ``ceil(samples / 1920)`` frames the PyTorch path returns; the caller then trims the
+        code stream back with its own padding mask.
+        """
+        try:
+            from transformers.models.mimi.modeling_mimi import MimiEncoderOutput
+
+            codec_model = self.model.speech_tokenizer.model
+            codec_encoder = codec_model.encoder
+            codec_encoder.eval()
+            downsample_rate = int(codec_model.encode_downsample_rate)
+
+            compiled = self._compile_ov_component(_CODEC_ENCODER_OV_IR_NAME, "codec encoder")
+
+            def ov_encode(input_values, padding_mask=None, return_dict=True, **kw):
+                waveform = _as_float32_numpy(input_values)
+                remainder = waveform.shape[-1] % downsample_rate
+                if remainder:
+                    waveform = np.pad(waveform, [(0, 0)] * (waveform.ndim - 1) + [(0, downsample_rate - remainder)])
+                audio_codes = torch.from_numpy(compiled(waveform)[0]).clone().to(torch.int64)
+                if not return_dict:
+                    return (audio_codes, None, None)
+                return MimiEncoderOutput(audio_codes)
+
+            codec_encoder.encode = ov_encode
+            self._ov_codec_encoder = compiled
+            logger.info("Qwen3-TTS: codec encoder offloaded to OpenVINO (IR-backed).")
+        except Exception as exc:  # pragma: no cover - fall back to pure PyTorch
+            logger.warning(f"Qwen3-TTS: OpenVINO codec encoder offload disabled ({exc}); using PyTorch.")
+
+    def _install_ov_codec_decoder(self) -> None:
+        """Offload the codec decoder (codes -> 24 kHz waveform) to OpenVINO.
+
+        The decoder's forward is replaced rather than ``decode``, so the surrounding
+        ``chunked_decode`` windowing in ``qwen_tts`` keeps driving it unchanged.
+        """
+        try:
+            codec_decoder = self.model.speech_tokenizer.model.decoder
+            codec_decoder.eval()
+
+            compiled = self._compile_ov_component(_CODEC_DECODER_OV_IR_NAME, "codec decoder")
+
+            def ov_forward(codes):
+                audio_codes = codes if isinstance(codes, np.ndarray) else codes.detach().cpu().numpy()
+                return torch.from_numpy(compiled(audio_codes.astype(np.int64))[0]).clone()
+
+            codec_decoder.forward = ov_forward
+            self._ov_codec_decoder = compiled
+            logger.info("Qwen3-TTS: codec decoder offloaded to OpenVINO (IR-backed).")
+        except Exception as exc:  # pragma: no cover - fall back to pure PyTorch
+            logger.warning(f"Qwen3-TTS: OpenVINO codec decoder offload disabled ({exc}); using PyTorch.")
 
     def preprocess_input(
         self,
