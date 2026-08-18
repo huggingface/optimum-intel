@@ -191,11 +191,8 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3TTSCodecDecoderPatcher,
     Qwen3TTSCodecEncoderPatcher,
     Qwen3TTSDecoderStackPatcher,
-    Qwen3TTSProjectionPatcher,
+    Qwen3TTSEmbeddingsPatcher,
     Qwen3TTSSpeakerEncoderPatcher,
-    Qwen3TTSSteppedProjectionPatcher,
-    Qwen3TTSSteppedTokenEmbeddingPatcher,
-    Qwen3TTSTokenEmbeddingPatcher,
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
     QwenImageTextEncoderModelPatcher,
@@ -7333,6 +7330,7 @@ class Qwen3TTSDecoderStackDummyInputGenerator(DummyInputGenerator):
         "sin",
         "past_key",
         "past_value",
+        "step",
     )
 
     def __init__(
@@ -7362,6 +7360,9 @@ class Qwen3TTSDecoderStackDummyInputGenerator(DummyInputGenerator):
             shape = [self.batch_size, 1, self.sequence_length, self.sequence_length]
         elif input_name in ("cos", "sin"):
             shape = [self.batch_size, self.sequence_length, self.head_dim]
+        elif input_name == "step":
+            # Scalar depth index selecting one of the folded per-depth output heads.
+            return torch.tensor(0, dtype=torch.int64)
         elif input_name in ("past_key", "past_value"):
             # Stacked per-layer cache with zero past length for the prefill trace.
             shape = [self.num_hidden_layers, self.batch_size, self.num_key_value_heads, 0, self.head_dim]
@@ -7399,8 +7400,10 @@ class Qwen3TTSDecoderStackOpenVINOConfig(OpenVINOConfig):
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
+        # The output head is folded into the stack, so the graph emits logits directly.
         return {
             "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+            "logits": {0: "batch_size", 1: "sequence_length"},
             "present_key": {1: "batch_size", 3: "sequence_length"},
             "present_value": {1: "batch_size", 3: "sequence_length"},
         }
@@ -7415,6 +7418,18 @@ class Qwen3TTSDecoderStackOpenVINOConfig(OpenVINOConfig):
         }
 
 
+class Qwen3TTSSteppedDecoderStackOpenVINOConfig(Qwen3TTSDecoderStackOpenVINOConfig):
+    """Decoder stack whose folded output head is chosen by a runtime depth index.
+
+    Used for the code predictor, whose ``lm_head`` is one linear per residual depth: the
+    stacked weights live in the same graph as the decoder layers, gathered with ``step``.
+    """
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {**super().inputs, "step": {}}
+
+
 class Qwen3TTSComponentDummyInputGenerator(DummyInputGenerator):
     """Generates inputs for the non-autoregressive Qwen3-TTS components.
 
@@ -7423,7 +7438,7 @@ class Qwen3TTSComponentDummyInputGenerator(DummyInputGenerator):
     dynamic, so the concrete dummy lengths below only need to be large enough to trace.
     """
 
-    SUPPORTED_INPUT_NAMES = ("mel_features", "input_values", "audio_codes", "input_ids", "hidden_states", "step")
+    SUPPORTED_INPUT_NAMES = ("mel_features", "input_values", "audio_codes", "input_ids", "offset")
 
     # A few frames is enough to exercise every block; the traced graphs stay length-agnostic.
     DUMMY_CODE_FRAMES = 8
@@ -7453,12 +7468,8 @@ class Qwen3TTSComponentDummyInputGenerator(DummyInputGenerator):
             shape = [self.batch_size, self.DUMMY_SEQUENCE_LENGTH]
             return self.random_int_tensor(shape, max_value=self.vocab_size, framework=framework, dtype=int_dtype)
 
-        if input_name == "hidden_states":
-            shape = [self.batch_size, self.DUMMY_SEQUENCE_LENGTH, self.hidden_size]
-            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
-
-        if input_name == "step":
-            # Scalar depth index selecting one of the code predictor's per-depth weights.
+        if input_name == "offset":
+            # Scalar row offset selecting one table inside the concatenated embedding matrix.
             return torch.tensor(0, dtype=torch.int64)
 
         if input_name == "mel_features":
@@ -7503,74 +7514,27 @@ class Qwen3TTSComponentOpenVINOConfig(OpenVINOConfig):
         }
 
 
-class Qwen3TTSTokenEmbeddingOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
-    """Export configuration for a Qwen3-TTS embedding table (token ids -> embeddings)."""
+class Qwen3TTSEmbeddingsOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
+    """Export configuration for the unified Qwen3-TTS embedding table.
 
-    _MODEL_PATCHER = Qwen3TTSTokenEmbeddingPatcher
+    Every table in the model - the talker's text and first-codebook tables and the code
+    predictor's per-depth tables - is concatenated into one, and the runtime picks between
+    them with a row ``offset``. The text table is stored with ``text_projection`` applied.
+    """
+
+    _MODEL_PATCHER = Qwen3TTSEmbeddingsPatcher
     VOCAB_SIZE_ATTR = "vocab_size"
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {"input_ids": {0: "batch_size", 1: "sequence_length"}}
+        return {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "offset": {},
+        }
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {"embeddings": {0: "batch_size", 1: "sequence_length"}}
-
-
-class Qwen3TTSTextEmbeddingOpenVINOConfig(Qwen3TTSTokenEmbeddingOpenVINOConfig):
-    """Export configuration for the talker's text embedding table (the 311M-parameter one)."""
-
-    VOCAB_SIZE_ATTR = "text_vocab_size"
-
-
-class Qwen3TTSProjectionOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
-    """Export configuration for a Qwen3-TTS projection over hidden states."""
-
-    _MODEL_PATCHER = Qwen3TTSProjectionPatcher
-    HIDDEN_SIZE_ATTR = "hidden_size"
-    OUTPUT_NAME = "output"
-
-    @property
-    def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {"hidden_states": {0: "batch_size", 1: "sequence_length"}}
-
-    @property
-    def outputs(self) -> Dict[str, Dict[int, str]]:
-        return {self.OUTPUT_NAME: {0: "batch_size", 1: "sequence_length"}}
-
-
-class Qwen3TTSTextProjectionOpenVINOConfig(Qwen3TTSProjectionOpenVINOConfig):
-    """Export configuration for ``talker.text_projection`` (text hidden size -> talker hidden size)."""
-
-    HIDDEN_SIZE_ATTR = "text_hidden_size"
-
-
-class Qwen3TTSCodecHeadOpenVINOConfig(Qwen3TTSProjectionOpenVINOConfig):
-    """Export configuration for ``talker.codec_head`` (hidden states -> first-codebook logits)."""
-
-    OUTPUT_NAME = "logits"
-
-
-class Qwen3TTSSteppedTokenEmbeddingOpenVINOConfig(Qwen3TTSTokenEmbeddingOpenVINOConfig):
-    """Export configuration for the code predictor's per-depth embedding tables, stacked."""
-
-    _MODEL_PATCHER = Qwen3TTSSteppedTokenEmbeddingPatcher
-
-    @property
-    def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {**super().inputs, "step": {}}
-
-
-class Qwen3TTSSteppedLMHeadOpenVINOConfig(Qwen3TTSProjectionOpenVINOConfig):
-    """Export configuration for the code predictor's per-depth ``lm_head`` linears, stacked."""
-
-    _MODEL_PATCHER = Qwen3TTSSteppedProjectionPatcher
-    OUTPUT_NAME = "logits"
-
-    @property
-    def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {**super().inputs, "step": {}}
 
 
 class Qwen3TTSSpeakerEncoderOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
