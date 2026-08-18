@@ -7140,7 +7140,12 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
 
         if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
             return get_vlm_text_embeddings_config(
-                "qwen3_5_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
+                "qwen3_5_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
             )
 
         if behavior == QwenVLConfigBehavior.LANGUAGE:
@@ -7152,6 +7157,8 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
                 model_patcher=Qwen3_5ModelPatcher,
                 dummy_input_generator=DummyQwen3_5LMInputGenerator,
                 inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
             )
 
         if behavior in (
