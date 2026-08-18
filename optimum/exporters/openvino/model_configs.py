@@ -5061,7 +5061,8 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
         )
         self._behavior = behavior
         self.SUPPORTED_BEHAVIORS = list(type(self).SUPPORTED_BEHAVIORS)
-        if config.audio_config is None:
+        audio_config = getattr(config, "audio_config", None)
+        if audio_config is None:
             self.SUPPORTED_BEHAVIORS.remove(Gemma4ConfigBehavior.AUDIO_EMBEDDINGS.value)
         if self._behavior == Gemma4ConfigBehavior.VISION_EMBEDDINGS and config.model_type == "gemma4":
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4VisionInputGenerator,)
@@ -5101,7 +5102,7 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
             self._normalized_config = NormalizedTextConfig(self._config)
         elif self._behavior == Gemma4ConfigBehavior.AUDIO_EMBEDDINGS:
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4AudioInputGenerator,)
-            self._config = config.audio_config
+            self._config = audio_config
             self._normalized_config = NormalizedConfig(self._config)
 
     @staticmethod
@@ -5433,7 +5434,8 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
         )
         self._behavior = behavior
         self.SUPPORTED_BEHAVIORS = list(type(self).SUPPORTED_BEHAVIORS)
-        if config.audio_config is None:
+        audio_config = getattr(config, "audio_config", None)
+        if audio_config is None:
             self.SUPPORTED_BEHAVIORS.remove(Gemma4UnifiedConfigBehavior.AUDIO_EMBEDDINGS.value)
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4UnifiedVisionInputGenerator,)
@@ -5458,7 +5460,7 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
             self._normalized_config = NormalizedTextConfig(self._config)
         elif self._behavior == Gemma4UnifiedConfigBehavior.AUDIO_EMBEDDINGS:
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4UnifiedAudioInputGenerator,)
-            self._config = config.audio_config
+            self._config = audio_config
             self._normalized_config = NormalizedConfig(self._config)
 
     def with_behavior(self, behavior: Union[str, Gemma4UnifiedConfigBehavior]):
