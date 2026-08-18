@@ -908,7 +908,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
         if model_arch in self.SUPPORT_AUDIO:
             input_audio = self._generate_random_audio_data()
-            if model_arch == "gemma4_unified":
+            if model_arch in ("gemma4", "gemma4_unified"):
                 input_audio = input_audio[0]
             question = "Translate this audio to French"
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
