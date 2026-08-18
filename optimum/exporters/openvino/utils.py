@@ -326,7 +326,9 @@ def _get_qwen3_tts_submodels_fn_and_export_configs(
     #
     #   talker_model          28-layer decoder + codec_head, one call per 12.5 Hz frame
     #   code_predictor_model   5-layer decoder + per-depth lm_head, num_code_groups-1 per frame
-    #   embeddings             every embedding table, concatenated and selected by row offset
+    #   text_embeddings        text token ids -> talker hidden states (projection baked in)
+    #   talker_embeddings      first-codebook ids -> talker hidden states
+    #   code_predictor_embeddings  per-depth residual tables, stacked and picked by step
     #   speaker_encoder        ECAPA-TDNN, once per reference audio (voice clone)
     #   codec_encoder          reference waveform -> residual codes (ICL)
     #   codec_decoder          generated codes -> 24 kHz waveform
@@ -334,23 +336,26 @@ def _get_qwen3_tts_submodels_fn_and_export_configs(
     # Each output head is folded into the stack it follows, because it is applied to that
     # stack's hidden states on the same call path. The embedding tables cannot be folded the
     # same way - they are looked up all over prompt assembly, far from any stack call, and one
-    # OpenVINO graph computes all of its outputs on every call - so they are merged with each
-    # other instead: one table, one graph, selected by offset.
+    # OpenVINO graph computes all of its outputs on every call - so each kind of table gets its
+    # own graph, with the code predictor's per-depth tables stacked into one.
     from optimum.exporters.openvino.model_configs import (
         Qwen3TTSCodecDecoderOpenVINOConfig,
         Qwen3TTSCodecEncoderOpenVINOConfig,
         Qwen3TTSDecoderStackOpenVINOConfig,
-        Qwen3TTSEmbeddingsOpenVINOConfig,
+        Qwen3TTSEmbeddingOpenVINOConfig,
         Qwen3TTSSpeakerEncoderOpenVINOConfig,
         Qwen3TTSSteppedDecoderStackOpenVINOConfig,
+        Qwen3TTSSteppedEmbeddingOpenVINOConfig,
+        Qwen3TTSTextEmbeddingOpenVINOConfig,
     )
     from optimum.exporters.openvino.model_patcher import (
         Qwen3TTSCodecDecoderWrapper,
         Qwen3TTSCodecEncoderWrapper,
         Qwen3TTSDecoderStackWrapper,
-        Qwen3TTSEmbeddingsWrapper,
+        Qwen3TTSEmbeddingWrapper,
         Qwen3TTSSpeakerEncoderWrapper,
         Qwen3TTSSteppedDecoderStackWrapper,
+        Qwen3TTSSteppedEmbeddingWrapper,
     )
 
     talker = model.talker
@@ -364,7 +369,11 @@ def _get_qwen3_tts_submodels_fn_and_export_configs(
         "code_predictor_model": Qwen3TTSSteppedDecoderStackOpenVINOConfig(
             code_predictor_config, task="feature-extraction"
         ),
-        "embeddings": Qwen3TTSEmbeddingsOpenVINOConfig(talker_config, task="feature-extraction"),
+        "text_embeddings": Qwen3TTSTextEmbeddingOpenVINOConfig(talker_config, task="feature-extraction"),
+        "talker_embeddings": Qwen3TTSEmbeddingOpenVINOConfig(talker_config, task="feature-extraction"),
+        "code_predictor_embeddings": Qwen3TTSSteppedEmbeddingOpenVINOConfig(
+            code_predictor_config, task="feature-extraction"
+        ),
         "codec_encoder": Qwen3TTSCodecEncoderOpenVINOConfig(codec_model.config, task="feature-extraction"),
         "codec_decoder": Qwen3TTSCodecDecoderOpenVINOConfig(
             codec_model.config.decoder_config, task="feature-extraction"
@@ -380,12 +389,16 @@ def _get_qwen3_tts_submodels_fn_and_export_configs(
             "code_predictor_model": Qwen3TTSSteppedDecoderStackWrapper(
                 code_predictor.model, heads=code_predictor.lm_head
             ).eval(),
-            "embeddings": Qwen3TTSEmbeddingsWrapper(
+            "text_embeddings": Qwen3TTSEmbeddingWrapper(
                 talker.config,
-                text_embedding=talker.get_text_embeddings(),
-                text_projection=talker.text_projection,
-                codec_embedding=talker.get_input_embeddings(),
-                code_predictor_embeddings=code_predictor.get_input_embeddings(),
+                embedding=talker.get_text_embeddings(),
+                projection=talker.text_projection,
+            ).eval(),
+            "talker_embeddings": Qwen3TTSEmbeddingWrapper(
+                talker.config, embedding=talker.get_input_embeddings()
+            ).eval(),
+            "code_predictor_embeddings": Qwen3TTSSteppedEmbeddingWrapper(
+                code_predictor.config, embeddings=code_predictor.get_input_embeddings()
             ).eval(),
             "codec_encoder": Qwen3TTSCodecEncoderWrapper(
                 codec_model.config,

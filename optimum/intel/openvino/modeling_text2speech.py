@@ -929,13 +929,17 @@ _CODE_PREDICTOR_OV_IR_NAME = "openvino_code_predictor_model.xml"
 _SPEAKER_ENCODER_OV_IR_NAME = "openvino_speaker_encoder.xml"
 _CODEC_ENCODER_OV_IR_NAME = "openvino_codec_encoder.xml"
 _CODEC_DECODER_OV_IR_NAME = "openvino_codec_decoder.xml"
-_EMBEDDINGS_OV_IR_NAME = "openvino_embeddings.xml"
+_TEXT_EMBEDDINGS_OV_IR_NAME = "openvino_text_embeddings.xml"
+_TALKER_EMBEDDINGS_OV_IR_NAME = "openvino_talker_embeddings.xml"
+_CODE_PREDICTOR_EMBEDDINGS_OV_IR_NAME = "openvino_code_predictor_embeddings.xml"
 
 # Every IR a Qwen3-TTS export can contain.
 _QWEN3_TTS_OV_IR_NAMES = (
     _TALKER_OV_IR_NAME,
     _CODE_PREDICTOR_OV_IR_NAME,
-    _EMBEDDINGS_OV_IR_NAME,
+    _TEXT_EMBEDDINGS_OV_IR_NAME,
+    _TALKER_EMBEDDINGS_OV_IR_NAME,
+    _CODE_PREDICTOR_EMBEDDINGS_OV_IR_NAME,
     _SPEAKER_ENCODER_OV_IR_NAME,
     _CODEC_ENCODER_OV_IR_NAME,
     _CODEC_DECODER_OV_IR_NAME,
@@ -951,7 +955,9 @@ _QWEN3_TTS_OV_IR_NAMES = (
 _QWEN3_TTS_COMPRESSIBLE_OV_IR_NAMES = (
     _TALKER_OV_IR_NAME,
     _CODE_PREDICTOR_OV_IR_NAME,
-    _EMBEDDINGS_OV_IR_NAME,
+    _TEXT_EMBEDDINGS_OV_IR_NAME,
+    _TALKER_EMBEDDINGS_OV_IR_NAME,
+    _CODE_PREDICTOR_EMBEDDINGS_OV_IR_NAME,
 )
 
 
@@ -1108,19 +1114,19 @@ def _as_float32_numpy(tensor) -> np.ndarray:
     return np.ascontiguousarray(tensor.detach().cpu().to(torch.float32).numpy())
 
 
-def _make_ov_embedding_forward(compiled, embedding_dim, offset):
+def _make_ov_embedding_forward(compiled, embedding_dim, step=None):
     """Build an OpenVINO-backed ``forward`` for one embedding table.
 
-    All tables live in one graph, so ``offset`` picks the block of rows belonging to this
-    one. ``qwen_tts`` looks embeddings up with 0-d, 1-d and 2-d id tensors while the graph has
-    a fixed rank, so ids are flattened to ``[1, N]`` on the way in and the original shape is
-    restored on the way out.
+    ``step`` is passed only for the code predictor's stacked per-depth tables, which share a
+    graph and select a depth at run time. ``qwen_tts`` looks embeddings up with 0-d, 1-d and
+    2-d id tensors while the graph has a fixed rank, so ids are flattened to ``[1, N]`` on the
+    way in and the original shape is restored on the way out.
     """
-    offset_input = np.array(offset, dtype=np.int64)
+    extra_inputs = [] if step is None else [np.array(step, dtype=np.int64)]
 
     def ov_forward(input_ids):
         ids = input_ids.reshape(1, -1).to(torch.int64).numpy()
-        embeddings = torch.from_numpy(compiled([ids, offset_input])[0]).clone()
+        embeddings = torch.from_numpy(compiled([ids, *extra_inputs])[0]).clone()
         return embeddings.reshape(*input_ids.shape, embedding_dim)
 
     return ov_forward
@@ -1398,7 +1404,13 @@ class _OVModelForQwen3TTS:
         if not self._codec_weights_present:
             required |= {"codec encoder", "codec decoder"}
         if not self._weights_present:
-            required |= {"talker", "code predictor", "embeddings"}
+            required |= {
+                "talker",
+                "code predictor",
+                "text embeddings",
+                "talker embeddings",
+                "code predictor embeddings",
+            }
             if self.model.speaker_encoder is not None:
                 required.add("speaker encoder")
         missing = required - set(self._ov_ir_paths)
@@ -1556,39 +1568,36 @@ class _OVModelForQwen3TTS:
             logger.warning(f"Qwen3-TTS: OpenVINO code predictor offload disabled ({exc}); using PyTorch.")
 
     def _install_ov_embeddings(self) -> None:
-        """Point every embedding table in the model at the single unified embeddings IR.
+        """Point the model's embedding tables at their exported IRs.
 
-        The tables were concatenated at export time, so each lookup differs only by the row
-        ``offset`` it starts at; the offsets are derived here in the same order the export
-        used. ``text_projection`` was baked into the text table, so the module that applies it
-        becomes an identity - every call site in ``qwen_tts`` applies it directly to the text
-        embeddings, which now already carry it.
+        Three graphs cover them: the talker's text table, its first-codebook table, and the
+        code predictor's per-depth tables stacked into one and selected by a ``step`` index.
+
+        ``text_projection`` was baked into the rows of the text table at export time, so the
+        module that would apply it becomes an identity - every call site in ``qwen_tts``
+        applies it directly to the text embeddings, which now already carry it.
         """
         try:
             talker = self.model.talker
             talker_config = talker.model.config
             code_predictor = talker.code_predictor
-
-            compiled = self._compile_ov_component(_EMBEDDINGS_OV_IR_NAME, "embeddings")
             hidden_size = talker_config.hidden_size
 
-            text_embeddings = talker.get_text_embeddings()
-            codec_embeddings = talker.get_input_embeddings()
-            code_predictor_embeddings = code_predictor.get_input_embeddings()
+            text_embeddings = self._compile_ov_component(_TEXT_EMBEDDINGS_OV_IR_NAME, "text embeddings")
+            talker_embeddings = self._compile_ov_component(_TALKER_EMBEDDINGS_OV_IR_NAME, "talker embeddings")
+            code_predictor_embeddings = self._compile_ov_component(
+                _CODE_PREDICTOR_EMBEDDINGS_OV_IR_NAME, "code predictor embeddings"
+            )
 
-            offset = 0
-            text_embeddings.forward = _make_ov_embedding_forward(compiled, hidden_size, offset)
-            offset += talker_config.text_vocab_size
-            codec_embeddings.forward = _make_ov_embedding_forward(compiled, hidden_size, offset)
-            offset += talker_config.vocab_size
-            for embedding in code_predictor_embeddings:
-                embedding.forward = _make_ov_embedding_forward(compiled, hidden_size, offset)
-                offset += code_predictor.model.config.vocab_size
+            talker.get_text_embeddings().forward = _make_ov_embedding_forward(text_embeddings, hidden_size)
+            talker.get_input_embeddings().forward = _make_ov_embedding_forward(talker_embeddings, hidden_size)
+            for step, embedding in enumerate(code_predictor.get_input_embeddings()):
+                embedding.forward = _make_ov_embedding_forward(code_predictor_embeddings, hidden_size, step=step)
 
             # The projection is already applied to the exported text table.
             talker.text_projection.forward = lambda hidden_states: hidden_states
 
-            self._ov_embeddings = compiled
+            self._ov_embeddings = (text_embeddings, talker_embeddings, code_predictor_embeddings)
             logger.info("Qwen3-TTS: embedding tables offloaded to OpenVINO (IR-backed).")
         except Exception as exc:  # pragma: no cover - fall back to pure PyTorch
             logger.warning(f"Qwen3-TTS: OpenVINO embeddings offload disabled ({exc}); using PyTorch.")

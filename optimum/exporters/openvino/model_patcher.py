@@ -11595,22 +11595,17 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
         self.patched_forward = patched_forward
 
 
-class Qwen3TTSEmbeddingsPatcher(ModelPatcher):
-    """Traces every Qwen3-TTS embedding table as one graph.
+class Qwen3TTSEmbeddingPatcher(ModelPatcher):
+    """Traces one Qwen3-TTS embedding table (token ids -> talker hidden states).
 
-    The model looks tokens up in tables of three different kinds - the talker's text table,
-    its first-codebook table, and the code predictor's ``num_code_groups - 1`` per-depth
-    tables - all of which produce vectors of the talker's hidden size. They are concatenated
-    into a single table and selected with a runtime row ``offset``, so one IR replaces what
-    would otherwise be 17 of them.
-
-    The text table is stored with ``text_projection`` already applied to it. That projection
-    is a per-token MLP and every call site in ``qwen_tts`` applies it directly to the text
-    embeddings, so folding it in is exact - and it also halves that table, the largest single
-    tensor in the model, from the text hidden size down to the talker's.
+    When the wrapper also carries a ``projection``, that projection is applied to the table
+    rows at export time instead of at inference time. This is used for the text table: the
+    projection is a per-token MLP and every call site in ``qwen_tts`` applies it directly to
+    the text embeddings, so baking it in is exact - and it shrinks what is otherwise the
+    largest tensor in the model from the text hidden size down to the talker's.
     """
 
-    # Rows converted per chunk when baking the projection, to bound peak memory.
+    # Rows converted per chunk when baking a projection, to bound peak memory.
     _PROJECTION_CHUNK_ROWS = 8192
 
     def __init__(self, config, model, model_kwargs=None):
@@ -11619,17 +11614,39 @@ class Qwen3TTSEmbeddingsPatcher(ModelPatcher):
         output_name = list(config.outputs.keys())[0]
 
         with torch.no_grad():
-            text_weight = wrapper.text_embedding.weight
-            projected = [
-                wrapper.text_projection(text_weight[start : start + self._PROJECTION_CHUNK_ROWS])
-                for start in range(0, text_weight.shape[0], self._PROJECTION_CHUNK_ROWS)
-            ]
-            tables = [torch.cat(projected, dim=0), wrapper.codec_embedding.weight]
-            tables += [embedding.weight for embedding in wrapper.code_predictor_embeddings]
-            table = torch.cat(tables, dim=0)
+            table = wrapper.embedding.weight
+            projection = getattr(wrapper, "projection", None)
+            if projection is not None:
+                table = torch.cat(
+                    [
+                        projection(table[start : start + self._PROJECTION_CHUNK_ROWS])
+                        for start in range(0, table.shape[0], self._PROJECTION_CHUNK_ROWS)
+                    ],
+                    dim=0,
+                )
 
-        def patched_forward(input_ids, offset):
-            return {output_name: torch.nn.functional.embedding(input_ids + offset, table)}
+        def patched_forward(input_ids):
+            return {output_name: torch.nn.functional.embedding(input_ids, table)}
+
+        self.patched_forward = patched_forward
+
+
+class Qwen3TTSSteppedEmbeddingPatcher(ModelPatcher):
+    """Traces the code predictor's per-depth embedding tables as one step-indexed graph.
+
+    The code predictor owns ``num_code_groups - 1`` tables, one per residual depth. Stacking
+    them and gathering with a runtime ``step`` index keeps this a single IR instead of 15,
+    reusing the approach of :class:`Qwen3OmniMoeCodePredictorPatcher`.
+    """
+
+    def __init__(self, config, model, model_kwargs=None):
+        super().__init__(config, model, model_kwargs)
+        stacked = torch.stack([embedding.weight for embedding in self._model.embeddings])
+        output_name = list(config.outputs.keys())[0]
+
+        def patched_forward(input_ids, step):
+            weight = torch.index_select(stacked, 0, step.reshape(1)).squeeze(0)
+            return {output_name: torch.nn.functional.embedding(input_ids, weight)}
 
         self.patched_forward = patched_forward
 
@@ -11687,10 +11704,17 @@ class Qwen3TTSSpeakerEncoderWrapper(Qwen3TTSComponentWrapper):
         self._unpatched()
 
 
-class Qwen3TTSEmbeddingsWrapper(Qwen3TTSComponentWrapper):
-    """Holds every embedding table of the model, plus the projection baked into the text one."""
+class Qwen3TTSEmbeddingWrapper(Qwen3TTSComponentWrapper):
+    """Holds one embedding table, optionally with the projection to bake into its rows."""
 
-    def forward(self, input_ids, offset):
+    def forward(self, input_ids):
+        self._unpatched()
+
+
+class Qwen3TTSSteppedEmbeddingWrapper(Qwen3TTSComponentWrapper):
+    """Holds the code predictor's per-depth embedding tables."""
+
+    def forward(self, input_ids, step):
         self._unpatched()
 
 

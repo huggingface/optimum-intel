@@ -191,8 +191,9 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3TTSCodecDecoderPatcher,
     Qwen3TTSCodecEncoderPatcher,
     Qwen3TTSDecoderStackPatcher,
-    Qwen3TTSEmbeddingsPatcher,
+    Qwen3TTSEmbeddingPatcher,
     Qwen3TTSSpeakerEncoderPatcher,
+    Qwen3TTSSteppedEmbeddingPatcher,
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
     QwenImageTextEncoderModelPatcher,
@@ -7438,7 +7439,7 @@ class Qwen3TTSComponentDummyInputGenerator(DummyInputGenerator):
     dynamic, so the concrete dummy lengths below only need to be large enough to trace.
     """
 
-    SUPPORTED_INPUT_NAMES = ("mel_features", "input_values", "audio_codes", "input_ids", "offset")
+    SUPPORTED_INPUT_NAMES = ("mel_features", "input_values", "audio_codes", "input_ids", "step")
 
     # A few frames is enough to exercise every block; the traced graphs stay length-agnostic.
     DUMMY_CODE_FRAMES = 8
@@ -7468,8 +7469,8 @@ class Qwen3TTSComponentDummyInputGenerator(DummyInputGenerator):
             shape = [self.batch_size, self.DUMMY_SEQUENCE_LENGTH]
             return self.random_int_tensor(shape, max_value=self.vocab_size, framework=framework, dtype=int_dtype)
 
-        if input_name == "offset":
-            # Scalar row offset selecting one table inside the concatenated embedding matrix.
+        if input_name == "step":
+            # Scalar depth index selecting one of the code predictor's per-depth tables.
             return torch.tensor(0, dtype=torch.int64)
 
         if input_name == "mel_features":
@@ -7514,27 +7515,35 @@ class Qwen3TTSComponentOpenVINOConfig(OpenVINOConfig):
         }
 
 
-class Qwen3TTSEmbeddingsOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
-    """Export configuration for the unified Qwen3-TTS embedding table.
+class Qwen3TTSEmbeddingOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
+    """Export configuration for one Qwen3-TTS embedding table (token ids -> hidden states)."""
 
-    Every table in the model - the talker's text and first-codebook tables and the code
-    predictor's per-depth tables - is concatenated into one, and the runtime picks between
-    them with a row ``offset``. The text table is stored with ``text_projection`` applied.
-    """
-
-    _MODEL_PATCHER = Qwen3TTSEmbeddingsPatcher
+    _MODEL_PATCHER = Qwen3TTSEmbeddingPatcher
     VOCAB_SIZE_ATTR = "vocab_size"
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {
-            "input_ids": {0: "batch_size", 1: "sequence_length"},
-            "offset": {},
-        }
+        return {"input_ids": {0: "batch_size", 1: "sequence_length"}}
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {"embeddings": {0: "batch_size", 1: "sequence_length"}}
+
+
+class Qwen3TTSTextEmbeddingOpenVINOConfig(Qwen3TTSEmbeddingOpenVINOConfig):
+    """Export configuration for the talker's text table, with ``text_projection`` baked in."""
+
+    VOCAB_SIZE_ATTR = "text_vocab_size"
+
+
+class Qwen3TTSSteppedEmbeddingOpenVINOConfig(Qwen3TTSEmbeddingOpenVINOConfig):
+    """Export configuration for the code predictor's per-depth tables, stacked."""
+
+    _MODEL_PATCHER = Qwen3TTSSteppedEmbeddingPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {**super().inputs, "step": {}}
 
 
 class Qwen3TTSSpeakerEncoderOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
