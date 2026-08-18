@@ -347,6 +347,39 @@ if is_diffusers_version(">=", "0.35.0"):
     }
 
 
+if is_diffusers_version(">=", "0.38.0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["ltx2"] = {
+        "model_class": "OVLTX2Pipeline",
+        "convert": [
+            "SDPAFusion",
+            "PackMultiHeadAttention",
+            "CommonFusions",
+            "TransposeConvert",
+            "TransposeFuse",
+            "ReverseInputChannelsFusion",
+            "BroadcastTransition",
+        ],
+        "compile": [
+            "CausalMaskPreprocessFusion",
+            "CommonDecompositions",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "DecompressionHandling",
+            "LinOpSequenceFusion",
+            "MultiplyFusions",
+            "RoPEFusion",
+            "RoPEFusionGPTNEOX",
+            "SDPASubgraphFusion",
+            "Snippets",
+            "Tokenization",
+        ],
+    }
+
+
 def _get_flat_transforms(arch):
     """Return a flat list of all expected transformations (convert + compile) for an architecture."""
     entry = ARCH_TO_EXPECTED_TRANSFORMATIONS[arch]
