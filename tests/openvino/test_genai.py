@@ -613,6 +613,15 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
             "2026.4",
             "text-generation-with-past",
         ),
+        (
+            "gemma4_dflash",
+            DFLASH_VLM_MODELS["gemma4_dflash"],
+            "DFlash",
+            "5.5.0",
+            None,
+            "2026.4",
+            "text-generation-with-past",
+        ),
     ]
 
     @parameterized.expand(SPECULATIVE_DECODING_MODELS)
