@@ -5579,7 +5579,7 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
         conversation = [{"role": "user", "content": [{"type": "text", "text": text}]}]
         if image is not None:
             conversation[0]["content"].insert(0, {"type": "image", "image": image})
-        audio_inputs = audio if isinstance(audio, (list, tuple)) else [audio]
+        audio_inputs = audio if isinstance(audio, list) else [audio]
         conversation[0]["content"].extend({"type": "audio", "audio": item} for item in audio_inputs)
         return processor.apply_chat_template(
             conversation,
