@@ -7227,6 +7227,8 @@ class Qwen3_5MoeOpenVINOConfig(Qwen3_5OpenVINOConfig):
                 model_patcher=Qwen3_5MoeModelPatcher,
                 dummy_input_generator=DummyQwen3_5LMInputGenerator,
                 inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
             )
 
         if behavior in (
