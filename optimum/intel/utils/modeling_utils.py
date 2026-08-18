@@ -560,7 +560,6 @@ class _Qwen3TTSForTextToSpeech:
         **kwargs,
     ):
         try:
-            import torch
             from qwen_tts import Qwen3TTSModel
         except ImportError as exc:
             raise ImportError(
@@ -568,7 +567,12 @@ class _Qwen3TTSForTextToSpeech:
                 "Please install it with `pip install qwen-tts`."
             ) from exc
 
-        load_kwargs: Dict[str, Any] = {"dtype": torch.float32}
+        # Load in the checkpoint's own precision by default, so the exported IRs keep it.
+        # ``export_pytorch`` makes 16-bit models traceable with fp32 activations, which yields
+        # 16-bit weight constants behind fp32 inputs/outputs. An explicit dtype (from
+        # ``--weight-format fp16/fp32``, resolved upstream into the loading kwargs) wins.
+        dtype = kwargs.pop("torch_dtype", kwargs.pop("dtype", None)) or "auto"
+        load_kwargs: Dict[str, Any] = {"dtype": dtype}
         if token is not None:
             load_kwargs["token"] = token
         if revision is not None:

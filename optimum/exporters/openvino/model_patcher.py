@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import functools
 import inspect
 import logging
@@ -11574,7 +11575,7 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
                 weight = torch.index_select(stacked_heads, 0, step.reshape(1)).squeeze(0)
                 return {
                     "last_hidden_state": hidden,
-                    "logits": torch.nn.functional.linear(hidden, weight),
+                    "logits": torch.nn.functional.linear(hidden, weight.to(hidden.dtype)),
                     "present_key": present_key,
                     "present_value": present_value,
                 }
@@ -11617,16 +11618,23 @@ class Qwen3TTSEmbeddingPatcher(ModelPatcher):
             table = wrapper.embedding.weight
             projection = getattr(wrapper, "projection", None)
             if projection is not None:
+                # Bake in fp32 on a copy, then store back in the table's own precision: the
+                # rows are computed once here, so there is no reason to do it at 16-bit
+                # accuracy, and no reason to mutate the model either.
+                projection = copy.deepcopy(projection).float()
                 table = torch.cat(
                     [
-                        projection(table[start : start + self._PROJECTION_CHUNK_ROWS])
+                        projection(table[start : start + self._PROJECTION_CHUNK_ROWS].float())
                         for start in range(0, table.shape[0], self._PROJECTION_CHUNK_ROWS)
                     ],
                     dim=0,
-                )
+                ).to(wrapper.embedding.weight.dtype)
 
         def patched_forward(input_ids):
-            return {output_name: torch.nn.functional.embedding(input_ids, table)}
+            # The gather keeps the table at its stored precision; the cast that follows is
+            # what lets a 16-bit checkpoint export as 16-bit constants behind an fp32 output.
+            embeddings = torch.nn.functional.embedding(input_ids, table)
+            return {output_name: embeddings.to(torch.float32)}
 
         self.patched_forward = patched_forward
 
@@ -11646,7 +11654,8 @@ class Qwen3TTSSteppedEmbeddingPatcher(ModelPatcher):
 
         def patched_forward(input_ids, step):
             weight = torch.index_select(stacked, 0, step.reshape(1)).squeeze(0)
-            return {output_name: torch.nn.functional.embedding(input_ids, weight)}
+            embeddings = torch.nn.functional.embedding(input_ids, weight)
+            return {output_name: embeddings.to(torch.float32)}
 
         self.patched_forward = patched_forward
 
@@ -11728,6 +11737,26 @@ class Qwen3TTSCodecDecoderWrapper(Qwen3TTSComponentWrapper):
         self._unpatched()
 
 
+# Attribute OpenVINO's 16-bit helper uses to recognise an already-patched module; setting it
+# makes ``__make_16bit_traceable`` skip the module instead of casting its weights to fp32.
+_OV_16BIT_PATCH_ATTR = "_openvino_module_extension_patch_orig_forward"
+
+
+def _qwen3_tts_conv_16bit_forward(self, hidden_states):
+    """Convolution forward that keeps its weights at their stored precision.
+
+    ``__make_16bit_traceable`` only has 16-bit extensions for ``Linear``/``Embedding``; every
+    other module with weights - here the ECAPA-TDNN's ``nn.Conv1d`` stack - has its parameters
+    cast to fp32, which would double the size of that component in the IR. Casting the weight
+    to the activation dtype inside the forward instead keeps the constant 16-bit with an
+    explicit ``Convert`` in front of it, the same shape of graph the extensions produce.
+    """
+    weight = self.weight.to(hidden_states.dtype)
+    bias = None if self.bias is None else self.bias.to(hidden_states.dtype)
+    # ``_conv_forward`` carries torch's own padding_mode handling ("same"/reflect here).
+    return self._conv_forward(hidden_states, weight, bias)
+
+
 class Qwen3TTSSpeakerEncoderPatcher(ModelPatcher):
     """Traces the Qwen3-TTS ECAPA-TDNN speaker encoder (mel spectrogram -> x-vector).
 
@@ -11744,6 +11773,7 @@ class Qwen3TTSSpeakerEncoderPatcher(ModelPatcher):
 
         self.patched_forward = patched_forward
         self._patched_pooling = []
+        self._patched_convs = []
 
     def __enter__(self):
         super().__enter__()
@@ -11752,6 +11782,10 @@ class Qwen3TTSSpeakerEncoderPatcher(ModelPatcher):
                 module._orig_asp_forward = module.forward
                 module.forward = types.MethodType(_qwen3_tts_asp_forward, module)
                 self._patched_pooling.append(module)
+            elif isinstance(module, nn.Conv1d) and module.weight.dtype in (torch.float16, torch.bfloat16):
+                setattr(module, _OV_16BIT_PATCH_ATTR, module.forward)
+                module.forward = types.MethodType(_qwen3_tts_conv_16bit_forward, module)
+                self._patched_convs.append(module)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -11759,7 +11793,14 @@ class Qwen3TTSSpeakerEncoderPatcher(ModelPatcher):
         for module in self._patched_pooling:
             module.forward = module._orig_asp_forward
             del module._orig_asp_forward
+        for module in self._patched_convs:
+            # ``export_pytorch`` runs OpenVINO's ``unpatch_model`` first when the model is
+            # 16-bit, which already restores and removes the attribute.
+            if hasattr(module, _OV_16BIT_PATCH_ATTR):
+                module.forward = getattr(module, _OV_16BIT_PATCH_ATTR)
+                delattr(module, _OV_16BIT_PATCH_ATTR)
         self._patched_pooling = []
+        self._patched_convs = []
 
 
 class _Qwen3TTSCodecPatcherMixin:
