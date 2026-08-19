@@ -247,6 +247,7 @@ ADDITIONAL_ARCH_MAPPINGS = {
     "flux.2-klein": "OVFlux2KleinPipeline",
     "latent-consistency": "OVLatentConsistencyModelPipeline",
     "ltx-video": "OVLTXPipeline",
+    "ltx2": "OVLTX2Pipeline",
     "sana": "OVSanaPipeline",
     "sana-sprint": "OVSanaPipeline",
     "stable-diffusion-3": "OVStableDiffusion3Pipeline",
