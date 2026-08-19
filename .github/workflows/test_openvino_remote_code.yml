@@ -64,9 +64,9 @@ jobs:
         run: |
           uv pip install transformers==4.57.6
 
-      - name: Install qwen-asr funasr qwen-tts packages
+      - name: Install qwen-asr funasr packages
         run: |
-          uv pip install qwen-asr funasr qwen-tts
+          uv pip install qwen-asr funasr
 
       - name: Login with fork PRs CI token
         if: ${{ env.HF_TOKEN == '' }}
@@ -76,6 +76,15 @@ jobs:
       - name: Test Qwen3-ASR and FunASR
         run: |
           pytest tests/openvino/${{ matrix.test-pattern }} -k "qwen3_asr or fun_asr" --durations=0
+
+      - if: ${{ matrix.test-pattern == '*export*' || matrix.test-pattern == '*quantization*' }}
+        name: Install qwen-tts package
+        run: |
+          # qwen-tts pins transformers==4.57.3 and qwen-asr pins 4.57.6, so the two cannot be
+          # resolved together. qwen-asr is removed once its tests above have run, and qwen-tts
+          # is installed on its own for the Qwen3-TTS steps that follow.
+          uv pip uninstall qwen-asr
+          uv pip install qwen-tts
 
       - if: ${{ matrix.test-pattern == '*export*' }}
         name: Test Qwen3-TTS export
