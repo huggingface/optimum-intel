@@ -5282,6 +5282,9 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
 @register_in_tasks_manager("gemma3n", *["image-text-to-text"], library_name="transformers")
 class Gemma3nOpenVINOConfig(Gemma4OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "5.0"
+    SUPPORTED_BEHAVIORS = [
+        behavior.value for behavior in Gemma4ConfigBehavior if behavior != Gemma4ConfigBehavior.AUDIO_EMBEDDINGS
+    ]
 
     def __init__(
         self,

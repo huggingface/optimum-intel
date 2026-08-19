@@ -611,7 +611,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "muse_glimmer",
     ]
     SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl", "qwen2_5_vl", "qwen3_vl", "videochat_flash_qwen"]
-    SUPPORT_AUDIO = ["gemma3n", "gemma4", "gemma4_unified", "qwen3_omni_moe"]
+    SUPPORT_AUDIO = ["gemma4", "gemma4_unified", "qwen3_omni_moe"]
     # "llama" is registered for image-text-to-text
     # to support VLM Eagle3 draft models (tested separately in test_genai.py).
     UNSUPPORTED_ARCHITECTURES = {"phi4_multimodal", "llama"}
@@ -791,6 +791,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             device=OPENVINO_DEVICE,
             ov_config=F32_CONFIG,
         )
+        if model_arch == "gemma3n":
+            self.assertIsNone(ov_model.audio_embeddings)
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
 
         image = self.IMAGE.resize((600, 600))
@@ -907,7 +909,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
         if model_arch in self.SUPPORT_AUDIO:
             input_audio = self._generate_random_audio_data()
-            if model_arch in ("gemma3n", "gemma4", "gemma4_unified"):
+            if model_arch in ("gemma4", "gemma4_unified"):
                 input_audio = input_audio[0]
             question = "Translate this audio to French"
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
