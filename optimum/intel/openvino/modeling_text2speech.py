@@ -1007,17 +1007,27 @@ def _qwen3_tts_weightless_codec(model_id):
     Outside this context - and for export directories that still carry codec weights - the
     original loader is used unchanged.
     """
-    from qwen_tts.inference.qwen3_tts_tokenizer import Qwen3TTSTokenizer
+    try:
+        from qwen_tts.inference.qwen3_tts_tokenizer import Qwen3TTSTokenizer
+    except ImportError as exc:
+        raise ImportError(
+            "Qwen3-TTS requires the `qwen_tts` package. Install it with `pip install qwen-tts`."
+        ) from exc
 
     original_from_pretrained = Qwen3TTSTokenizer.from_pretrained
 
     def from_config(cls, pretrained_model_name_or_path, **kwargs):
-        from qwen_tts.core import (
-            Qwen3TTSTokenizerV1Config,
-            Qwen3TTSTokenizerV1Model,
-            Qwen3TTSTokenizerV2Config,
-            Qwen3TTSTokenizerV2Model,
-        )
+        try:
+            from qwen_tts.core import (
+                Qwen3TTSTokenizerV1Config,
+                Qwen3TTSTokenizerV1Model,
+                Qwen3TTSTokenizerV2Config,
+                Qwen3TTSTokenizerV2Model,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "Qwen3-TTS requires the `qwen_tts` package. Install it with `pip install qwen-tts`."
+            ) from exc
         from transformers import AutoConfig, AutoFeatureExtractor, AutoModel
 
         for config_cls, model_cls in (
@@ -1153,10 +1163,15 @@ def _build_weightless_qwen3_tts_pipeline(model_id, generate_config_name: str = "
     """
     import json
 
-    from qwen_tts.core.models.configuration_qwen3_tts import Qwen3TTSConfig
-    from qwen_tts.core.models.modeling_qwen3_tts import Qwen3TTSForConditionalGeneration
-    from qwen_tts.core.models.processing_qwen3_tts import Qwen3TTSProcessor
-    from qwen_tts.inference.qwen3_tts_model import Qwen3TTSModel
+    try:
+        from qwen_tts.core.models.configuration_qwen3_tts import Qwen3TTSConfig
+        from qwen_tts.core.models.modeling_qwen3_tts import Qwen3TTSForConditionalGeneration
+        from qwen_tts.core.models.processing_qwen3_tts import Qwen3TTSProcessor
+        from qwen_tts.inference.qwen3_tts_model import Qwen3TTSModel
+    except ImportError as exc:
+        raise ImportError(
+            "Qwen3-TTS requires the `qwen_tts` package. Install it with `pip install qwen-tts`."
+        ) from exc
 
     model_dir = Path(str(model_id))
     config = Qwen3TTSConfig.from_pretrained(model_dir)
@@ -1166,7 +1181,12 @@ def _build_weightless_qwen3_tts_pipeline(model_id, generate_config_name: str = "
     model.eval()
 
     with _qwen3_tts_weightless_codec(model_dir):
-        from qwen_tts.inference.qwen3_tts_tokenizer import Qwen3TTSTokenizer
+        try:
+            from qwen_tts.inference.qwen3_tts_tokenizer import Qwen3TTSTokenizer
+        except ImportError as exc:
+            raise ImportError(
+                "Qwen3-TTS requires the `qwen_tts` package. Install it with `pip install qwen-tts`."
+            ) from exc
 
         model.load_speech_tokenizer(Qwen3TTSTokenizer.from_pretrained(model_dir / "speech_tokenizer"))
 

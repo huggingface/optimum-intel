@@ -11527,7 +11527,16 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
 
     def __init__(self, config, model, model_kwargs=None):
         super().__init__(config, model, model_kwargs)
-        from qwen_tts.core.models.modeling_qwen3_tts import eager_attention_forward, rotate_half
+        # Guarded so `transformers.dynamic_module_utils.get_imports` skips it: that helper walks
+        # this file's AST whenever a remote-code model resolves a class from it, and it counts
+        # imports at any nesting level - a bare `from qwen_tts import ...` here would make an
+        # unrelated model fail to load with "requires the following packages: qwen_tts".
+        try:
+            from qwen_tts.core.models.modeling_qwen3_tts import eager_attention_forward, rotate_half
+        except ImportError as exc:
+            raise ImportError(
+                "Exporting Qwen3-TTS requires the `qwen_tts` package. Install it with `pip install qwen-tts`."
+            ) from exc
 
         wrapper = self._model
         num_heads = wrapper.num_attention_heads
@@ -11905,7 +11914,15 @@ class Qwen3TTSCodecDecoderPatcher(_Qwen3TTSCodecPatcherMixin, ModelPatcher):
         self.patched_forward = patched_forward
 
     def _causal_conv_class(self):
-        from qwen_tts.core.tokenizer_12hz.modeling_qwen3_tts_tokenizer_v2 import Qwen3TTSTokenizerV2CausalConvNet
+        # Guarded for the same reason as in Qwen3TTSDecoderStackPatcher.
+        try:
+            from qwen_tts.core.tokenizer_12hz.modeling_qwen3_tts_tokenizer_v2 import (
+                Qwen3TTSTokenizerV2CausalConvNet,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "Exporting Qwen3-TTS requires the `qwen_tts` package. Install it with `pip install qwen-tts`."
+            ) from exc
 
         return Qwen3TTSTokenizerV2CausalConvNet
 
