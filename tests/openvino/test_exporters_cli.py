@@ -1112,7 +1112,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = self._load_exported_ov_model(model_type, task, tmpdir, model_kwargs)
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
             expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
-            if task.startswith(("text2text-generation", "automatic-speech-recognition")) and (
+            if (task.startswith("text2text-generation") or model_type == "cohere_asr") and (
                 not task.endswith("with-past") or model.decoder.stateful
             ):
                 expected_int8.pop("decoder_with_past", None)
