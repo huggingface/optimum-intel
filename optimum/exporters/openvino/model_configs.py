@@ -7353,6 +7353,7 @@ class Qwen3TTSDecoderStackDummyInputGenerator(DummyInputGenerator):
         self.num_key_value_heads = config.num_key_value_heads
         self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
         self.num_hidden_layers = config.num_hidden_layers
+        self.position_ids_rows = kwargs.get("position_ids_rows", 1)
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "inputs_embeds":
@@ -7363,8 +7364,11 @@ class Qwen3TTSDecoderStackDummyInputGenerator(DummyInputGenerator):
         elif input_name in ("cos", "sin"):
             shape = [self.batch_size, self.sequence_length, self.head_dim]
         elif input_name == "position_ids":
-            # Rotary positions for stacks that build cos/sin inside the graph.
+            # Rotary positions for stacks that build cos/sin inside the graph; m-RoPE takes
+            # one row per position stream.
             shape = [self.batch_size, self.sequence_length]
+            if self.position_ids_rows > 1:
+                shape = [self.position_ids_rows] + shape
             return self.random_int_tensor(shape, max_value=self.sequence_length, framework=framework, dtype=int_dtype)
         elif input_name == "step":
             # Scalar depth index selecting one of the folded per-depth output heads.
@@ -7393,53 +7397,18 @@ class Qwen3TTSDecoderStackOpenVINOConfig(OpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (Qwen3TTSDecoderStackDummyInputGenerator,)
     _MODEL_PATCHER = Qwen3TTSDecoderStackPatcher
 
+    # Rows of the ``position_ids`` input: interleaved m-RoPE carries three position streams,
+    # plain 1D RoPE a single one (see the code predictor's config).
+    POSITION_IDS_ROWS = 3
+
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         return {
             "inputs_embeds": {0: "batch_size", 1: "sequence_length"},
             "attention_mask": {0: "batch_size", 2: "sequence_length", 3: "kv_length"},
-            "cos": {0: "batch_size", 1: "sequence_length"},
-            "sin": {0: "batch_size", 1: "sequence_length"},
+            "position_ids": {1: "batch_size", 2: "sequence_length"},
             "past_key": {1: "batch_size", 3: "past_length"},
             "past_value": {1: "batch_size", 3: "past_length"},
-        }
-
-    @property
-    def outputs(self) -> Dict[str, Dict[int, str]]:
-        # The output head is folded into the stack, so the graph emits logits directly.
-        return {
-            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
-            "logits": {0: "batch_size", 1: "sequence_length"},
-            "present_key": {1: "batch_size", 3: "sequence_length"},
-            "present_value": {1: "batch_size", 3: "sequence_length"},
-        }
-
-    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
-        generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](self.task, self._normalized_config, **kwargs)
-        return {
-            name: generator.generate(name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype)
-            for name in self.inputs
-        }
-
-
-class Qwen3TTSSteppedDecoderStackOpenVINOConfig(Qwen3TTSDecoderStackOpenVINOConfig):
-    """Decoder stack whose folded output head is chosen by a runtime depth index.
-
-    Used for the code predictor, whose ``lm_head`` is one linear per residual depth: the
-    stacked weights live in the same graph as the decoder layers, gathered with ``step``.
-    """
-
-    @property
-    def inputs(self) -> Dict[str, Dict[int, str]]:
-        common_inputs = super().inputs
-        common_inputs.pop("cos", None)
-        common_inputs.pop("sin", None)
-        return {
-            "inputs_embeds": common_inputs.pop("inputs_embeds"),
-            "attention_mask": common_inputs.pop("attention_mask"),
-            "position_ids": {0: "batch_size", 1: "sequence_length"},
-            **common_inputs,
-            "step": {},
         }
 
     def patch_stateful_model(self, ov_model) -> None:
@@ -7466,6 +7435,40 @@ class Qwen3TTSSteppedDecoderStackOpenVINOConfig(Qwen3TTSDecoderStackOpenVINOConf
             key_value_output_names=key_value_output_names,
             batch_dim=1,
         )
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        # The output head is folded into the stack, so the graph emits logits directly.
+        return {
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+            "logits": {0: "batch_size", 1: "sequence_length"},
+            "present_key": {1: "batch_size", 3: "sequence_length"},
+            "present_value": {1: "batch_size", 3: "sequence_length"},
+        }
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        kwargs.setdefault("position_ids_rows", self.POSITION_IDS_ROWS)
+        generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](self.task, self._normalized_config, **kwargs)
+        return {
+            name: generator.generate(name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype)
+            for name in self.inputs
+        }
+
+
+class Qwen3TTSSteppedDecoderStackOpenVINOConfig(Qwen3TTSDecoderStackOpenVINOConfig):
+    """Decoder stack whose folded output head is chosen by a runtime depth index.
+
+    Used for the code predictor, whose ``lm_head`` is one linear per residual depth: the
+    stacked weights live in the same graph as the decoder layers, gathered with ``step``.
+    """
+
+    POSITION_IDS_ROWS = 1
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = super().inputs
+        common_inputs["position_ids"] = {0: "batch_size", 1: "sequence_length"}
+        return {**common_inputs, "step": {}}
 
 
 class Qwen3TTSComponentDummyInputGenerator(DummyInputGenerator):

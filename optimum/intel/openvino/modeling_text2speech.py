@@ -1222,7 +1222,7 @@ def _make_ov_embedding_forward(compiled, embedding_dim, step=None):
     return ov_forward
 
 
-def _make_ov_stateful_decoder_stack_forward(decoder_model, compiled):
+def _make_ov_stateful_decoder_stack_forward(decoder_model, compiled, position_fn=None, with_step=False):
     """Build an OpenVINO-backed ``forward`` for a decoder stack whose cache is graph state.
 
     The graph keeps its key/value cache in OpenVINO variables, so nothing is passed in or read
@@ -1245,6 +1245,13 @@ def _make_ov_stateful_decoder_stack_forward(decoder_model, compiled):
     num_kv = cfg.num_key_value_heads
     neg = torch.finfo(torch.float32).min
     request = compiled.create_infer_request()
+
+    def default_positions(position_ids, cache_position, batch_size):
+        if position_ids is None:
+            position_ids = cache_position.view(1, -1).expand(batch_size, -1)
+        return position_ids
+
+    build_positions = position_fn or default_positions
     head_state: Dict[str, Any] = {"logits": None, "hidden_shape": None}
 
     def ov_forward(
@@ -1272,8 +1279,7 @@ def _make_ov_stateful_decoder_stack_forward(decoder_model, compiled):
 
         if cache_position is None:
             cache_position = torch.arange(past_len, past_len + seq_)
-        if position_ids is None:
-            position_ids = cache_position.view(1, -1).expand(bs_, -1)
+        position_ids = build_positions(position_ids, cache_position, bs_)
 
         total = past_len + seq_
         rows = torch.arange(seq_).view(seq_, 1)
@@ -1283,15 +1289,10 @@ def _make_ov_stateful_decoder_stack_forward(decoder_model, compiled):
         if attention_mask is not None and attention_mask.ndim == 2:
             mask = mask.masked_fill((attention_mask[:, :total] == 0).view(bs_, 1, 1, total), neg)
 
-        request.start_async(
-            [
-                inputs_embeds.numpy(),
-                mask.numpy(),
-                position_ids.to(torch.int64).numpy(),
-                np.array(step if step is not None else 0, dtype=np.int64),
-            ],
-            share_inputs=True,
-        )
+        graph_inputs = [inputs_embeds.numpy(), mask.numpy(), position_ids.to(torch.int64).numpy()]
+        if with_step:
+            graph_inputs.append(np.array(step if step is not None else 0, dtype=np.int64))
+        request.start_async(graph_inputs, share_inputs=True)
         request.wait()
 
         hidden = torch.from_numpy(request.get_tensor("last_hidden_state").data).clone()
@@ -1307,128 +1308,6 @@ def _make_ov_stateful_decoder_stack_forward(decoder_model, compiled):
             last_hidden_state=hidden,
             past_key_values=past_key_values,
             hidden_states=(hidden,) if output_hidden_states else None,
-            attentions=None,
-        )
-
-    return ov_forward, head_state
-
-
-def _make_ov_decoder_stack_forward(decoder_model, compiled, rope_fn):
-    """Build an OpenVINO-backed ``forward`` for one Qwen3-TTS decoder stack.
-
-    Shared by the talker and the code predictor, whose exported graphs have the same
-    stateless, KV-explicit signature and differ only in how the rotary ``cos``/``sin`` are
-    produced (``rope_fn``). The returned callable preserves the PyTorch I/O contract of
-    ``Qwen3TTS*Model.forward`` (``DynamicCache`` in and out, ``BaseModelOutputWithPast``),
-    so the ``qwen_tts`` generation loops around it are untouched.
-
-    The graph returns only the newly computed keys/values; concatenating them onto the past
-    happens here, in a per-stack store that is reset whenever a sequence starts over.
-
-    The output head is folded into the same graph, so every call also produces logits. They
-    are handed back through ``head_state`` (returned alongside the forward), because the
-    PyTorch code applies the head one call later, from a different module.
-    """
-    from transformers import DynamicCache
-    from transformers.modeling_outputs import BaseModelOutputWithPast
-
-    cfg = decoder_model.config
-    num_layers = len(decoder_model.layers)
-    num_kv = cfg.num_key_value_heads
-    head_dim = getattr(cfg, "head_dim", cfg.hidden_size // cfg.num_attention_heads)
-    neg = torch.finfo(torch.float32).min
-
-    # Per-call KV store (mirrors the HF cache, but version independent).
-    state: Dict[str, Any] = {"k": None, "v": None}
-    # Logits produced by the folded output head, consumed by the caller right after.
-    head_state: Dict[str, Any] = {"logits": None, "hidden_shape": None}
-
-    def _build_mask(bs_, seq_, past_len, attention_mask):
-        """Build the additive [B, 1, seq, kv] causal mask the graph consumes.
-
-        Both call sites hand the stack the 2D padding mask that ``generate`` maintains and
-        rely on the model to derive the causal mask, which is what happens here. A caller
-        that already built the 4D additive mask is passed straight through.
-        """
-        total = past_len + seq_
-        if attention_mask is not None and attention_mask.ndim == 4:
-            return attention_mask.to(torch.float32)
-
-        rows = torch.arange(seq_).view(seq_, 1)
-        cols = torch.arange(total).view(1, total)
-        allowed = cols <= (past_len + rows)
-        mask = torch.zeros(seq_, total, dtype=torch.float32)
-        mask = mask.masked_fill(~allowed, neg)
-        mask = mask.view(1, 1, seq_, total).expand(bs_, 1, seq_, total).clone()
-        if attention_mask is not None:
-            pad = attention_mask[:, :total] == 0
-            mask = mask.masked_fill(pad.view(bs_, 1, 1, total), neg)
-        return mask
-
-    def ov_forward(
-        input_ids=None,
-        attention_mask=None,
-        position_ids=None,
-        past_key_values=None,
-        inputs_embeds=None,
-        use_cache=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        cache_position=None,
-        step=None,
-        **kw,
-    ):
-        if past_key_values is None:
-            past_key_values = DynamicCache()
-        inputs_embeds = inputs_embeds.to(torch.float32)
-        bs_, seq_ = inputs_embeds.shape[0], inputs_embeds.shape[1]
-        past_len = past_key_values.get_seq_length()
-
-        if cache_position is None:
-            cache_position = torch.arange(past_len, past_len + seq_)
-
-        cos, sin = rope_fn(position_ids, cache_position, bs_, seq_, inputs_embeds)
-        mask = _build_mask(bs_, seq_, past_len, attention_mask)
-
-        if past_len == 0 or state["k"] is None:
-            past_k = torch.zeros(num_layers, bs_, num_kv, 0, head_dim, dtype=torch.float32)
-            past_v = torch.zeros(num_layers, bs_, num_kv, 0, head_dim, dtype=torch.float32)
-        else:
-            past_k = state["k"]
-            past_v = state["v"]
-
-        graph_inputs = [
-            inputs_embeds.numpy(),
-            mask.numpy(),
-            cos.numpy(),
-            sin.numpy(),
-            past_k.numpy(),
-            past_v.numpy(),
-        ]
-        if step is not None:
-            graph_inputs.append(np.array(step, dtype=np.int64))
-        outputs = compiled(graph_inputs)
-        hidden = torch.from_numpy(outputs[0])
-        head_state["logits"] = torch.from_numpy(outputs[1]).clone()
-        head_state["hidden_shape"] = tuple(hidden.shape)
-        new_k = torch.from_numpy(outputs[2])
-        new_v = torch.from_numpy(outputs[3])
-
-        if past_k.shape[3] == 0:
-            state["k"], state["v"] = new_k, new_v
-        else:
-            state["k"] = torch.cat([past_k, new_k], dim=3)
-            state["v"] = torch.cat([past_v, new_v], dim=3)
-
-        # Keep the HF cache length in sync so cache_position is computed correctly.
-        for idx in range(num_layers):
-            past_key_values.update(new_k[idx], new_v[idx], idx)
-
-        hidden_states = (hidden,) if output_hidden_states else None
-        return BaseModelOutputWithPast(
-            last_hidden_state=hidden,
-            past_key_values=past_key_values,
-            hidden_states=hidden_states,
             attentions=None,
         )
 
@@ -1674,51 +1553,32 @@ class _OVModelForQwen3TTS:
     def _install_ov_talker(self) -> None:
         """Offload the talker decoder stack (28 layers, run every frame) to OpenVINO.
 
-        The rotary sections are merged outside the graph: the talker uses interleaved
-        m-RoPE, and rather than duplicating that merge, ``apply_multimodal_rotary_pos_emb``
-        is evaluated on a basis probe whose first half is 1 and second half 0 - the rotated
-        output's halves are then exactly the merged cos and sin.
+        The graph owns its rotary embedding and its key/value cache: it takes the three m-RoPE
+        position streams and merges the sections internally, and its cache lives in OpenVINO
+        state. Only the shape of ``position_ids`` is normalized here, because ``qwen_tts``
+        hands it over in several forms.
         """
         try:
-            from qwen_tts.core.models.modeling_qwen3_tts import apply_multimodal_rotary_pos_emb
-
             talker = self.model.talker
             talker_model = talker.model
             talker_model.eval()
-            cfg = talker_model.config
-            mrope_section = cfg.rope_scaling["mrope_section"]
-            mrope_interleaved = cfg.rope_scaling.get("interleaved", False)
-            head_dim = getattr(cfg, "head_dim", cfg.hidden_size // cfg.num_attention_heads)
-            half = head_dim // 2
 
             compiled = self._compile_ov_component(_TALKER_OV_IR_NAME, "talker")
 
-            def merged_mrope(position_ids, cache_position, batch_size, seq_len, inputs_embeds):
+            def mrope_positions(position_ids, cache_position, batch_size):
+                # The graph expects [3, batch, sequence]: one row per m-RoPE stream.
                 if position_ids is None:
-                    position_ids = cache_position.view(1, 1, -1).expand(3, batch_size, -1)
-                elif position_ids.ndim == 2:
-                    position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)
+                    return cache_position.view(1, 1, -1).expand(3, batch_size, -1)
+                if position_ids.ndim == 2:
+                    return position_ids[None, ...].expand(3, position_ids.shape[0], -1)
                 if position_ids.ndim == 3 and position_ids.shape[0] == 4:
-                    position_ids = position_ids[1:]
+                    # `qwen_tts` sometimes carries a leading text row ahead of the three.
+                    return position_ids[1:]
+                return position_ids
 
-                cos, sin = talker_model.rotary_emb(inputs_embeds, position_ids)
-                probe = torch.cat(
-                    [
-                        torch.ones(batch_size, 1, seq_len, half, dtype=torch.float32),
-                        torch.zeros(batch_size, 1, seq_len, half, dtype=torch.float32),
-                    ],
-                    dim=-1,
-                )
-                merged, _ = apply_multimodal_rotary_pos_emb(
-                    probe, probe, cos.to(torch.float32), sin.to(torch.float32), mrope_section, mrope_interleaved
-                )
-                merged = merged.squeeze(1)
-                return (
-                    torch.cat([merged[..., :half], merged[..., :half]], dim=-1),
-                    torch.cat([merged[..., half:], merged[..., half:]], dim=-1),
-                )
-
-            ov_forward, head_state = _make_ov_decoder_stack_forward(talker_model, compiled, merged_mrope)
+            ov_forward, head_state = _make_ov_stateful_decoder_stack_forward(
+                talker_model, compiled, position_fn=mrope_positions
+            )
             talker_model.forward = ov_forward
 
             def ov_codec_head(hidden_states):
@@ -1758,7 +1618,9 @@ class _OVModelForQwen3TTS:
             compiled = self._compile_ov_component(_CODE_PREDICTOR_OV_IR_NAME, "code predictor")
 
             # The code predictor's graph owns its rotary embeddings and its key/value cache.
-            ov_forward, head_state = _make_ov_stateful_decoder_stack_forward(code_predictor_model, compiled)
+            ov_forward, head_state = _make_ov_stateful_decoder_stack_forward(
+                code_predictor_model, compiled, with_step=True
+            )
             code_predictor_model.forward = ov_forward
 
             def ov_code_predictor_forward(

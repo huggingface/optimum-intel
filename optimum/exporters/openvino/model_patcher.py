@@ -11473,8 +11473,9 @@ class Qwen3TTSDecoderStackWrapper(nn.Module):
       inside every talker step.
 
     It exposes the decoder layers and final norm with an export-friendly forward signature
-    whose parameters match the stateless graph inputs (``inputs_embeds``, ``attention_mask``,
-    ``cos``, ``sin``, ``past_key``, ``past_value``). The actual stateless computation is
+    matching the graph inputs (``inputs_embeds``, ``attention_mask``, ``position_ids``). The
+    rotary embedding is built inside the graph from ``position_ids`` and the key/value cache
+    is hidden as OpenVINO state, so neither appears at the boundary. The computation itself is
     installed by :class:`Qwen3TTSDecoderStackPatcher`.
     """
 
@@ -11496,12 +11497,16 @@ class Qwen3TTSDecoderStackWrapper(nn.Module):
         # stacked and gathered with a runtime ``step`` index.
         self.head = head
         self.heads = heads
-        # A stateful graph keeps its cache in OpenVINO variables, so `present_*` has to carry
-        # the whole cache (past + new) for the Assign to grow it. A stateless graph emits only
-        # the new entries and lets the caller concatenate.
-        self.stateful = False
+        # The cache is hidden in OpenVINO variables, so `present_*` carries the whole cache
+        # (past + new): the Assign has to grow the state, not replace it.
+        self.stateful = True
+        # Interleaved m-RoPE mixes three position streams and is merged per layer; a stack
+        # without it (the code predictor) uses plain 1D RoPE.
+        rope_scaling = getattr(self.config, "rope_scaling", None) or {}
+        self.mrope_section = rope_scaling.get("mrope_section")
+        self.mrope_interleaved = rope_scaling.get("interleaved", False)
 
-    def forward(self, inputs_embeds, attention_mask, cos, sin, past_key, past_value):
+    def forward(self, inputs_embeds, attention_mask, position_ids, past_key, past_value):
         raise RuntimeError(
             "Qwen3TTSDecoderStackWrapper must be used within Qwen3TTSDecoderStackPatcher for OpenVINO export."
         )
@@ -11514,10 +11519,6 @@ class Qwen3TTSSteppedDecoderStackWrapper(Qwen3TTSDecoderStackWrapper):
     becomes a graph constant and the graph takes ``position_ids`` rather than ready-made
     ``cos``/``sin``.
     """
-
-    def __init__(self, decoder_model, head=None, heads=None):
-        super().__init__(decoder_model, head=head, heads=heads)
-        self.stateful = True
 
     def forward(self, inputs_embeds, attention_mask, position_ids, past_key, past_value, step):
         raise RuntimeError(
@@ -11535,10 +11536,11 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
     ``eager_attention_forward``) and the model's own weight modules, so nothing is
     re-implemented.
 
-    The rotary step is identical for both stacks: the talker applies interleaved m-RoPE and
-    the code predictor plain 1D RoPE, but in both cases the graph consumes already-merged
-    ``cos``/``sin`` (halves duplicated) and applies ``x * cos + rotate_half(x) * sin``. The
-    section merging stays outside the graph, on the runtime side.
+    Both graphs build their own rotary embedding from ``position_ids`` and keep their cache as
+    OpenVINO state, so ``cos``/``sin`` and the past/present pairs are gone from the boundary.
+    The two differ only in the rotary kind: the talker applies interleaved m-RoPE, which mixes
+    three position streams, so ``position_ids`` arrives as ``[3, batch, sequence]``; the code
+    predictor uses plain 1D RoPE with ``[batch, sequence]``.
     """
 
     def __init__(self, config, model, model_kwargs=None):
@@ -11548,7 +11550,11 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
         # imports at any nesting level - a bare `from qwen_tts import ...` here would make an
         # unrelated model fail to load with "requires the following packages: qwen_tts".
         try:
-            from qwen_tts.core.models.modeling_qwen3_tts import eager_attention_forward, rotate_half
+            from qwen_tts.core.models.modeling_qwen3_tts import (
+                apply_multimodal_rotary_pos_emb,
+                eager_attention_forward,
+                rotate_half,
+            )
         except ImportError as exc:
             raise ImportError(
                 "Exporting Qwen3-TTS requires the `qwen_tts` package. Install it with `pip install qwen-tts`."
@@ -11560,10 +11566,22 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
         head_dim = wrapper.head_dim
         scaling = wrapper.scaling
         stacked_heads = None if wrapper.heads is None else torch.stack([head.weight for head in wrapper.heads])
+        mrope_section = wrapper.mrope_section
+        mrope_interleaved = wrapper.mrope_interleaved
 
-        def run_stack(inputs_embeds, attention_mask, cos, sin, past_key, past_value):
+        def rotate(query, key, cos, sin):
+            if mrope_section is not None:
+                # Reuses the model's own merge instead of restating it, exactly as the
+                # unpatched attention does.
+                return apply_multimodal_rotary_pos_emb(query, key, cos, sin, mrope_section, mrope_interleaved)
             cos_u = cos.unsqueeze(1)
             sin_u = sin.unsqueeze(1)
+            return (
+                (query * cos_u) + (rotate_half(query) * sin_u),
+                (key * cos_u) + (rotate_half(key) * sin_u),
+            )
+
+        def run_stack(inputs_embeds, attention_mask, cos, sin, past_key, past_value):
             hidden = inputs_embeds
             new_k_list = []
             new_v_list = []
@@ -11575,8 +11593,7 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
                 q = attn.q_norm(attn.q_proj(h).view(bs, seq, num_heads, head_dim)).transpose(1, 2)
                 k = attn.k_norm(attn.k_proj(h).view(bs, seq, num_kv, head_dim)).transpose(1, 2)
                 v = attn.v_proj(h).view(bs, seq, num_kv, head_dim).transpose(1, 2)
-                q = (q * cos_u) + (rotate_half(q) * sin_u)
-                k = (k * cos_u) + (rotate_half(k) * sin_u)
+                q, k = rotate(q, k, cos, sin)
                 if not wrapper.stateful:
                     new_k_list.append(k)
                     new_v_list.append(v)
@@ -11623,9 +11640,15 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
 
         else:
 
-            def patched_forward(inputs_embeds, attention_mask, cos, sin, past_key, past_value):
+            def patched_forward(inputs_embeds, attention_mask, position_ids, past_key, past_value):
+                cos, sin = wrapper.rotary_emb(inputs_embeds, position_ids)
                 hidden, present_key, present_value = run_stack(
-                    inputs_embeds, attention_mask, cos, sin, past_key, past_value
+                    inputs_embeds,
+                    attention_mask,
+                    cos.to(inputs_embeds.dtype),
+                    sin.to(inputs_embeds.dtype),
+                    past_key,
+                    past_value,
                 )
                 return {
                     "last_hidden_state": hidden,
