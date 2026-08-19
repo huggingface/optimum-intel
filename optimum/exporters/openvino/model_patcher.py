@@ -63,7 +63,6 @@ from optimum.intel.utils.import_utils import (
     is_transformers_version,
 )
 
-
 if is_transformers_version(">=", "4.53"):
     from transformers.masking_utils import (
         ALL_MASK_ATTENTION_FUNCTIONS,
