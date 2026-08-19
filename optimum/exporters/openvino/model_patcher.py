@@ -11482,6 +11482,9 @@ class Qwen3TTSDecoderStackWrapper(nn.Module):
         super().__init__()
         self.layers = decoder_model.layers
         self.norm = decoder_model.norm
+        # Kept so a stack with plain 1D RoPE can build cos/sin inside the graph from
+        # ``position_ids``; the talker's interleaved m-RoPE is merged outside instead.
+        self.rotary_emb = decoder_model.rotary_emb
         self.config = decoder_model.config
         self.num_attention_heads = self.config.num_attention_heads
         self.num_key_value_heads = self.config.num_key_value_heads
@@ -11493,6 +11496,10 @@ class Qwen3TTSDecoderStackWrapper(nn.Module):
         # stacked and gathered with a runtime ``step`` index.
         self.head = head
         self.heads = heads
+        # A stateful graph keeps its cache in OpenVINO variables, so `present_*` has to carry
+        # the whole cache (past + new) for the Assign to grow it. A stateless graph emits only
+        # the new entries and lets the caller concatenate.
+        self.stateful = False
 
     def forward(self, inputs_embeds, attention_mask, cos, sin, past_key, past_value):
         raise RuntimeError(
@@ -11501,9 +11508,18 @@ class Qwen3TTSDecoderStackWrapper(nn.Module):
 
 
 class Qwen3TTSSteppedDecoderStackWrapper(Qwen3TTSDecoderStackWrapper):
-    """Decoder stack whose output head is selected by a runtime depth index."""
+    """Decoder stack that builds its own RoPE and selects its head by a runtime depth index.
 
-    def forward(self, inputs_embeds, attention_mask, cos, sin, past_key, past_value, step):
+    Used for the code predictor: its rotary embedding is the plain 1D kind, so ``inv_freq``
+    becomes a graph constant and the graph takes ``position_ids`` rather than ready-made
+    ``cos``/``sin``.
+    """
+
+    def __init__(self, decoder_model, head=None, heads=None):
+        super().__init__(decoder_model, head=head, heads=heads)
+        self.stateful = True
+
+    def forward(self, inputs_embeds, attention_mask, position_ids, past_key, past_value, step):
         raise RuntimeError(
             "Qwen3TTSSteppedDecoderStackWrapper must be used within Qwen3TTSDecoderStackPatcher for OpenVINO export."
         )
@@ -11561,10 +11577,15 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
                 v = attn.v_proj(h).view(bs, seq, num_kv, head_dim).transpose(1, 2)
                 q = (q * cos_u) + (rotate_half(q) * sin_u)
                 k = (k * cos_u) + (rotate_half(k) * sin_u)
-                new_k_list.append(k)
-                new_v_list.append(v)
+                if not wrapper.stateful:
+                    new_k_list.append(k)
+                    new_v_list.append(v)
                 k = torch.cat([past_key[idx], k], dim=2)
                 v = torch.cat([past_value[idx], v], dim=2)
+                if wrapper.stateful:
+                    # The state has to end up holding the full cache, not just this step's.
+                    new_k_list.append(k)
+                    new_v_list.append(v)
                 attn_out, _ = eager_attention_forward(attn, q, k, v, attention_mask, scaling)
                 attn_out = attn_out.reshape(bs, seq, -1)
                 attn_out = attn.o_proj(attn_out)
@@ -11577,9 +11598,17 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
 
         if stacked_heads is not None:
 
-            def patched_forward(inputs_embeds, attention_mask, cos, sin, past_key, past_value, step):
+            def patched_forward(inputs_embeds, attention_mask, position_ids, past_key, past_value, step):
+                # Plain 1D RoPE depends only on position_ids, so it is traced into the graph
+                # rather than recomputed by the caller on every one of the inner steps.
+                cos, sin = wrapper.rotary_emb(inputs_embeds, position_ids)
                 hidden, present_key, present_value = run_stack(
-                    inputs_embeds, attention_mask, cos, sin, past_key, past_value
+                    inputs_embeds,
+                    attention_mask,
+                    cos.to(inputs_embeds.dtype),
+                    sin.to(inputs_embeds.dtype),
+                    past_key,
+                    past_value,
                 )
                 # Cast the stacked weights before the gather, for the same reason as the
                 # embedding tables: it keeps them 16-bit on disk while leaving the

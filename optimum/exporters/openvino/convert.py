@@ -409,7 +409,16 @@ def export_pytorch(
             input_name = input_names[idx]
             inp_tensor.get_tensor().set_names({input_name})
 
-        if stateful:
+        # An export config may know how to hide its own cache, which the generic patcher cannot:
+        # that one matches the `past_key_values.<i>.<key|value>` naming and does not fit graphs
+        # carrying the whole cache as one stacked tensor. Defining `patch_stateful_model` is an
+        # explicit opt-in, so it is honoured regardless of the `stateful` flag - that flag
+        # follows task support (`ensure_export_task_support_stateful`), and a component-wise
+        # pipeline exported under, say, `text-to-audio` never qualifies.
+        custom_stateful_patcher = getattr(config, "patch_stateful_model", None)
+        if callable(custom_stateful_patcher):
+            custom_stateful_patcher(ov_model)
+        elif stateful:
             patch_stateful(model.config, ov_model)
 
         library_name = _infer_library_from_model_or_model_class(model=model, library_name=library_name)

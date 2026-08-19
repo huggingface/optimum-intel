@@ -7331,6 +7331,7 @@ class Qwen3TTSDecoderStackDummyInputGenerator(DummyInputGenerator):
         "sin",
         "past_key",
         "past_value",
+        "position_ids",
         "step",
     )
 
@@ -7361,6 +7362,10 @@ class Qwen3TTSDecoderStackDummyInputGenerator(DummyInputGenerator):
             shape = [self.batch_size, 1, self.sequence_length, self.sequence_length]
         elif input_name in ("cos", "sin"):
             shape = [self.batch_size, self.sequence_length, self.head_dim]
+        elif input_name == "position_ids":
+            # Rotary positions for stacks that build cos/sin inside the graph.
+            shape = [self.batch_size, self.sequence_length]
+            return self.random_int_tensor(shape, max_value=self.sequence_length, framework=framework, dtype=int_dtype)
         elif input_name == "step":
             # Scalar depth index selecting one of the folded per-depth output heads.
             return torch.tensor(0, dtype=torch.int64)
@@ -7426,7 +7431,41 @@ class Qwen3TTSSteppedDecoderStackOpenVINOConfig(Qwen3TTSDecoderStackOpenVINOConf
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {**super().inputs, "step": {}}
+        common_inputs = super().inputs
+        common_inputs.pop("cos", None)
+        common_inputs.pop("sin", None)
+        return {
+            "inputs_embeds": common_inputs.pop("inputs_embeds"),
+            "attention_mask": common_inputs.pop("attention_mask"),
+            "position_ids": {0: "batch_size", 1: "sequence_length"},
+            **common_inputs,
+            "step": {},
+        }
+
+    def patch_stateful_model(self, ov_model) -> None:
+        """Hide the key/value cache inside the graph as OpenVINO state.
+
+        The stack carries its whole cache as two stacked tensors rather than one pair per
+        layer, so the generic ``patch_stateful`` naming does not apply and the pairing is given
+        explicitly. ``batch_dim`` is 1 because the layer axis comes first:
+        ``[layers, batch, kv_heads, past_length, head_dim]``.
+        """
+        from optimum.exporters.openvino.stateful import make_stateful
+
+        key_value_input_names = ["past_key", "past_value"]
+        key_value_output_names = ["present_key", "present_value"]
+        not_kv_inputs = [
+            model_input
+            for model_input in ov_model.inputs
+            if not any(name in key_value_input_names for name in model_input.get_names())
+        ]
+        make_stateful(
+            ov_model,
+            not_kv_inputs=not_kv_inputs,
+            key_value_input_names=key_value_input_names,
+            key_value_output_names=key_value_output_names,
+            batch_dim=1,
+        )
 
 
 class Qwen3TTSComponentDummyInputGenerator(DummyInputGenerator):
