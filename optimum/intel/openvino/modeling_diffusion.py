@@ -1371,6 +1371,8 @@ class OVModelTransformerLTX2(OVPipelinePart):
         audio_encoder_hidden_states: torch.FloatTensor = None,
         timestep: torch.LongTensor = None,
         audio_timestep: torch.LongTensor = None,
+        sigma: Optional[torch.Tensor] = None,
+        audio_sigma: Optional[torch.Tensor] = None,
         encoder_attention_mask: torch.LongTensor = None,
         audio_encoder_attention_mask: torch.LongTensor = None,
         num_frames: Optional[int] = None,
@@ -1385,6 +1387,18 @@ class OVModelTransformerLTX2(OVPipelinePart):
         **kwargs,
     ):
         self.compile()
+
+        # LTX-2.3 feeds the transformer a `sigma` alongside `timestep` to modulate the prompt
+        # embeddings. The exported graph has no `sigma` input: the export patcher bakes in
+        # `sigma = timestep`, which is what the pipeline passes on every non-cross-timestep path.
+        # Anything else cannot be honoured by this IR, so say so instead of quietly ignoring it.
+        for name, value in (("sigma", sigma), ("audio_sigma", audio_sigma)):
+            if value is not None and not torch.equal(torch.as_tensor(value), torch.as_tensor(timestep)):
+                raise ValueError(
+                    f"`{name}` differs from `timestep`, which the exported LTX-2 transformer cannot "
+                    "represent (the graph was traced with them tied together). This happens with "
+                    "`use_cross_timestep=True`, which the OpenVINO export does not support."
+                )
 
         model_inputs = {
             "hidden_states": hidden_states,
@@ -2167,11 +2181,18 @@ class OVLTX2Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTX2Pip
         # Reshape text_encoder with batch_size only (tokenizer_max_length stays dynamic for Gemma)
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(self.text_encoder.model, batch_size, -1)
-        # Reshape connectors, audio_vae, vocoder with the full batch (accounts for guidance scale)
-        effective_batch = (
-            batch_size * num_images_per_prompt * 2 if batch_size > 0 and num_images_per_prompt > 0 else -1
-        )
-        for ov_model_attr in [self.connectors, self.audio_vae, self.vocoder]:
+        known_batch = batch_size > 0 and num_images_per_prompt > 0
+        # The connectors run on the concatenated negative+positive prompts, so they see twice the
+        # batch under classifier-free guidance. The audio VAE and the vocoder run after the
+        # denoising loop, where the guidance halves have already been merged back, so they see the
+        # plain batch.
+        guided_batch = batch_size * num_images_per_prompt * 2 if known_batch else -1
+        plain_batch = batch_size * num_images_per_prompt if known_batch else -1
+        for ov_model_attr, effective_batch in [
+            (self.connectors, guided_batch),
+            (self.audio_vae, plain_batch),
+            (self.vocoder, plain_batch),
+        ]:
             if ov_model_attr is not None:
                 shapes = {}
                 for inputs in ov_model_attr.model.inputs:

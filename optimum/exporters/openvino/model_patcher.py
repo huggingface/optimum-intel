@@ -10427,6 +10427,13 @@ class _LTX2AttnProcessorWithEps:
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
 
+        # Gated attention: connector blocks set apply_gated_attention=True when the checkpoint has
+        # video_gated_attn/audio_gated_attn=True (e.g. LTX-2.3). Gate logits are computed on the
+        # original hidden_states, same as diffusers LTX2AudioVideoAttnProcessor. For LTX-2.0
+        # (to_gate_logits is None) this is skipped and the path is identical to before.
+        if attn.to_gate_logits is not None:
+            gate_logits = attn.to_gate_logits(hidden_states)
+
         query = attn.to_q(hidden_states)
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
@@ -10453,15 +10460,24 @@ class _LTX2AttnProcessorWithEps:
         if attention_mask is not None:
             attn_weights = attn_weights + attention_mask
 
-        # epsilon to avoid CPU plugin issue with zero attention weights
+        # The epsilon is a uniform shift, so softmax is invariant to it; it exists only to keep an
+        # Add node in the graph, which works around a CPU plugin issue with zero attention weights.
+        # The softmax accumulates in fp32 because this manual attention replaces
+        # `scaled_dot_product_attention`, which does not reduce in the bf16 input dtype either.
         eps = 1e-30
-
-        attn_weights = torch.nn.functional.softmax(attn_weights + eps, dim=-1)
+        attn_weights = torch.nn.functional.softmax(attn_weights + eps, dim=-1, dtype=torch.float32).to(query.dtype)
 
         hidden_states = torch.matmul(attn_weights, value)
 
         hidden_states = hidden_states.transpose(1, 2).flatten(2, 3)
         hidden_states = hidden_states.to(query.dtype)
+
+        if attn.to_gate_logits is not None:
+            hidden_states = hidden_states.unflatten(2, (attn.heads, -1))  # [B, T, H, D]
+            # Factor of 2.0 so zero-initialized gate logits give initial gates of 1.
+            gates = 2.0 * torch.sigmoid(gate_logits)  # [B, T, H]
+            hidden_states = hidden_states * gates.unsqueeze(-1)
+            hidden_states = hidden_states.flatten(2, 3)
 
         hidden_states = attn.to_out[0](hidden_states)
         hidden_states = attn.to_out[1](hidden_states)
@@ -10581,7 +10597,13 @@ class _LTX2TraceSafeAttnProcessor:
         attention_mask=None,
         query_rotary_emb=None,
         key_rotary_emb=None,
+        perturbation_mask=None,
+        all_perturbed=None,
     ):
+        # `perturbation_mask` / `all_perturbed` are passed by LTX2PerturbedAttnProcessor blocks
+        # (perturbed_attn=True, e.g. LTX-2.3). For base CFG generation (no STG) they are None, in
+        # which case the full attention path below is exactly equivalent, so we accept and ignore
+        # them. STG (non-None perturbation_mask) is not supported by this static-IR export.
         # Use trace-safe RoPE — original has in-place addcmul_ on views which can break tracing
         apply_rotary = _ltx2_apply_split_rotary_emb
 
@@ -10700,6 +10722,13 @@ class LTX2TransformerPatcher(ModelPatcher):
         self._orig_model_forward = self._model.forward
 
         import functools
+        import inspect
+
+        # `sigma`/`audio_sigma` only exist on the transformer forward from the LTX-2.3 PR onwards.
+        # On older diffusers (LTX-2.0 era) they are absent, so only forward them when supported —
+        # this keeps LTX-2.0 export working across diffusers versions.
+        _fwd_params = inspect.signature(self._orig_model_forward).parameters
+        _supports_sigma = "sigma" in _fwd_params
 
         @functools.wraps(self._orig_model_forward)
         def patched_forward(
@@ -10717,8 +10746,22 @@ class LTX2TransformerPatcher(ModelPatcher):
             audio_num_frames=None,
             video_coords=None,
             audio_coords=None,
+            sigma=None,
+            audio_sigma=None,
             **kwargs,
         ):
+            # `sigma`/`audio_sigma` drive the prompt cross-attention modulation path used when the
+            # checkpoint sets cross_attn_mod=True (e.g. LTX-2.3). The pipeline always passes
+            # sigma=timestep, so we default them here rather than adding a redundant traced input;
+            # this keeps the exported IR interface identical for LTX-2.0 (whose config ignores them).
+            extra_forward_kwargs = {}
+            if _supports_sigma:
+                if sigma is None:
+                    sigma = timestep
+                if audio_sigma is None:
+                    audio_sigma = sigma
+                extra_forward_kwargs["sigma"] = sigma
+                extra_forward_kwargs["audio_sigma"] = audio_sigma
             result = self._orig_model_forward(
                 hidden_states=hidden_states,
                 audio_hidden_states=audio_hidden_states,
@@ -10735,6 +10778,7 @@ class LTX2TransformerPatcher(ModelPatcher):
                 video_coords=video_coords,
                 audio_coords=audio_coords,
                 return_dict=False,
+                **extra_forward_kwargs,
                 **kwargs,
             )
             if isinstance(result, tuple):
