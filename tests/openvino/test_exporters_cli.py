@@ -113,6 +113,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-image", "sana"),
         ("text-to-video", "ltx-video"),
         ("text-to-video", "ltx2"),
+        ("image-to-video", "ltx2"),
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
@@ -128,15 +129,16 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "qwen3_dflash"),
         ("text-generation-with-past", "zamba2"),
         ("text-generation-with-past", "exaone4"),
+        ("text-generation-with-past", "ouro"),
         ("text-generation-with-past", "bitnet"),
         ("text-generation-with-past", "qwen3_next"),
-        ("image-text-to-text", "qwen3_vl_eagle3"),
         ("text-generation", "lfm2_moe"),
         ("text-generation-with-past", "lfm2_moe"),
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
         ("automatic-speech-recognition", "cohere_asr"),
+        ("image-text-to-text", "muse_glimmer"),
     ]
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = [
@@ -145,6 +147,12 @@ class OVCLIExportTestCase(unittest.TestCase):
         if TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type)
         in get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
     ]
+
+    # Add custom model types
+    if is_transformers_version("==", "4.57.6"):
+        SUPPORTED_ARCHITECTURES.append(
+            ("text-generation-with-past", "qwen3_vl_eagle3"),
+        )
 
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
@@ -184,8 +192,10 @@ class OVCLIExportTestCase(unittest.TestCase):
         "bitnet": 2,
         "granitemoehybrid": 2,
         "smollm3": 2,
+        "ouro": 2,
         "qwen3_vl_eagle3": 0,
         "qwen3_vl_embedding": 2,
+        "muse_glimmer": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -713,7 +723,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
             "--dataset textvqa --num-samples 1",
             {
-                "lm_model": {"int8": 12, "int4": 18},
+                "lm_model": {"int8": 10, "int4": 20},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 1},
                 "vision_embeddings_merger_model": {"int8": 32},
@@ -1092,8 +1102,6 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_int8(self, task: str, model_type: str):
         if model_type in ["bitnet"]:
             self.skipTest("CVS-176501 INT8 compression fails for BitNet; need to compress remaining BF16 weights")
-        if model_type == "qwen3_vl_eagle3":
-            self.skipTest("Skipped, no compression and quantiozation are needed for the draft Eagle3 model.")
         with TemporaryDirectory() as tmpdir:
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":

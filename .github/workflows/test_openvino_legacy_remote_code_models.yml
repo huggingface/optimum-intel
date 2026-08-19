@@ -49,7 +49,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip uv
-          uv pip install .[tests] librosa diffusers
+          uv pip install .[tests] librosa
 
       - name: Login with fork PRs CI token
         if: ${{ env.HF_TOKEN == '' }}
