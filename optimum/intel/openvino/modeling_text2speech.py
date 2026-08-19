@@ -1645,7 +1645,8 @@ class _OVModelForQwen3TTS:
                     generation_steps = inputs_embeds.shape[1] - 2
                 else:
                     inputs_embeds = code_predictor.model.get_input_embeddings()[generation_steps - 1](input_ids)
-                inputs_embeds = code_predictor.small_to_mtp_projection(inputs_embeds)
+                # `small_to_mtp_projection` is folded into the graph, so the embeddings are
+                # handed over in the talker's width.
 
                 outputs = ov_forward(
                     attention_mask=attention_mask,

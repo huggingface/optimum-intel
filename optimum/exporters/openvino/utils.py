@@ -387,7 +387,9 @@ def _get_qwen3_tts_submodels_fn_and_export_configs(
         submodels = {
             "talker_model": Qwen3TTSDecoderStackWrapper(talker.model, head=talker.codec_head).eval(),
             "code_predictor_model": Qwen3TTSSteppedDecoderStackWrapper(
-                code_predictor.model, heads=code_predictor.lm_head
+                code_predictor.model,
+                heads=code_predictor.lm_head,
+                input_projection=code_predictor.small_to_mtp_projection,
             ).eval(),
             "text_embeddings": Qwen3TTSEmbeddingWrapper(
                 talker.config,
@@ -414,6 +416,10 @@ def _get_qwen3_tts_submodels_fn_and_export_configs(
                 model.config.speaker_encoder_config, speaker_encoder=model.speaker_encoder
             ).eval()
         return submodels
+
+    # The code predictor is fed embeddings in the talker's width and narrows them itself, so
+    # its graph input is sized by the talker rather than by its own hidden size.
+    custom_export_configs["code_predictor_model"].input_hidden_size = talker_config.hidden_size
 
     # The speaker encoder only exists on the voice-clone (``base``) variants.
     if model.speaker_encoder is not None:

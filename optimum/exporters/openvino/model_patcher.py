@@ -11520,6 +11520,13 @@ class Qwen3TTSSteppedDecoderStackWrapper(Qwen3TTSDecoderStackWrapper):
     ``cos``/``sin``.
     """
 
+    def __init__(self, decoder_model, head=None, heads=None, input_projection=None):
+        super().__init__(decoder_model, head=head, heads=heads)
+        # On variants whose code predictor is narrower than the talker this is a real Linear
+        # (2048 -> 1024 on the 1.7B model) rather than an Identity, so it holds weights and has
+        # to travel into the graph with the rest of the stack.
+        self.input_projection = input_projection
+
     def forward(self, inputs_embeds, attention_mask, position_ids, past_key, past_value, step):
         raise RuntimeError(
             "Qwen3TTSSteppedDecoderStackWrapper must be used within Qwen3TTSDecoderStackPatcher for OpenVINO export."
@@ -11616,6 +11623,10 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
         if stacked_heads is not None:
 
             def patched_forward(inputs_embeds, attention_mask, position_ids, past_key, past_value, step):
+                # The stack is fed embeddings in the talker's width; this maps them to its own
+                # (an Identity when the two match).
+                if wrapper.input_projection is not None:
+                    inputs_embeds = wrapper.input_projection(inputs_embeds)
                 # Plain 1D RoPE depends only on position_ids, so it is traced into the graph
                 # rather than recomputed by the caller on every one of the inner steps.
                 cos, sin = wrapper.rotary_emb(inputs_embeds, position_ids)

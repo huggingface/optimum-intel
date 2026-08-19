@@ -7354,10 +7354,13 @@ class Qwen3TTSDecoderStackDummyInputGenerator(DummyInputGenerator):
         self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
         self.num_hidden_layers = config.num_hidden_layers
         self.position_ids_rows = kwargs.get("position_ids_rows", 1)
+        # The width of `inputs_embeds`, which is the talker's hidden size for a stack fed from
+        # the talker; it only equals this stack's own hidden size when the two match.
+        self.input_hidden_size = kwargs.get("input_hidden_size") or self.hidden_size
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "inputs_embeds":
-            shape = [self.batch_size, self.sequence_length, self.hidden_size]
+            shape = [self.batch_size, self.sequence_length, self.input_hidden_size]
         elif input_name == "attention_mask":
             # Additive causal mask; at export there is no past so kv_length == sequence_length.
             shape = [self.batch_size, 1, self.sequence_length, self.sequence_length]
@@ -7446,8 +7449,14 @@ class Qwen3TTSDecoderStackOpenVINOConfig(OpenVINOConfig):
             "present_value": {1: "batch_size", 3: "sequence_length"},
         }
 
+    # Width of `inputs_embeds` when it differs from this stack's hidden size; set by the
+    # exporter for the code predictor, which is fed embeddings in the talker's width.
+    input_hidden_size = None
+
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         kwargs.setdefault("position_ids_rows", self.POSITION_IDS_ROWS)
+        if self.input_hidden_size is not None:
+            kwargs.setdefault("input_hidden_size", self.input_hidden_size)
         generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](self.task, self._normalized_config, **kwargs)
         return {
             name: generator.generate(name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype)
