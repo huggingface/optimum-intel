@@ -99,7 +99,7 @@ jobs:
 
       - name: Test with Pytest
         run: |
-          /usr/bin/time -v pytest tests/openvino/${{ matrix.test-pattern }} -k "not (qwen3_asr or fun_asr)" --durations=0
+          /usr/bin/time -v python -u -m pytest tests/openvino/${{ matrix.test-pattern }} -k "not (qwen3_asr or fun_asr)" --durations=0 -v
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Install Nightly OpenVINO
