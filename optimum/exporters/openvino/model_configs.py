@@ -844,6 +844,46 @@ class LlamaOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             common_outputs["d2t"] = {0: "vocab_size"}
         return common_outputs
 
+    def overwrite_shape_and_generate_input(
+        self, dummy_input_gen: DummyInputGenerator, input_name: str, framework: str, input_shapes: Dict
+    ):
+        # VLM Eagle3 replaces input_ids with inputs_embeds as the sequence-length-bearing
+        # input, so it (and the paired "hidden_states" input from the main model) needs the
+        # same "single new token" shape override like input_ids/decoder_input_ids/position_ids
+        if (
+            self.eagle3_vlm
+            and input_name in ("inputs_embeds", "hidden_states")
+            and self.use_past
+            and self.use_past_in_inputs
+            and self.use_cache_branch is not False
+        ):
+            sequence_length = dummy_input_gen.sequence_length
+            dummy_input_gen.sequence_length = 1
+            dummy_input = dummy_input_gen.generate(
+                input_name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
+            )
+            dummy_input_gen.sequence_length = sequence_length
+            return dummy_input
+        return super().overwrite_shape_and_generate_input(dummy_input_gen, input_name, framework, input_shapes)
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        dummy_inputs = super().generate_dummy_inputs(framework=framework, **kwargs)
+        # VLM Eagle3 has no "input_ids" to size the attention_mask padding from (base class
+        # padding is keyed off "text-generation" task/input_ids, which don't apply here).
+        if (
+            self.eagle3_vlm
+            and self.use_past_in_inputs
+            and self.PAD_ATTENTION_MASK_TO_PAST
+            and self.use_cache_branch is not False
+            and "attention_mask" in dummy_inputs
+        ):
+            seq_len = dummy_inputs["inputs_embeds"].shape[1]
+            past_seq_len = dummy_inputs["past_key_values"][0][1].shape[-2]
+            dummy_inputs["attention_mask"] = DummyInputGenerator.pad_input_on_dim(
+                dummy_inputs["attention_mask"], desired_length=past_seq_len + seq_len, dim=1
+            )
+        return dummy_inputs
+
 
 @register_in_tasks_manager(
     "gpt_oss",
