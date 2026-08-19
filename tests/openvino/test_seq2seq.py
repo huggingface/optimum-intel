@@ -743,6 +743,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             # Qwen3OmniMoeForConditionalGeneration has a custom generate() interface incompatible with this flow
             self.skipTest("qwen3_omni_moe comparison tested via dedicated test methods")
 
+        if model_arch == "gemma4":
+            # Segfaults inside the OpenVINO CPU plugin's AVX2 JIT kernels, so it only crashes on hosts
+            # without AVX-512 (the CI runners). Reproducible anywhere with ONEDNN_MAX_CPU_ISA=AVX2.
+            self.skipTest("OpenVINO CPU plugin crashes on the AVX2 inference path")
+
         def compare_outputs(inputs, ov_model, transformers_model, generation_config):
             transformers_inputs = copy.deepcopy(inputs)
             if model_arch == "videochat_flash_qwen":
