@@ -82,6 +82,7 @@ from optimum.intel.openvino.modeling_visual_language import (
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 
+
 if is_transformers_version("<=", "4.52"):
     from transformers.image_utils import load_video
 else:
