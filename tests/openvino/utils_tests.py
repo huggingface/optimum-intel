@@ -626,8 +626,9 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "gemma4": {
         "lm_model": 54,
         "text_embeddings_model": 1,
-        "vision_embeddings_model": 10,
+        "vision_embeddings_model": 11 if is_transformers_version(">=", "5.10") else 10,
         "text_embeddings_per_layer_model": 1,
+        "audio_embeddings_model": 16,
     },
     "gemma4_moe": {
         "lm_model": 48,
