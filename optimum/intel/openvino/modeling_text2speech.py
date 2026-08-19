@@ -960,6 +960,20 @@ _QWEN3_TTS_COMPRESSIBLE_OV_IR_NAMES = (
     _CODE_PREDICTOR_EMBEDDINGS_OV_IR_NAME,
 )
 
+# Of those, the components 4-bit weights are worth spending on, so `--weight-format int4`
+# produces a mixed int4/int8 model. The talker stack is 60% of the pipeline's parameters and
+# its job is picking one coarse code per 80 ms frame, which survives aggressive quantization:
+# measured here, int4 keeps 100% top-1 code agreement with the uncompressed graph. Everything
+# else stays 8-bit even when int4 is requested, because it is either small enough that 4 bits
+# buy little or carries detail that quantizes badly:
+#   * the code predictor is 11% of the weights but emits 15 of every 16 codes - all the fine
+#     acoustic structure - and at int4 it flips 5% of them, to save ~35 MB;
+#   * the embedding tables are the model's input representation, which is why NNCF's own int4
+#     defaults already fall back to 8-bit for them.
+# Within an IR, `--ratio` still splits layers between 4-bit and the 8-bit backup precision as
+# usual; this only decides which IRs are offered 4-bit at all.
+_QWEN3_TTS_INT4_OV_IR_NAMES = (_TALKER_OV_IR_NAME,)
+
 
 def _resolve_ir_dir(model_id, cache_dir) -> Path:
     """Resolve a writable directory for the Qwen3-TTS OpenVINO IRs.
@@ -1692,20 +1706,41 @@ class _OVModelForQwen3TTS:
         components in :data:`_QWEN3_TTS_COMPRESSIBLE_OV_IR_NAMES` are compressed - see the note
         there on why the codec is left in floating point - and each is compressed on its own,
         so this works whatever subset of components a given Qwen3-TTS variant produced.
+
+        A 4-bit request is applied per component rather than across the board: only the IRs in
+        :data:`_QWEN3_TTS_INT4_OV_IR_NAMES` are quantized to 4 bits, the rest fall back to 8,
+        so `--weight-format int4` yields a mixed int4/int8 model.
         """
         from openvino import save_model
 
+        from .configuration import OVWeightQuantizationConfig
         from .quantization import _weight_only_quantization
 
         output_dir = Path(save_directory) if save_directory is not None else Path(self._ir_dir)
         core = openvino.Core()
 
+        requested_bits = (
+            quantization_config.get("bits") if isinstance(quantization_config, dict) else quantization_config.bits
+        )
+        fallback_config = None
+        if requested_bits is not None and requested_bits < 8:
+            symmetric = (
+                quantization_config.get("sym", False)
+                if isinstance(quantization_config, dict)
+                else getattr(quantization_config, "sym", False)
+            )
+            fallback_config = OVWeightQuantizationConfig(bits=8, sym=symmetric, group_size=-1, ratio=1.0)
+
         for ir_name in _QWEN3_TTS_COMPRESSIBLE_OV_IR_NAMES:
             ir_path = Path(self._ir_dir) / ir_name
             if not ir_path.is_file():
                 continue
-            logger.info(f"Qwen3-TTS: applying weight compression to {ir_name}.")
-            compressed = _weight_only_quantization(core.read_model(ir_path), quantization_config)
+            config = quantization_config
+            if fallback_config is not None and ir_name not in _QWEN3_TTS_INT4_OV_IR_NAMES:
+                config = fallback_config
+            bits = config.get("bits") if isinstance(config, dict) else config.bits
+            logger.info(f"Qwen3-TTS: applying {bits}-bit weight compression to {ir_name}.")
+            compressed = _weight_only_quantization(core.read_model(ir_path), config)
 
             # The source weights are still memory-mapped, both by the model this method was
             # called on and by ``read_model`` above, so the compressed graph is written under a

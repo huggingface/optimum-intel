@@ -11572,10 +11572,13 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
                 hidden, present_key, present_value = run_stack(
                     inputs_embeds, attention_mask, cos, sin, past_key, past_value
                 )
-                weight = torch.index_select(stacked_heads, 0, step.reshape(1)).squeeze(0)
+                # Cast the stacked weights before the gather, for the same reason as the
+                # embedding tables: it keeps them 16-bit on disk while leaving the
+                # Constant -> Convert -> Gather pattern that NNCF can compress.
+                weight = torch.index_select(stacked_heads.to(torch.float32), 0, step.reshape(1)).squeeze(0)
                 return {
                     "last_hidden_state": hidden,
-                    "logits": torch.nn.functional.linear(hidden, weight.to(hidden.dtype)),
+                    "logits": torch.nn.functional.linear(hidden, weight),
                     "present_key": present_key,
                     "present_value": present_value,
                 }
@@ -11631,10 +11634,12 @@ class Qwen3TTSEmbeddingPatcher(ModelPatcher):
                 ).to(wrapper.embedding.weight.dtype)
 
         def patched_forward(input_ids):
-            # The gather keeps the table at its stored precision; the cast that follows is
-            # what lets a 16-bit checkpoint export as 16-bit constants behind an fp32 output.
-            embeddings = torch.nn.functional.embedding(input_ids, table)
-            return {output_name: embeddings.to(torch.float32)}
+            # Cast the table, not the gathered rows: that traces to
+            # ``Constant(16-bit) -> Convert(f32) -> Gather``, the canonical compressed-weight
+            # pattern. It keeps a 16-bit checkpoint 16-bit on disk, and it is the shape NNCF
+            # matches - casting after the gather leaves the weight unrecognised, so
+            # ``--weight-format int8/int4`` would silently skip the table.
+            return {output_name: torch.nn.functional.embedding(input_ids, table.to(torch.float32))}
 
         self.patched_forward = patched_forward
 
@@ -11653,9 +11658,8 @@ class Qwen3TTSSteppedEmbeddingPatcher(ModelPatcher):
         output_name = list(config.outputs.keys())[0]
 
         def patched_forward(input_ids, step):
-            weight = torch.index_select(stacked, 0, step.reshape(1)).squeeze(0)
-            embeddings = torch.nn.functional.embedding(input_ids, weight)
-            return {output_name: embeddings.to(torch.float32)}
+            weight = torch.index_select(stacked.to(torch.float32), 0, step.reshape(1)).squeeze(0)
+            return {output_name: torch.nn.functional.embedding(input_ids, weight)}
 
         self.patched_forward = patched_forward
 

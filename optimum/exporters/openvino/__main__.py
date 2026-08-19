@@ -588,17 +588,9 @@ def main_export(
         elif library_name == "qwen3_tts":
             # Without an explicit request the checkpoint's own precision is kept, so the IRs
             # come out at the precision the model was published in rather than upcast. A
-            # floating-point --weight-format pins the precision it names, and a weight-only
-            # quantization loads in fp32: NNCF does not match embedding weights that are
-            # already 16-bit, and since the compressed output is int8 either way, the lossless
-            # bf16 -> fp32 upcast only costs export-time memory.
-            if ov_config is not None:
-                if ov_config.quantization_config is not None:
-                    loading_kwargs.setdefault("torch_dtype", torch.float32)
-                elif ov_config.dtype in {"fp16", "fp32"}:
-                    loading_kwargs.setdefault(
-                        "torch_dtype", torch.float16 if ov_config.dtype == "fp16" else torch.float32
-                    )
+            # floating-point --weight-format still pins the precision it names.
+            if ov_config is not None and ov_config.dtype in {"fp16", "fp32"}:
+                loading_kwargs.setdefault("torch_dtype", torch.float16 if ov_config.dtype == "fp16" else torch.float32)
             model = _Qwen3TTSForTextToSpeech.from_pretrained(
                 model_name_or_path,
                 cache_dir=cache_dir,
