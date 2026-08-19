@@ -117,6 +117,14 @@ if _kokoro_available:
     except importlib_metadata.PackageNotFoundError:
         _kokoro_available = False
 
+_qwen_tts_available = importlib.util.find_spec("qwen_tts") is not None
+_qwen_tts_version = "N/A"
+if _qwen_tts_available:
+    try:
+        _qwen_tts_version = importlib_metadata.version("qwen-tts")
+    except importlib_metadata.PackageNotFoundError:
+        _qwen_tts_available = False
+
 _funasr_available = importlib.util.find_spec("funasr") is not None
 _funasr_version = "N/A"
 if _funasr_available:
@@ -308,6 +316,10 @@ def is_open_clip_available():
 
 def is_kokoro_available():
     return _kokoro_available
+
+
+def is_qwen_tts_available():
+    return _qwen_tts_available
 
 
 def is_funasr_available():

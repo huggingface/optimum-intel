@@ -15,6 +15,7 @@
 import gc
 import logging
 import os
+import re
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -188,7 +189,10 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
         # Qwen3-TTS is a multi-component autoregressive TTS model with a fully custom
         # generation orchestration, so it is handled by a dedicated runtime class.
         if _is_qwen3_tts_config(kwargs.get("config")):
-            kwargs.pop("export", None)
+            # ``export`` is honoured by the dedicated runtime (it converts the checkpoint
+            # first); ``compile`` has no meaning there, as each component compiles when it is
+            # installed.
+            kwargs.pop("compile", None)
             return _OVModelForQwen3TTS.from_pretrained(model_id, **kwargs)
 
         return super().from_pretrained(model_id, **kwargs)
@@ -1086,6 +1090,58 @@ def _strip_qwen3_tts_weights(model: "torch.nn.Module") -> None:
         raise RuntimeError(f"Qwen3-TTS: buffers left on the meta device and cannot be rebuilt: {remaining}")
 
 
+def _qwen3_tts_weight_compression_config(load_in_8bit, quantization_config):
+    """Resolve the weight-compression request, mirroring the other OpenVINO model classes."""
+    from .configuration import OVWeightQuantizationConfig
+
+    if quantization_config is not None:
+        if isinstance(quantization_config, dict):
+            return OVWeightQuantizationConfig.from_dict(quantization_config)
+        return quantization_config
+    if load_in_8bit:
+        return OVWeightQuantizationConfig(bits=8)
+    return None
+
+
+def _export_qwen3_tts(model_id, cache_dir, weight_compression=None):
+    """Convert a Qwen3-TTS checkpoint to OpenVINO and return the directory holding the IRs.
+
+    Backs ``from_pretrained(..., export=True)``. The output goes to the directory
+    :func:`_resolve_ir_dir` resolves for this model, so a second load finds the IRs already
+    there instead of converting again.
+    """
+    from optimum.exporters.openvino import main_export
+
+    source = Path(str(model_id))
+    if source.is_dir() and (source / _TALKER_OV_IR_NAME).is_file():
+        return source  # already an exported directory
+
+    # Never convert into the source directory: it may be a read-only Hub snapshot, and mixing
+    # IRs into a checkpoint makes the result neither one thing nor the other.
+    sanitized = re.sub(r"[^\w.-]+", "--", str(model_id)).strip("-")
+    # Compressed and uncompressed conversions of the same checkpoint must not share a cache
+    # entry, or the first one exported would be reused for both.
+    if weight_compression is not None:
+        sanitized += f"--{getattr(weight_compression, 'bits', 8)}bit"
+    base = Path(cache_dir) if cache_dir else Path(HUGGINGFACE_HUB_CACHE)
+    output_dir = base / "openvino_qwen3_tts" / sanitized
+    if (output_dir / _TALKER_OV_IR_NAME).is_file():
+        logger.info(f"Qwen3-TTS: reusing the OpenVINO export at {output_dir}.")
+        return output_dir
+
+    logger.info(f"Qwen3-TTS: exporting {model_id} to OpenVINO in {output_dir}.")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    main_export(
+        model_name_or_path=str(model_id),
+        output=output_dir,
+        task="text-to-audio",
+        cache_dir=cache_dir,
+    )
+    if weight_compression is not None:
+        compress_qwen3_tts_irs(output_dir, weight_compression)
+    return output_dir
+
+
 def _build_weightless_qwen3_tts_pipeline(model_id, generate_config_name: str = "generation_config.json"):
     """Build the ``qwen_tts`` pipeline for an export that carries no PyTorch weights.
 
@@ -1278,6 +1334,60 @@ def _is_qwen3_tts_config(config: Optional["PretrainedConfig"]) -> bool:
     return "Qwen3TTSForConditionalGeneration" in architectures
 
 
+def compress_qwen3_tts_irs(ir_dir, quantization_config, output_dir=None) -> None:
+    """Weight-compress the exported Qwen3-TTS IRs in ``ir_dir``.
+
+    Shared by ``optimum-cli export openvino --weight-format ...`` (through
+    :meth:`_OVModelForQwen3TTS._apply_quantization`) and by ``main_export`` when an
+    ``OVConfig`` carrying a quantization config is passed, so both entry points produce the
+    same model.
+    """
+    from openvino import save_model
+
+    from .configuration import OVWeightQuantizationConfig
+    from .quantization import _weight_only_quantization
+
+    ir_dir = Path(ir_dir)
+    output_dir = Path(output_dir) if output_dir is not None else ir_dir
+    core = openvino.Core()
+
+    requested_bits = (
+        quantization_config.get("bits") if isinstance(quantization_config, dict) else quantization_config.bits
+    )
+    fallback_config = None
+    if requested_bits is not None and requested_bits < 8:
+        symmetric = (
+            quantization_config.get("sym", False)
+            if isinstance(quantization_config, dict)
+            else getattr(quantization_config, "sym", False)
+        )
+        fallback_config = OVWeightQuantizationConfig(bits=8, sym=symmetric, group_size=-1, ratio=1.0)
+
+    for ir_name in _QWEN3_TTS_COMPRESSIBLE_OV_IR_NAMES:
+        ir_path = ir_dir / ir_name
+        if not ir_path.is_file():
+            continue
+        config = quantization_config
+        if fallback_config is not None and ir_name not in _QWEN3_TTS_INT4_OV_IR_NAMES:
+            config = fallback_config
+        bits = config.get("bits") if isinstance(config, dict) else config.bits
+        logger.info(f"Qwen3-TTS: applying {bits}-bit weight compression to {ir_name}.")
+        compressed = _weight_only_quantization(core.read_model(ir_path), config)
+
+        # The source weights are still memory-mapped, both by the model this method was
+        # called on and by ``read_model`` above, so the compressed graph is written under a
+        # temporary name and renamed into place. Writing over a mapped .bin would truncate
+        # it underneath its mappings and take the process down with SIGBUS.
+        staged_xml = output_dir / f"{ir_path.stem}.compressed.xml"
+        save_model(compressed, staged_xml, compress_to_fp16=False)
+        del compressed
+        gc.collect()
+
+        target_xml = output_dir / ir_name
+        os.replace(staged_xml, target_xml)
+        os.replace(staged_xml.with_suffix(".bin"), target_xml.with_suffix(".bin"))
+
+
 class _OVModelForQwen3TTS:
     """OpenVINO-backed runtime for Qwen3-TTS.
 
@@ -1321,6 +1431,9 @@ class _OVModelForQwen3TTS:
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
         local_files_only: bool = False,
         trust_remote_code: bool = False,
+        export: bool = False,
+        load_in_8bit: Optional[bool] = None,
+        quantization_config: Optional[Any] = None,
         **kwargs,
     ) -> "_OVModelForQwen3TTS":
         try:
@@ -1345,6 +1458,19 @@ class _OVModelForQwen3TTS:
             load_kwargs["cache_dir"] = cache_dir
         load_kwargs["force_download"] = force_download
         load_kwargs["local_files_only"] = local_files_only
+
+        # ``export=True`` accepts an original checkpoint and converts it first, matching the
+        # other OpenVINO model classes. The IRs land in the same location a later load resolves
+        # to, so the conversion is done once and reused.
+        weight_compression = _qwen3_tts_weight_compression_config(load_in_8bit, quantization_config)
+        if export:
+            model_id = _export_qwen3_tts(model_id, cache_dir, weight_compression)
+        elif weight_compression is not None:
+            raise ValueError(
+                "Weight compression of Qwen3-TTS is applied while exporting. Pass `export=True` to convert the "
+                "checkpoint here, or compress at export time with "
+                "`optimum-cli export openvino --weight-format int8/int4`."
+            )
 
         # An export produced by this exporter carries no weights at all - every parameter is
         # in an IR - so the pipeline is built structurally. Original checkpoints (a Hub repo,
@@ -1693,6 +1819,22 @@ class _OVModelForQwen3TTS:
         except Exception as exc:  # pragma: no cover - fall back to pure PyTorch
             logger.warning(f"Qwen3-TTS: OpenVINO codec decoder offload disabled ({exc}); using PyTorch.")
 
+    @property
+    def ov_models(self) -> Dict[str, openvino.Model]:
+        """The exported graphs, keyed by component name.
+
+        Reads them back from disk rather than holding them alongside the compiled models,
+        since an ``ov.Model`` keeps its own copy of the weights and the compiled ones are what
+        inference runs on. Used for inspection - e.g. checking the compression state of each
+        component - not on any hot path.
+        """
+        core = openvino.Core()
+        models = {}
+        for label, ir_path in self._ov_ir_paths.items():
+            name = Path(ir_path).stem[len("openvino_") :]
+            models[name] = core.read_model(ir_path)
+        return models
+
     def _apply_quantization(
         self,
         quantization_config,
@@ -1711,49 +1853,11 @@ class _OVModelForQwen3TTS:
         :data:`_QWEN3_TTS_INT4_OV_IR_NAMES` are quantized to 4 bits, the rest fall back to 8,
         so `--weight-format int4` yields a mixed int4/int8 model.
         """
-        from openvino import save_model
-
-        from .configuration import OVWeightQuantizationConfig
-        from .quantization import _weight_only_quantization
-
-        output_dir = Path(save_directory) if save_directory is not None else Path(self._ir_dir)
-        core = openvino.Core()
-
-        requested_bits = (
-            quantization_config.get("bits") if isinstance(quantization_config, dict) else quantization_config.bits
+        compress_qwen3_tts_irs(
+            self._ir_dir,
+            quantization_config,
+            output_dir=save_directory if save_directory is not None else self._ir_dir,
         )
-        fallback_config = None
-        if requested_bits is not None and requested_bits < 8:
-            symmetric = (
-                quantization_config.get("sym", False)
-                if isinstance(quantization_config, dict)
-                else getattr(quantization_config, "sym", False)
-            )
-            fallback_config = OVWeightQuantizationConfig(bits=8, sym=symmetric, group_size=-1, ratio=1.0)
-
-        for ir_name in _QWEN3_TTS_COMPRESSIBLE_OV_IR_NAMES:
-            ir_path = Path(self._ir_dir) / ir_name
-            if not ir_path.is_file():
-                continue
-            config = quantization_config
-            if fallback_config is not None and ir_name not in _QWEN3_TTS_INT4_OV_IR_NAMES:
-                config = fallback_config
-            bits = config.get("bits") if isinstance(config, dict) else config.bits
-            logger.info(f"Qwen3-TTS: applying {bits}-bit weight compression to {ir_name}.")
-            compressed = _weight_only_quantization(core.read_model(ir_path), config)
-
-            # The source weights are still memory-mapped, both by the model this method was
-            # called on and by ``read_model`` above, so the compressed graph is written under a
-            # temporary name and renamed into place. Writing over a mapped .bin would truncate
-            # it underneath its mappings and take the process down with SIGBUS.
-            staged_xml = output_dir / f"{ir_path.stem}.compressed.xml"
-            save_model(compressed, staged_xml, compress_to_fp16=False)
-            del compressed
-            gc.collect()
-
-            target_xml = output_dir / ir_name
-            os.replace(staged_xml, target_xml)
-            os.replace(staged_xml.with_suffix(".bin"), target_xml.with_suffix(".bin"))
 
     def preprocess_input(
         self,

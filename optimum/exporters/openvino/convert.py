@@ -632,6 +632,11 @@ def _save_qwen3_tts_config_and_assets(model, output: Path):
     skip_names = {".git", ".cache", "openvino_talker_model.xml", "openvino_talker_model.bin"}
     ignore_weights = shutil.ignore_patterns(*_QWEN3_TTS_WEIGHT_PATTERNS)
 
+    # Exporting a directory onto itself: the assets are already in place, and copying would
+    # raise SameFileError on the nested `speech_tokenizer` directory.
+    if src.is_dir() and output.is_dir() and src.resolve() == output.resolve():
+        return
+
     if src.is_dir():
         for item in src.iterdir():
             if item.name in skip_names or ignore_weights(str(src), [item.name]):
@@ -674,6 +679,14 @@ def export_from_model(
     **kwargs_shapes,
 ):
     model_kwargs = model_kwargs or {}
+
+    # ``main_export`` turns this on after inspecting the loaded model; callers that reach
+    # ``export_from_model`` directly (tests, custom pipelines) would otherwise trace a 16-bit
+    # model with fp32 dummy inputs and fail on the dtype mismatch.
+    import torch
+
+    if not patch_16bit_model and getattr(model, "dtype", None) in [torch.float16, torch.bfloat16]:
+        patch_16bit_model = True
 
     if ov_config is not None and ov_config.quantization_config and not is_nncf_available():
         raise ImportError(
