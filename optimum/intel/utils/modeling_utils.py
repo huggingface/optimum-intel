@@ -593,4 +593,3 @@ class _Qwen3TTSForTextToSpeech:
             model.config.model_type = "qwen3_tts"
 
         return model
-

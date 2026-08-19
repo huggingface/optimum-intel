@@ -7412,9 +7412,7 @@ class Qwen3TTSDecoderStackOpenVINOConfig(OpenVINOConfig):
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](self.task, self._normalized_config, **kwargs)
         return {
-            name: generator.generate(
-                name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
-            )
+            name: generator.generate(name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype)
             for name in self.inputs
         }
 

@@ -1440,8 +1440,7 @@ class _OVModelForQwen3TTS:
             from qwen_tts import Qwen3TTSModel
         except ImportError as exc:
             raise ImportError(
-                "Qwen3-TTS requires the `qwen_tts` package to be installed. "
-                "Install it with: pip install qwen-tts"
+                "Qwen3-TTS requires the `qwen_tts` package to be installed. " "Install it with: pip install qwen-tts"
             ) from exc
 
         # Only forward arguments understood by the underlying loader.
