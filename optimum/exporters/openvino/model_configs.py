@@ -243,7 +243,6 @@ from optimum.utils.normalized_config import (
     NormalizedVisionConfig,
 )
 
-
 COMMON_TEXT_TASKS = [
     "feature-extraction",
     "fill-mask",
@@ -5165,12 +5164,16 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
                 def forward(self, input_features: torch.Tensor, input_features_mask: torch.Tensor):
                     audio_outputs = self.audio_tower(input_features, input_features_mask, return_dict=True)
                     audio_features = self.embed_audio(inputs_embeds=audio_outputs.last_hidden_state)
-                    return audio_features, audio_outputs.attention_mask
+                    audio_mask = getattr(audio_outputs, "attention_mask", None)
+                    if audio_mask is None:
+                        audio_mask = audio_outputs.audio_mel_mask
+                    return audio_features, audio_mask
 
             audio_embeddings = AudioEmbeddingsModule(model)
             audio_embeddings.config = model.config.audio_config
             return audio_embeddings
         if behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
+
             class PerLayerInputsModule(torch.nn.Module):
                 def __init__(self, language_model, vocab_size_per_layer_input: int, config):
                     super().__init__()
@@ -5220,6 +5223,7 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+
             class TextEmbeddingsModule(torch.nn.Module):
                 def __init__(self, model):
                     super().__init__()
