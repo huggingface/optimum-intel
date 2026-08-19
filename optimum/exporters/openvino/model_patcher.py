@@ -5595,6 +5595,7 @@ def gemma4_text_attention_forward(
     hidden_states: torch.Tensor,
     position_embeddings: torch.Tensor,
     attention_mask: Optional[torch.Tensor],
+    shared_kv_states: Optional[Dict[str, Tuple[torch.Tensor, torch.Tensor]]] = None,
     past_key_values: Optional[Cache] = None,
     cache_position: Optional[torch.LongTensor] = None,
     **kwargs,
@@ -5611,7 +5612,12 @@ def gemma4_text_attention_forward(
     query_states = apply_rotary_pos_emb_gemma4(query_states, cos, sin, unsqueeze_dim=2)
     query_states = query_states.transpose(1, 2)
 
-    if self.is_kv_shared_layer and past_key_values is not None:
+    # Transformers 5.10 passes shared KV separately; older versions store it in the cache.
+    if self.is_kv_shared_layer and shared_kv_states is not None:
+        key_states, value_states = shared_kv_states[self.layer_type]
+        key_states = key_states.to(query_states.device)
+        value_states = value_states.to(query_states.device)
+    elif self.is_kv_shared_layer and past_key_values is not None:
         key_states, value_states = past_key_values.shared_layers[self.kv_shared_layer_index]
         key_states = key_states.to(query_states.device)
         value_states = value_states.to(query_states.device)
@@ -5626,7 +5632,12 @@ def gemma4_text_attention_forward(
         value_states = self.v_norm(value_states)
         value_states = value_states.transpose(1, 2)
 
-    if past_key_values is not None:
+    if shared_kv_states is not None:
+        if past_key_values is not None and not self.is_kv_shared_layer:
+            key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx)
+        if self.store_full_length_kv:
+            shared_kv_states[self.layer_type] = key_states, value_states
+    elif past_key_values is not None:
         cache_kwargs = {
             "sin": sin,
             "cos": cos,

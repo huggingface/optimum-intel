@@ -55,6 +55,7 @@ from optimum.intel.openvino.utils import (
 )
 from optimum.intel.utils.import_utils import is_transformers_version
 
+
 if is_transformers_version(">=", "4.57"):
     from transformers.models.qwen3_omni_moe.processing_qwen3_omni_moe import _get_feat_extract_output_lengths
     from transformers.models.qwen3_vl.modeling_qwen3_vl import (
