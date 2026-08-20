@@ -16,6 +16,7 @@ import functools
 import inspect
 import logging
 import math
+import sys
 import types
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -10731,6 +10732,206 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
                 if hasattr(attn, "_orig_forward"):
                     attn.forward = attn._orig_forward
                     del attn._orig_forward
+
+
+class CohereAsrModelPatcher(OVSeq2SeqModelPatcher):
+    """Makes the Cohere ASR remote code traceable.
+
+    Two spots break `torch.jit.trace`: the relative positional encoding caches its table behind
+    `torch._dynamo.disable`, and the cache length helper casts the kv length to a Python int."""
+
+    def __enter__(self):
+        super().__enter__()
+        self._patched_positional_encodings = []
+        self._patch_positional_encoding()
+        self._patch_cache_seq_length()
+        self._patch_decoder_inputs()
+
+    def _patch_positional_encoding(self):
+        # Matched by class name so the patch also covers the encoder only submodule that the
+        # encoder export traces
+        for positional_encoding in self._model.modules():
+            if type(positional_encoding).__name__ != "RelPositionalEncoding":
+                continue
+            positional_encoding._orig_materialize_pe = positional_encoding._materialize_pe
+            positional_encoding._materialize_pe = self._build_materialize_pe(positional_encoding)
+            self._patched_positional_encodings.append(positional_encoding)
+
+    @staticmethod
+    def _build_materialize_pe(positional_encoding):
+        # Rebuilding the table on every call, instead of reusing a cached one, keeps it a pure
+        # function of the arguments so trace sees identical constants on its verification pass
+        def materialize_pe(length, device, dtype):
+            effective_length = max(length, getattr(positional_encoding, "max_len", length))
+            positions = torch.arange(
+                effective_length - 1, -effective_length, -1, dtype=torch.float32, device=device
+            ).unsqueeze(1)
+            positional_embeddings = positional_encoding._create_pe(positions=positions, dtype=dtype)
+            if hasattr(positional_encoding, "pe"):
+                positional_encoding.pe = positional_embeddings
+            else:
+                positional_encoding.register_buffer("pe", positional_embeddings, persistent=False)
+
+        return materialize_pe
+
+    @staticmethod
+    def _cache_seq_length(past_key_values):
+        if past_key_values is None:
+            return 0
+        if hasattr(past_key_values, "get_seq_length"):
+            return past_key_values.get_seq_length()
+        # The exporter feeds the legacy layout as a list, which the remote helper only accepts as a
+        # tuple, so without this the length collapses to a constant zero in the traced graph
+        if isinstance(past_key_values, (list, tuple)) and past_key_values:
+            return past_key_values[0][0].shape[-2]
+        return 0
+
+    def _patch_cache_seq_length(self):
+        # The remote helper casts the cache length to int, which freezes the kv length as a graph
+        # constant and leaves the exported decoder valid only for the traced step count
+        remote_module = sys.modules.get(type(self._model).__module__)
+        if remote_module is None or not hasattr(remote_module, "_get_cache_seq_length"):
+            return
+
+        self._cache_seq_length_module = remote_module
+        self._orig_get_cache_seq_length = remote_module._get_cache_seq_length
+        remote_module._get_cache_seq_length = self._cache_seq_length
+
+    def _patch_decoder_inputs(self):
+        # `positions` is not part of the exported decoder signature, and the remote code defaults it
+        # to arange(tgt_len), which restarts at zero on every cached step and makes the decoder loop
+        self._forward_without_positions = self._model.forward
+
+        @functools.wraps(self._forward_without_positions)
+        def forward_with_running_positions(*args, **kwargs):
+            decoder_ids = kwargs.get("input_ids")
+            if decoder_ids is None:
+                decoder_ids = kwargs.get("decoder_input_ids")
+            past_key_values = kwargs.get("past_key_values")
+            if decoder_ids is not None and past_key_values is None and self.real_config._behavior == "decoder":
+                # The remote code only fills a cache it is handed, so the cacheless decoder would
+                # export no `present` outputs and leave the second submodel with an empty cache
+                past_key_values = EncoderDecoderCache(DynamicCache(), DynamicCache())
+                kwargs["past_key_values"] = past_key_values
+            if kwargs.get("positions") is None and decoder_ids is not None and past_key_values is not None:
+                # Reuses the cache length the remote code already resolves dynamically, so the
+                # offset stays a graph value instead of the traced step index
+                past_length = self._cache_seq_length(past_key_values)
+                positions = torch.arange(past_length, past_length + decoder_ids.shape[1], device=decoder_ids.device)
+                # Kept at batch one so the embedding add broadcasts, otherwise the traced batch size
+                # would be frozen and beam search could not widen it
+                kwargs["positions"] = positions.unsqueeze(0)
+            return self._forward_without_positions(*args, **kwargs)
+
+        self._model.forward = forward_with_running_positions
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._forward_without_positions = None
+
+        for positional_encoding in getattr(self, "_patched_positional_encodings", []):
+            if hasattr(positional_encoding, "_orig_materialize_pe"):
+                positional_encoding._materialize_pe = positional_encoding._orig_materialize_pe
+                del positional_encoding._orig_materialize_pe
+
+        remote_module = getattr(self, "_cache_seq_length_module", None)
+        if remote_module is not None and hasattr(self, "_orig_get_cache_seq_length"):
+            remote_module._get_cache_seq_length = self._orig_get_cache_seq_length
+            del self._orig_get_cache_seq_length
+            self._cache_seq_length_module = None
+
+
+class CohereAsrNativeModelPatcher(OVSeq2SeqModelPatcher):
+    """Reconnects the encoder mask for the transformers native Cohere ASR decoder.
+
+    The model reads the subsampled mask off the encoder output, but the decoder submodel is traced
+    with the encoder states handed in as a bare tensor, so the mask has to be reattached."""
+
+    def __enter__(self):
+        super().__enter__()
+        self._strip_forward_annotations()
+        self._patch_inner_forward()
+        self._patch_encoder_attention()
+
+    def _patch_encoder_attention(self):
+        # A padded frame masks its own attention row out completely, and the softmax over that row
+        # comes back as NaN here where the fused torch kernel returns zeros instead
+        inner_model = getattr(self._model, "model", None)
+        # The encoder submodel is traced on its own, so it is already the model being patched
+        encoder = getattr(inner_model, "encoder", None) if inner_model is not None else self._model
+        self._encoder_attentions = [layer.self_attn for layer in getattr(encoder, "layers", [])]
+
+        for attention in self._encoder_attentions:
+            attention._forward_with_masked_rows = attention.forward
+            attention.forward = functools.partial(self._attention_without_masked_rows, attention)
+
+    @staticmethod
+    def _attention_without_masked_rows(attention, hidden_states, *args, attention_mask=None, **kwargs):
+        attn_output, attn_weights = attention._forward_with_masked_rows(
+            hidden_states, *args, attention_mask=attention_mask, **kwargs
+        )
+        if attention_mask is not None:
+            # Zeroed rather than left as they are so the depthwise convolution downstream, the only
+            # step that mixes across time, keeps reading padded frames as empty
+            fully_masked_rows = attention_mask.any(dim=-1).logical_not().transpose(1, 2)
+            attn_output = attn_output.masked_fill(fully_masked_rows, 0.0)
+        return attn_output, attn_weights
+
+    def _strip_forward_annotations(self):
+        # The tracing wrapper is built by executing the forward signature as source, so an
+        # annotation naming a type it does not import drops the export to positional arguments and
+        # the shared seq2seq patcher can then no longer find the cache it is meant to convert
+        signature = inspect.signature(self._model.forward)
+        self._model.forward.__signature__ = signature.replace(
+            parameters=[
+                parameter.replace(annotation=inspect.Parameter.empty) for parameter in signature.parameters.values()
+            ]
+        )
+
+    def _patch_inner_forward(self):
+        # Patched on the inner model because that is the first place the arguments carry names, and
+        # also where the mask is read off the encoder output the decoder submodel never produces
+        self._inner_model = getattr(self._model, "model", None)
+        if self._inner_model is None:
+            return
+
+        self._inner_forward = self._inner_model.forward
+
+        @functools.wraps(self._inner_forward)
+        def patched_inner_forward(*args, **kwargs):
+            encoder_outputs = kwargs.get("encoder_outputs")
+            if encoder_outputs is not None:
+                # Bypassing the encoder leaves `attention_mask` carrying the subsampled mask rather
+                # than the frame level one, which is exactly what cross attention needs
+                kwargs["encoder_outputs"] = self._as_encoder_output(encoder_outputs, kwargs.get("attention_mask"))
+            if kwargs.get("use_cache") is None:
+                # Never filled in from the config here, and left unset the cache is dropped from the
+                # outputs, so the exported decoder would have nothing to hand to the next step
+                kwargs["use_cache"] = True
+            return self._inner_forward(*args, **kwargs)
+
+        self._inner_model.forward = patched_inner_forward
+
+    @staticmethod
+    def _as_encoder_output(encoder_outputs, encoder_mask):
+        # The dummy generator hands the states over as a tuple, which the model cannot read the
+        # mask off, so they are rewrapped instead of being passed straight through
+        hidden_states = getattr(encoder_outputs, "last_hidden_state", None)
+        if hidden_states is None:
+            hidden_states = encoder_outputs[0] if isinstance(encoder_outputs, (list, tuple)) else encoder_outputs
+
+        rewrapped = BaseModelOutput(last_hidden_state=hidden_states)
+        rewrapped.attention_mask = encoder_mask
+        return rewrapped
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for attention in getattr(self, "_encoder_attentions", []):
+            attention.forward = attention._forward_with_masked_rows
+        self._encoder_attentions = []
+        if getattr(self, "_inner_model", None) is not None:
+            self._inner_model.forward = self._inner_forward
+            self._inner_model = None
 
 
 class KokoroModelPatcher(ModelPatcher):

@@ -181,6 +181,7 @@ HUB_MODEL_NAMES = {
     "chatglm4": "optimum-intel-internal-testing/tiny-random-chatglm4",
     "codegen": "optimum-intel-internal-testing/tiny-random-CodeGenForCausalLM",
     "codegen2": "optimum-intel-internal-testing/tiny-random-codegen2",
+    "cohere_asr": "optimum-intel-internal-testing/tiny-random-cohere-asr",
     "data2vec-text": "optimum-intel-internal-testing/tiny-random-Data2VecTextModel",
     "data2vec-vision": "optimum-intel-internal-testing/tiny-random-Data2VecVisionModel",
     "data2vec-audio": "optimum-intel-internal-testing/tiny-random-Data2VecAudioModel",
@@ -651,6 +652,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "encoder": 46,
         "decoder": 30,
         "decoder_with_past": 30,
+    },
+    "cohere_asr": {
+        "encoder": 60,
+        "decoder": 48,
+        "decoder_with_past": 48,
     },
 }
 
