@@ -227,6 +227,11 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
     _library_name = "transformers"
     _search_pattern = r"(.*)?openvino(.*)?\_(.*)?.xml$"
 
+    def get_experts_implementation(self) -> Dict[str, Optional[str]]:
+        # Transformers' generate() decode loop queries this to optionally switch MoE expert kernels. The
+        # OpenVINO IR has no switchable expert modules, so report none — there is nothing to switch.
+        return {}
+
     def __init__(
         self,
         model: openvino.Model,
