@@ -246,6 +246,7 @@ HUB_MODEL_NAMES = {
     "longt5": "optimum-intel-internal-testing/tiny-random-longt5",
     "llama": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
     "llama_awq": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
+    "llama_compressed_tensors": "optimum-intel-internal-testing/tiny-random-llama-compressed-tensors",
     "llama4": "optimum-intel-internal-testing/tiny-random-llama4",
     "llava": "optimum-intel-internal-testing/tiny-random-llava",
     "llava_next": "optimum-intel-internal-testing/tiny-random-llava-next",
@@ -810,6 +811,7 @@ def check_compression_state_per_model(
     models: Dict[str, ov.Model],
     expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
     expected_num_fake_nodes_per_model: Optional[Dict[str, int]] = None,
+    check_kv_cache_precision: bool = True,
 ):
     test_case.assertEqual(len(models), len(expected_num_weight_nodes_per_model))
     actual_num_weights_per_model = {}
@@ -822,7 +824,10 @@ def check_compression_state_per_model(
         actual_num_weights_per_model[ov_model_name] = num_weight_nodes
         actual_num_fake_nodes_per_model[ov_model_name] = num_fake_nodes
 
-        test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+        # Weights compressed by NNCF drop the KV cache precision hint, but models that are
+        # already quantized (e.g. compressed-tensors) keep the default f16 KV cache precision.
+        if check_kv_cache_precision:
+            test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     # Check weight nodes
     test_case.assertEqual(expected_num_weight_nodes_per_model, actual_num_weights_per_model)
@@ -851,6 +856,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "gemma4_moe": "gemma4",
     "gpt_oss_mxfp4": "gpt_oss",
     "llama_awq": "llama",
+    "llama_compressed_tensors": "llama",
     "llava_next_mistral": "llava_next",
     "mistral-nemo": "mistral",
     "mixtral_awq": "mixtral",

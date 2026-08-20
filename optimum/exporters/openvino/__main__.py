@@ -36,6 +36,7 @@ from optimum.intel.utils.import_utils import (
     is_diffusers_available,
     is_nncf_available,
     is_openvino_tokenizers_available,
+    is_openvino_version,
     is_transformers_version,
 )
 from optimum.intel.utils.modeling_utils import (
@@ -412,10 +413,28 @@ def main_export(
             dtype = torch.bfloat16
             loading_kwargs["quantization_config"] = Mxfp4Config(dequantize=True)
 
-        supported_quant_methods = ["gptq", "awq", "bitnet"]
+        supported_quant_methods = ["gptq", "awq", "bitnet", "compressed-tensors"]
         do_quant_patching = quant_method in supported_quant_methods
         do_gptq_patching = quant_method == "gptq"
         do_bitnet_patching = quant_method == "bitnet"
+        do_ct_patching = quant_method == "compressed-tensors"
+
+        # compressed-tensors export relies on the OpenVINO PyTorch frontend
+        # compressed-tensors patcher, which is only available since 2026.3.
+        if do_ct_patching and is_openvino_version("<", "2026.3"):
+            raise RuntimeError(
+                "Exporting compressed-tensors quantized models requires OpenVINO 2026.3 or newer, "
+                "but the installed OpenVINO does not meet this requirement. "
+                "Please upgrade OpenVINO, e.g. `pip install --upgrade openvino`."
+            )
+
+        # Loading a compressed-tensors model and keeping its packed weights intact
+        # requires the `compressed_tensors` package.
+        if do_ct_patching and importlib.util.find_spec("compressed_tensors") is None:
+            raise RuntimeError(
+                "Exporting compressed-tensors quantized models requires the `compressed_tensors` "
+                "package, which is not installed. Please install it, e.g. `pip install compressed_tensors`."
+            )
 
         if is_transformers_version(">=", "4.56") and config.model_type in {"qwen2_vl_text", "qwen2_5_vl_text"}:
             patch_qwenvl_configs()
@@ -550,6 +569,29 @@ def main_export(
                     return state_dict
 
                 AutoBitLinear.load_hook = bitnet_load_hook
+            if do_ct_patching:
+                from transformers.quantizers.quantizer_compressed_tensors import (
+                    CompressedTensorsHfQuantizer,
+                )
+
+                orig_ct_process = CompressedTensorsHfQuantizer._process_model_after_weight_loading
+
+                # Skip decompression so that weight_packed buffers remain intact for
+                # the OV PT frontend compressed-tensors patcher (quantized.py) to
+                # convert them to u4 constants during tracing.
+                CompressedTensorsHfQuantizer._process_model_after_weight_loading = lambda self, model, **kwargs: model
+
+                # In compressed-tensors >= 0.17, compress_model() installs a forward
+                # pre-hook (ct_decompress_hook) that lazily decompresses weights on
+                # the first forward pass.  We must suppress it so that weight_packed
+                # buffers stay intact for the OV traced graph.
+                try:
+                    from compressed_tensors import ModelCompressor
+
+                    orig_add_decompress_hook = ModelCompressor.add_decompress_hook
+                    ModelCompressor.add_decompress_hook = lambda self, model: None
+                except ImportError:
+                    orig_add_decompress_hook = None
     elif library_name == "diffusers":
         _loading_kwargs = {} if variant is None else {"variant": variant}
         if dtype == "auto" or dtype is None:
@@ -679,6 +721,10 @@ def main_export(
                 GPTQQuantizer.post_init_model = orig_post_init_model
             if do_bitnet_patching:
                 AutoBitLinear.load_hook = orig_load_hook
+            if do_ct_patching:
+                CompressedTensorsHfQuantizer._process_model_after_weight_loading = orig_ct_process
+                if orig_add_decompress_hook is not None:
+                    ModelCompressor.add_decompress_hook = orig_add_decompress_hook
 
 
 def _main_quantize(
