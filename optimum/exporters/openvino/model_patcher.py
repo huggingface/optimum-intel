@@ -11144,13 +11144,21 @@ class LTX2TransformerPatcher(ModelPatcher):
             **kwargs,
         ):
             # `sigma`/`audio_sigma` drive the prompt cross-attention modulation path used when the
-            # checkpoint sets cross_attn_mod=True (e.g. LTX-2.3). The pipeline always passes
-            # sigma=timestep, so we default them here rather than adding a redundant traced input;
+            # checkpoint sets cross_attn_mod=True (e.g. LTX-2.3). Both pipelines pass
+            # `sigma=t.expand(batch)` — the same scalar-per-batch tensor they pass as
+            # `audio_timestep` — so we default to that rather than adding a redundant traced input;
             # this keeps the exported IR interface identical for LTX-2.0 (whose config ignores them).
+            # `timestep` itself cannot stand in: image-to-video makes it per-token ([B, S]) via the
+            # conditioning mask, and `prompt_adaln` would then emit one modulation vector per video
+            # token, which does not broadcast against the text sequence.
             extra_forward_kwargs = {}
             if _supports_sigma:
                 if sigma is None:
-                    sigma = timestep
+                    sigma = kwargs.get("audio_timestep")
+                    if sigma is None:
+                        sigma = timestep
+                    if sigma is not None and sigma.ndim > 1:
+                        sigma = sigma[:, 0]
                 if audio_sigma is None:
                     audio_sigma = sigma
                 extra_forward_kwargs["sigma"] = sigma

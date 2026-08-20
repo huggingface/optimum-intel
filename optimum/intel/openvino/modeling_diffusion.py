@@ -1465,22 +1465,21 @@ class OVModelTransformerLTX2(OVPipelinePart):
     ):
         self.compile()
 
-        # LTX-2.3 feeds the transformer a `sigma` alongside `timestep` to modulate the prompt
-        # embeddings. The exported graph has no `sigma` input: the export patcher bakes in
-        # `sigma = timestep`, which is what the pipeline passes on every non-cross-timestep path.
-        # Anything else cannot be honoured by this IR, so say so instead of quietly ignoring it.
-        # Checked before `timestep` is reshaped below, while the two are still comparable.
-        for name, value in (("sigma", sigma), ("audio_sigma", audio_sigma)):
-            if value is not None and not torch.equal(torch.as_tensor(value), torch.as_tensor(timestep)):
-                raise ValueError(
-                    f"`{name}` differs from `timestep`, which the exported LTX-2 transformer cannot "
-                    "represent (the graph was traced with them tied together). This happens with "
-                    "`use_cross_timestep=True`, which the OpenVINO export does not support."
-                )
-
         # T2V leaves audio_timestep None; mirror the diffusers fallback before `timestep` is broadcast.
         if audio_timestep is None:
             audio_timestep = timestep if timestep is None or timestep.ndim == 1 else timestep[:, 0]
+
+        # LTX-2.3 feeds the transformer a `sigma` alongside `timestep` to modulate the prompt
+        # embeddings. The exported graph has no `sigma` input: the export patcher ties it to
+        # `audio_timestep`, the scalar-per-batch noise level that both pipelines pass as `sigma`.
+        # Anything else cannot be honoured by this IR, so say so instead of quietly ignoring it.
+        for name, value in (("sigma", sigma), ("audio_sigma", audio_sigma)):
+            if value is not None and not torch.equal(torch.as_tensor(value), torch.as_tensor(audio_timestep)):
+                raise ValueError(
+                    f"`{name}` differs from the scalar timestep, which the exported LTX-2 transformer "
+                    "cannot represent (the graph was traced with them tied together). This happens "
+                    "with `use_cross_timestep=True`, which the OpenVINO export does not support."
+                )
 
         # T2V passes a scalar timestep [B]; the IR expects [B, S]. Broadcast to match.
         if timestep is not None and timestep.ndim == 1 and self._timestep_rank == 2:
