@@ -91,15 +91,9 @@ jobs:
         run: |
           python tests/scripts/login_with_ci_token.py
 
-      - name: Runner hardware info
-        run: |
-          lscpu
-          free -g
-          command -v /usr/bin/time || sudo apt-get install -y time
-
       - name: Test with Pytest
         run: |
-          /usr/bin/time -v python -u -m pytest tests/openvino/${{ matrix.test-pattern }} -k "not (qwen3_asr or fun_asr)" --durations=0 -v
+          pytest tests/openvino/${{ matrix.test-pattern }} -k "not (qwen3_asr or fun_asr)" --durations=0
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Install Nightly OpenVINO
