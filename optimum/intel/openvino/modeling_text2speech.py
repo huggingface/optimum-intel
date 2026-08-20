@@ -1751,10 +1751,14 @@ class _OVModelForQwen3TTS:
 
     def _install_ov_speaker_encoder(self) -> None:
         """Offload the ECAPA-TDNN speaker encoder (mel spectrogram -> x-vector) to OpenVINO."""
+        # Only the voice-clone (`base`) variants embed a reference voice; a `CustomVoice`
+        # checkpoint selects a built-in speaker instead, so there is nothing to offload and
+        # nothing to warn about.
+        if self.model.speaker_encoder is None:
+            logger.info("Qwen3-TTS: no speaker encoder in this variant; nothing to offload.")
+            return
         try:
             speaker_encoder = self.model.speaker_encoder
-            if speaker_encoder is None:
-                raise ValueError("model has no speaker encoder (non-`base` variant)")
             speaker_encoder.eval()
 
             compiled = self._compile_ov_component(_SPEAKER_ENCODER_OV_IR_NAME, "speaker encoder")
@@ -1866,6 +1870,34 @@ class _OVModelForQwen3TTS:
             output_dir=save_directory if save_directory is not None else self._ir_dir,
         )
 
+    @property
+    def _tts_model_type(self) -> str:
+        """Where the checkpoint gets its voice from.
+
+        Qwen3-TTS ships three variants - ``base`` clones a voice from reference audio,
+        ``custom_voice`` picks a built-in speaker by name, and ``voice_design`` invents one
+        from a text description. Each takes different inputs and is driven by a different
+        ``qwen_tts`` entry point, which rejects the other variants' checkpoints outright.
+        """
+        return getattr(self.model, "tts_model_type", "base")
+
+    @property
+    def _is_custom_voice(self) -> bool:
+        return self._tts_model_type == "custom_voice"
+
+    @property
+    def _is_voice_design(self) -> bool:
+        return self._tts_model_type == "voice_design"
+
+    def get_supported_speakers(self) -> List[str]:
+        """Names accepted as ``speaker`` by a ``CustomVoice`` checkpoint."""
+        if not self._is_custom_voice:
+            raise ValueError(
+                f"Built-in speakers exist only on Qwen3-TTS `CustomVoice` checkpoints; this one "
+                f"is a `{self._tts_model_type}` model."
+            )
+        return list(self._pipeline.get_supported_speakers())
+
     def preprocess_input(
         self,
         text: Union[str, List[str]],
@@ -1873,16 +1905,47 @@ class _OVModelForQwen3TTS:
         ref_audio: Optional[Any] = None,
         ref_text: Optional[Union[str, List[Optional[str]]]] = None,
         x_vector_only_mode: Union[bool, List[bool]] = False,
+        speaker: Optional[Union[str, List[str]]] = None,
+        instruct: Optional[Union[str, List[str]]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
-        """Build the inputs for :meth:`generate` from raw text and reference audio.
+        """Build the inputs for :meth:`generate` from raw text and a voice.
 
         For the ``base`` (voice-clone) model this performs the reference-audio
         encoding and speaker-embedding extraction (ICL mode when ``ref_text`` is
         provided), mirroring ``qwen_tts.Qwen3TTSModel.create_voice_clone_prompt``.
 
+        For a ``CustomVoice`` model the voice is a built-in ``speaker`` name, and for a
+        ``VoiceDesign`` model it is described by ``instruct`` ("a calm elderly man, slight
+        rasp"). Neither has reference audio to encode, so this only collects the arguments.
+
         Returns a dictionary that can be unpacked directly into :meth:`generate`.
         """
+        if self._is_custom_voice:
+            if speaker is None:
+                raise ValueError(
+                    "`speaker` must be provided for a Qwen3-TTS CustomVoice model. "
+                    f"Supported speakers: {', '.join(self.get_supported_speakers())}."
+                )
+            inputs: Dict[str, Any] = {
+                "text": text,
+                "language": language,
+                "speaker": speaker,
+                "instruct": instruct,
+            }
+            inputs.update(kwargs)
+            return inputs
+
+        if self._is_voice_design:
+            if not instruct:
+                raise ValueError(
+                    "`instruct` must be provided for a Qwen3-TTS VoiceDesign model: it is the "
+                    "description the voice is built from, not an optional style hint."
+                )
+            inputs = {"text": text, "language": language, "instruct": instruct}
+            inputs.update(kwargs)
+            return inputs
+
         if ref_audio is None:
             raise ValueError("`ref_audio` must be provided for Qwen3-TTS voice cloning.")
 
@@ -1892,7 +1955,7 @@ class _OVModelForQwen3TTS:
             x_vector_only_mode=x_vector_only_mode,
         )
 
-        inputs: Dict[str, Any] = {
+        inputs = {
             "text": text,
             "language": language,
             "voice_clone_prompt": voice_clone_prompt,
@@ -1908,25 +1971,45 @@ class _OVModelForQwen3TTS:
         voice_clone_prompt: Optional[Any] = None,
         ref_audio: Optional[Any] = None,
         ref_text: Optional[Union[str, List[Optional[str]]]] = None,
+        speaker: Optional[Union[str, List[str]]] = None,
+        instruct: Optional[Union[str, List[str]]] = None,
         return_sample_rate: bool = False,
         **kwargs,
     ) -> Union[torch.Tensor, "tuple[torch.Tensor, int]"]:
         """Generate a speech waveform.
 
         The talker/code-predictor generation and the codec decoding are driven by the
-        original ``qwen_tts`` orchestration (optionally OpenVINO-accelerated).
+        original ``qwen_tts`` orchestration (optionally OpenVINO-accelerated), through
+        whichever entry point the checkpoint supports: a built-in speaker for ``CustomVoice``,
+        a described voice for ``VoiceDesign``, a cloned reference voice otherwise.
 
         Returns a single waveform tensor (batch size 1) or a list of tensors for
         batched inputs.
         """
-        wavs, sr = self._pipeline.generate_voice_clone(
-            text=text,
-            language=language,
-            ref_audio=ref_audio,
-            ref_text=ref_text,
-            voice_clone_prompt=voice_clone_prompt,
-            **kwargs,
-        )
+        if self._is_custom_voice:
+            wavs, sr = self._pipeline.generate_custom_voice(
+                text=text,
+                speaker=speaker,
+                language=language,
+                instruct=instruct,
+                **kwargs,
+            )
+        elif self._is_voice_design:
+            wavs, sr = self._pipeline.generate_voice_design(
+                text=text,
+                instruct=instruct,
+                language=language,
+                **kwargs,
+            )
+        else:
+            wavs, sr = self._pipeline.generate_voice_clone(
+                text=text,
+                language=language,
+                ref_audio=ref_audio,
+                ref_text=ref_text,
+                voice_clone_prompt=voice_clone_prompt,
+                **kwargs,
+            )
         self.sampling_rate = int(sr)
 
         waveforms = [torch.from_numpy(np.ascontiguousarray(w)) for w in wavs]
