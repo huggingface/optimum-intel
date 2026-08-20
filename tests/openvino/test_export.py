@@ -99,6 +99,7 @@ class ExportModelTest(unittest.TestCase):
         "qwenimage": OVQwenImagePipeline,
         "ltx-video": OVLTXPipeline,
         "ltx2": OVLTX2Pipeline,
+        "ltx2.3": OVLTX2Pipeline,
         "kokoro": OVModelForTextToSpeechSeq2Seq,
         "cohere2": OVModelForCausalLM,
         "granitemoehybrid": OVModelForCausalLM,
@@ -149,6 +150,7 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl-refiner": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "ltx-video": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "ltx2": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
+        "ltx2.3": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
     }
 
     GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")

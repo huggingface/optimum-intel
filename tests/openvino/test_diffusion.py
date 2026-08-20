@@ -1064,6 +1064,10 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(["ltx-video"])
     if is_diffusers_version(">=", "0.38.0"):
         SUPPORTED_ARCHITECTURES.extend(["ltx2"])
+    # LTX-2.3 needs the transformer flags (cross_attn_mod, gated_attn, perturbed_attn) added in
+    # diffusers 0.40.0; written as ">" so the 0.40.0.dev0 prereleases that carry them qualify.
+    if is_diffusers_version(">", "0.39.0"):
+        SUPPORTED_ARCHITECTURES.extend(["ltx2.3"])
 
     OVMODEL_CLASS = OVPipelineForText2Video
     AUTOMODEL_CLASS = DiffusionPipeline
@@ -1221,6 +1225,9 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(["ltx-video"])
     if is_diffusers_version(">=", "0.38.0"):
         SUPPORTED_ARCHITECTURES.extend(["ltx2"])
+    # See the note in OVPipelineForText2VideoTest: LTX-2.3 landed in diffusers 0.40.0.dev0.
+    if is_diffusers_version(">", "0.39.0"):
+        SUPPORTED_ARCHITECTURES.extend(["ltx2.3"])
 
     OVMODEL_CLASS = OVPipelineForImage2Video
     AUTOMODEL_CLASS = DiffusionPipeline
@@ -1250,7 +1257,7 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
 
     @staticmethod
     def _auto_cls(model_arch: str):
-        if model_arch == "ltx2":
+        if model_arch.startswith("ltx2"):
             from diffusers import LTX2ImageToVideoPipeline
 
             return LTX2ImageToVideoPipeline
