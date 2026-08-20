@@ -582,47 +582,25 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         "do_sample": False,
         "num_beams": 1,
     }
-    SPECULATIVE_DECODING_MODELS = [
-        (model_arch, model_pair, "Eagle3", None, "2026.0") for model_arch, model_pair in EAGLE3_MODELS.items()
-    ] + [(model_arch, model_pair, "DFlash", "4.57", "2026.4") for model_arch, model_pair in DFLASH_MODELS.items()]
-    SPECULATIVE_DECODING_VLM_MODELS = [
-        (
-            "qwen3_vl_eagle3",
-            EAGLE3_VLM_MODELS["qwen3_vl_eagle3"],
-            "Eagle3",
-            "4.57",
-            "5.0.0",
-            "2026.999",
-            "image-text-to-text",
-        ),
-        (
-            "qwen3_5_dflash",
-            DFLASH_VLM_MODELS["qwen3_5_dflash"],
-            "DFlash",
-            "5.2.0",
-            "5.2.999",
-            "2026.4",
-            "text-generation-with-past",
-        ),
-        (
-            "qwen3_5_moe_dflash",
-            DFLASH_VLM_MODELS["qwen3_5_moe_dflash"],
-            "DFlash",
-            "5.2.0",
-            "5.2.999",
-            "2026.4",
-            "text-generation-with-past",
-        ),
-        (
-            "gemma4_dflash",
-            DFLASH_VLM_MODELS["gemma4_dflash"],
-            "DFlash",
-            "5.5.0",
-            None,
-            "2026.4",
-            "text-generation-with-past",
-        ),
-    ]
+    SUPPORTED_TYPES = get_supported_model_for_library("transformers")
+
+    def _filter_models(models, supported=SUPPORTED_TYPES):
+        return [m for m in models if all(TEST_NAME_TO_MODEL_TYPE.get(n, n) in supported for n in m[1])]
+
+    SPECULATIVE_DECODING_MODELS = _filter_models(
+        [(model_arch, model_pair, "Eagle3", "2026.0") for model_arch, model_pair in EAGLE3_MODELS.items()]
+        + [(model_arch, model_pair, "DFlash", "2026.4") for model_arch, model_pair in DFLASH_MODELS.items()]
+    )
+    SPECULATIVE_DECODING_VLM_MODELS = _filter_models(
+        [
+            (model_arch, model_pair, "Eagle3", "2026.999", "image-text-to-text")
+            for model_arch, model_pair in EAGLE3_VLM_MODELS.items()
+        ]
+        + [
+            (model_arch, model_pair, "DFlash", "2026.4", "text-generation-with-past")
+            for model_arch, model_pair in DFLASH_VLM_MODELS.items()
+        ]
+    )
 
     @parameterized.expand(SPECULATIVE_DECODING_MODELS)
     def test_compare_outputs(
@@ -630,15 +608,13 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         model_arch,
         model_pair,
         speculative_decoding_type,
-        min_transformers_version,
         min_openvino_version,
     ):
-        if min_transformers_version is not None and is_transformers_version("<", min_transformers_version):
-            self.skipTest(f"{speculative_decoding_type} requires transformers >= {min_transformers_version}")
         if is_openvino_version("<", min_openvino_version):
             self.skipTest(f"{speculative_decoding_type} requires openvino-genai >= {min_openvino_version}")
 
-        draft_model_id, target_model_id = model_pair
+        draft_model_name, target_model_name = model_pair
+        draft_model_id, target_model_id = MODEL_NAMES[draft_model_name], MODEL_NAMES[target_model_name]
         trust_remote_code = model_arch in REMOTE_CODE_MODELS
 
         # export main and draft models and initialize OV LLM pipelines w/o speculative decoding
@@ -662,7 +638,17 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
 
         # Phase 1: generate with speculative decoding
         ov_draft_model = draft_model(draft_model_path, "CPU")
-        ov_speculative_pipe = LLMPipeline(main_model_path, OPENVINO_DEVICE, draft_model=ov_draft_model, **TEST_CONFIG)
+        speculative_pipeline_kwargs = dict(TEST_CONFIG)
+        if speculative_decoding_type == "DFlash":
+            scheduler_config = SchedulerConfig()
+            scheduler_config.enable_prefix_caching = False
+            speculative_pipeline_kwargs["scheduler_config"] = scheduler_config
+        ov_speculative_pipe = LLMPipeline(
+            main_model_path,
+            OPENVINO_DEVICE,
+            draft_model=ov_draft_model,
+            **speculative_pipeline_kwargs,
+        )
         genai_speculative_output = str(
             ov_speculative_pipe.generate(
                 prompt, echo=True, apply_chat_template=False, ignore_eos=True, **self.GEN_KWARGS
@@ -673,7 +659,12 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         gc.collect()
 
         # Phase 2: generate without speculative decoding
-        ov_pipe = LLMPipeline(main_model_path, OPENVINO_DEVICE, **TEST_CONFIG)
+        baseline_pipeline_kwargs = dict(TEST_CONFIG)
+        if speculative_decoding_type == "DFlash":
+            scheduler_config = SchedulerConfig()
+            scheduler_config.enable_prefix_caching = False
+            baseline_pipeline_kwargs["scheduler_config"] = scheduler_config
+        ov_pipe = LLMPipeline(main_model_path, OPENVINO_DEVICE, **baseline_pipeline_kwargs)
         genai_output = str(
             ov_pipe.generate(prompt, echo=True, apply_chat_template=False, ignore_eos=True, **self.GEN_KWARGS)
         )
@@ -693,20 +684,15 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         model_arch,
         model_pair,
         speculative_decoding_type,
-        min_transformers_version,
-        max_transformers_version,
         min_openvino_version,
         draft_task,
     ):
-        if is_transformers_version("<", min_transformers_version):
-            self.skipTest(f"{speculative_decoding_type} VLM requires transformers >= {min_transformers_version}")
-        if max_transformers_version is not None and is_transformers_version(">=", max_transformers_version):
-            self.skipTest(f"{speculative_decoding_type} VLM requires transformers < {max_transformers_version}")
         if is_openvino_version("<", min_openvino_version):
             self.skipTest(f"{speculative_decoding_type} VLM requires openvino-genai >= {min_openvino_version}")
 
-        draft_model_id, target_model_id = model_pair
-        trust_remote_code = model_arch in REMOTE_CODE_MODELS or speculative_decoding_type == "DFlash"
+        draft_model_name, target_model_name = model_pair
+        draft_model_id, target_model_id = MODEL_NAMES[draft_model_name], MODEL_NAMES[target_model_name]
+        trust_remote_code = model_arch in REMOTE_CODE_MODELS
 
         # export main (VLM) and speculative draft models
         draft_model_path = Path(self.temp_dir) / "draft_model"
