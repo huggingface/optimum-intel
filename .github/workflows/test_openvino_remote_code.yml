@@ -77,6 +77,34 @@ jobs:
         run: |
           pytest tests/openvino/${{ matrix.test-pattern }} -k "qwen3_asr or fun_asr" --durations=0
 
+      - if: ${{ matrix.test-pattern == '*export*' || matrix.test-pattern == '*quantization*' }}
+        name: Install qwen-tts package
+        run: |
+          # qwen-tts pins transformers==4.57.3 and qwen-asr pins 4.57.6, so the two cannot be
+          # resolved together. qwen-asr is removed once its tests above have run, and qwen-tts
+          # is installed on its own for the Qwen3-TTS steps that follow.
+          uv pip uninstall qwen-asr
+          uv pip install qwen-tts
+
+      - if: ${{ matrix.test-pattern == '*export*' }}
+        name: Test Qwen3-TTS export
+        run: |
+          # The CLI cases are named after the task, so this also picks up SpeechT5; the
+          # Qwen3-TTS ones only exist when `qwen-tts` is installed, as it is here.
+          pytest tests/openvino/test_exporters_cli.py -k "text_to_audio" --durations=0
+          pytest tests/openvino/test_export.py -k "qwen3_tts" --durations=0
+          pytest tests/openvino/test_seq2seq.py -k "qwen3_tts" --durations=0
+
+      - if: ${{ matrix.test-pattern == '*quantization*' }}
+        name: Test Qwen3-TTS weight compression
+        run: |
+          pytest tests/openvino/test_quantization.py -k "Qwen3TTS" --durations=0
+
+      - if: ${{ matrix.test-pattern == '*export*' }}
+        name: Test Qwen3-TTS transformations
+        run: |
+          pytest tests/openvino/test_transformations.py -k "qwen3_tts" --durations=0
+
       - if: ${{ matrix.test-pattern == '*export*' }}
         name: Test DFlash
         run: |

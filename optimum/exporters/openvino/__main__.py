@@ -42,6 +42,7 @@ from optimum.intel.utils.modeling_utils import (
     _infer_library_from_model_name_or_path,
     _KokoroForTextToSpeech,
     _OpenClipForZeroShotImageClassification,
+    _Qwen3TTSForTextToSpeech,
 )
 
 from .utils import (
@@ -88,7 +89,7 @@ def infer_task(
     if task == "auto":
         if library_name == "open_clip":
             task = "zero-shot-image-classification"
-        elif library_name == "kokoro":
+        elif library_name in ("kokoro", "qwen3_tts"):
             task = "text-to-audio"
         elif library_name == "funasr":
             # Use the with-past task so the encoder-decoder export is stateful (KV cache hidden in
@@ -584,6 +585,21 @@ def main_export(
             from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
 
             model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+        elif library_name == "qwen3_tts":
+            # Without an explicit request the checkpoint's own precision is kept, so the IRs
+            # come out at the precision the model was published in rather than upcast. A
+            # floating-point --weight-format still pins the precision it names.
+            if ov_config is not None and ov_config.dtype in {"fp16", "fp32"}:
+                loading_kwargs.setdefault("torch_dtype", torch.float16 if ov_config.dtype == "fp16" else torch.float32)
+            model = _Qwen3TTSForTextToSpeech.from_pretrained(
+                model_name_or_path,
+                cache_dir=cache_dir,
+                token=token,
+                revision=revision,
+                local_files_only=local_files_only,
+                force_download=force_download,
+                **loading_kwargs,
+            )
         else:
             # remote code models like phi3_v internvl2, minicpmv, internvl2, nanollava, maira2 should be loaded using AutoModelForCausalLM and not AutoModelForImageTextToText
             # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)
