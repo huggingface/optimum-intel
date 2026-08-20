@@ -7377,8 +7377,8 @@ class Qwen3TTSDecoderStackDummyInputGenerator(DummyInputGenerator):
             # Scalar depth index selecting one of the folded per-depth output heads.
             return torch.tensor(0, dtype=torch.int64)
         elif input_name in ("past_key", "past_value"):
-            # Stacked per-layer cache with zero past length for the prefill trace.
-            shape = [self.num_hidden_layers, self.batch_size, self.num_key_value_heads, 0, self.head_dim]
+            # One layer's cache, with zero past length for the prefill trace.
+            shape = [self.batch_size, self.num_key_value_heads, 0, self.head_dim]
         else:
             raise ValueError(f"Unsupported input name {input_name} for {self.__class__.__name__}")
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
@@ -7404,50 +7404,51 @@ class Qwen3TTSDecoderStackOpenVINOConfig(OpenVINOConfig):
     # plain 1D RoPE a single one (see the code predictor's config).
     POSITION_IDS_ROWS = 3
 
+    # Inputs that follow the cache in the forward signature (the code predictor's ``step``).
+    EXTRA_INPUT_NAMES = ()
+
+    @property
+    def num_layers(self) -> int:
+        return self._normalized_config.num_layers
+
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {
+        inputs = {
             "inputs_embeds": {0: "batch_size", 1: "sequence_length"},
             "attention_mask": {0: "batch_size", 2: "sequence_length", 3: "kv_length"},
             "position_ids": {1: "batch_size", 2: "sequence_length"},
-            "past_key": {1: "batch_size", 3: "past_length"},
-            "past_value": {1: "batch_size", 3: "past_length"},
         }
+        # One pair per layer, under the naming the stateful transformation looks for.
+        for layer in range(self.num_layers):
+            inputs[f"past_key_values.{layer}.key"] = {0: "batch_size", 2: "past_length"}
+            inputs[f"past_key_values.{layer}.value"] = {0: "batch_size", 2: "past_length"}
+        return inputs
 
     def patch_stateful_model(self, ov_model) -> None:
         """Hide the key/value cache inside the graph as OpenVINO state.
 
-        The stack carries its whole cache as two stacked tensors rather than one pair per
-        layer, so the generic ``patch_stateful`` naming does not apply and the pairing is given
-        explicitly. ``batch_dim`` is 1 because the layer axis comes first:
-        ``[layers, batch, kv_heads, past_length, head_dim]``.
+        This is the standard decoder transformation: besides turning every ``past_key_values``
+        pair into a variable, it adds the ``beam_idx`` input and gathers each cache read
+        through it, so a caller can reorder the cache across the batch the way beam search
+        does. It has to be requested here rather than through the ``stateful`` flag, which
+        follows task support (``ensure_export_task_support_stateful``) and is never set for a
+        component-wise pipeline exported under ``text-to-audio``.
         """
-        from optimum.exporters.openvino.stateful import make_stateful
+        from optimum.exporters.openvino.stateful import patch_stateful
 
-        key_value_input_names = ["past_key", "past_value"]
-        key_value_output_names = ["present_key", "present_value"]
-        not_kv_inputs = [
-            model_input
-            for model_input in ov_model.inputs
-            if not any(name in key_value_input_names for name in model_input.get_names())
-        ]
-        make_stateful(
-            ov_model,
-            not_kv_inputs=not_kv_inputs,
-            key_value_input_names=key_value_input_names,
-            key_value_output_names=key_value_output_names,
-            batch_dim=1,
-        )
+        patch_stateful(self._config, ov_model)
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         # The output head is folded into the stack, so the graph emits logits directly.
-        return {
+        outputs = {
             "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
             "logits": {0: "batch_size", 1: "sequence_length"},
-            "present_key": {1: "batch_size", 3: "sequence_length"},
-            "present_value": {1: "batch_size", 3: "sequence_length"},
         }
+        for layer in range(self.num_layers):
+            outputs[f"present.{layer}.key"] = {0: "batch_size", 2: "kv_length"}
+            outputs[f"present.{layer}.value"] = {0: "batch_size", 2: "kv_length"}
+        return outputs
 
     # Width of `inputs_embeds` when it differs from this stack's hidden size; set by the
     # exporter for the code predictor, which is fed embeddings in the talker's width.
@@ -7458,10 +7459,19 @@ class Qwen3TTSDecoderStackOpenVINOConfig(OpenVINOConfig):
         if self.input_hidden_size is not None:
             kwargs.setdefault("input_hidden_size", self.input_hidden_size)
         generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](self.task, self._normalized_config, **kwargs)
-        return {
-            name: generator.generate(name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype)
-            for name in self.inputs
-        }
+
+        def dummy(name):
+            return generator.generate(
+                name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
+            )
+
+        # Keyed by forward parameter, not by graph input: the cache is one nested argument that
+        # the exporter flattens back into the `past_key_values.<i>.<key|value>` inputs above.
+        dummy_inputs = {name: dummy(name) for name in ("inputs_embeds", "attention_mask", "position_ids")}
+        dummy_inputs["past_key_values"] = [(dummy("past_key"), dummy("past_value")) for _ in range(self.num_layers)]
+        for name in self.EXTRA_INPUT_NAMES:
+            dummy_inputs[name] = dummy(name)
+        return dummy_inputs
 
 
 class Qwen3TTSSteppedDecoderStackOpenVINOConfig(Qwen3TTSDecoderStackOpenVINOConfig):
@@ -7472,12 +7482,40 @@ class Qwen3TTSSteppedDecoderStackOpenVINOConfig(Qwen3TTSDecoderStackOpenVINOConf
     """
 
     POSITION_IDS_ROWS = 1
+    EXTRA_INPUT_NAMES = ("step",)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         common_inputs = super().inputs
         common_inputs["position_ids"] = {0: "batch_size", 1: "sequence_length"}
         return {**common_inputs, "step": {}}
+
+    def patch_stateful_model(self, ov_model) -> None:
+        """Hide the cache as state, without the ``beam_idx`` cache reordering.
+
+        Unlike the talker, this stack is never driven by ``generate``: its cache covers the
+        inner steps of a single talker frame and is reset at the start of the next one, so
+        there is no beam to reorder and the extra input would only be dead weight.
+        """
+        from optimum.exporters.openvino.stateful import make_stateful
+
+        key_value_input_names = [name for model_input in ov_model.inputs for name in model_input.get_names()]
+        key_value_input_names = [name for name in key_value_input_names if "key_values" in name]
+        key_value_output_names = [
+            name for model_output in ov_model.outputs for name in model_output.get_names() if "present" in name
+        ]
+        not_kv_inputs = [
+            model_input
+            for model_input in ov_model.inputs
+            if not any(name in key_value_input_names for name in model_input.get_names())
+        ]
+        make_stateful(
+            ov_model,
+            not_kv_inputs=not_kv_inputs,
+            key_value_input_names=key_value_input_names,
+            key_value_output_names=key_value_output_names,
+            batch_dim=0,
+        )
 
 
 class Qwen3TTSComponentDummyInputGenerator(DummyInputGenerator):

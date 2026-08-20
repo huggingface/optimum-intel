@@ -937,6 +937,12 @@ _TEXT_EMBEDDINGS_OV_IR_NAME = "openvino_text_embeddings.xml"
 _TALKER_EMBEDDINGS_OV_IR_NAME = "openvino_talker_embeddings.xml"
 _CODE_PREDICTOR_EMBEDDINGS_OV_IR_NAME = "openvino_code_predictor_embeddings.xml"
 
+# Both decoder stacks keep their key/value cache in OpenVINO state, which makes the CPU plugin
+# apply its default `u8` cache compression. That trade is made for long-context LLMs; here the
+# cache spans a couple of hundred 12.5 Hz frames at most, so it saves little, while quantizing
+# the keys is enough to move sampled codes away from what PyTorch produces.
+_DECODER_STACK_OV_CONFIG = {"KV_CACHE_PRECISION": "f32"}
+
 # Every IR a Qwen3-TTS export can contain.
 _QWEN3_TTS_OV_IR_NAMES = (
     _TALKER_OV_IR_NAME,
@@ -1236,6 +1242,10 @@ def _make_ov_stateful_decoder_stack_forward(decoder_model, compiled, position_fn
     surrounding ``generate`` uses its length to derive ``cache_position``. It is fed
     one-element-wide dummy tensors: the real keys and values live in the graph, and only the
     sequence length is read.
+
+    A graph produced by the standard stateful transformation also takes ``beam_idx`` and
+    gathers its cache through it, which is detected here rather than assumed, so both that
+    form and a plain stateful graph can be driven by this one shim.
     """
     from transformers import DynamicCache
     from transformers.modeling_outputs import BaseModelOutputWithPast
@@ -1245,6 +1255,7 @@ def _make_ov_stateful_decoder_stack_forward(decoder_model, compiled, position_fn
     num_kv = cfg.num_key_value_heads
     neg = torch.finfo(torch.float32).min
     request = compiled.create_infer_request()
+    has_beam_idx = any("beam_idx" in graph_input.get_names() for graph_input in compiled.inputs)
 
     def default_positions(position_ids, cache_position, batch_size):
         if position_ids is None:
@@ -1289,9 +1300,18 @@ def _make_ov_stateful_decoder_stack_forward(decoder_model, compiled, position_fn
         if attention_mask is not None and attention_mask.ndim == 2:
             mask = mask.masked_fill((attention_mask[:, :total] == 0).view(bs_, 1, 1, total), neg)
 
-        graph_inputs = [inputs_embeds.numpy(), mask.numpy(), position_ids.to(torch.int64).numpy()]
+        graph_inputs = {
+            "inputs_embeds": inputs_embeds.numpy(),
+            "attention_mask": mask.numpy(),
+            "position_ids": position_ids.to(torch.int64).numpy(),
+        }
         if with_step:
-            graph_inputs.append(np.array(step if step is not None else 0, dtype=np.int64))
+            graph_inputs["step"] = np.array(step if step is not None else 0, dtype=np.int64)
+        if has_beam_idx:
+            # The graph gathers every cache read through `beam_idx`, so it always has to be
+            # fed; the talker samples one continuation per sequence, so the batch keeps its
+            # order and identity indices are what a reorder would produce.
+            graph_inputs["beam_idx"] = np.arange(bs_, dtype=np.int32)
         request.start_async(graph_inputs, share_inputs=True)
         request.wait()
 
@@ -1498,7 +1518,7 @@ class _OVModelForQwen3TTS:
     def can_generate(self) -> bool:
         return True
 
-    def _compile_ov_component(self, ir_name: str, label: str):
+    def _compile_ov_component(self, ir_name: str, label: str, ov_config: Optional[Dict[str, Any]] = None):
         """Read and compile one exported component IR, or raise when it is not on disk."""
         ir_dir = Path(getattr(self, "_ir_dir", None) or _resolve_ir_dir(self.model_save_dir, None))
         ir_xml = ir_dir / ir_name
@@ -1506,9 +1526,27 @@ class _OVModelForQwen3TTS:
             raise FileNotFoundError(f"{label} OpenVINO IR not found at {ir_xml}")
         core = openvino.Core()
         logger.info(f"Qwen3-TTS: loading {label} OpenVINO IR from {ir_xml}.")
-        compiled = core.compile_model(core.read_model(ir_xml), self._device)
+        compiled = core.compile_model(core.read_model(ir_xml), self._device, self._supported(core, ov_config))
         self._ov_ir_paths[label] = str(ir_xml)
         return compiled
+
+    def _supported(self, core: "openvino.Core", ov_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Drop properties the target device does not advertise.
+
+        The compile hints used here are per-device (``KV_CACHE_PRECISION`` is not offered
+        everywhere), and passing one a device does not know is an error - which the callers
+        would turn into a silent fallback to PyTorch.
+        """
+        if not ov_config:
+            return {}
+        try:
+            supported = set(core.get_property(self._device, "SUPPORTED_PROPERTIES"))
+        except Exception:
+            return {}
+        dropped = [name for name in ov_config if name not in supported]
+        if dropped:
+            logger.info(f"Qwen3-TTS: {self._device} does not support {dropped}; compiling without.")
+        return {name: value for name, value in ov_config.items() if name in supported}
 
     def _install_ov_components(self) -> None:
         """Offload every exported Qwen3-TTS component to OpenVINO.
@@ -1563,7 +1601,7 @@ class _OVModelForQwen3TTS:
             talker_model = talker.model
             talker_model.eval()
 
-            compiled = self._compile_ov_component(_TALKER_OV_IR_NAME, "talker")
+            compiled = self._compile_ov_component(_TALKER_OV_IR_NAME, "talker", _DECODER_STACK_OV_CONFIG)
 
             def mrope_positions(position_ids, cache_position, batch_size):
                 # The graph expects [3, batch, sequence]: one row per m-RoPE stream.
@@ -1615,7 +1653,9 @@ class _OVModelForQwen3TTS:
             code_predictor_model = code_predictor.model
             code_predictor_model.eval()
 
-            compiled = self._compile_ov_component(_CODE_PREDICTOR_OV_IR_NAME, "code predictor")
+            compiled = self._compile_ov_component(
+                _CODE_PREDICTOR_OV_IR_NAME, "code predictor", _DECODER_STACK_OV_CONFIG
+            )
 
             # The code predictor's graph owns its rotary embeddings and its key/value cache.
             ov_forward, head_state = _make_ov_stateful_decoder_stack_forward(

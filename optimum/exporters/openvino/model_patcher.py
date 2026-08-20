@@ -11473,10 +11473,12 @@ class Qwen3TTSDecoderStackWrapper(nn.Module):
       inside every talker step.
 
     It exposes the decoder layers and final norm with an export-friendly forward signature
-    matching the graph inputs (``inputs_embeds``, ``attention_mask``, ``position_ids``). The
-    rotary embedding is built inside the graph from ``position_ids`` and the key/value cache
-    is hidden as OpenVINO state, so neither appears at the boundary. The computation itself is
-    installed by :class:`Qwen3TTSDecoderStackPatcher`.
+    matching the graph inputs (``inputs_embeds``, ``attention_mask``, ``position_ids``,
+    ``past_key_values``). The rotary embedding is built inside the graph from ``position_ids``,
+    and the cache is traced as one key/value pair per layer under the usual
+    ``past_key_values.<i>.<key|value>`` naming, so the standard stateful transformation
+    recognises it and hides it as OpenVINO state. The computation itself is installed by
+    :class:`Qwen3TTSDecoderStackPatcher`.
     """
 
     def __init__(self, decoder_model, head=None, heads=None):
@@ -11497,16 +11499,13 @@ class Qwen3TTSDecoderStackWrapper(nn.Module):
         # stacked and gathered with a runtime ``step`` index.
         self.head = head
         self.heads = heads
-        # The cache is hidden in OpenVINO variables, so `present_*` carries the whole cache
-        # (past + new): the Assign has to grow the state, not replace it.
-        self.stateful = True
         # Interleaved m-RoPE mixes three position streams and is merged per layer; a stack
         # without it (the code predictor) uses plain 1D RoPE.
         rope_scaling = getattr(self.config, "rope_scaling", None) or {}
         self.mrope_section = rope_scaling.get("mrope_section")
         self.mrope_interleaved = rope_scaling.get("interleaved", False)
 
-    def forward(self, inputs_embeds, attention_mask, position_ids, past_key, past_value):
+    def forward(self, inputs_embeds, attention_mask, position_ids, past_key_values):
         raise RuntimeError(
             "Qwen3TTSDecoderStackWrapper must be used within Qwen3TTSDecoderStackPatcher for OpenVINO export."
         )
@@ -11527,7 +11526,7 @@ class Qwen3TTSSteppedDecoderStackWrapper(Qwen3TTSDecoderStackWrapper):
         # to travel into the graph with the rest of the stack.
         self.input_projection = input_projection
 
-    def forward(self, inputs_embeds, attention_mask, position_ids, past_key, past_value, step):
+    def forward(self, inputs_embeds, attention_mask, position_ids, past_key_values, step):
         raise RuntimeError(
             "Qwen3TTSSteppedDecoderStackWrapper must be used within Qwen3TTSDecoderStackPatcher for OpenVINO export."
         )
@@ -11543,8 +11542,10 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
     ``eager_attention_forward``) and the model's own weight modules, so nothing is
     re-implemented.
 
-    Both graphs build their own rotary embedding from ``position_ids`` and keep their cache as
-    OpenVINO state, so ``cos``/``sin`` and the past/present pairs are gone from the boundary.
+    Both graphs build their own rotary embedding from ``position_ids`` and trace one
+    ``past_key_values.<i>.<key|value>`` pair per layer, which the stateful transformation then
+    hides as OpenVINO state - so neither ``cos``/``sin`` nor the past/present pairs survive at
+    the boundary of the saved IR.
     The two differ only in the rotary kind: the talker applies interleaved m-RoPE, which mixes
     three position streams, so ``position_ids`` arrives as ``[3, batch, sequence]``; the code
     predictor uses plain 1D RoPE with ``[batch, sequence]``.
@@ -11588,10 +11589,9 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
                 (key * cos_u) + (rotate_half(key) * sin_u),
             )
 
-        def run_stack(inputs_embeds, attention_mask, cos, sin, past_key, past_value):
+        def run_stack(inputs_embeds, attention_mask, cos, sin, past_key_values):
             hidden = inputs_embeds
-            new_k_list = []
-            new_v_list = []
+            present_key_values = []
             for idx, layer in enumerate(wrapper.layers):
                 attn = layer.self_attn
                 bs, seq, _ = hidden.shape
@@ -11601,15 +11601,12 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
                 k = attn.k_norm(attn.k_proj(h).view(bs, seq, num_kv, head_dim)).transpose(1, 2)
                 v = attn.v_proj(h).view(bs, seq, num_kv, head_dim).transpose(1, 2)
                 q, k = rotate(q, k, cos, sin)
-                if not wrapper.stateful:
-                    new_k_list.append(k)
-                    new_v_list.append(v)
-                k = torch.cat([past_key[idx], k], dim=2)
-                v = torch.cat([past_value[idx], v], dim=2)
-                if wrapper.stateful:
-                    # The state has to end up holding the full cache, not just this step's.
-                    new_k_list.append(k)
-                    new_v_list.append(v)
+                past_k, past_v = past_key_values[idx]
+                k = torch.cat([past_k, k], dim=2)
+                v = torch.cat([past_v, v], dim=2)
+                # The cache is hidden in OpenVINO variables, so `present` carries the whole
+                # cache (past + new): the Assign has to grow the state, not replace it.
+                present_key_values.append((k, v))
                 attn_out, _ = eager_attention_forward(attn, q, k, v, attention_mask, scaling)
                 attn_out = attn_out.reshape(bs, seq, -1)
                 attn_out = attn.o_proj(attn_out)
@@ -11618,11 +11615,11 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
                 h = layer.post_attention_layernorm(hidden)
                 hidden = residual + layer.mlp(h)
             hidden = wrapper.norm(hidden)
-            return hidden, torch.stack(new_k_list, dim=0), torch.stack(new_v_list, dim=0)
+            return hidden, present_key_values
 
         if stacked_heads is not None:
 
-            def patched_forward(inputs_embeds, attention_mask, position_ids, past_key, past_value, step):
+            def patched_forward(inputs_embeds, attention_mask, position_ids, past_key_values, step):
                 # The stack is fed embeddings in the talker's width; this maps them to its own
                 # (an Identity when the two match).
                 if wrapper.input_projection is not None:
@@ -11630,13 +11627,12 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
                 # Plain 1D RoPE depends only on position_ids, so it is traced into the graph
                 # rather than recomputed by the caller on every one of the inner steps.
                 cos, sin = wrapper.rotary_emb(inputs_embeds, position_ids)
-                hidden, present_key, present_value = run_stack(
+                hidden, present_key_values = run_stack(
                     inputs_embeds,
                     attention_mask,
                     cos.to(inputs_embeds.dtype),
                     sin.to(inputs_embeds.dtype),
-                    past_key,
-                    past_value,
+                    past_key_values,
                 )
                 # Cast the stacked weights before the gather, for the same reason as the
                 # embedding tables: it keeps them 16-bit on disk while leaving the
@@ -11645,27 +11641,24 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
                 return {
                     "last_hidden_state": hidden,
                     "logits": torch.nn.functional.linear(hidden, weight),
-                    "present_key": present_key,
-                    "present_value": present_value,
+                    "present_key_values": present_key_values,
                 }
 
         else:
 
-            def patched_forward(inputs_embeds, attention_mask, position_ids, past_key, past_value):
+            def patched_forward(inputs_embeds, attention_mask, position_ids, past_key_values):
                 cos, sin = wrapper.rotary_emb(inputs_embeds, position_ids)
-                hidden, present_key, present_value = run_stack(
+                hidden, present_key_values = run_stack(
                     inputs_embeds,
                     attention_mask,
                     cos.to(inputs_embeds.dtype),
                     sin.to(inputs_embeds.dtype),
-                    past_key,
-                    past_value,
+                    past_key_values,
                 )
                 return {
                     "last_hidden_state": hidden,
                     "logits": wrapper.head(hidden),
-                    "present_key": present_key,
-                    "present_value": present_value,
+                    "present_key_values": present_key_values,
                 }
 
         self.patched_forward = patched_forward
