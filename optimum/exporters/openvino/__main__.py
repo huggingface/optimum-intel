@@ -46,6 +46,7 @@ from optimum.intel.utils.modeling_utils import (
 
 from .utils import (
     _MAX_UNCOMPRESSED_SIZE,
+    _MODEL_TYPES_TO_SKIP_DEFAULT_COMPRESSION,
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     clear_class_registry,
     deduce_diffusers_dtype,
@@ -670,7 +671,7 @@ def main_export(
         # TODO: Remove GPT-OSS workaround when possible
         quantization_config = None if ov_config is None else ov_config.quantization_config
         if not quantization_config or isinstance(quantization_config, _GPTOSSQuantizationConfig):
-            _apply_model_size_based_quantization(submodel_paths, ov_config, output)
+            _apply_model_size_based_quantization(submodel_paths, ov_config, output, model_type=model_type)
     finally:
         # Unpatch modules after quantized model export
         if do_quant_patching:
@@ -869,10 +870,25 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
         logger.warning("Tokenizer won't be converted.")
 
 
-def _apply_model_size_based_quantization(submodel_paths: List[str], ov_config: "OVConfig", output: Union[str, Path]):
+def _apply_model_size_based_quantization(
+    submodel_paths: List[str], ov_config: "OVConfig", output: Union[str, Path], model_type: Optional[str] = None
+):
     """
     Apply weight-only quantization to int8_asym to submodels larger than 1B parameters.
+
+    For model types listed in ``_MODEL_TYPES_TO_SKIP_DEFAULT_COMPRESSION`` the automatic (data-free) INT8 weight
+    compression is skipped because it significantly degrades accuracy without a data-free recipe that recovers it.
+    Such models are exported keeping the original (FP16) precision unless the user explicitly requests a weight
+    compression format via ``ov_config``.
     """
+    if ov_config is None and model_type in _MODEL_TYPES_TO_SKIP_DEFAULT_COMPRESSION:
+        logger.info(
+            f"Default model-size-based INT8 weight compression is skipped for model type '{model_type}' because it "
+            "degrades accuracy for this architecture. The model is exported keeping FP16 precision. To compress the "
+            "weights explicitly request a weight compression format (e.g. `--weight-format int8`)."
+        )
+        return
+
     # TODO: Refactor the code below in the following way:
     #   1. Create a OVPipelineQuantizationConfig based on each submodel size
     #   2. Run _main_quantize() with the created quantization config
