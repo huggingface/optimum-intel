@@ -47,7 +47,7 @@ from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSp
 from transformers.processing_utils import Unpack
 from transformers.utils import ModelOutput
 
-from optimum.exporters.openvino._ov_ops import convert_recurrent_attention_cell
+from optimum.exporters.openvino._ov_ops import convert_recurrent_attention_cell, convert_recurrent_selective_ssm_cell
 from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.openvino.patching_utils import (
     ModelPatcher,
@@ -114,6 +114,10 @@ if is_transformers_version(">=", "4.57"):
 
 if is_transformers_version(">=", "5"):
     from transformers.modeling_rope_utils import RotaryEmbeddingConfigMixin
+
+
+if is_diffusers_version(">=", "0.38.0"):
+    from diffusers.models.transformers import transformer_ltx2
 
 
 logger = logging.getLogger(__name__)
@@ -3118,6 +3122,296 @@ class FluxTransformerModelPatcher(ModelPatcher):
             self._model.pos_embed.forward = self._model.pos_embed._orig_forward
 
 
+# Patching is needed, as OpenVINO PyTorch frontend fails to trace torch.cat with Complex tensors,
+# so the Rotary embeddings related calculations are rewritten in float values.
+# Original code: https://github.com/huggingface/diffusers/blob/f27949dad9f88a34eb22ff80956bbbb940cdbd2b/src/diffusers/models/transformers/transformer_qwenimage.py#L94
+def _qwenimage_apply_rotary_emb(x, freqs):
+    # Real-valued equivalent of the complex rotary embedding used by QwenImage, written so that the
+    # traced subgraph is recognized by OpenVINO's GPT-NeoX `RoPEFusion` matcher and collapsed into the
+    # dedicated `ov::op::internal::RoPE` operation at compile time.
+    #
+    # QwenImage rotates *interleaved* pairs (dims 2j, 2j+1) with frequency j. That matcher only accepts
+    # the *contiguous* rotate-half convention (first half vs. second half, dims j and j+D/2). The two are
+    # related by the fixed "de-interleave" permutation P that sends even dims to the first half and odd
+    # dims to the second half. Applying P to `x` up front and rotating contiguously reproduces the
+    # interleaved rotation exactly, and because the identical permutation is applied to both query and
+    # key (and never undone) it cancels in the q.k^T attention score, leaving the model numerically
+    # unchanged while exposing a fusable subgraph.
+    #
+    # The matched region is: `xp` (de-interleaved) fed into both `xp * cos` and the two half-slices, with
+    # the rotate expressed as Slice + Multiply(-1) + Concat, then `xp * cos + rotate_half(xp) * sin`.
+    # Note the negation must be `x2 * -1.0` (an Eltwise Multiply); a unary `-x` traces to a `Negative`
+    # op which the matcher does not recognize.
+    cos, sin = freqs  # each [1, seq, 1, head_dim] with the half-width table duplicated onto both halves
+    x_even = x[..., 0::2]  # even dims -> first contiguous half
+    x_odd = x[..., 1::2]  # odd dims  -> second contiguous half
+    xp = torch.cat([x_even, x_odd], dim=-1)  # de-interleaved [batch, seq, heads, head_dim]
+    half = xp.shape[-1] // 2
+    x1 = xp[..., :half]
+    x2 = xp[..., half:]
+    rot = torch.cat([x2 * -1.0, x1], dim=-1)  # contiguous rotate-half
+    return (xp * cos + rot * sin).type_as(x)
+
+
+# Patching is needed to use _qwenimage_apply_rotary_emb instead of original method that uses complex values.
+# Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L270
+def _qwenimage_attn_processor_call(
+    self,
+    attn,
+    hidden_states,
+    encoder_hidden_states=None,
+    encoder_hidden_states_mask=None,
+    attention_mask=None,
+    image_rotary_emb=None,
+):
+    # Patched QwenDoubleStreamAttnProcessor2_0 that consumes precomputed real rotary embeddings
+    # (image and text cos/sin tensors) instead of complex tensors so the model can be traced for OpenVINO.
+    seq_txt = encoder_hidden_states.shape[1]
+
+    img_query = attn.to_q(hidden_states).unflatten(-1, (attn.heads, -1))
+    img_key = attn.to_k(hidden_states).unflatten(-1, (attn.heads, -1))
+    img_value = attn.to_v(hidden_states).unflatten(-1, (attn.heads, -1))
+
+    txt_query = attn.add_q_proj(encoder_hidden_states).unflatten(-1, (attn.heads, -1))
+    txt_key = attn.add_k_proj(encoder_hidden_states).unflatten(-1, (attn.heads, -1))
+    txt_value = attn.add_v_proj(encoder_hidden_states).unflatten(-1, (attn.heads, -1))
+
+    if attn.norm_q is not None:
+        img_query = attn.norm_q(img_query)
+    if attn.norm_k is not None:
+        img_key = attn.norm_k(img_key)
+    if attn.norm_added_q is not None:
+        txt_query = attn.norm_added_q(txt_query)
+    if attn.norm_added_k is not None:
+        txt_key = attn.norm_added_k(txt_key)
+
+    img_freqs, txt_freqs = image_rotary_emb
+    img_query = _qwenimage_apply_rotary_emb(img_query, img_freqs)
+    img_key = _qwenimage_apply_rotary_emb(img_key, img_freqs)
+    txt_query = _qwenimage_apply_rotary_emb(txt_query, txt_freqs)
+    txt_key = _qwenimage_apply_rotary_emb(txt_key, txt_freqs)
+
+    joint_query = torch.cat([txt_query, img_query], dim=1).transpose(1, 2)
+    joint_key = torch.cat([txt_key, img_key], dim=1).transpose(1, 2)
+    joint_value = torch.cat([txt_value, img_value], dim=1).transpose(1, 2)
+
+    joint_hidden_states = F.scaled_dot_product_attention(joint_query, joint_key, joint_value, attn_mask=attention_mask)
+    joint_hidden_states = joint_hidden_states.transpose(1, 2).flatten(2, 3).to(joint_query.dtype)
+
+    txt_attn_output = joint_hidden_states[:, :seq_txt, :]
+    img_attn_output = joint_hidden_states[:, seq_txt:, :]
+
+    img_attn_output = attn.to_out[0](img_attn_output)
+    if len(attn.to_out) > 1:
+        img_attn_output = attn.to_out[1](img_attn_output)
+    txt_attn_output = attn.to_add_out(txt_attn_output)
+
+    return img_attn_output, txt_attn_output
+
+
+# Patching is needed, as OpenVINO PyTorch frontend fails to trace torch.cat with Complex tensors,
+# so the Rotary embeddings related calculations are rewritten in float values.
+# Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L237
+def _qwenimage_rope_freqs(positions, inv_freq):
+    # positions: (seq,) float tensor of per-token positions along one axis
+    # inv_freq:  (dim // 2,) constant tensor of inverse frequencies
+    # returns real (cos, sin) of shape (seq, dim // 2), matching the real part / imaginary part
+    # of the complex `torch.polar(1, outer(positions, inv_freq))` used by diffusers' QwenEmbedRope.
+    # NOTE: use an explicit broadcast multiply instead of `torch.outer`. `torch.outer` traces to a
+    # MatMul whose constant `inv_freq` input is treated as a weight and gets int8-quantized by the
+    # default weight compression applied to models > 1B params. Quantizing `inv_freq` (values spanning
+    # 1.0 down to ~1e-4) destroys the low-magnitude frequencies and corrupts the rotary embeddings. An
+    # elementwise multiply is an Eltwise op, which weight compression leaves untouched.
+    angles = positions.float().unsqueeze(-1) * inv_freq.unsqueeze(0)
+    return torch.cos(angles), torch.sin(angles)
+
+
+# Patching is needed, as OpenVINO PyTorch frontend fails to trace torch.cat with Complex tensors,
+# so the Rotary embeddings related calculations are rewritten in float values.
+# Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L196
+def _qwenimage_expand_rope_freq(freq):
+    # Turn a half-width per-position table `freq` [seq, head_dim // 2] into the full-width table
+    # [1, seq, 1, head_dim] consumed by `_qwenimage_apply_rotary_emb`. Because the rotary apply
+    # de-interleaves `x` into two contiguous halves (see that function), each frequency must land at
+    # position j and position j + head_dim // 2, i.e. the half-width table is simply duplicated onto both
+    # halves. The singleton batch/head axes broadcast over the [batch, seq, heads, head_dim] tensor.
+    full = torch.cat([freq, freq], dim=-1)  # [seq, head_dim]
+    return full[None, :, None, :]  # [1, seq, 1, head_dim]
+
+
+def _qwenimage_build_rotary_emb(axes_dim, theta, image_seq_len, height, width, txt_seq_len, device):
+    # Reproduces diffusers' QwenEmbedRope (scale_rope=True, single image block, frame=1) using real
+    # trigonometric math instead of complex arithmetic, so it can be traced for OpenVINO while keeping
+    # the image resolution (`height`/`width`) as runtime tensor inputs rather than baked-in constants.
+    inv_freqs = [
+        1.0 / torch.pow(torch.tensor(float(theta), device=device), torch.arange(0, d, 2, device=device).float() / d)
+        for d in axes_dim
+    ]
+
+    # Per-token (frame, height, width) index arithmetic over the packed image sequence. Avoiding
+    # `view`/`expand` with tensor-derived sizes keeps `height`/`width` as genuine dynamic inputs.
+    hw = height * width
+    token = torch.arange(image_seq_len, device=device)
+    frame_idx = torch.div(token, hw, rounding_mode="floor")
+    rem = token % hw
+    height_idx = torch.div(rem, width, rounding_mode="floor")
+    width_idx = rem % width
+
+    h_half = height // 2
+    w_half = width // 2
+    # scale_rope centered positions: value - (size - size // 2)
+    pos_frame = frame_idx.float()
+    pos_height = height_idx.float() - (height - h_half).float()
+    pos_width = width_idx.float() - (width - w_half).float()
+
+    img_cos_parts, img_sin_parts = [], []
+    for pos, inv_freq in zip((pos_frame, pos_height, pos_width), inv_freqs):
+        cos, sin = _qwenimage_rope_freqs(pos, inv_freq)
+        img_cos_parts.append(cos)
+        img_sin_parts.append(sin)
+    img_cos = torch.cat(img_cos_parts, dim=-1)
+    img_sin = torch.cat(img_sin_parts, dim=-1)
+
+    # Text tokens share a single position across all three axes, offset by the max image index.
+    max_vid_index = torch.maximum(h_half, w_half)
+    txt_pos = torch.arange(txt_seq_len, device=device).float() + max_vid_index.float()
+    txt_cos_parts, txt_sin_parts = [], []
+    for inv_freq in inv_freqs:
+        cos, sin = _qwenimage_rope_freqs(txt_pos, inv_freq)
+        txt_cos_parts.append(cos)
+        txt_sin_parts.append(sin)
+    txt_cos = torch.cat(txt_cos_parts, dim=-1)
+    txt_sin = torch.cat(txt_sin_parts, dim=-1)
+
+    # Expand to the full-width, broadcast layout so the rotary apply traces to a RoPE-fusable subgraph.
+    img_cos = _qwenimage_expand_rope_freq(img_cos)
+    img_sin = _qwenimage_expand_rope_freq(img_sin)
+    txt_cos = _qwenimage_expand_rope_freq(txt_cos)
+    txt_sin = _qwenimage_expand_rope_freq(txt_sin)
+
+    return (img_cos, img_sin), (txt_cos, txt_sin)
+
+
+# Patching is needed to use [height, width] instead of original img_shapes, that fails to be scripted with torch.script.
+# Only first element is used, so it is valid to use only one shape: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L206
+# Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/transformers/transformer_qwenimage.py#L545
+def _qwenimage_transformer_forward(
+    self,
+    hidden_states,
+    encoder_hidden_states,
+    encoder_hidden_states_mask,
+    timestep,
+    height,
+    width,
+    guidance=None,
+):
+    # Patched QwenImageTransformer2DModel forward. The original forward builds the rotary embeddings
+    # from python-list `img_shapes` using complex arithmetic inside `self.pos_embed`, which bakes a
+    # fixed resolution into the trace. Here the embeddings are computed inside the model from the
+    # `height`/`width` runtime tensor inputs using real math, so a single exported model serves any
+    # resolution while matching the original implementation numerically.
+    hidden_states = self.img_in(hidden_states)
+    timestep = timestep.to(hidden_states.dtype)
+
+    encoder_hidden_states = self.txt_norm(encoder_hidden_states)
+    encoder_hidden_states = self.txt_in(encoder_hidden_states)
+
+    if guidance is not None:
+        guidance = guidance.to(hidden_states.dtype) * 1000
+
+    temb = (
+        self.time_text_embed(timestep, hidden_states)
+        if guidance is None
+        else self.time_text_embed(timestep, guidance, hidden_states)
+    )
+
+    image_rotary_emb = _qwenimage_build_rotary_emb(
+        list(self.config.axes_dims_rope),
+        10000,
+        hidden_states.shape[1],
+        height,
+        width,
+        encoder_hidden_states.shape[1],
+        hidden_states.device,
+    )
+
+    batch_size, image_seq_len = hidden_states.shape[:2]
+    image_mask = torch.ones((batch_size, image_seq_len), dtype=torch.bool, device=hidden_states.device)
+    joint_attention_mask = torch.cat([encoder_hidden_states_mask.to(torch.bool), image_mask], dim=1)
+    attention_mask = joint_attention_mask[:, None, None, :]
+
+    for block in self.transformer_blocks:
+        encoder_hidden_states, hidden_states = block(
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_hidden_states_mask=None,
+            temb=temb,
+            image_rotary_emb=image_rotary_emb,
+            joint_attention_kwargs={"attention_mask": attention_mask},
+        )
+
+    hidden_states = self.norm_out(hidden_states, temb)
+    output = self.proj_out(hidden_states)
+    return output
+
+
+class QwenImageTransformerModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        self._model._orig_forward = self._model.forward
+        self._model.forward = types.MethodType(_qwenimage_transformer_forward, self._model)
+        # Python resolves __call__ on the type, so the attention processor class (shared by all blocks)
+        # is patched at the class level rather than per-instance.
+        processor_cls = type(self._model.transformer_blocks[0].attn.processor)
+        self._processor_cls = processor_cls
+        self._orig_processor_call = processor_cls.__call__
+        processor_cls.__call__ = _qwenimage_attn_processor_call
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model._orig_forward
+        del self._model._orig_forward
+        self._processor_cls.__call__ = self._orig_processor_call
+
+
+class QwenImageVaeModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        from diffusers.models.autoencoders.autoencoder_kl_qwenimage import QwenImageUpsample
+
+        # OpenVINO has no "nearest-exact" upsampling op; "nearest" is identical for the integer
+        # scale factor of 2 used here.
+        # Original code: https://github.com/huggingface/diffusers/blob/v0.35.0/src/diffusers/models/autoencoders/autoencoder_kl_qwenimage.py#L151
+        self._patched_upsamplers = []
+        for module in self._model.modules():
+            if isinstance(module, QwenImageUpsample) and module.mode == "nearest-exact":
+                module.mode = "nearest"
+                self._patched_upsamplers.append(module)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for module in self._patched_upsamplers:
+            module.mode = "nearest-exact"
+
+
+class QwenImageTextEncoderModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+        self._model.config._attn_implementation = "sdpa"
+        if is_transformers_version(">=", "4.53"):
+            # starting from 4.53, we get unmatching outputs if we use the boolean mask
+            # (an OpenVINO inconsistency between boolean and float masks)
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+        del self._model.config._orig_attn_implementation
+        if is_transformers_version(">=", "4.53"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
+
+
 def _minicpmv_resampler_forward(self, image_feature, pos_embed, key_padding_mask):
     bs = image_feature.shape[0]
     image_feature = self.kv_proj(image_feature)  # B * L * D
@@ -4586,6 +4880,85 @@ class Qwen3OmniMoeCodePredictorPatcher(OVDecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
+
+
+class DeepseekOCR2LMPatcher(OVDecoderModelPatcher):
+    """Language-model patcher for DeepSeek-OCR-2 (model_type ``deepseek_ocr2``).
+
+    The exported model is ``DeepseekOcr2ForConditionalGeneration`` whose ``forward`` runs the
+    vision branch and merges image features. For the text-generation part we drive only the
+    underlying ``DeepseekOcr2TextModel`` (a standard MHA/GQA decoder with cos/sin RoPE) from
+    ``inputs_embeds`` and apply ``lm_head``, bypassing the vision code entirely.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        def lm_forward(
+            self,
+            attention_mask,
+            position_ids=None,
+            past_key_values=None,
+            inputs_embeds=None,
+            input_ids=None,
+            use_cache=True,
+        ):
+            pkv = DynamicCache(past_key_values)
+            outputs = self.model.language_model(
+                input_ids=None,
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=pkv,
+                use_cache=use_cache,
+            )
+            hidden_states = outputs[0]
+            logits = self.lm_head(hidden_states)
+            return (logits, postprocess_past_key_values(outputs.past_key_values))
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(lm_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+        # Route the MoE experts through the OpenVINO-friendly batched-matmul implementation.
+        register_ov_batched_mm(self)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class DeepseekOCR2VisionEmbeddingsPatcher(ModelPatcher):
+    """Vision-encoder patcher for DeepSeek-OCR-2 (model_type ``deepseek_ocr2``).
+
+    Exposes the composed ``multi_modal_projector(vision_tower(pixel_values))`` pipeline as the
+    traced forward, returning ``{"last_hidden_state": embeds}``. Two streams exist with
+    different (static) input sizes: the 1024x1024 global view (256 query tokens) and the
+    768x768 crop tiles (144 query tokens).
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        super().__init__(config, model, model_kwargs)
+        vision_root = model.model if hasattr(model, "model") else model
+        output_name = list(config.outputs.keys())[0]
+
+        def patched_forward(pixel_values):
+            vision_outputs = vision_root.vision_tower(pixel_values)
+            embeds = vision_root.multi_modal_projector(vision_outputs.last_hidden_state)
+            return {output_name: embeds}
+
+        self.patched_forward = patched_forward
 
 
 class Qwen3OmniMoeCode2WavPatcher(ModelPatcher):
@@ -7505,44 +7878,87 @@ class GptOssModelPatcher(OVDecoderModelPatcher):
             GptOssExperts.forward = self.original_gpt_oss_forward
 
 
-# This patch overrides the following line in Transformers:
-# https://github.com/huggingface/transformers/blob/v4.55-release/src/transformers/models/granitemoehybrid/modeling_granitemoehybrid.py#L1553
-# It is required to work around an OpenVINO issue:
-# [CPU] Broadcast node '__module.model/aten::copy_/Broadcast' failed the check
-# 'arg_shape[i - start_axis].is_dynamic()...' in src/core/shape_inference/include/broadcast_shape_inference.hpp:89
-def granite_moe_hybrid_update_causal_mask(
+# Recurrent form of the GraniteMoeHybrid Mamba2 mixer (`GraniteMoeHybridMambaLayer`).
+# Adapted from `torch_forward` of:
+# https://github.com/huggingface/transformers/blob/v4.55-release/src/transformers/models/granitemoehybrid/modeling_granitemoehybrid.py
+#
+# This patch replaces the chunked SSD implementation with a recurrent form that uses
+# `SelectiveSSMRecurrentCell`, which is replaced by an `ov::Loop` during
+# conversion. It runs a single unified code path for both prefill and decoding stages.
+def granite_moe_hybrid_mamba_mixer_forward(
     self,
-    attention_mask,
-    input_tensor: torch.Tensor,
-    cache_position: torch.Tensor,
-    past_key_values,
-    output_attentions: bool = False,
+    hidden_states: torch.Tensor,
+    cache_params=None,
+    conv_state: Optional[torch.Tensor] = None,
+    recurrent_state: Optional[torch.Tensor] = None,
+    attention_mask: Optional[torch.Tensor] = None,
 ):
-    dtype = input_tensor.dtype
-    batch_size = input_tensor.shape[0]
-    sequence_length = input_tensor.shape[1]
-    target_length = attention_mask.shape[-1]
+    batch_size, seq_len, _ = hidden_states.shape
 
-    if attention_mask is not None and attention_mask.dim() == 4:
-        # In this case we assume that the mask comes already in inverted form and requires no inversion or slicing.
-        causal_mask = attention_mask
-    else:
-        min_dtype = torch.finfo(dtype).min
-        causal_mask = torch.full(
-            (sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=cache_position.device
+    def apply_mask_to_padding_states(hidden_states, attention_mask):
+        if attention_mask is not None and attention_mask.shape[0] > 1:
+            dtype = hidden_states.dtype
+            attention_mask = attention_mask[:, -seq_len:]
+            hidden_states = (hidden_states * attention_mask[:, :, None]).to(dtype)
+        return hidden_states
+
+    # 1. Gated MLP's linear projection
+    hidden_states = apply_mask_to_padding_states(hidden_states, attention_mask)
+    projected_states = self.in_proj(hidden_states)
+    gate, hidden_states_B_C, dt = projected_states.split(
+        [self.intermediate_size, self.conv_dim, self.num_heads], dim=-1
+    )
+
+    # 2. Convolution sequence transformation with cached state
+    hidden_states_B_C = hidden_states_B_C.transpose(1, 2)
+    if conv_state is None:
+        conv_state = torch.zeros(batch_size, self.conv_dim, self.conv_kernel_size, dtype=hidden_states_B_C.dtype)
+    new_hidden_states_B_C, new_conv_state = ov_causal_conv1d(
+        conv_state, hidden_states_B_C, self.conv1d.weight, self.conv1d.bias
+    )
+    hidden_states_B_C = self.act(new_hidden_states_B_C).transpose(1, 2)
+    hidden_states_B_C = apply_mask_to_padding_states(hidden_states_B_C, attention_mask)
+
+    hidden_states_ssm, B, C = torch.split(
+        hidden_states_B_C,
+        [self.intermediate_size, self.n_groups * self.ssm_state_size, self.n_groups * self.ssm_state_size],
+        dim=-1,
+    )
+
+    # 3. State Space Model transformation in recurrent form
+    A = -torch.exp(self.A_log.float())  # (num_heads,)
+    dt = torch.nn.functional.softplus(dt + self.dt_bias)  # (B, T, num_heads)
+    dt = torch.clamp(dt, self.time_step_limit[0], self.time_step_limit[1]).float()
+
+    x = hidden_states_ssm.reshape(batch_size, seq_len, self.num_heads, self.head_dim).float()
+    B = B.reshape(batch_size, seq_len, self.n_groups, self.ssm_state_size).float()
+    C = C.reshape(batch_size, seq_len, self.n_groups, self.ssm_state_size).float()
+
+    if recurrent_state is None:
+        recurrent_state = torch.zeros(
+            batch_size, self.num_heads, self.head_dim, self.ssm_state_size, dtype=torch.float32
         )
-        causal_mask *= torch.arange(target_length, device=cache_position.device) > cache_position.reshape(-1, 1)
-        causal_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1)
+    recurrent_state = recurrent_state.float()
 
-        if attention_mask is not None:
-            causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
-            mask_length = attention_mask.shape[-1]
-            padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :]
-            padding_mask = padding_mask == 0
-            new_causal_mask = causal_mask[:, :, :, :mask_length].masked_fill(padding_mask, min_dtype)
-            causal_mask = new_causal_mask
+    # A (H,), dt (B,T,H), B (B,T,G,N), x (B,T,H,P), C (B,T,G,N), state (B,H,P,N)
+    output_cell = self.selective_ssm_recurrent_cell(A, dt, B, x, C, recurrent_state)
 
-    return causal_mask
+    num_elems = batch_size * seq_len * self.num_heads * self.head_dim
+    y = output_cell[:num_elems].reshape(batch_size, seq_len, self.num_heads, self.head_dim)
+    new_recurrent_state = output_cell[num_elems:].reshape(recurrent_state.shape)
+
+    # D skip connection (independent of the recurrent state)
+    y = y + x * self.D.view(1, 1, -1, 1)
+
+    # (B, T, H, P) -> (B, T, intermediate_size)
+    y = y.reshape(batch_size, seq_len, -1)
+
+    scan_output = self.norm(y, gate)
+
+    # 4. Final linear projection
+    contextualized_states = self.out_proj(scan_output.to(hidden_states.dtype))
+
+    return contextualized_states, new_conv_state, new_recurrent_state
 
 
 class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
@@ -7552,90 +7968,89 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers.models.granitemoehybrid.modeling_granitemoehybrid import HybridMambaAttentionDynamicCache
+        from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
 
         super().__init__(config, model, model_kwargs)
 
-        class GraniteMoeHybridDynamicCacheWrap(HybridMambaAttentionDynamicCache):
-            def __init__(self, config, batch_size: int, conv_states, ssm_states, key_cache, value_cache):
-                # Call parent constructor with all required arguments
-                super().__init__(config=config, batch_size=batch_size)
+        layer_types = self.real_config._config.layer_types
+
+        class GraniteMoeHybridCacheWrap:
+            def __init__(self, config, conv_states, recurrent_states, key_cache, value_cache, attention_mask=None):
+                self.config = config
                 self.conv_states = conv_states
-                self.ssm_states = ssm_states
+                self.recurrent_states = recurrent_states
                 self.key_cache = key_cache
                 self.value_cache = value_cache
-                self.attention_layer_idx_mapping = {}
-                self.mamba_layer_idx_mapping = {}
-                attention_layer_idx = 0
-                mamba_layer_idx = 0
-                for i in range(config.num_hidden_layers):
-                    if self.layers_block_type[i] == "attention":
-                        self.attention_layer_idx_mapping[i] = attention_layer_idx
-                        attention_layer_idx += 1
-                    elif self.layers_block_type[i] == "mamba":
-                        self.mamba_layer_idx_mapping[i] = mamba_layer_idx
-                        mamba_layer_idx += 1
+                self.raw_attention_mask = attention_mask
+                self.mamba_mapping = {}
+                self.attn_mapping = {}
+                mamba_idx = 0
+                attn_idx = 0
+                for i, block_type in enumerate(config.layers_block_type):
+                    if block_type == "mamba":
+                        self.mamba_mapping[i] = mamba_idx
+                        mamba_idx += 1
+                    elif block_type == "attention":
+                        self.attn_mapping[i] = attn_idx
+                        attn_idx += 1
+                self.num_attn_layers = attn_idx
 
-            def update(
-                self,
-                key_states: torch.Tensor,
-                value_states: torch.Tensor,
-                layer_idx: int,
-                cache_kwargs: Optional[dict[str, Any]] = None,
-            ) -> tuple[torch.Tensor, torch.Tensor]:
-                # map layer_idx to key_cache (value_cache) idx
-                layer_idx = self.attention_layer_idx_mapping[layer_idx]
-                # Update the cache
-                if self.key_cache[layer_idx].shape[-1] == 0:
-                    self.key_cache[layer_idx] = key_states
-                    self.value_cache[layer_idx] = value_states
-                else:
-                    self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=2)
-                    self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=2)
-
-                return self.key_cache[layer_idx], self.value_cache[layer_idx]
-
-            def __getitem__(self, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-                layer_idx = self.attention_layer_idx_mapping[layer_idx]
-                return self.key_cache[layer_idx], self.value_cache[layer_idx]
+            def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
+                idx = self.attn_mapping[layer_idx]
+                self.key_cache[idx] = torch.cat([self.key_cache[idx], key_states], dim=2)
+                self.value_cache[idx] = torch.cat([self.value_cache[idx], value_states], dim=2)
+                return self.key_cache[idx], self.value_cache[idx]
 
             def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
-                # take any layer that contains cache and not empty tensor
-                layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
-                layer_idx = self.attention_layer_idx_mapping[layer_idx]
-                # if len(self.key_cache) <= layer_idx or self.key_cache[layer_idx].numel() == 0:
-                #    return 0
-                return self.key_cache[layer_idx].shape[-2]
+                if self.num_attn_layers == 0 or self.key_cache[0] is None:
+                    return 0
+                return self.key_cache[0].shape[-2]
 
-        # the patch is needed to include KV-cache, Conv, and SSM states in the inputs and outputs.
+            def get_mask_sizes(self, query_length, layer_idx: int = 0):
+                # transformers >= 5.x passes the scalar `query_length` (int or 0-dim tensor);
+                # older versions passed a 1-d `cache_position` tensor. Use `.shape[0]` only for the
+                # legacy 1-d tensor; a scalar (empty shape) is added directly.
+                if hasattr(query_length, "shape") and len(query_length.shape) > 0:
+                    query_length = query_length.shape[0]
+                kv_length = self.get_seq_length() + query_length
+                return kv_length, 0
+
+            @property
+            def is_sliding(self):
+                return [False]
+
+            is_compileable = False
+
+            def has_previous_state(self, layer_idx: Optional[int] = None) -> bool:
+                return True
+
         def patched_forward(
             input_ids,
             attention_mask=None,
             cache_params=None,
         ):
-            num_mamba_layers = self.real_config._config.layer_types.count("mamba")
-            num_attention_layers = self.real_config._config.layer_types.count("attention")
+            num_mamba_layers = layer_types.count("mamba")
+            num_attn_layers = layer_types.count("attention")
+
             use_cache = False
             wrapped_cache_params = None
             if cache_params is not None:
                 use_cache = True
                 conv_states = []
-                ssm_states = []
+                recurrent_states = []
                 key_cache = []
                 value_cache = []
 
-                # decouple ssm_states, conv_states, keys and values from cache_params
-                batch_size = cache_params[0].size(0)
                 for idx in range(num_mamba_layers):
                     conv_states.append(cache_params[2 * idx])
-                    ssm_states.append(cache_params[2 * idx + 1])
+                    recurrent_states.append(cache_params[2 * idx + 1])
 
-                for idx in range(num_attention_layers):
+                for idx in range(num_attn_layers):
                     key_cache.append(cache_params[2 * num_mamba_layers + 2 * idx])
                     value_cache.append(cache_params[2 * num_mamba_layers + 2 * idx + 1])
 
-                wrapped_cache_params = GraniteMoeHybridDynamicCacheWrap(
-                    self.real_config._config, batch_size, conv_states, ssm_states, key_cache, value_cache
+                wrapped_cache_params = GraniteMoeHybridCacheWrap(
+                    self.real_config._config, conv_states, recurrent_states, key_cache, value_cache, attention_mask
                 )
 
             causal_lm_output = self.model_orig_forward(
@@ -7649,16 +8064,15 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             }
 
             if use_cache:
-                past_key_values = causal_lm_output.past_key_values
-                # unwrap GraniteMoeHybridDynamicCacheWrap object
+                present = wrapped_cache_params
                 present_key_values = []
                 for idx in range(num_mamba_layers):
-                    present_key_values.append(past_key_values.conv_states[idx])
-                    present_key_values.append(past_key_values.ssm_states[idx])
+                    present_key_values.append(present.conv_states[idx])
+                    present_key_values.append(present.recurrent_states[idx])
 
-                for idx in range(num_attention_layers):
-                    present_key_values.append(past_key_values.key_cache[idx])
-                    present_key_values.append(past_key_values.value_cache[idx])
+                for idx in range(num_attn_layers):
+                    present_key_values.append(present.key_cache[idx])
+                    present_key_values.append(present.value_cache[idx])
 
                 outputs["present_key_values"] = present_key_values
 
@@ -7667,6 +8081,13 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
         self.patched_forward = patched_forward
         self.model_orig_forward = self.orig_forward
         self.orig_forward = patched_forward
+
+        self.module_extensions = {
+            SelectiveSSMRecurrentCell: ModuleExtension(SelectiveSSMRecurrentCell, "SelectiveSSMRecurrentCellOp"),
+        }
+        self.conversion_extensions = [
+            ConversionExtension("SelectiveSSMRecurrentCellOp", convert_recurrent_selective_ssm_cell),
+        ]
 
     def __enter__(self):
         def patch_sparse_moe(sparse_moe_layer):
@@ -7686,21 +8107,35 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
-        if is_transformers_version("<", "5"):
-            self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
-            self._model.model._update_causal_mask = types.MethodType(
-                granite_moe_hybrid_update_causal_mask, self._model.model
-            )
+        def make_mamba_forward(mamba_layer):
+            def _forward(hidden_states, cache_params=None, attention_mask=None, **kwargs):
+                conv_state = None
+                recurrent_state = None
+                raw_attention_mask = None
+                if cache_params is not None:
+                    mamba_idx = cache_params.mamba_mapping[mamba_layer.layer_idx]
+                    conv_state = cache_params.conv_states[mamba_idx]
+                    recurrent_state = cache_params.recurrent_states[mamba_idx]
+                    raw_attention_mask = cache_params.raw_attention_mask
+                out, new_conv_state, new_recurrent_state = granite_moe_hybrid_mamba_mixer_forward(
+                    mamba_layer, hidden_states, cache_params, conv_state, recurrent_state, raw_attention_mask
+                )
+                if cache_params is not None:
+                    mamba_idx = cache_params.mamba_mapping[mamba_layer.layer_idx]
+                    cache_params.conv_states[mamba_idx] = new_conv_state
+                    cache_params.recurrent_states[mamba_idx] = new_recurrent_state
+                return out
 
-        for idx, layer in enumerate(self._model.model.layers):
+            return _forward
+
+        for layer in self._model.model.layers:
             if getattr(layer, "block_sparse_moe", None) is not None:
                 patch_sparse_moe(layer.block_sparse_moe)
-            if self.real_config._config.layers_block_type[idx] == "mamba":
+            if layer.mamba is not None:
                 mamba_layer = layer.mamba
-            else:
-                continue
-            mamba_layer._orig_forward = mamba_layer.forward
-            mamba_layer.forward = types.MethodType(zamba2_mamba_mixer, mamba_layer)
+                mamba_layer._orig_forward = mamba_layer.forward
+                mamba_layer.selective_ssm_recurrent_cell = SelectiveSSMRecurrentCell()
+                mamba_layer.forward = make_mamba_forward(mamba_layer)
 
     def __exit__(self, exc_type, exc_value, traceback):
         def unpatch_sparse_moe(sparse_moe_layer):
@@ -7711,17 +8146,14 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
 
-        if is_transformers_version("<", "5"):
-            self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
-
-        for idx, layer in enumerate(self._model.model.layers):
+        for layer in self._model.model.layers:
             if getattr(layer, "block_sparse_moe", None) is not None:
                 unpatch_sparse_moe(layer.block_sparse_moe)
-            if self.real_config._config.layers_block_type[idx] == "mamba":
+            if layer.mamba is not None:
                 mamba_layer = layer.mamba
-            else:
-                continue
-            mamba_layer.forward = mamba_layer._orig_forward
+                mamba_layer.forward = mamba_layer._orig_forward
+                if hasattr(mamba_layer, "selective_ssm_recurrent_cell"):
+                    del mamba_layer.selective_ssm_recurrent_cell
 
 
 class BigBirdPegasusModelPatcher(OVSeq2SeqModelPatcher):
@@ -8907,6 +9339,63 @@ class Qwen3NextModelPatcher(OVDecoderModelPatcher):
                 sparse_moe_block = decoder_layer.mlp
                 decoder_layer.mlp.forward = decoder_layer.mlp._orig_forward
                 del sparse_moe_block.down_projs, sparse_moe_block.gate_projs, sparse_moe_block.up_projs
+
+
+# This torch.nn.Module represents the Mamba2 selective-scan recurrence in its recurrent form.
+# It is required for converting the Mamba2 mixer with OpenVINO using the ModuleExtension mechanism.
+#
+# The discretized quantities `dA` (decay), `dBx` (input contribution) and `C` (output projection)
+# are precomputed and vectorized over the sequence dimension in the patched mixer forward
+# (`granite_moe_hybrid_mamba_mixer_forward`). The recurrence over the SSM state is:
+#       state_t = state_{t-1} * dA_t + dBx_t
+#       y_t     = reduce_sum(state_t * C_t, axis=N)
+# This loop has no known vectorized form that can be correctly traced by torch.jit.trace,
+# so it is replaced with an `ov::Loop` operation via `convert_recurrent_selective_ssm_cell`.
+class SelectiveSSMRecurrentCell(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(
+        self,
+        A,  # (H,)          — negative log-decay rates per head
+        dt,  # (B, T, H)    — time steps (after softplus + clamp)
+        B,  # (B, T, G, N)  — input-projection matrix (G groups, broadcast to H heads)
+        x,  # (B, T, H, P)  — input hidden states (P = head_dim)
+        C,  # (B, T, G, N)  — output-projection matrix (G groups, broadcast to H heads)
+        last_state,  # (B, H, P, N) — initial recurrent state
+    ):
+        # Mamba-2 selective scan in recurrent form (one step per token):
+        #   dA_t    = exp(A * dt_t)           — per-head state decay
+        #   dBx_t   = dtB_t ⊗ x_t            — discretized input (outer product over P×N)
+        #   state_t = state_{t-1} * dA_t + dBx_t
+        #   y_t     = Σ_n (state_t * C_t)     — readout (reduce over state dim N)
+        sequence_length = dt.shape[1]
+        num_heads = dt.shape[2]
+        num_groups = B.shape[2]
+        heads_per_group = num_heads // num_groups
+        core_out = torch.zeros(x.shape, dtype=x.dtype)  # (B, T, H, P)
+
+        # Expand B/C from (B, T, G, N) → (B, T, H, N) via repeat_interleave
+        B = B.repeat_interleave(heads_per_group, dim=2)
+        C = C.repeat_interleave(heads_per_group, dim=2)
+
+        # Time discretization of A and B is vectorized over the whole sequence (T) before the
+        # loop — cheaper than recomputing exp / (dt * B) per timestep inside the loop:
+        #   dA  = exp(A * dt)   -> (B, T, H)      per-head state decay
+        #   dtB = dt * B        -> (B, T, H, N)   discretized input matrix
+        # The outer product dtB ⊗ x stays inside the loop (its (B, T, H, P, N) form is too large
+        # to materialize up front).
+        dA = torch.exp(dt * A.view(1, 1, -1))  # (B, T, H)
+        dtB = dt[..., None] * B  # (B, T, H, N)
+
+        for i in range(sequence_length):
+            dBx_t = dtB[:, i, :, None, :] * x[:, i, :, :, None]  # (B, H, P, N)
+            last_state = last_state * dA[:, i, :, None, None] + dBx_t
+            core_out[:, i] = (last_state * C[:, i].unsqueeze(-2)).sum(dim=-1)
+
+        # Single flattened output (OpenVINO ModuleExtension expects one tensor).
+        output_cell = torch.cat([core_out.flatten(), last_state.flatten()], dim=0)
+        return output_cell
 
 
 # OpenVINO has a bug due to which Clamp(-inf, inf) doesn't work correctly: CVS-185473.
@@ -10396,99 +10885,12 @@ def _ltx2_connectors_top_level_forward_patched(
     return video_text_embedding, audio_text_embedding, binary_attn_mask.squeeze(-1)
 
 
-class _LTX2AttnProcessorWithEps:
-    """
-    Connector attention processor: replaces SDPA with manual attention and adds eps=1e-30
-    before softmax to avoid an OpenVINO CPU plugin numerical issue with all-zero attention rows.
-
-    Reference (diffusers==0.38.0): models/transformers/transformer_ltx2.py,
-    LTX2AudioVideoAttnProcessor.__call__ L161-228 (SDPA via dispatch_attention_fn at L206).
-
-
-    """
-
-    def __call__(
-        self,
-        attn,
-        hidden_states,
-        encoder_hidden_states=None,
-        attention_mask=None,
-        query_rotary_emb=None,
-        key_rotary_emb=None,
-    ):
-        batch_size, sequence_length, _ = (
-            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
-        )
-
-        if attention_mask is not None:
-            attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
-            attention_mask = attention_mask.view(batch_size, attn.heads, -1, attention_mask.shape[-1])
-
-        if encoder_hidden_states is None:
-            encoder_hidden_states = hidden_states
-
-        # Gated attention: connector blocks set apply_gated_attention=True when the checkpoint has
-        # video_gated_attn/audio_gated_attn=True (e.g. LTX-2.3). Gate logits are computed on the
-        # original hidden_states, same as diffusers LTX2AudioVideoAttnProcessor. For LTX-2.0
-        # (to_gate_logits is None) this is skipped and the path is identical to before.
-        if attn.to_gate_logits is not None:
-            gate_logits = attn.to_gate_logits(hidden_states)
-
-        query = attn.to_q(hidden_states)
-        key = attn.to_k(encoder_hidden_states)
-        value = attn.to_v(encoder_hidden_states)
-
-        query = attn.norm_q(query)
-        key = attn.norm_k(key)
-
-        if query_rotary_emb is not None:
-            query = _ltx2_apply_split_rotary_emb(query, query_rotary_emb)
-            key = _ltx2_apply_split_rotary_emb(key, key_rotary_emb if key_rotary_emb is not None else query_rotary_emb)
-
-        query = query.unflatten(2, (attn.heads, -1))
-        key = key.unflatten(2, (attn.heads, -1))
-        value = value.unflatten(2, (attn.heads, -1))
-
-        # Manual attention with epsilon to avoid CPU plugin issue
-        query = query.transpose(1, 2)
-        key = key.transpose(1, 2)
-        value = value.transpose(1, 2)
-
-        scale = 1.0 / (query.shape[-1] ** 0.5)
-        attn_weights = torch.matmul(query, key.transpose(-2, -1)) * scale
-
-        if attention_mask is not None:
-            attn_weights = attn_weights + attention_mask
-
-        # The epsilon is a uniform shift, so softmax is invariant to it; it exists only to keep an
-        # Add node in the graph, which works around a CPU plugin issue with zero attention weights.
-        # The softmax accumulates in fp32 because this manual attention replaces
-        # `scaled_dot_product_attention`, which does not reduce in the bf16 input dtype either.
-        eps = 1e-30
-        attn_weights = torch.nn.functional.softmax(attn_weights + eps, dim=-1, dtype=torch.float32).to(query.dtype)
-
-        hidden_states = torch.matmul(attn_weights, value)
-
-        hidden_states = hidden_states.transpose(1, 2).flatten(2, 3)
-        hidden_states = hidden_states.to(query.dtype)
-
-        if attn.to_gate_logits is not None:
-            hidden_states = hidden_states.unflatten(2, (attn.heads, -1))  # [B, T, H, D]
-            # Factor of 2.0 so zero-initialized gate logits give initial gates of 1.
-            gates = 2.0 * torch.sigmoid(gate_logits)  # [B, T, H]
-            hidden_states = hidden_states * gates.unsqueeze(-1)
-            hidden_states = hidden_states.flatten(2, 3)
-
-        hidden_states = attn.to_out[0](hidden_states)
-        hidden_states = attn.to_out[1](hidden_states)
-
-        return hidden_states
-
-
 class LTX2ConnectorsPatcher(ModelPatcher):
     """
     Export patcher for LTX2TextConnectors: swaps in the trace-safe top-level and
-    sub-connector forwards and the eps attention processor for the duration of the export.
+    sub-connector forwards for the duration of the export, and monkey-patches
+    apply_split_rotary_emb (module-level) to an out-of-place implementation so RoPE
+    traces cleanly. Native SDPA attention (LTX2AudioVideoAttnProcessor) is left untouched.
     """
 
     def __enter__(self):
@@ -10505,15 +10907,12 @@ class LTX2ConnectorsPatcher(ModelPatcher):
                 connector._orig_forward = connector.forward
                 connector.forward = types.MethodType(_ltx2_connector_forward_patched, connector)
 
-        # Replace attention processors with epsilon-patched version
-        self._orig_processors = {}
-        for connector_name in ["video_connector", "audio_connector"]:
-            connector = getattr(self._model, connector_name, None)
-            if connector is not None:
-                for block in connector.transformer_blocks:
-                    attn = block.attn1
-                    self._orig_processors[id(attn)] = attn.processor
-                    attn.set_processor(_LTX2AttnProcessorWithEps())
+        # Patch apply_split_rotary_emb at module level: the original does an in-place
+        # addcmul_ on tensor views, which traces to ScatterNDUpdate in OpenVINO. Swap in
+        # the out-of-place version; LTX2AudioVideoAttnProcessor picks it up via module-level
+        # name lookup, so native SDPA attention needs no changes.
+        self._orig_apply_split_rotary_emb = transformer_ltx2.apply_split_rotary_emb
+        transformer_ltx2.apply_split_rotary_emb = _ltx2_apply_split_rotary_emb
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -10527,15 +10926,9 @@ class LTX2ConnectorsPatcher(ModelPatcher):
             if connector is not None and hasattr(connector, "_orig_forward"):
                 connector.forward = connector._orig_forward
 
-        # Restore original attention processors
-        for connector_name in ["video_connector", "audio_connector"]:
-            connector = getattr(self._model, connector_name, None)
-            if connector is not None:
-                for block in connector.transformer_blocks:
-                    attn = block.attn1
-                    orig = self._orig_processors.get(id(attn))
-                    if orig is not None:
-                        attn.set_processor(orig)
+        # Restore original apply_split_rotary_emb
+        if hasattr(self, "_orig_apply_split_rotary_emb"):
+            transformer_ltx2.apply_split_rotary_emb = self._orig_apply_split_rotary_emb
 
 
 def _ltx2_apply_split_rotary_emb(x, freqs):
@@ -10795,3 +11188,226 @@ class LTX2TransformerPatcher(ModelPatcher):
         for name, module in self._model.named_modules():
             if name in self._orig_processors and hasattr(module, "set_processor"):
                 module.set_processor(self._orig_processors[name])
+
+
+# ------------------------------------------------------------------------------
+# MuseGlimmer (native transformers VLM) export patchers.
+#
+# The native MuseGlimmer model already applies rotary embeddings with real-valued
+# cos/sin tensors (``apply_rotary_pos_emb`` / ``apply_rotary_pos_emb_vision``), so
+# unlike the earlier flat trust_remote_code "onyx" model there is no complex-RoPE
+# to work around. The language patcher only rewires the forward to consume
+# ``inputs_embeds`` + a legacy KV tuple for the stateful text-generation export.
+# The vision patcher reimplements the encoder over ``pixel_values`` plus the
+# grid-derived tensors (attention masks, window reordering, rotary position ids,
+# bilinear position gathers and the pixel-shuffle permutation) passed as inputs,
+# so the graph is resolution-agnostic and free of the untraceable grid ops.
+# ------------------------------------------------------------------------------
+class MuseGlimmerVisionEmbeddingsModelPatcher(ModelPatcher):
+    """Export the native MuseGlimmer vision stack as one resolution-agnostic graph.
+
+    Reimplements ``vision_tower`` -> ``vision_adapter`` -> ``vision_projection`` ->
+    ``perception_emb_norm`` consuming only ``pixel_values`` and ``image_grid_thw``.
+    All grid-derived tensors (attention masks, rotary position ids, bilinear
+    position gathers, pixel-shuffle permutation) are recomputed *inside* the graph
+    from ``image_grid_thw`` with pure tensor arithmetic, so no ``.tolist()`` /
+    ``int()`` / dynamic-reshape ops bake the resolution and no extra inputs are
+    needed. Window attention is expressed as a block-diagonal equality mask in the
+    original patch order (equivalent to the native reorder-attend-reverse) so the
+    untraceable window-index gather is avoided.
+    """
+
+    def __init__(self, config, model, model_kwargs=None):
+        from transformers.models.muse_glimmer.modeling_muse_glimmer import apply_rotary_pos_emb_vision
+
+        output_names = list(config.outputs.keys())
+
+        def _vision_attention(attn, hidden_states, attention_mask, position_embeddings):
+            seq_length = hidden_states.shape[0]
+            query_states = attn.q_proj(hidden_states).reshape(1, seq_length, -1, attn.head_dim)
+            key_states = attn.k_proj(hidden_states).reshape(1, seq_length, -1, attn.head_dim)
+            value_states = attn.v_proj(hidden_states).reshape(1, seq_length, -1, attn.head_dim)
+
+            cos, sin = position_embeddings
+            query_states, key_states = apply_rotary_pos_emb_vision(query_states, key_states, cos, sin)
+
+            query_states = query_states.transpose(2, 1)
+            key_states = key_states.transpose(2, 1)
+            value_states = value_states.transpose(2, 1)
+
+            attn_weights = torch.matmul(query_states, key_states.transpose(-1, -2)) * attn.scaling
+            attn_weights = attn_weights + attention_mask.to(attn_weights.dtype)
+            attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(
+                query_states.dtype
+            )
+            attn_output = torch.matmul(attn_weights, value_states)
+            attn_output = attn_output.transpose(2, 1).reshape(seq_length, -1)
+            return attn.proj(attn_output)
+
+        model.__orig_forward = model.forward
+
+        def image_embed_forward(self, pixel_values, image_grid_thw):
+            vision_model = self.model
+            vision_tower = vision_model.vision_tower
+            patch_embedder = vision_tower.patch_embedder
+            cfg = vision_tower.config
+            device = pixel_values.device
+
+            # --- per-patch grid coordinates (vectorised over all images/frames) ---
+            grid = image_grid_thw
+            counts = grid[:, 0] * grid[:, 1] * grid[:, 2]
+            per_h = torch.repeat_interleave(grid[:, 1], counts)
+            per_w = torch.repeat_interleave(grid[:, 2], counts)
+            img_start = torch.repeat_interleave(torch.nn.functional.pad(counts.cumsum(0)[:-1], (1, 0)), counts)
+            seq_len = pixel_values.shape[0]
+            ar = torch.arange(seq_len, device=device)
+            within = ar - img_start
+            hw = per_h * per_w
+            frame = within // hw
+            within_frame = within - frame * hw
+            row = within_frame // per_w
+            col = within_frame - row * per_w
+            # absolute start index of this patch's (image, frame) segment -> unique full-attn id
+            seg_id = img_start + frame * hw
+            window = cfg.pos_emb_height  # window size in patches (spatial_merge_size == 1)
+            win_r = row // window
+            win_c = col // window
+
+            # --- learned position-embedding bilinear resample (raster order) ---
+            # Native uses a custom grid_sample(align_corners=False, padding="zeros")
+            # equivalent: half-pixel sample centres + zeroed out-of-bounds corners.
+            side = patch_embedder.num_grid_per_side
+            h_grid = (row.float() + 0.5) * (side / per_h.float()) - 0.5
+            w_grid = (col.float() + 0.5) * (side / per_w.float()) - 0.5
+            h_floor = torch.floor(h_grid)
+            w_floor = torch.floor(w_grid)
+            h_ceil = h_floor + 1
+            w_ceil = w_floor + 1
+            h_frac = h_grid - h_floor
+            w_frac = w_grid - w_floor
+            h_fv = (h_floor >= 0) & (h_floor <= side - 1)
+            h_cv = (h_ceil >= 0) & (h_ceil <= side - 1)
+            w_fv = (w_floor >= 0) & (w_floor <= side - 1)
+            w_cv = (w_ceil >= 0) & (w_ceil <= side - 1)
+            h_fl = h_floor.clamp(0, side - 1).long()
+            h_cl = h_ceil.clamp(0, side - 1).long()
+            w_fl = w_floor.clamp(0, side - 1).long()
+            w_cl = w_ceil.clamp(0, side - 1).long()
+            bilinear_indices = torch.stack(
+                [h_fl * side + w_fl, h_fl * side + w_cl, h_cl * side + w_fl, h_cl * side + w_cl], dim=1
+            )
+            bilinear_weights = torch.stack(
+                [
+                    (1 - h_frac) * (1 - w_frac) * (h_fv & w_fv),
+                    (1 - h_frac) * w_frac * (h_fv & w_cv),
+                    h_frac * (1 - w_frac) * (h_cv & w_fv),
+                    h_frac * w_frac * (h_cv & w_cv),
+                ],
+                dim=1,
+            )
+
+            # --- additive attention masks (block-diagonal, original patch order) ---
+            neg = torch.finfo(pixel_values.dtype).min
+            same_seg = seg_id[:, None] == seg_id[None, :]
+            full_mask = torch.zeros(seq_len, seq_len, dtype=pixel_values.dtype, device=device).masked_fill(
+                ~same_seg, neg
+            )[None, None]
+            same_win = same_seg & (win_r[:, None] == win_r[None, :]) & (win_c[:, None] == win_c[None, :])
+            window_mask = torch.zeros(seq_len, seq_len, dtype=pixel_values.dtype, device=device).masked_fill(
+                ~same_win, neg
+            )[None, None]
+
+            # --- rotary position ids (raster (h, w) flipped + 1, matches native) ---
+            position_ids = torch.stack([row, col], dim=-1).flip(-1) + 1
+            position_ids = position_ids[None]
+
+            # --- pixel-shuffle gather (merge_size x merge_size block reorder) ---
+            factor = cfg.merge_size
+            blocks_w = per_w // factor
+            ps_in_col = within_frame % factor
+            ps_in_row = (within_frame // factor) % factor
+            ps_block_col = (within_frame // (factor * factor)) % blocks_w
+            ps_block_row = within_frame // (factor * factor * blocks_w)
+            ps_src = (ps_block_row * factor + ps_in_row) * per_w + (ps_block_col * factor + ps_in_col)
+            pixel_shuffle_index = seg_id + ps_src
+
+            # --- encoder ---
+            target_dtype = patch_embedder.patch_embedding.weight.dtype
+            patch_embeds = patch_embedder.patch_embedding(pixel_values.to(dtype=target_dtype))
+            embeddings = patch_embeds.reshape(seq_len, -1)
+            pos_embeds = (
+                patch_embedder.position_embedding_table(bilinear_indices) * bilinear_weights[:, :, None]
+            ).sum(1)
+            hidden_states = embeddings + pos_embeds.to(embeddings.dtype)
+
+            hidden_states = vision_tower.ln_pre(hidden_states)
+            position_embeddings = vision_tower.rotary_emb(hidden_states, position_ids)
+
+            layer_types = cfg.layer_types
+            for i, block in enumerate(vision_tower.layers):
+                mask = full_mask if layer_types[i] == "full_attention" else window_mask
+                hidden_states = hidden_states + _vision_attention(
+                    block.attn, block.norm1(hidden_states), mask, position_embeddings
+                )
+                hidden_states = hidden_states + block.mlp(block.norm2(hidden_states))
+
+            hidden_states = vision_tower.ln_post(hidden_states)
+
+            dim = hidden_states.shape[-1]
+            hidden_states = hidden_states[pixel_shuffle_index]
+            hidden_states = (
+                hidden_states.view(-1, factor * factor, dim).permute(0, 2, 1).reshape(-1, dim * factor * factor)
+            )
+
+            vision_features = vision_model.vision_adapter(hidden_states)
+            vision_features = vision_model.vision_projection(vision_features)
+            vision_features = vision_model.perception_emb_norm(vision_features)
+            return {output_names[0]: vision_features}
+
+        model.forward = types.MethodType(image_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class MuseGlimmerLanguageModelPatcher(OVDecoderModelPatcher):
+    """Patch the MuseGlimmer language model to consume ``inputs_embeds`` + a legacy
+    KV tuple for the stateful text-generation export (native real-valued RoPE)."""
+
+    def __init__(self, config, model, model_kwargs=None):
+        model.__orig_forward = model.forward
+
+        def forward_wrap(
+            self,
+            attention_mask,
+            position_ids=None,
+            past_key_values=None,
+            inputs_embeds=None,
+            input_ids=None,
+            use_cache=True,
+        ):
+            if is_transformers_version("<", "5"):
+                new_past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                new_past_key_values = DynamicCache(past_key_values)
+
+            result = self.__orig_forward(
+                input_ids=input_ids,
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=new_past_key_values,
+                use_cache=use_cache,
+            )
+            if past_key_values is not None:
+                result["past_key_values"] = postprocess_past_key_values(result["past_key_values"])
+            return result
+
+        model.forward = types.MethodType(forward_wrap, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
