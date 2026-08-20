@@ -619,6 +619,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     OVMODEL_CLASS = OVModelForVisualCausalLM
     TASK = "image-text-to-text"
 
+    # Architectures that segfault inside the OpenVINO CPU plugin's AVX2 JIT kernels. They only crash on
+    # hosts without AVX-512 (the CI runners); reproducible anywhere with ONEDNN_MAX_CPU_ISA=AVX2.
+    SEGFAULTING_ARCHITECTURES = {"gemma4"}
+
     # filter architectures depending on min/max transformers supported versions declared on their
     # OpenVINO export config
     UNSUPPORTED_ARCHITECTURES.update(
@@ -742,6 +746,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         if model_arch == "qwen3_omni_moe":
             # Qwen3OmniMoeForConditionalGeneration has a custom generate() interface incompatible with this flow
             self.skipTest("qwen3_omni_moe comparison tested via dedicated test methods")
+
+        if model_arch in self.SEGFAULTING_ARCHITECTURES:
+            self.skipTest(f"{model_arch}: OpenVINO CPU plugin crashes on the AVX2 inference path")
 
         def compare_outputs(inputs, ov_model, transformers_model, generation_config):
             transformers_inputs = copy.deepcopy(inputs)
@@ -981,6 +988,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_generate_utils(self, model_arch):
+        if model_arch in self.SEGFAULTING_ARCHITECTURES:
+            self.skipTest(f"{model_arch}: OpenVINO CPU plugin crashes on the AVX2 inference path")
+
         model_id = MODEL_NAMES[model_arch]
         trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
         model = self.OVMODEL_CLASS.from_pretrained(
