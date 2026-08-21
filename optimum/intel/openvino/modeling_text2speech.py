@@ -15,7 +15,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import openvino
@@ -161,22 +161,66 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
     export_feature = "text-to-audio"
 
     @classmethod
+    def from_pretrained(cls, model_id, **kwargs):
+        # For Kokoro models, load config via PretrainedConfig since AutoConfig
+        # does not recognize the "kokoro" model_type.
+        if kwargs.get("config") is None:
+            try:
+                config = PretrainedConfig.from_pretrained(
+                    model_id,
+                    cache_dir=kwargs.get("cache_dir", HUGGINGFACE_HUB_CACHE),
+                    token=kwargs.get("token"),
+                    revision=kwargs.get("revision"),
+                )
+                # Detect Kokoro models that lack model_type by checking for
+                # characteristic config keys (same heuristic used by CLI export).
+                if not getattr(config, "model_type", None):
+                    if hasattr(config, "istftnet") and hasattr(config, "plbert"):
+                        config.model_type = "kokoro"
+                        config.export_model_type = "kokoro"
+                if getattr(config, "model_type", None) == "kokoro":
+                    kwargs["config"] = config
+            except Exception as e:
+                logger.warning(f"Could not pre-load config for Kokoro detection: {e}")
+        return super().from_pretrained(model_id, **kwargs)
+
+    @classmethod
+    def _export(cls, model_id, config, use_cache=False, **kwargs):
+        return super()._export(model_id, config, use_cache=use_cache, **kwargs)
+
+    @classmethod
     def _from_pretrained(
         cls,
         model_id: Union[str, Path],
         config: "PretrainedConfig",
         **kwargs,
     ):
-        if "SpeechT5ForTextToSpeech" in config.architectures:
+        if getattr(config, "model_type", None) == "kokoro":
+            return _OVModelForKokoroTextToSpeech._from_pretrained(model_id, config, **kwargs)
+        elif getattr(config, "architectures", None) and "SpeechT5ForTextToSpeech" in config.architectures:
             return _OVModelForSpeechT5ForTextToSpeech._from_pretrained(model_id, config, **kwargs)
         else:
-            raise ValueError(f"{config.architectures} are not supported text-to-audio model using OpenVINO")
-
-            return super()._from_pretrained(model_id, config, **kwargs)
+            raise ValueError(f"{getattr(config, 'model_type')} are not supported text-to-audio model using OpenVINO")
 
     def reshape(self, *args, **kwargs):
         logger.warning("Static shapes are not supported for this model.")
         return self
+
+    def preprocess_input(self, text: str, **kwargs) -> dict:
+        """
+        Preprocess a text string into model inputs (input_ids and other required tensors).
+
+        Args:
+            text: The input text to synthesize.
+            **kwargs: Model-specific arguments (e.g., voice, speed, lang_code for Kokoro).
+
+        Returns:
+            Dictionary with model inputs ready for `generate()`.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement `preprocess_input`. "
+            "Use the appropriate model-specific subclass."
+        )
 
 
 class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
@@ -522,3 +566,327 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
                 )
                 outputs = (*outputs, cross_attentions)
         return outputs
+
+
+class _OVModelForKokoroTextToSpeech(OVBaseModel):
+    """
+    OpenVINO inference model for Kokoro TTS.
+
+    Kokoro is a single-model architecture with inputs (input_ids, ref_s, speed) and
+    outputs (waveform, phonemes). Voice embeddings are stored as .bin files in a voices/ subdirectory.
+    """
+
+    export_feature = "text-to-audio"
+    auto_model_class = AutoModelForTextToSpectrogram
+
+    def __init__(self, model: openvino.Model, config: PretrainedConfig = None, **kwargs):
+        # Kokoro model does not support dynamic shapes due to Squeeze op limitations,
+        # so we skip the automatic reshape to dynamic shapes.
+        kwargs.setdefault("dynamic_shapes", False)
+        super().__init__(model, config, **kwargs)
+        self._voices = {}
+        self._voices_dir = None
+
+    def _reshape(self, model, batch_size, sequence_length, height=None, width=None):
+        # Kokoro has inputs with different ranks (speed is 1D), so only reshape
+        # dimensions that exist in each input.
+        shapes = {}
+        for inp in model.inputs:
+            shape = inp.get_partial_shape()
+            if len(shape) >= 1:
+                shape[0] = batch_size
+            if len(shape) >= 2:
+                shape[1] = sequence_length
+            shapes[inp] = shape
+        model.reshape(shapes)
+        return model
+
+    @classmethod
+    def _from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        config: "PretrainedConfig",
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        local_files_only: bool = False,
+        load_in_8bit: bool = False,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        trust_remote_code: bool = False,
+        **kwargs,
+    ):
+        model = super()._from_pretrained(
+            model_id,
+            config=config,
+            token=token,
+            revision=revision,
+            force_download=force_download,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+            load_in_8bit=load_in_8bit,
+            quantization_config=quantization_config,
+            trust_remote_code=trust_remote_code,
+            **kwargs,
+        )
+        # Locate voices directory
+        if model.model_save_dir is not None:
+            voices_dir = Path(model.model_save_dir) / "voices"
+            if voices_dir.is_dir():
+                model._voices_dir = voices_dir
+        return model
+
+    def _load_voice(self, voice_name: str) -> np.ndarray:
+        """Load a voice embedding by name, caching results."""
+        if voice_name in self._voices:
+            return self._voices[voice_name]
+
+        if self._voices_dir is None:
+            raise FileNotFoundError("No voices directory found in model directory.")
+
+        voice_path = self._voices_dir / f"{voice_name}.bin"
+        if not voice_path.exists():
+            raise FileNotFoundError(
+                f"Voice '{voice_name}' not found at {voice_path}. "
+                f"Available voices: {[f.stem for f in self._voices_dir.glob('*.bin')]}"
+            )
+
+        voice_data = np.fromfile(voice_path, dtype=np.float32)
+        self._voices[voice_name] = voice_data
+        return voice_data
+
+    @property
+    def available_voices(self) -> List[str]:
+        """Returns list of available voice names."""
+        if self._voices_dir is None or not self._voices_dir.is_dir():
+            return []
+        return sorted(f.stem for f in self._voices_dir.glob("*.bin"))
+
+    def forward(
+        self,
+        input_ids: Union[torch.Tensor, np.ndarray],
+        ref_s: Union[torch.Tensor, np.ndarray],
+        speed: Union[torch.Tensor, np.ndarray, float],
+        **kwargs,
+    ) -> ModelOutput:
+        """
+        Run inference on the Kokoro model.
+
+        Args:
+            input_ids: Token IDs of shape [batch_size, sequence_length].
+            ref_s: Voice style embedding of shape [batch_size, style_dim].
+            speed: Speed factor, scalar or array.
+
+        Returns:
+            ModelOutput with `waveform` and `phonemes`.
+        """
+        self.compile()
+
+        if isinstance(input_ids, torch.Tensor):
+            input_ids = input_ids.numpy()
+        if isinstance(ref_s, torch.Tensor):
+            ref_s = ref_s.numpy()
+        if isinstance(speed, (int, float)):
+            speed = np.array([speed], dtype=np.float32)
+        elif isinstance(speed, torch.Tensor):
+            speed = speed.numpy()
+
+        inputs = {
+            "input_ids": input_ids,
+            "ref_s": ref_s,
+            "speed": speed,
+        }
+
+        outputs = self._inference(inputs)
+        waveform = torch.from_numpy(outputs[0])
+        phonemes = torch.from_numpy(outputs[1])
+        return ModelOutput(waveform=waveform, phonemes=phonemes)
+
+    def generate(
+        self,
+        input_ids: Optional[Union[torch.Tensor, np.ndarray]] = None,
+        voice: Optional[str] = None,
+        ref_s: Optional[Union[torch.Tensor, np.ndarray]] = None,
+        speed: float = 1.0,
+        segments: Optional[List[Dict[str, Any]]] = None,
+        **kwargs,
+    ) -> torch.FloatTensor:
+        """
+        Generate audio waveform from token IDs or preprocessed segments.
+
+        Args:
+            input_ids: Token IDs of shape [batch_size, sequence_length].
+            voice: Name of a voice preset (e.g., "af_heart"). Ignored if ref_s is provided.
+            ref_s: Voice style embedding. If None, loaded from voice preset.
+            speed: Speed factor (default 1.0).
+            segments: Optional list produced by ``preprocess_input`` for chunked
+                long-text/multilingual synthesis. If provided, each segment is
+                synthesized and the resulting waveforms are concatenated.
+
+        Returns:
+            Audio waveform tensor.
+        """
+        if segments is not None:
+            waveforms = []
+            for segment in segments:
+                segment_result = self.forward(
+                    input_ids=segment["input_ids"],
+                    ref_s=segment["ref_s"],
+                    speed=segment.get("speed", speed),
+                )
+                waveforms.append(segment_result.waveform)
+            if not waveforms:
+                raise ValueError("No valid segments were provided for Kokoro generation.")
+            return torch.cat(waveforms, dim=-1)
+
+        if input_ids is None:
+            raise ValueError("`input_ids` must be provided when `segments` are not supplied.")
+
+        if ref_s is None:
+            if voice is None:
+                voice = "af_heart"
+            voice_data = self._load_voice(voice)
+            ref_s = voice_data.reshape(1, -1)
+
+        if isinstance(input_ids, torch.Tensor):
+            if input_ids.dim() == 1:
+                input_ids = input_ids.unsqueeze(0)
+        elif isinstance(input_ids, np.ndarray):
+            if input_ids.ndim == 1:
+                input_ids = input_ids.reshape(1, -1)
+
+        if isinstance(ref_s, np.ndarray) and ref_s.ndim == 1:
+            ref_s = ref_s.reshape(1, -1)
+
+        result = self.forward(input_ids=input_ids, ref_s=ref_s, speed=speed)
+        return result.waveform
+
+    def reshape(self, *args, **kwargs):
+        logger.warning("Static shapes are not supported for Kokoro model.")
+        return self
+
+    def can_generate(self) -> bool:
+        return True
+
+    def preprocess_input(
+        self,
+        text: str,
+        voice: str = "af_heart",
+        speed: float = 1.0,
+        lang_code: str = "a",
+        split_pattern: Optional[str] = r"\n+",
+        speaker_embedding: Optional[Union["openvino.Tensor", torch.Tensor, np.ndarray]] = None,
+        **kwargs,
+    ) -> dict:
+        """
+        Preprocess a text string into model inputs for Kokoro TTS.
+
+        Uses the ``kokoro`` and ``misaki`` packages for grapheme-to-phoneme
+        conversion and phoneme tokenization.
+
+        Args:
+            text: The input text to synthesize.
+            voice: Name of a voice preset (e.g., ``"af_heart"``). Ignored if
+                   ``speaker_embedding`` is provided.
+            speed: Speed factor (default 1.0).
+            lang_code: Language code for G2P (default ``"a"`` for American English).
+            speaker_embedding: Pre-selected speaker/style embedding. Accepts an
+                ``openvino.Tensor``, ``torch.Tensor``, or ``numpy.ndarray`` of shape
+                ``[style_dim]`` or ``[1, style_dim]``. When provided, the ``voice``
+                argument is ignored and no voice-pack indexing is performed. This
+                mirrors the ``speaker_embedding`` argument of
+                ``openvino_genai.Text2SpeechPipeline.generate()``.
+
+        Returns:
+            Dictionary with either:
+            - ``segments`` for multi-chunk inputs, or
+            - ``input_ids``/``ref_s``/``speed`` plus ``segments`` for single-chunk inputs.
+
+        Note:
+            Chunking and language-specific G2P are delegated to ``KPipeline.__call__``
+            (quiet mode, ``model=False``), so this wrapper does not duplicate
+            Kokoro chunking/G2P internals.
+        """
+        try:
+            from kokoro import KPipeline
+        except ImportError:
+            raise ImportError(
+                "The `kokoro` and `misaki` packages are required for text preprocessing. "
+                "Install them with: pip install kokoro misaki[en]"
+            )
+
+        vocab = getattr(self.config, "vocab", None)
+        if vocab is None:
+            raise ValueError("Model config does not contain 'vocab'. Cannot tokenize phonemes.")
+
+        pipeline = KPipeline(lang_code=lang_code, model=False)
+        segments = list(pipeline(text=text, split_pattern=split_pattern))
+        if not segments:
+            raise ValueError(f"G2P produced no phoneme segments for input text: {text!r}")
+
+        if speaker_embedding is not None:
+            # Convert to numpy regardless of source type
+            if hasattr(speaker_embedding, "data"):  # openvino.Tensor
+                shape = (
+                    tuple(speaker_embedding.get_shape())
+                    if hasattr(speaker_embedding, "get_shape")
+                    else tuple(speaker_embedding.shape)
+                )
+                speaker_embedding_data = np.array(speaker_embedding.data, dtype=np.float32).reshape(shape)
+            elif isinstance(speaker_embedding, torch.Tensor):
+                speaker_embedding_data = speaker_embedding.detach().cpu().numpy()
+            else:
+                speaker_embedding_data = np.asarray(speaker_embedding, dtype=np.float32)
+        else:
+            speaker_embedding_data = None
+            voice_pack = pipeline.load_voice(voice)
+
+        preprocessed_segments = []
+        for segment in segments:
+            phonemes = segment.phonemes
+            if not phonemes:
+                continue
+
+            # Tokenize: phoneme string -> token IDs (with BOS/EOS)
+            token_ids = [vocab.get(p) for p in phonemes]
+            token_ids = [i for i in token_ids if i is not None]
+            input_ids = torch.LongTensor([[0, *token_ids, 0]])
+
+            if speaker_embedding_data is not None:
+                if speaker_embedding_data.ndim == 3:
+                    idx = min(len(phonemes) - 1, speaker_embedding_data.shape[0] - 1)
+                    ref_s = speaker_embedding_data[idx]  # -> [1, style_dim]
+                elif speaker_embedding_data.ndim == 1:
+                    ref_s = speaker_embedding_data.reshape(1, -1)
+                else:
+                    ref_s = speaker_embedding_data
+            else:
+                # Voice packs have one embedding per phoneme-sequence length.
+                ref_s = voice_pack[min(len(phonemes) - 1, voice_pack.shape[0] - 1)]
+
+            preprocessed_segments.append(
+                {
+                    "input_ids": input_ids,
+                    "ref_s": ref_s,
+                    "speed": speed,
+                    "phonemes": phonemes,
+                    "graphemes": segment.graphemes,
+                }
+            )
+
+        if not preprocessed_segments:
+            raise ValueError(f"No valid phoneme segments were produced for input text: {text!r}")
+
+        if len(preprocessed_segments) == 1:
+            single = preprocessed_segments[0]
+            return {
+                "input_ids": single["input_ids"],
+                "ref_s": single["ref_s"],
+                "speed": single["speed"],
+                "segments": preprocessed_segments,
+            }
+
+        return {
+            "segments": preprocessed_segments,
+            "speed": speed,
+        }

@@ -63,6 +63,39 @@ core = Core()
 logger = logging.getLogger(__name__)
 
 
+# Mapping of model_type -> python module name that, when imported, registers the
+# model with transformers' AutoConfig/AutoModel. This is used as a fallback for
+# custom model types whose configs do not declare an `auto_map` for trust_remote_code.
+_REMOTE_CODE_MODEL_REGISTRARS = {
+    "qwen3_asr": "qwen_asr",
+}
+
+
+def _maybe_register_remote_code_model(model_id, revision=None, token=None, cache_dir=None):
+    try:
+        config_dict, _ = PretrainedConfig.get_config_dict(
+            model_id, revision=revision, token=token, cache_dir=cache_dir
+        )
+    except Exception:
+        return
+    if "auto_map" in config_dict and "AutoConfig" in config_dict.get("auto_map", {}):
+        # The repo provides remote code itself; nothing to register.
+        return
+    model_type = config_dict.get("model_type")
+    package_name = _REMOTE_CODE_MODEL_REGISTRARS.get(model_type)
+    if package_name is None:
+        return
+    try:
+        import importlib
+
+        importlib.import_module(package_name)
+    except ImportError:
+        logger.warning(
+            f"Model type `{model_type}` requires the `{package_name}` package to be installed. "
+            f"Install it with `pip install {package_name}`."
+        )
+
+
 class OVModelHostMixin:
     """
     Mixin class for models that contain OpenVINO models as submodels.
@@ -577,6 +610,12 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             logger.info("Offline mode: forcing local_files_only=True")
             local_files_only = True
 
+        # Some custom model types are registered with transformers via a separate
+        # third-party package (e.g. `qwen_asr` for `qwen3_asr`). Try to import it
+        # lazily before AutoConfig is invoked downstream.
+        if trust_remote_code:
+            _maybe_register_remote_code_model(model_id, revision=revision, token=token, cache_dir=cache_dir)
+
         _export = export
         try:
             if local_files_only:
@@ -866,7 +905,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         cls,
         model,
         config: PretrainedConfig,
-        onnx_config: ExportConfig,
+        exporter_config: ExportConfig,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -885,11 +924,10 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             )
             compile_only = False
 
-        # Export the model to the ONNX format
+        # Export the model to the OpenVINO format
         export(
             model=model,
-            config=onnx_config,
-            opset=onnx_config.DEFAULT_ONNX_OPSET,
+            config=exporter_config,
             output=save_dir_path / cls._all_ov_model_paths["model"],
             stateful=stateful,
         )
@@ -1032,6 +1070,7 @@ class OVModelPart(OVModelHostMixin):
         self._model_name = model_name
         self.config = self.parent_model.config
         self._model_dir = Path(model_dir or parent_model.model_save_dir)
+        self._device_override: Optional[str] = None
 
     def compile(self):
         if self.parent_model._compile_only and isinstance(self.model, CompiledModel):
@@ -1052,6 +1091,11 @@ class OVModelPart(OVModelHostMixin):
 
     @property
     def _device(self) -> str:
+        # Per-part device override takes precedence over the parent model's device. This is used by
+        # multi-component architectures (e.g. Qwen3-Omni) to place audio_encoder on GPU while keeping
+        # talker on CPU, without mutating the parent model's configured device.
+        if self._device_override is not None:
+            return self._device_override
         return self.parent_model._device
 
     @property

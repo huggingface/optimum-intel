@@ -292,7 +292,14 @@ class OVCalibrationDatasetBuilder:
                 )
 
             if isinstance(self.model, OVModelForVisualCausalLM):
-                dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[config.dataset]
+                dataset_name = config.dataset
+                if dataset_name == "contextual":
+                    logger.warning(
+                        "The `contextual` calibration dataset is deprecated because its images are no longer "
+                        "reachable, and will be removed in a future release. Using `textvqa` instead."
+                    )
+                    dataset_name = "textvqa"
+                dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[dataset_name]
                 return self.build_from_dataset_name(
                     config,
                     dataset_metadata["id"],
@@ -840,8 +847,11 @@ class OVCalibrationDatasetBuilder:
                     break
 
                 instruction = item[dataset_metadata["inputs"]["instruction"]]
-                image_url = item[dataset_metadata["inputs"]["image_url"]]
-                image = Image.open(requests.get(image_url, stream=True).raw).convert("RGB")
+                if "image_url" in dataset_metadata["inputs"]:
+                    image_url = item[dataset_metadata["inputs"]["image_url"]]
+                    image = Image.open(requests.get(image_url, stream=True).raw).convert("RGB")
+                else:
+                    image = item[dataset_metadata["inputs"]["image"]].convert("RGB")
                 if max_image_size is not None:
                     # To avoid large images, resize them keeping the aspect ratio
                     scale_factor = max(image.size[0] / max_image_size, image.size[1] / max_image_size)
@@ -866,12 +876,16 @@ class OVCalibrationDatasetBuilder:
                     **inputs
                 )
 
-                language_model_inputs = self.model.language_model.prepare_inputs(
-                    input_ids=None,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    inputs_embeds=inputs_embeds,
-                )
+                prepare_inputs_kwargs = {
+                    "input_ids": None,
+                    "attention_mask": attention_mask,
+                    "position_ids": position_ids,
+                    "inputs_embeds": inputs_embeds,
+                }
+                if self.model.language_model.config.model_type == "gemma4":
+                    prepare_inputs_kwargs["per_layer_inputs"] = extra_outputs[0]
+
+                language_model_inputs = self.model.language_model.prepare_inputs(**prepare_inputs_kwargs)
 
                 collected_inputs["lm_model"].append(language_model_inputs)
 
@@ -1025,7 +1039,7 @@ class OVCalibrationDatasetBuilder:
                     if isinstance(item, dict)
                     else item
                 )
-                self.model(prompt, height=height, width=width)
+                self.model(prompt=prompt, height=height, width=width)
                 pbar.update(min(num_samples, len(calibration_data)) - pbar.n)
                 if len(calibration_data) >= num_samples:
                     calibration_data = calibration_data[:num_samples]
@@ -1199,6 +1213,8 @@ class OVCalibrationDatasetBuilder:
                     )
                     if inputs["input_ids"].shape[1] > seq_len:
                         inputs["input_ids"] = inputs["input_ids"][:, :seq_len]
+                        if "attention_mask" in inputs:
+                            inputs["attention_mask"] = inputs["attention_mask"][:, :seq_len]
 
                 self.model(**inputs)
 
@@ -1303,7 +1319,6 @@ class OVQuantizer(OptimumQuantizer):
         ] = None,
         save_directory: Optional[Union[str, Path]] = None,
         ov_config: OVConfig = None,
-        file_name: Optional[str] = None,
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = False,
@@ -1322,8 +1337,6 @@ class OVQuantizer(OptimumQuantizer):
             ov_config (`OVConfig`, *optional*):
                 The configuration containing the parameters related to quantization. If not provided, 8-bit symmetric
                 weight-only quantization will be applied.
-            file_name (`str`, *optional*):
-                The model file name to use when saving the model. Overwrites the default file name `"model.onnx"`.
             batch_size (`int`, defaults to 1):
                 The number of calibration samples to load per batch.
             data_collator (`DataCollator`, *optional*):
@@ -1472,6 +1485,13 @@ class OVQuantizer(OptimumQuantizer):
                 ov_model_name, pipeline_quantization_config.default_config
             )
             if config is None:
+                if immediate_save:
+                    # The submodels being quantized is unloaded after quantization,
+                    # so the skipped submodels should also be unloaded to avoid keeping their IR files open on Windows.
+                    # This can avoid later _merge_move failures caused by locked .bin files.
+                    ov_model = self.model.ov_models[ov_model_name]
+                    if ov_model is not None:
+                        self.model._unload_ov_model(ov_model)
                 continue
             ov_model = self.model.ov_models[ov_model_name]
             nncf_dataset = calibration_dataset.get(ov_model_name, None) if calibration_dataset else None
