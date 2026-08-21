@@ -1093,6 +1093,50 @@ class DummyMiniCPMVImageInputGenerator(DummyVisionInputGenerator):
             )
 
 
+class DummyMiniCPMV4_6VisionInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "position_ids", "window_index", "merge_index")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height)
+        vision_config = normalized_config.config.vision_config
+        self.patch_size = vision_config.patch_size
+        self.num_patches_per_side = vision_config.image_size // vision_config.patch_size
+        window_h, window_w = vision_config.window_kernel_size
+        merge_h, merge_w = normalized_config.config.merge_kernel_size
+        # Minimal dummy patch grid divisible by both the window (window merger)
+        # and the merge kernel so every spatial merge stays integral.
+        self.grid_h = window_h * merge_h
+        self.grid_w = window_w * merge_w
+        self.num_patches = self.grid_h * self.grid_w
+        # number of tokens after the intermediate window-attention merger
+        self.num_window_tokens = (self.grid_h // window_h) * (self.grid_w // window_w)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            return self.random_float_tensor(
+                shape=[1, self.num_channels, self.patch_size, self.patch_size * self.num_patches],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "position_ids":
+            return self.constant_tensor(
+                shape=[1, self.num_patches], framework=framework, value=0, dtype=DTYPE_MAPPER.pt(int_dtype)
+            )
+        if input_name == "window_index":
+            return torch.arange(self.num_patches, dtype=DTYPE_MAPPER.pt(int_dtype))
+        if input_name == "merge_index":
+            return torch.arange(self.num_window_tokens, dtype=DTYPE_MAPPER.pt(int_dtype))
+
+
 class DummyMiniCPMVResampleInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("image_feature", "pos_embed", "key_padding_mask")
 
