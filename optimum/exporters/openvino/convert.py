@@ -1338,7 +1338,12 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
 
         # Vocoder
         if hasattr(pipeline, "vocoder") and pipeline.vocoder is not None:
-            vocoder = pipeline.vocoder
+            # Deep-copied like the audio VAE above: `forward` is replaced below to name the input
+            # `hidden_states` and wrap the bare tensor in a dict, and that must not leak back into
+            # the caller's pipeline. The name is also what keeps the IR input stable across the
+            # LTX-2.0 (`LTX2Vocoder.forward(hidden_states, time_last)`) and LTX-2.3
+            # (`LTX2VocoderWithBWE.forward(mel_spec)`) signatures.
+            vocoder = copy.deepcopy(pipeline.vocoder)
             orig_vocoder_forward = vocoder.forward
 
             def vocoder_forward(hidden_states):

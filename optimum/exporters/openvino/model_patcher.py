@@ -10990,7 +10990,13 @@ class _LTX2TraceSafeAttnProcessor:
         attention_mask=None,
         query_rotary_emb=None,
         key_rotary_emb=None,
+        perturbation_mask=None,
+        all_perturbed=None,
     ):
+        # `perturbation_mask` / `all_perturbed` are passed by LTX2PerturbedAttnProcessor blocks
+        # (perturbed_attn=True, e.g. LTX-2.3). For base CFG generation (no STG) they are None, in
+        # which case the full attention path below is exactly equivalent, so we accept and ignore
+        # them. STG (non-None perturbation_mask) is not supported by this static-IR export.
         # Use trace-safe RoPE — original has in-place addcmul_ on views which can break tracing
         apply_rotary = _ltx2_apply_split_rotary_emb
 
@@ -11055,11 +11061,36 @@ class _LTX2TraceSafeAttnProcessor:
         return hidden_states
 
 
+def _ltx2_text_encoder_final_norm(model):
+    """
+    Locate the text tower's final norm (`Gemma3TextModel.norm`), whose output is the real
+    `last_hidden_state`. Returns None if the layout is unfamiliar, so the caller can fall back.
+    """
+    for path in (("model", "language_model", "norm"), ("language_model", "model", "norm"), ("model", "norm"), ("norm",)):
+        module = model
+        for attr in path:
+            module = getattr(module, attr, None)
+            if module is None:
+                break
+        if isinstance(module, torch.nn.Module):
+            return module
+    return None
+
+
 class LTX2TextEncoderPatcher(ModelPatcher):
     """
     Export patcher for the text encoder. Forces output_hidden_states, builds an explicit
     causal mask (the connectors consume every hidden-state layer), and returns a flat dict so
     each `hidden_states.{i}` becomes a named export output.
+
+    transformers collects `hidden_states` with forward hooks on the decoder layers, so the last
+    entry is the layer output *before* the text tower's final norm; the post-norm value is
+    substituted afterwards only when the returned output object exposes `last_hidden_state`.
+    `Gemma3ForConditionalGeneration` returns `Gemma3CausalLMOutputWithPast`, which does not, and
+    the exported graph ended up with the pre-norm tensor for both `last_hidden_state` and
+    `hidden_states.{num_layers}` (off by the final RMSNorm: |max| 6.6e5 instead of 1.6e2). The
+    connectors consume all layers stacked, so that one slot corrupted the text conditioning.
+    Capture the final norm's output directly instead of relying on that substitution.
     """
 
     def __init__(self, config, model, model_kwargs=None):
@@ -11067,6 +11098,7 @@ class LTX2TextEncoderPatcher(ModelPatcher):
         super().__init__(config, model, model_kwargs)
 
         orig_forward = self.orig_forward
+        final_norm = _ltx2_text_encoder_final_norm(model)
 
         def patched_forward(input_ids, attention_mask=None, **kwargs):
             if attention_mask is not None and attention_mask.dim() == 2:
@@ -11079,9 +11111,26 @@ class LTX2TextEncoderPatcher(ModelPatcher):
                 causal_mask = causal_mask * causal_positions[None, None, :, :]
                 causal_mask = (1.0 - causal_mask) * torch.finfo(torch.float32).min
                 attention_mask = {"full_attention": causal_mask, "sliding_attention": causal_mask}
-            outputs = orig_forward(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
-            result = {"last_hidden_state": outputs.hidden_states[-1]}
-            for i, hs in enumerate(outputs.hidden_states):
+
+            captured = {}
+            handle = None
+            if final_norm is not None:
+                handle = final_norm.register_forward_hook(lambda module, args, output: captured.update(out=output))
+            try:
+                outputs = orig_forward(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
+            finally:
+                if handle is not None:
+                    handle.remove()
+
+            hidden_states = list(outputs.hidden_states)
+            post_norm = captured.get("out")
+            # No-op when transformers already substituted the post-norm state. Comparing shapes here
+            # would be traced into the graph, so rely on the explicit module lookup instead.
+            if post_norm is not None:
+                hidden_states[-1] = post_norm
+
+            result = {"last_hidden_state": hidden_states[-1]}
+            for i, hs in enumerate(hidden_states):
                 result[f"hidden_states.{i}"] = hs
             return result
 
@@ -11109,6 +11158,13 @@ class LTX2TransformerPatcher(ModelPatcher):
         self._orig_model_forward = self._model.forward
 
         import functools
+        import inspect
+
+        # `sigma`/`audio_sigma` only exist on the transformer forward from the LTX-2.3 PR onwards.
+        # On older diffusers (LTX-2.0 era) they are absent, so only forward them when supported —
+        # this keeps LTX-2.0 export working across diffusers versions.
+        _fwd_params = inspect.signature(self._orig_model_forward).parameters
+        _supports_sigma = "sigma" in _fwd_params
 
         @functools.wraps(self._orig_model_forward)
         def patched_forward(
@@ -11126,8 +11182,30 @@ class LTX2TransformerPatcher(ModelPatcher):
             audio_num_frames=None,
             video_coords=None,
             audio_coords=None,
+            sigma=None,
+            audio_sigma=None,
             **kwargs,
         ):
+            # `sigma`/`audio_sigma` drive the prompt cross-attention modulation path used when the
+            # checkpoint sets cross_attn_mod=True (e.g. LTX-2.3). Both pipelines pass
+            # `sigma=t.expand(batch)` — the same scalar-per-batch tensor they pass as
+            # `audio_timestep` — so we default to that rather than adding a redundant traced input;
+            # this keeps the exported IR interface identical for LTX-2.0 (whose config ignores them).
+            # `timestep` itself cannot stand in: image-to-video makes it per-token ([B, S]) via the
+            # conditioning mask, and `prompt_adaln` would then emit one modulation vector per video
+            # token, which does not broadcast against the text sequence.
+            extra_forward_kwargs = {}
+            if _supports_sigma:
+                if sigma is None:
+                    sigma = kwargs.get("audio_timestep")
+                    if sigma is None:
+                        sigma = timestep
+                    if sigma is not None and sigma.ndim > 1:
+                        sigma = sigma[:, 0]
+                if audio_sigma is None:
+                    audio_sigma = sigma
+                extra_forward_kwargs["sigma"] = sigma
+                extra_forward_kwargs["audio_sigma"] = audio_sigma
             result = self._orig_model_forward(
                 hidden_states=hidden_states,
                 audio_hidden_states=audio_hidden_states,
@@ -11144,6 +11222,7 @@ class LTX2TransformerPatcher(ModelPatcher):
                 video_coords=video_coords,
                 audio_coords=audio_coords,
                 return_dict=False,
+                **extra_forward_kwargs,
                 **kwargs,
             )
             if isinstance(result, tuple):

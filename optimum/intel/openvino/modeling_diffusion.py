@@ -1448,6 +1448,8 @@ class OVModelTransformerLTX2(OVPipelinePart):
         audio_encoder_hidden_states: torch.FloatTensor = None,
         timestep: torch.LongTensor = None,
         audio_timestep: torch.LongTensor = None,
+        sigma: Optional[torch.Tensor] = None,
+        audio_sigma: Optional[torch.Tensor] = None,
         encoder_attention_mask: torch.LongTensor = None,
         audio_encoder_attention_mask: torch.LongTensor = None,
         num_frames: Optional[int] = None,
@@ -1466,6 +1468,18 @@ class OVModelTransformerLTX2(OVPipelinePart):
         # T2V leaves audio_timestep None; mirror the diffusers fallback before `timestep` is broadcast.
         if audio_timestep is None:
             audio_timestep = timestep if timestep is None or timestep.ndim == 1 else timestep[:, 0]
+
+        # LTX-2.3 feeds the transformer a `sigma` alongside `timestep` to modulate the prompt
+        # embeddings. The exported graph has no `sigma` input: the export patcher ties it to
+        # `audio_timestep`, the scalar-per-batch noise level that both pipelines pass as `sigma`.
+        # Anything else cannot be honoured by this IR, so say so instead of quietly ignoring it.
+        for name, value in (("sigma", sigma), ("audio_sigma", audio_sigma)):
+            if value is not None and not torch.equal(torch.as_tensor(value), torch.as_tensor(audio_timestep)):
+                raise ValueError(
+                    f"`{name}` differs from the scalar timestep, which the exported LTX-2 transformer "
+                    "cannot represent (the graph was traced with them tied together). This happens "
+                    "with `use_cross_timestep=True`, which the OpenVINO export does not support."
+                )
 
         # T2V passes a scalar timestep [B]; the IR expects [B, S]. Broadcast to match.
         if timestep is not None and timestep.ndim == 1 and self._timestep_rank == 2:
@@ -2190,6 +2204,13 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         self.vae = OVModelVae(decoder=self.vae_decoder, encoder=self.vae_encoder)
         self.scheduler = scheduler
         self.tokenizer = tokenizer
+        # LTX-2 has a single tokenizer and no feature extractor, but this `__init__` replaces
+        # `OVDiffusionPipeline.__init__` (which sets them to None), and `_save_pretrained` reads
+        # all four unconditionally. Without these, `save_pretrained` fails with an
+        # `AttributeError` from diffusers' `ConfigMixin.__getattr__`.
+        self.tokenizer_2 = None
+        self.tokenizer_3 = None
+        self.feature_extractor = None
 
         # Get latents_mean/std from vae_decoder config or audio_vae_decoder config
         vae_cfg = self.vae_decoder.config
@@ -2314,11 +2335,18 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         # Reshape text_encoder with batch_size only (tokenizer_max_length stays dynamic for Gemma)
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(self.text_encoder.model, batch_size, -1)
-        # Reshape connectors, audio_vae, vocoder with the full batch (accounts for guidance scale)
-        effective_batch = (
-            batch_size * num_images_per_prompt * 2 if batch_size > 0 and num_images_per_prompt > 0 else -1
-        )
-        for ov_model_attr in [self.connectors, self.audio_vae, self.vocoder]:
+        known_batch = batch_size > 0 and num_images_per_prompt > 0
+        # The connectors run on the concatenated negative+positive prompts, so they see twice the
+        # batch under classifier-free guidance. The audio VAE and the vocoder run after the
+        # denoising loop, where the guidance halves have already been merged back, so they see the
+        # plain batch.
+        guided_batch = batch_size * num_images_per_prompt * 2 if known_batch else -1
+        plain_batch = batch_size * num_images_per_prompt if known_batch else -1
+        for ov_model_attr, effective_batch in [
+            (self.connectors, guided_batch),
+            (self.audio_vae, plain_batch),
+            (self.vocoder, plain_batch),
+        ]:
             if ov_model_attr is not None:
                 shapes = {}
                 for inputs in ov_model_attr.model.inputs:

@@ -2522,7 +2522,12 @@ class UNetOpenVINOConfig(VisionOpenVINOConfig):
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         dummy_inputs = super().generate_dummy_inputs(framework=framework, **kwargs)
-        dummy_inputs["encoder_hidden_states"] = dummy_inputs["encoder_hidden_states"][0]
+        # The seq2seq generators hand back a `(tensor, None, None)` tuple, so only the first element
+        # is the encoder hidden states. Generators that already return a plain
+        # `[batch, sequence, embed_dim]` tensor must be left alone -- indexing one would silently
+        # strip the batch axis and export a rank-2 input.
+        if isinstance(dummy_inputs["encoder_hidden_states"], (tuple, list)):
+            dummy_inputs["encoder_hidden_states"] = dummy_inputs["encoder_hidden_states"][0]
 
         if getattr(self._normalized_config, "addition_embed_type", None) == "text_time":
             dummy_inputs["added_cond_kwargs"] = {
@@ -3043,9 +3048,12 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
         vocab_size="attention_head_dim",
         allow_new=True,
     )
+    # `generate_dummy_inputs` keeps the FIRST generator that claims a given input name, so
+    # LTX2TransformerDummyInputGenerator must stay ahead of the generic ones: it is the only one
+    # that knows the per-modality text embedding widths (LTX-2.3) vs the shared
+    # `caption_channels` width (LTX-2.0). It covers every input except `timestep`.
     DUMMY_INPUT_GENERATOR_CLASSES = (
         LTX2TransformerDummyInputGenerator,
-        DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator,
         DummySanaTimestepInputGenerator,
     )
 
