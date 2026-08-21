@@ -97,6 +97,15 @@ class InputMode(enum.Enum):
     VISION_SPEECH = 3
 
 
+def _normalize_audio_input(audio):
+    if isinstance(audio, (list, tuple)) and len(audio) == 1:
+        audio = audio[0]
+    sampling_rate = None
+    if isinstance(audio, tuple) and len(audio) == 2:
+        audio, sampling_rate = audio
+    return audio, sampling_rate
+
+
 class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
     def __init__(
         self,
@@ -393,9 +402,19 @@ class OVMultiModalProjector(OVVisionProjection):
 class OVAudioEmbeddings(OVModelPart):
     _model_name = "audio_embeddings"
 
-    def forward(self, audio_signal):
+    def forward(self, *args, **kwargs):
         self.compile()
-        return self.request(audio_signal)[0]
+        if len(args) == 1 and not kwargs:
+            inputs = args[0]
+        elif args:
+            input_names = list(self.input_names.keys())
+            inputs = {input_names[index]: value for index, value in enumerate(args)}
+        else:
+            inputs = {name: value for name, value in kwargs.items() if name in self.input_names}
+        result = self.request(inputs)
+        if len(result) > 1:
+            return result[0], result[1]
+        return result[0]
 
 
 class OVAudioEncoder(OVModelPart):
@@ -4437,11 +4456,7 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
             raise ValueError("Processor is required.")
         if video is not None:
             raise ValueError("Video input is not supported")
-        if isinstance(audio, (list, tuple)) and len(audio) == 1:
-            audio = audio[0]
-        sampling_rate = None
-        if isinstance(audio, tuple) and len(audio) == 2:
-            audio, sampling_rate = audio
+        audio, sampling_rate = _normalize_audio_input(audio)
 
         conversation = [{"role": "user", "content": [{"type": "text", "text": text}]}]
         if image is not None:
@@ -5410,7 +5425,7 @@ class _OVGemma3ForCausalLM(OVModelForVisualCausalLM):
 
 
 class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
-    additional_parts = ["text_embeddings_per_layer"]
+    additional_parts = ["text_embeddings_per_layer", "audio_embeddings"]
 
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
@@ -5418,7 +5433,14 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
         return self.vision_embeddings(pixel_values, **kwargs).last_hidden_state
 
     def get_multimodal_embeddings(
-        self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, **kwargs
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        input_audio_embeds=None,
+        audio_attention_mask=None,
+        **kwargs,
     ):
         embeds_from_args = kwargs.pop("inputs_embeds", None)
         inputs_embeds = (
@@ -5437,6 +5459,25 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
                     position_ids=position_ids,
                     **kwargs,
                 )
+        if input_audio_embeds is not None:
+            if self.audio_embeddings is None:
+                raise ValueError("Audio inputs were provided, but the audio embeddings model is not available.")
+            if audio_attention_mask is None:
+                raise ValueError("`input_features_mask` is required when audio inputs are provided.")
+
+            inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+            audio_features, audio_output_mask = self.audio_embeddings(input_audio_embeds, audio_attention_mask)
+            audio_features = (
+                torch.from_numpy(audio_features) if isinstance(audio_features, np.ndarray) else audio_features
+            )
+            audio_output_mask = (
+                torch.from_numpy(audio_output_mask) if isinstance(audio_output_mask, np.ndarray) else audio_output_mask
+            )
+            audio_features = audio_features[audio_output_mask.to(dtype=torch.bool)]
+
+            special_audio_mask = (input_ids == self.config.audio_token_id).unsqueeze(-1)
+            special_audio_mask = special_audio_mask.expand_as(inputs_embeds)
+            inputs_embeds = inputs_embeds.masked_scatter(special_audio_mask, audio_features.to(inputs_embeds.dtype))
         return inputs_embeds, attention_mask, position_ids, per_layer_inputs
 
     def merge_vision_text_embeddings(
@@ -5467,6 +5508,8 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
         attention_mask=None,
         mm_token_type_ids=None,
         image_position_ids=None,
+        input_features=None,
+        input_features_mask=None,
         **kwargs,
     ):
         model_inputs = super().prepare_inputs_for_generation(
@@ -5481,18 +5524,71 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
         # Map mm_token_type_ids to token_type_ids for the OV language model input
         model_inputs["token_type_ids"] = mm_token_type_ids
         model_inputs["image_position_ids"] = image_position_ids
+        model_inputs["input_features"] = input_features if past_key_values is None else None
+        model_inputs["input_features_mask"] = input_features_mask if past_key_values is None else None
         return model_inputs
 
-    def forward(self, input_ids, pixel_values=None, token_type_ids=None, **kwargs):
+    def forward(
+        self,
+        input_ids,
+        pixel_values=None,
+        input_features=None,
+        input_features_mask=None,
+        token_type_ids=None,
+        **kwargs,
+    ):
         # Map mm_token_type_ids (from Gemma4 processor) to token_type_ids (OV language model input)
         mm_token_type_ids = kwargs.pop("mm_token_type_ids", None)
+        input_audio_embeds = kwargs.pop("input_audio_embeds", None)
+        audio_attention_mask = kwargs.pop("audio_attention_mask", None)
+        if input_features is None:
+            input_features = input_audio_embeds
+        if input_features_mask is None:
+            input_features_mask = audio_attention_mask
         if token_type_ids is None and mm_token_type_ids is not None:
             token_type_ids = mm_token_type_ids
         return super().forward(
             input_ids=input_ids,
             pixel_values=pixel_values,
+            input_audio_embeds=input_features,
+            audio_attention_mask=input_features_mask,
             token_type_ids=token_type_ids,
             **kwargs,
+        )
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if audio is None:
+            return _OVGemma3ForCausalLM.preprocess_inputs(
+                text, image=image, processor=processor, tokenizer=tokenizer, config=config, video=video
+            )
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        audio, sampling_rate = _normalize_audio_input(audio)
+
+        conversation = [{"role": "user", "content": [{"type": "text", "text": text}]}]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image", "image": image})
+        audio_inputs = audio if isinstance(audio, list) else [audio]
+        conversation[0]["content"].extend({"type": "audio", "audio": item} for item in audio_inputs)
+        processor_kwargs = {"audio_kwargs": {"sampling_rate": sampling_rate}} if sampling_rate is not None else None
+        return processor.apply_chat_template(
+            conversation,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+            processor_kwargs=processor_kwargs,
         )
 
     def _update_model_kwargs_for_generation(
@@ -5514,6 +5610,8 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
 
 
 class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
+    additional_parts = ["audio_embeddings"]
+
     # gemma4_unified (e.g. google/gemma-4-12B) has an encoder-free vision embedder and no
     # per-layer text embeddings. The vision embedder consumes pre-merged pixel patches plus
     # 2D patch position ids and returns one soft token per (pooled) patch.
@@ -5545,6 +5643,47 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
         return inputs_embeds, attention_mask, position_ids
 
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        input_audio_embeds=None,
+        audio_attention_mask=None,
+        **kwargs,
+    ):
+        inputs_embeds, attention_mask, position_ids = super().get_multimodal_embeddings(
+            input_ids,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            **kwargs,
+        )
+        if input_audio_embeds is not None:
+            if self.audio_embeddings is None:
+                raise ValueError("Audio inputs were provided, but the audio embeddings model is not available.")
+            if audio_attention_mask is None:
+                raise ValueError("`input_features_mask` is required when audio inputs are provided.")
+
+            inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+            audio_features = self.audio_embeddings(input_audio_embeds)
+            audio_features = (
+                torch.from_numpy(audio_features) if isinstance(audio_features, np.ndarray) else audio_features
+            )
+            audio_attention_mask = (
+                torch.from_numpy(audio_attention_mask)
+                if isinstance(audio_attention_mask, np.ndarray)
+                else audio_attention_mask
+            )
+            audio_features = audio_features[audio_attention_mask.to(dtype=torch.bool)]
+
+            special_audio_mask = (input_ids == self.config.audio_token_id).unsqueeze(-1)
+            special_audio_mask = special_audio_mask.expand_as(inputs_embeds)
+            inputs_embeds = inputs_embeds.masked_scatter(special_audio_mask, audio_features.to(inputs_embeds.dtype))
+
+        return inputs_embeds, attention_mask, position_ids
+
     def prepare_inputs_for_generation(
         self,
         input_ids,
@@ -5555,6 +5694,8 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         attention_mask=None,
         mm_token_type_ids=None,
         image_position_ids=None,
+        input_features=None,
+        input_features_mask=None,
         **kwargs,
     ):
         model_inputs = super().prepare_inputs_for_generation(
@@ -5570,15 +5711,33 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         # propagate the patch positions needed by the vision embedder.
         model_inputs["token_type_ids"] = mm_token_type_ids
         model_inputs["image_position_ids"] = image_position_ids
+        model_inputs["input_features"] = input_features if past_key_values is None else None
+        model_inputs["input_features_mask"] = input_features_mask if past_key_values is None else None
         return model_inputs
 
-    def forward(self, input_ids, pixel_values=None, token_type_ids=None, **kwargs):
+    def forward(
+        self,
+        input_ids,
+        pixel_values=None,
+        input_features=None,
+        input_features_mask=None,
+        token_type_ids=None,
+        **kwargs,
+    ):
         mm_token_type_ids = kwargs.pop("mm_token_type_ids", None)
+        input_audio_embeds = kwargs.pop("input_audio_embeds", None)
+        audio_attention_mask = kwargs.pop("audio_attention_mask", None)
+        if input_features is None:
+            input_features = input_audio_embeds
+        if input_features_mask is None:
+            input_features_mask = audio_attention_mask
         if token_type_ids is None and mm_token_type_ids is not None:
             token_type_ids = mm_token_type_ids
         return super().forward(
             input_ids=input_ids,
             pixel_values=pixel_values,
+            input_audio_embeds=input_features,
+            audio_attention_mask=input_features_mask,
             token_type_ids=token_type_ids,
             **kwargs,
         )
@@ -5597,8 +5756,8 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
             raise ValueError("Processor is required.")
         if video is not None:
             raise ValueError("Video input is not supported")
-        if audio is not None:
-            raise ValueError("Audio input is not supported")
+        audio, sampling_rate = _normalize_audio_input(audio)
+        processor_kwargs = {"sampling_rate": sampling_rate} if sampling_rate is not None else {}
         if getattr(tokenizer, "chat_template", None) is None:
             if image is not None:
                 # If chat template is not available we need to add image token manually, as there's a requirement
@@ -5607,7 +5766,11 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
                 image_token = getattr(processor, "image_token", "<|image|>")
                 if image_token not in text:
                     text = f"{image_token}{text}"
-            return processor(images=image, text=text, return_tensors="pt")
+            if audio is not None:
+                audio_token = getattr(processor, "audio_token", "<|audio|>")
+                if audio_token not in text:
+                    text = f"{text}{audio_token}"
+            return processor(images=image, audio=audio, text=text, return_tensors="pt", **processor_kwargs)
 
         conversation = [
             {
@@ -5619,9 +5782,13 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         ]
         if image is not None:
             conversation[0]["content"].insert(0, {"type": "image"})
+        if audio is not None:
+            conversation[0]["content"].append({"type": "audio"})
 
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
-        return processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
+        return processor(
+            images=image, text=text_prompt, videos=video, audio=audio, return_tensors="pt", **processor_kwargs
+        )
 
     def _update_model_kwargs_for_generation(
         self,

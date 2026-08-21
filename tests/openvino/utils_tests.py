@@ -211,7 +211,7 @@ HUB_MODEL_NAMES = {
     "gemma3n_text": "optimum-intel-internal-testing/tiny-random-gemma3n-text",
     "gemma4": "optimum-intel-internal-testing/tiny-random-gemma4",
     "gemma4_moe": "optimum-intel-internal-testing/tiny-random-gemma4-moe",
-    "gemma4_unified": "optimum-intel-internal-testing/tiny-random-gemma4-unified",
+    "gemma4_unified": "optimum-intel-internal-testing/tiny-random-gemma4-unified-it",
     "falcon": "optimum-intel-internal-testing/really-tiny-falcon-testing",
     "falcon-40b": "optimum-intel-internal-testing/tiny-random-falcon-40b",
     "falcon_mamba": "optimum-intel-internal-testing/tiny-falcon-mamba",
@@ -626,8 +626,9 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "gemma4": {
         "lm_model": 54,
         "text_embeddings_model": 1,
-        "vision_embeddings_model": 10,
+        "vision_embeddings_model": 11 if is_transformers_version(">=", "5.10") else 10,
         "text_embeddings_per_layer_model": 1,
+        "audio_embeddings_model": 16,
     },
     "gemma4_moe": {
         "lm_model": 48,
