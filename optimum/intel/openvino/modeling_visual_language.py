@@ -5435,21 +5435,50 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     position_ids=position_ids,
+                    vision_token_id=self.config.image_token_id,
                     **kwargs,
                 )
+
+        pixel_values_videos = kwargs.get("pixel_values_videos")
+        video_position_ids = kwargs.get("video_position_ids")
+        if pixel_values_videos is not None and video_position_ids is not None:
+            flatten_pixel_values_videos = pixel_values_videos.flatten(0, 1)
+            flatten_video_position_ids = video_position_ids.flatten(0, 1)
+            video_embeds = self.get_vision_embeddings(flatten_pixel_values_videos, input_ids=input_ids, image_position_ids=flatten_video_position_ids)
+            if video_embeds is not None:
+                inputs_embeds, attention_mask, position_ids = self.merge_vision_text_embeddings(
+                    video_embeds,
+                    inputs_embeds,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    vision_token_id=self.config.video_token_id,
+                    **kwargs,
+                )
+
         return inputs_embeds, attention_mask, position_ids, per_layer_inputs
 
     def merge_vision_text_embeddings(
-        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+        self,
+        vision_embeds,
+        inputs_embeds,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        vision_token_id=None,
+        **kwargs
     ):
+        if vision_token_id is None:
+            raise ValueError("vision_token_id must be provided for merging vision and text embeddings")
+        
         image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
         if input_ids is None:
             special_image_mask = inputs_embeds == torch.from_numpy(
-                self.get_text_embeddings(torch.tensor([[self.config.image_token_id]], dtype=torch.long))[0]
+                self.get_text_embeddings(torch.tensor([[vision_token_id]], dtype=torch.long))[0]
             )
         else:
-            special_image_mask = (input_ids == self.config.image_token_id).unsqueeze(-1)
+            special_image_mask = (input_ids == vision_token_id).unsqueeze(-1)
             special_image_mask = special_image_mask.expand_as(inputs_embeds)
 
             image_features = image_features.to(inputs_embeds.dtype)
@@ -5463,10 +5492,12 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
         past_key_values=None,
         inputs_embeds=None,
         pixel_values=None,
+        pixel_values_videos=None,
         image_sizes=None,
         attention_mask=None,
         mm_token_type_ids=None,
         image_position_ids=None,
+        video_position_ids=None,
         **kwargs,
     ):
         model_inputs = super().prepare_inputs_for_generation(
@@ -5480,7 +5511,9 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
         )
         # Map mm_token_type_ids to token_type_ids for the OV language model input
         model_inputs["token_type_ids"] = mm_token_type_ids
-        model_inputs["image_position_ids"] = image_position_ids
+        model_inputs["image_position_ids"] = image_position_ids if past_key_values is None else None
+        model_inputs["pixel_values_videos"] = pixel_values_videos if past_key_values is None else None
+        model_inputs["video_position_ids"] = video_position_ids if past_key_values is None else None
         return model_inputs
 
     def forward(self, input_ids, pixel_values=None, token_type_ids=None, **kwargs):
@@ -5494,6 +5527,47 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
             token_type_ids=token_type_ids,
             **kwargs,
         )
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+        if video is not None:
+            conversation[0]["content"].insert(0, {"type": "video"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+
+        # switch off add_bos_token if chat template already includes it
+        orig_add_bos_token = processor.tokenizer.add_bos_token
+        if "bos_token" in processor.tokenizer.chat_template:
+            processor.tokenizer.add_bos_token = False
+
+        inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
+
+        # recover add_bos_token flag in tokenizer
+        processor.tokenizer.add_bos_token = orig_add_bos_token
+
+        return inputs
 
     def _update_model_kwargs_for_generation(
         self,
@@ -5510,6 +5584,8 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
         )
         model_kwargs.pop("mm_token_type_ids", None)
         model_kwargs.pop("image_position_ids", None)
+        model_kwargs.pop("pixel_values_videos", None)
+        model_kwargs.pop("video_position_ids", None)
         return model_kwargs
 
 
