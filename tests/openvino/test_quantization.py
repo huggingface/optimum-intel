@@ -1171,6 +1171,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForFeatureExtraction, "qwen3_vl_embedding", False),
         (OVModelForVisualCausalLM, "qwen3_omni_moe", False),
         (OVModelForCausalLM, "exaone4", True),
+        (OVModelForCausalLM, "ouro", True),
         (OVModelForVisualCausalLM, "llava_next_video", False),
         (OVModelForVisualCausalLM, "minicpmv", True),
         (OVModelForSpeechSeq2Seq, "qwen3_asr", True),
@@ -1180,6 +1181,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "qwen3_5_moe", False),
         (OVModelForVisualCausalLM, "gemma4", False),
         (OVModelForVisualCausalLM, "gemma4_moe", False),
+        (OVModelForVisualCausalLM, "deepseek_ocr2", False),
     ]
 
     # gemma3n openvino>=2026.2.0 because it needs erfinv operation,

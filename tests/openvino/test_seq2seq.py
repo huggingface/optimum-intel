@@ -600,8 +600,17 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5",
         "qwen3_5_moe",
         "qwen3_omni_moe",
+        "muse_glimmer",
+        "deepseek_ocr2",
     ]
-    SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl", "qwen2_5_vl", "qwen3_vl", "videochat_flash_qwen"]
+    SUPPORT_VIDEO = [
+        "llava_next_video",
+        "qwen2_vl",
+        "qwen2_5_vl",
+        "qwen3_vl",
+        "videochat_flash_qwen",
+        "muse_glimmer",
+    ]
     SUPPORT_AUDIO = ["qwen3_omni_moe"]
     # "llama" is registered for image-text-to-text
     # to support VLM Eagle3 draft models (tested separately in test_genai.py).
@@ -609,6 +618,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORT_AUDIO_OUTPUT = ["qwen3_omni_moe"]
     OVMODEL_CLASS = OVModelForVisualCausalLM
     TASK = "image-text-to-text"
+
+    # Architectures that segfault inside the OpenVINO CPU plugin's AVX2 JIT kernels. They only crash on
+    # hosts without AVX-512 (the CI runners); reproducible anywhere with ONEDNN_MAX_CPU_ISA=AVX2.
+    SEGFAULTING_ARCHITECTURES = {"gemma4"}
 
     # filter architectures depending on min/max transformers supported versions declared on their
     # OpenVINO export config
@@ -661,6 +674,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "qwen3_5",
             "qwen3_5_moe",
             "gemma4_unified",
+            "muse_glimmer",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -685,6 +699,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             from transformers import AutoModel
 
             return AutoModel
+        if model_arch == "deepseek_ocr2":
+            from transformers import AutoModelForImageTextToText
+
+            return AutoModelForImageTextToText
         return AutoModelForCausalLM
 
     def _check_device_and_request(self, ov_model, expected_device, has_request):
@@ -729,6 +747,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             # Qwen3OmniMoeForConditionalGeneration has a custom generate() interface incompatible with this flow
             self.skipTest("qwen3_omni_moe comparison tested via dedicated test methods")
 
+        if model_arch in self.SEGFAULTING_ARCHITECTURES:
+            self.skipTest(f"{model_arch}: OpenVINO CPU plugin crashes on the AVX2 inference path")
+
         def compare_outputs(inputs, ov_model, transformers_model, generation_config):
             transformers_inputs = copy.deepcopy(inputs)
             if model_arch == "videochat_flash_qwen":
@@ -754,6 +775,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
         if "llama4" in model_arch:
             loading_kwargs = {"_attn_implementation": "sdpa"}
+        if model_arch == "muse_glimmer":
+            # the tiny reference checkpoint is stored in bfloat16, force fp32 to match the OpenVINO model
+            loading_kwargs = {"dtype": torch.float32}
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(
             model_id, trust_remote_code=trust_remote_code, **loading_kwargs
         )
@@ -964,6 +988,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_generate_utils(self, model_arch):
+        if model_arch in self.SEGFAULTING_ARCHITECTURES:
+            self.skipTest(f"{model_arch}: OpenVINO CPU plugin crashes on the AVX2 inference path")
+
         model_id = MODEL_NAMES[model_arch]
         trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
         model = self.OVMODEL_CLASS.from_pretrained(
@@ -978,8 +1005,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         outputs = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
         self.assertIsInstance(outputs[0], str)
 
-        # GOT-OCR2 does not support text-only input
-        if model_arch != "got_ocr2":
+        # GOT-OCR2 and DeepSeek-OCR-2 are OCR models that do not support text-only input
+        if model_arch not in ("got_ocr2", "deepseek_ocr2"):
             # No input image case
             question = "Hi, how are you?"
             inputs = model.preprocess_inputs(**preprocessors, text=question, image=None)
