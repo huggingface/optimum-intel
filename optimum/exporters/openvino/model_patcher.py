@@ -11061,11 +11061,36 @@ class _LTX2TraceSafeAttnProcessor:
         return hidden_states
 
 
+def _ltx2_text_encoder_final_norm(model):
+    """
+    Locate the text tower's final norm (`Gemma3TextModel.norm`), whose output is the real
+    `last_hidden_state`. Returns None if the layout is unfamiliar, so the caller can fall back.
+    """
+    for path in (("model", "language_model", "norm"), ("language_model", "model", "norm"), ("model", "norm"), ("norm",)):
+        module = model
+        for attr in path:
+            module = getattr(module, attr, None)
+            if module is None:
+                break
+        if isinstance(module, torch.nn.Module):
+            return module
+    return None
+
+
 class LTX2TextEncoderPatcher(ModelPatcher):
     """
     Export patcher for the text encoder. Forces output_hidden_states, builds an explicit
     causal mask (the connectors consume every hidden-state layer), and returns a flat dict so
     each `hidden_states.{i}` becomes a named export output.
+
+    transformers collects `hidden_states` with forward hooks on the decoder layers, so the last
+    entry is the layer output *before* the text tower's final norm; the post-norm value is
+    substituted afterwards only when the returned output object exposes `last_hidden_state`.
+    `Gemma3ForConditionalGeneration` returns `Gemma3CausalLMOutputWithPast`, which does not, and
+    the exported graph ended up with the pre-norm tensor for both `last_hidden_state` and
+    `hidden_states.{num_layers}` (off by the final RMSNorm: |max| 6.6e5 instead of 1.6e2). The
+    connectors consume all layers stacked, so that one slot corrupted the text conditioning.
+    Capture the final norm's output directly instead of relying on that substitution.
     """
 
     def __init__(self, config, model, model_kwargs=None):
@@ -11073,6 +11098,7 @@ class LTX2TextEncoderPatcher(ModelPatcher):
         super().__init__(config, model, model_kwargs)
 
         orig_forward = self.orig_forward
+        final_norm = _ltx2_text_encoder_final_norm(model)
 
         def patched_forward(input_ids, attention_mask=None, **kwargs):
             if attention_mask is not None and attention_mask.dim() == 2:
@@ -11085,9 +11111,26 @@ class LTX2TextEncoderPatcher(ModelPatcher):
                 causal_mask = causal_mask * causal_positions[None, None, :, :]
                 causal_mask = (1.0 - causal_mask) * torch.finfo(torch.float32).min
                 attention_mask = {"full_attention": causal_mask, "sliding_attention": causal_mask}
-            outputs = orig_forward(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
-            result = {"last_hidden_state": outputs.hidden_states[-1]}
-            for i, hs in enumerate(outputs.hidden_states):
+
+            captured = {}
+            handle = None
+            if final_norm is not None:
+                handle = final_norm.register_forward_hook(lambda module, args, output: captured.update(out=output))
+            try:
+                outputs = orig_forward(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
+            finally:
+                if handle is not None:
+                    handle.remove()
+
+            hidden_states = list(outputs.hidden_states)
+            post_norm = captured.get("out")
+            # No-op when transformers already substituted the post-norm state. Comparing shapes here
+            # would be traced into the graph, so rely on the explicit module lookup instead.
+            if post_norm is not None:
+                hidden_states[-1] = post_norm
+
+            result = {"last_hidden_state": hidden_states[-1]}
+            for i, hs in enumerate(hidden_states):
                 result[f"hidden_states.{i}"] = hs
             return result
 
