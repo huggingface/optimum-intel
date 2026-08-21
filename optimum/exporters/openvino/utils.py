@@ -342,7 +342,6 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "muse_glimmer",
 ]
 
-
 SSM_MODELS = [
     "mamba",
     "falcon_mamba",
