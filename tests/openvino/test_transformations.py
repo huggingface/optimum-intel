@@ -239,6 +239,32 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToPowerStatic",
         ],
     },
+    "muse_glimmer": {
+        "convert": [
+            "SDPAFusion",
+            "SDPAFusionMatcher",
+            "MakeStateful",
+            "TransposeConvert",
+            "CommonFusions",
+            "LinOpSequenceFusion",
+            "ReshapeAMatMul",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "MultiplyFusions",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertBroadcast3",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "RMSFusion",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    },
 }
 
 if is_transformers_version(">=", "5.0.0"):
