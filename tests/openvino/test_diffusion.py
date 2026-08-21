@@ -1064,8 +1064,6 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(["ltx-video"])
     if is_diffusers_version(">=", "0.38.0"):
         SUPPORTED_ARCHITECTURES.extend(["ltx2"])
-    # LTX-2.3 needs the transformer flags (cross_attn_mod, gated_attn, perturbed_attn) added in
-    # diffusers 0.40.0; written as ">" so the 0.40.0.dev0 prereleases that carry them qualify.
     if is_diffusers_version(">", "0.39.0"):
         SUPPORTED_ARCHITECTURES.extend(["ltx2.3"])
 

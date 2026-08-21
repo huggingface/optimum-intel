@@ -589,10 +589,6 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder": 64,
         "connectors": 10,
     },
-    # Measured on optimum-intel-internal-testing/tiny-random-ltx2.3 with
-    # `optimum-cli export openvino --task image-to-video --weight-format int8`. `vae_encoder` is
-    # only exported for image-to-video (so text-to-video has one component less), and its weights
-    # are all convolutions, none of which get compressed.
     "ltx2.3": {
         "transformer": 124,
         "vae_decoder": 32,
