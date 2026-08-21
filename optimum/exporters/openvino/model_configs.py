@@ -7329,19 +7329,10 @@ class DummyZImageTransformerVisionInputGenerator(DummyUnetVisionInputGenerator):
         "hidden_states",
     )
 
-    def __init__(
-        self,
-        task: str,
-        normalized_config: NormalizedVisionConfig,
-        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
-        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
-        # 64x64 latent = 512x512 image / 8 (VAE spatial factor)
-        # This must match the resolution used at inference time.
-        width: int = 64,
-        height: int = 64,
-        **kwargs,
-    ):
-        super().__init__(task, normalized_config, batch_size, num_channels, width=width, height=height, **kwargs)
+    # No __init__ override: DummyVisionInputGenerator already defaults to
+    # batch_size=2, num_channels=3, width=64, height=64 (= a 64x64 latent, i.e. a
+    # 512x512 image at the VAE's spatial factor of 8), and takes num_channels from
+    # the normalized config.
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "hidden_states":
