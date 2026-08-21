@@ -5570,9 +5570,9 @@ class LFM2MoeOpenVINOConfig(LFM2OpenVINOConfig):
 class DummyZImageTransformerVisionInputGenerator(DummyUnetVisionInputGenerator):
     """Generates dummy latent inputs for ZImageTransformer2DModel export.
 
-    Uses 64x64 latent (= 512x512 / 8) as the default trace resolution.
-    This matches typical Z-Image inference (512x512 output images).
-    The exported model is resolution-specific; re-export for other resolutions.
+    Uses 64x64 latent (= 512x512 / 8) as the trace resolution.  The traced graph is
+    resolution agnostic (see ZImageTransformerModelPatcher), so this only determines
+    the shape of the example input, not the resolutions the exported model supports.
     """
 
     SUPPORTED_INPUT_NAMES = (

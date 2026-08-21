@@ -8706,6 +8706,114 @@ def _z_image_attn_proc_call(
     return output
 
 
+def _patched_z_image_pad_with_ids(
+    self,
+    feat: "torch.Tensor",
+    pos_grid_size,
+    pos_start,
+    device=None,
+    noise_mask_val=None,
+):
+    """
+    Patched _pad_with_ids for OV export — resolution agnostic.
+
+    The original implementation derives the padded length from ``len(feat)``, a
+    Python ``int`` that the tracer burns into the IR as a constant, and branches on
+    ``if pad_len > 0``.  Both make the exported graph valid only for the resolution
+    used at export time.
+
+    Here every length comes from ``feat.shape[0]``, which the tracer keeps symbolic,
+    and the pad branch is replaced by a branchless gather:
+
+      - ``padded_feat`` repeats the last row via ``index_select`` with clamped indices
+        (identical to ``feat[-1:].repeat(pad_len, 1)``)
+      - ``pos_ids`` gathers the coordinate grid and zeroes the rows past the grid
+        (identical to appending ``create_coordinate_grid((1, 1, 1), (0, 0, 0))``)
+    """
+    import torch
+    from diffusers.models.transformers.transformer_z_image import SEQ_MULTI_OF
+
+    ori_len = feat.shape[0]  # traced symbolically — stays dynamic in the IR
+    total_len = ori_len + (-ori_len) % SEQ_MULTI_OF
+
+    ori_pos_ids = self.create_coordinate_grid(size=pos_grid_size, start=pos_start, device=device).flatten(0, 2)
+
+    idx = torch.arange(total_len, device=feat.device)
+    pad_mask = idx >= ori_len
+
+    # Repeat the last feature row over the padded tail (branchless equivalent of
+    # torch.cat([feat, feat[-1:].repeat(pad_len, 1)])).
+    feat_idx = torch.minimum(idx, idx * 0 + ori_len - 1)
+    padded_feat = feat.index_select(0, feat_idx)
+
+    # The caption grid is already rounded up to SEQ_MULTI_OF, so it can be longer
+    # than ori_len; only rows beyond the grid are zero position ids.
+    n_pos = ori_pos_ids.shape[0]
+    pos_idx = torch.minimum(idx, idx * 0 + n_pos - 1)
+    pos_ids = ori_pos_ids.index_select(0, pos_idx)
+    pos_ids = torch.where(
+        (idx >= n_pos).unsqueeze(-1),
+        torch.zeros_like(pos_ids),
+        pos_ids,
+    )
+
+    noise_mask = [noise_mask_val] * total_len if noise_mask_val is not None else None
+    return padded_feat, pos_ids, pad_mask, total_len, noise_mask
+
+
+def _patched_z_image_patchify_image(self, image: "torch.Tensor", patch_size: int, f_patch_size: int):
+    """
+    Patched _patchify_image for OV export — resolution agnostic.
+
+    Same maths as the original, but uses ``reshape`` (``view`` requires a contiguous
+    layout that the tracer cannot always prove) and keeps all token counts as traced
+    shape expressions instead of Python ints.
+    """
+    pH, pW, pF = patch_size, patch_size, f_patch_size
+    channels, frames, height, width = image.shape
+    f_tokens, h_tokens, w_tokens = frames // pF, height // pH, width // pW
+    image = image.reshape(channels, f_tokens, pF, h_tokens, pH, w_tokens, pW)
+    image = image.permute(1, 3, 5, 2, 4, 6, 0).reshape(f_tokens * h_tokens * w_tokens, pF * pH * pW * channels)
+    return image, (frames, height, width), (f_tokens, h_tokens, w_tokens)
+
+
+def _patched_z_image_unpatchify(
+    self,
+    x,
+    size,
+    patch_size,
+    f_patch_size,
+    x_pos_offsets=None,
+):
+    """
+    Patched unpatchify for OV export (batch_size=1, non-omni only) — resolution agnostic.
+
+    The original slices ``x[i][:ori_len]`` with a Python ``int``, which the tracer turns
+    into a constant Slice and which therefore keeps the image tokens of the export
+    resolution at any other resolution.  ``index_select`` over a traced ``arange`` keeps
+    the same semantics with a fully dynamic length.
+    """
+    import torch
+
+    assert x_pos_offsets is None, "omni_mode not supported for OV export"
+
+    pH = pW = patch_size
+    pF = f_patch_size
+
+    result = []
+    for xi, (frames, height, width) in zip(x, size):
+        f_tokens, h_tokens, w_tokens = frames // pF, height // pH, width // pW
+        ori_len = f_tokens * h_tokens * w_tokens
+        tokens = xi.index_select(0, torch.arange(ori_len, device=xi.device))
+        # "f h w pf ph pw c -> c (f pf) (h ph) (w pw)"
+        result.append(
+            tokens.reshape(f_tokens, h_tokens, w_tokens, pF, pH, pW, self.out_channels)
+            .permute(6, 0, 3, 1, 4, 2, 5)
+            .reshape(self.out_channels, frames, height, width)
+        )
+    return result
+
+
 def _patched_z_image_prepare_sequence(
     self,
     feats,
@@ -8932,6 +9040,10 @@ class ZImageTransformerModelPatcher(ModelPatcher):
       creates dynamic attention masks via ones_like (no static seq_len constant)
     - ZImageTransformer2DModel._build_unified_sequence: avoids pad_sequence and
       static slicing; uses dynamic attention mask via ones_like
+    - ZImageTransformer2DModel._pad_with_ids / _patchify_image / unpatchify: derive
+      every token count from tensor shapes (traced symbolically) instead of Python
+      ints, and replace the `if pad_len > 0` branch by a branchless gather, so the
+      IR is resolution agnostic
     - ZImageTransformer2DModel.forward: replaced by _patched_z_image_inner_forward
       which eliminates the VariadicSplit nodes caused by:
         x_seqlens = [len(xi) for xi in x]       # burned as static [1024]
@@ -8962,6 +9074,16 @@ class ZImageTransformerModelPatcher(ModelPatcher):
         self._model._build_unified_sequence = types.MethodType(
             _patched_z_image_build_unified_sequence, self._model
         )
+
+        # 3b. Patch the patchify / pad / unpatchify helpers so that no token count is
+        #     baked into the IR as a constant — this is what makes the exported model
+        #     usable at resolutions other than the one used for tracing.
+        self._model._orig_ov_pad_with_ids = self._model._pad_with_ids
+        self._model._pad_with_ids = types.MethodType(_patched_z_image_pad_with_ids, self._model)
+        self._model._orig_ov_patchify_image = self._model._patchify_image
+        self._model._patchify_image = types.MethodType(_patched_z_image_patchify_image, self._model)
+        self._model._orig_ov_unpatchify = self._model.unpatchify
+        self._model.unpatchify = types.MethodType(_patched_z_image_unpatchify, self._model)
 
         # 4. Wrap forward to accept/return standard batched tensors
         #    hidden_states: [B, C, H, W]   (no F dim — we add it internally)
@@ -9027,6 +9149,15 @@ class ZImageTransformerModelPatcher(ModelPatcher):
         if hasattr(self._model, "_orig_ov_build_unified"):
             self._model._build_unified_sequence = self._model._orig_ov_build_unified
             del self._model._orig_ov_build_unified
+        if hasattr(self._model, "_orig_ov_pad_with_ids"):
+            self._model._pad_with_ids = self._model._orig_ov_pad_with_ids
+            del self._model._orig_ov_pad_with_ids
+        if hasattr(self._model, "_orig_ov_patchify_image"):
+            self._model._patchify_image = self._model._orig_ov_patchify_image
+            del self._model._orig_ov_patchify_image
+        if hasattr(self._model, "_orig_ov_unpatchify"):
+            self._model.unpatchify = self._model._orig_ov_unpatchify
+            del self._model._orig_ov_unpatchify
         # Forward is restored by the base ModelPatcher via _orig_forward mechanism
 
 

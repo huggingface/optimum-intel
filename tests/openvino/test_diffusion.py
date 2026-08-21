@@ -1315,12 +1315,17 @@ class OVZImagePipelineTest(unittest.TestCase):
             )
 
     def test_inference_output_shape(self):
-        """OVZImagePipeline generates images with the requested spatial resolution."""
+        """A single exported OVZImagePipeline serves every requested resolution.
+
+        The IR must be resolution agnostic: one export has to cover the resolution it
+        was traced with (64x64), larger and non-square ones, and — since image tokens
+        are padded to a multiple of ``SEQ_MULTI_OF`` — resolutions whose token count is
+        not a multiple of 32 (40x40 -> 20*20 = 400 tokens, padded to 416).
+        """
         from optimum.intel.openvino import OVZImagePipeline
         from optimum.intel.openvino.utils import TemporaryDirectory
 
         pipe = self._build_tiny_pipeline()
-        height, width = 64, 64
 
         with TemporaryDirectory() as src_dir, TemporaryDirectory() as ov_dir:
             pipe.save_pretrained(src_dir)
@@ -1336,16 +1341,18 @@ class OVZImagePipelineTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, msg=f"Export failed:\n{result.stderr}")
 
             ov_pipe = OVZImagePipeline.from_pretrained(ov_dir, device=OPENVINO_DEVICE)
-            output = ov_pipe(
-                "a beautiful landscape",
-                num_inference_steps=1,
-                height=height,
-                width=width,
-                output_type="np",
-            )
-            images = output.images
-            self.assertEqual(len(images), 1)
-            self.assertTupleEqual(images[0].shape, (height, width, 3))
+            for height, width in [(64, 64), (128, 128), (96, 64), (40, 40)]:
+                with self.subTest(height=height, width=width):
+                    output = ov_pipe(
+                        "a beautiful landscape",
+                        num_inference_steps=1,
+                        height=height,
+                        width=width,
+                        output_type="np",
+                    )
+                    images = output.images
+                    self.assertEqual(len(images), 1)
+                    self.assertTupleEqual(images[0].shape, (height, width, 3))
 
     def test_pipeline_class_dispatch(self):
         """OVDiffusionPipeline.from_pretrained dispatches to OVZImagePipeline."""
