@@ -328,16 +328,6 @@ def register_ov_batched_mm(patcher):
     patcher._model.set_experts_implementation("ov_batched_mm")
 
 
-def unregister_ov_grouped_mm(patcher):
-    """Restore grouped_mm_experts_forward to its original implementation."""
-    import transformers.integrations.moe as moe_module
-    from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
-
-    orig = patcher._orig_grouped_mm_experts_forward
-    moe_module.grouped_mm_experts_forward = orig
-    ALL_EXPERTS_FUNCTIONS._global_mapping["grouped_mm"] = orig
-
-
 def patch_update_causal_mask(
     model, transformers_version, inner_model_name="model", patch_fn=None, patch_extrnal_model=False
 ):
@@ -8192,13 +8182,13 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             return _forward
 
         for layer in self._model.model.layers:
+            if getattr(layer, "block_sparse_moe", None) is not None:
+                patch_sparse_moe(layer.block_sparse_moe)
             if layer.mamba is not None:
                 mamba_layer = layer.mamba
                 mamba_layer._orig_forward = mamba_layer.forward
                 mamba_layer.selective_ssm_recurrent_cell = SelectiveSSMRecurrentCell()
                 mamba_layer.forward = make_mamba_forward(mamba_layer)
-            if getattr(layer, "block_sparse_moe", None) is not None:
-                patch_sparse_moe(layer.block_sparse_moe)
 
     def __exit__(self, exc_type, exc_value, traceback):
         def unpatch_sparse_moe(sparse_moe_layer):
@@ -8211,13 +8201,13 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
 
         for layer in self._model.model.layers:
+            if getattr(layer, "block_sparse_moe", None) is not None:
+                unpatch_sparse_moe(layer.block_sparse_moe)
             if layer.mamba is not None:
                 mamba_layer = layer.mamba
                 mamba_layer.forward = mamba_layer._orig_forward
                 if hasattr(mamba_layer, "selective_ssm_recurrent_cell"):
                     del mamba_layer.selective_ssm_recurrent_cell
-            if getattr(layer, "block_sparse_moe", None) is not None:
-                unpatch_sparse_moe(layer.block_sparse_moe)
 
 
 class BigBirdPegasusModelPatcher(OVSeq2SeqModelPatcher):
