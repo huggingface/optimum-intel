@@ -2615,6 +2615,156 @@ class _OVMiniCPMOForCausalLM(_OVMiniCPMVForCausalLM):
         return inputs
 
 
+class _OVMiniCPMV4_6ForCausalLM(OVModelForVisualCausalLM):
+    @staticmethod
+    def _position_ids(h, w, num_patches_per_side):
+        # Interpolated position ids for the vision embeddings (bucketize), see
+        # MiniCPMV4_6VisionEmbeddings.forward.
+        boundaries = torch.arange(1 / num_patches_per_side, 1.0, 1 / num_patches_per_side)
+        fractional_h = torch.arange(0, 1 - 1e-6, 1 / h)
+        fractional_w = torch.arange(0, 1 - 1e-6, 1 / w)
+        bucket_h = torch.bucketize(fractional_h, boundaries, right=True)
+        bucket_w = torch.bucketize(fractional_w, boundaries, right=True)
+        pos_ids = (bucket_h[:, None] * num_patches_per_side + bucket_w).flatten()
+        return pos_ids.unsqueeze(0)
+
+    @staticmethod
+    def _grouping_index(h, w, kernel_h, kernel_w):
+        # Permutation that groups a ``h x w`` patch grid into row-major
+        # ``kernel_h x kernel_w`` blocks. Shared by both the intermediate
+        # window-attention merger (window_index) and the final downsample
+        # merger (merge_index) since they use the same spatial grouping.
+        index = torch.arange(h * w).reshape(h, w)
+        index = index.reshape(h // kernel_h, kernel_h, w // kernel_w, kernel_w)
+        index = index.permute(0, 2, 1, 3).reshape(-1)
+        return index
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        target_sizes = kwargs.get("target_sizes")
+        if target_sizes is None or pixel_values is None:
+            return None
+        if not isinstance(target_sizes, torch.Tensor):
+            target_sizes = torch.as_tensor(target_sizes)
+        target_sizes = target_sizes.reshape(-1, 2)
+
+        vision_config = self.config.vision_config
+        patch_size = vision_config.patch_size
+        num_patches_per_side = vision_config.image_size // patch_size
+        window_h, window_w = vision_config.window_kernel_size
+        merge_h, merge_w = self.config.merge_kernel_size
+
+        features = []
+        column = 0
+        for image_index in range(target_sizes.shape[0]):
+            grid_h = int(target_sizes[image_index, 0])
+            grid_w = int(target_sizes[image_index, 1])
+            num_patches = grid_h * grid_w
+            single_pixel_values = pixel_values[:, :, :, column : column + patch_size * num_patches]
+            column += patch_size * num_patches
+            position_ids = self._position_ids(grid_h, grid_w, num_patches_per_side)
+            window_index = self._grouping_index(grid_h, grid_w, window_h, window_w)
+            # the final merger operates on the window-downsampled grid
+            merge_index = self._grouping_index(grid_h // window_h, grid_w // window_w, merge_h, merge_w)
+            output = self.vision_embeddings(
+                pixel_values=single_pixel_values,
+                position_ids=position_ids,
+                window_index=window_index,
+                merge_index=merge_index,
+            ).last_hidden_state
+            features.append(torch.from_numpy(output))
+        return features
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        image_features = (
+            torch.cat(vision_embeds, dim=0) if isinstance(vision_embeds, (list, tuple)) else vision_embeds
+        )
+        if isinstance(inputs_embeds, np.ndarray):
+            inputs_embeds = torch.from_numpy(inputs_embeds)
+        image_features = image_features.to(inputs_embeds.dtype)
+        image_mask = (input_ids == self.config.image_token_id).unsqueeze(-1).expand_as(inputs_embeds)
+        inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_features)
+        return inputs_embeds, attention_mask, position_ids
+
+    def forward(
+        self,
+        input_ids,
+        pixel_values=None,
+        past_key_values=None,
+        inputs_embeds=None,
+        attention_mask=None,
+        position_ids=None,
+        target_sizes=None,
+        **kwargs,
+    ):
+        # ``target_sizes`` carries the per-image NaViT patch grid required by the
+        # vision submodel. It is declared explicitly so that transformers'
+        # ``_validate_model_kwargs`` accepts it; the base ``forward`` forwards it
+        # to ``get_multimodal_embeddings`` through ``**kwargs``.
+        return super().forward(
+            input_ids,
+            pixel_values=pixel_values,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            target_sizes=target_sizes,
+            **kwargs,
+        )
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        attention_mask=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        model_inputs["target_sizes"] = kwargs.get("target_sizes")
+        return model_inputs
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        content = [{"type": "text", "text": text}]
+        if image is not None:
+            content = [{"type": "image", "image": image}] + content
+        messages = [{"role": "user", "content": content}]
+        inputs = processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
+        return inputs
+
+
 class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
@@ -7596,6 +7746,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "llava_next": _OVLlavaNextForCausalLM,
     "llava_next_video": _OVLlavaNextVideoForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
+    "minicpmv4_6": _OVMiniCPMV4_6ForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
     "maira2": _OVMaira2ForCausalLM,
     "phi3_v": _OVPhi3VisionForCausalLM,

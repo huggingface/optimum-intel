@@ -144,6 +144,95 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+def _create_tiny_minicpmv4_6_model():
+    """Generate a tiny random MiniCPM-V-4.6 (``minicpmv4_6``) model for testing.
+
+    The tiny model preserves the real architecture (top ``minicpmv4_6`` /
+    ``MiniCPMV4_6ForConditionalGeneration``, ``qwen3_5_text`` hybrid text
+    backbone, ``minicpmv4_6_vision`` SigLIP-NaViT vision tower, and the
+    image/video placeholder token ids). Only scale parameters are reduced; no
+    original weights are downloaded. The result is cached on disk so subsequent
+    calls are cheap. Requires ``transformers>=5.7`` (the version that ships the
+    ``minicpmv4_6`` architecture).
+    """
+    original_model_id = "openbmb/MiniCPM-V-4.6"
+    marker_version = 3
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_minicpmv4_6"
+    marker_file = output_dir / ".tiny_model_marker.json"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+
+    def _cache_valid():
+        if not (marker_file.exists() and config_file.exists() and weights_file.exists()):
+            return False
+        try:
+            marker = json.loads(marker_file.read_text())
+            cfg = json.loads(config_file.read_text())
+        except Exception:
+            return False
+        return (
+            marker.get("marker_version") == marker_version
+            and cfg.get("model_type") == "minicpmv4_6"
+            and cfg.get("architectures") == ["MiniCPMV4_6ForConditionalGeneration"]
+            and cfg.get("image_token_id") == 248056
+            and cfg.get("text_config", {}).get("model_type") == "qwen3_5_text"
+            and cfg.get("vision_config", {}).get("model_type") == "minicpmv4_6_vision"
+        )
+
+    if _cache_valid():
+        return str(output_dir)
+
+    from transformers import AutoConfig, AutoModelForImageTextToText, AutoProcessor
+
+    cfg = AutoConfig.from_pretrained(original_model_id, trust_remote_code=True)
+
+    # text sub-config: qwen3_5_text (hybrid linear + full attention)
+    tc = cfg.text_config
+    tc.hidden_size = 64
+    tc.num_attention_heads = 4
+    tc.num_key_value_heads = 2
+    tc.head_dim = 32
+    tc.intermediate_size = 128
+    tc.num_hidden_layers = 4
+    tc.full_attention_interval = 4
+    tc.layer_types = ["linear_attention", "linear_attention", "linear_attention", "full_attention"]
+    tc.linear_num_key_heads = 2
+    tc.linear_num_value_heads = 2
+    tc.linear_key_head_dim = 32
+    tc.linear_value_head_dim = 32
+    tc.linear_conv_kernel_dim = 4
+    tc.mtp_num_hidden_layers = 1
+    tc.initializer_range = 0.1
+
+    # vision sub-config: minicpmv4_6_vision (SigLIP-NaViT + window merger)
+    vc = cfg.vision_config
+    vc.hidden_size = 64
+    vc.num_attention_heads = 4
+    vc.intermediate_size = 128
+    vc.num_hidden_layers = 3
+    vc.image_size = 224
+    cfg.insert_layer_id = 1
+    vc.insert_layer_id = 1
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    torch.manual_seed(SEED)
+    model = AutoModelForImageTextToText.from_config(cfg, trust_remote_code=True)
+    model.eval()
+    model.save_pretrained(output_dir, safe_serialization=True)
+
+    processor = AutoProcessor.from_pretrained(original_model_id, trust_remote_code=True)
+    processor.save_pretrained(output_dir)
+    try:
+        from transformers import GenerationConfig
+
+        GenerationConfig.from_pretrained(original_model_id).save_pretrained(output_dir)
+    except Exception:
+        pass
+
+    marker_file.write_text(json.dumps({"marker_version": marker_version}))
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -263,6 +352,11 @@ HUB_MODEL_NAMES = {
     "minicpm": "optimum-intel-internal-testing/tiny-random-minicpm",
     "minicpm3": "optimum-intel-internal-testing/tiny-random-minicpm3",
     "minicpmv": "optimum-intel-internal-testing/tiny-random-minicpmv-2_6",
+    "minicpmv4_6": (
+        _create_tiny_minicpmv4_6_model()
+        if is_transformers_version(">=", "5.7")
+        else "optimum-intel-internal-testing/tiny-random-minicpmv4_6"
+    ),
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
     "mistral-nemo": "optimum-intel-internal-testing/tiny-random-mistral-nemo",
@@ -498,6 +592,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 26,
         "resampler_model": 6,
+    },
+    "minicpmv4_6": {
+        "lm_model": 72,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 28,
     },
     "llava_next_video": {
         "lm_model": 30,
