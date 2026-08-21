@@ -199,6 +199,8 @@ from optimum.exporters.openvino.model_patcher import (
     SentenceTransformersTransformerPatcher,
     SpeechT5ModelPatcher,
     VideoChatFlashQwenVisionEmbeddingModelPatcher,
+    ZImageTextEncoderModelPatcher,
+    ZImageTransformerModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
     _get_model_attribute,
@@ -372,6 +374,7 @@ def init_model_configs():
             TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"] = {}
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["sana"] = "SanaPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["sana-sprint"] = "SanaSprintPipeline"
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["z-image"] = "ZImagePipeline"
     if is_diffusers_available():
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS.setdefault("text-to-video", {})
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx-video"] = "LTXPipeline"
@@ -7308,3 +7311,128 @@ class TrOCROpenVINOConfig(TextSeq2SeqOpenVINOConfig):
         decoder_num_attention_heads="decoder_attention_heads",
         hidden_size="hidden_size",
     )
+
+
+class DummyZImageTransformerVisionInputGenerator(DummyUnetVisionInputGenerator):
+    """Generates dummy latent inputs for ZImageTransformer2DModel export.
+
+    Uses 64x64 latent (= 512x512 / 8) as the trace resolution.  The traced graph is
+    resolution agnostic (see ZImageTransformerModelPatcher), so this only determines
+    the shape of the example input, not the resolutions the exported model supports.
+    """
+
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "pixel_mask",
+        "sample",
+        "latent_sample",
+        "hidden_states",
+    )
+
+    # No __init__ override: DummyVisionInputGenerator already defaults to
+    # batch_size=2, num_channels=3, width=64, height=64 (= a 64x64 latent, i.e. a
+    # 512x512 image at the VAE's spatial factor of 8), and takes num_channels from
+    # the normalized config.
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "hidden_states":
+            return self.random_float_tensor(
+                [self.batch_size, self.num_channels, self.height, self.width],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyZImageCapFeatInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
+    """Generates dummy text-feature inputs for ZImageTransformer2DModel export."""
+
+    SUPPORTED_INPUT_NAMES = (
+        "decoder_input_ids",
+        "decoder_attention_mask",
+        "encoder_outputs",
+        "encoder_hidden_states",
+    )
+
+
+@register_in_tasks_manager("z-image-transformer", *["semantic-segmentation"], library_name="diffusers")
+class ZImageTransformerOpenVINOConfig(UNetOpenVINOConfig):
+    """
+    Export config for ZImageTransformer2DModel.
+
+    The patched forward (via ZImageTransformerModelPatcher) accepts:
+      hidden_states:         [B, C, H, W]    — latent without the frame (F) dim
+      timestep:              [B]
+      encoder_hidden_states: [B, seq_len, cap_feat_dim]
+
+    And returns:
+      sample: [B, C, H, W]
+    """
+
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        image_size="sample_size",  # not used directly but required by base class
+        num_channels="in_channels",
+        hidden_size="cap_feat_dim",  # used for encoder_hidden_states dim
+        vocab_size="n_heads",  # dummy — needed by base class
+        allow_new=True,
+    )
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummyTransformerTimestpsInputGenerator,
+        DummyZImageTransformerVisionInputGenerator,
+        DummyZImageCapFeatInputGenerator,
+    )
+    _MODEL_PATCHER = ZImageTransformerModelPatcher
+
+    @property
+    def inputs(self):
+        return {
+            "hidden_states": {0: "batch_size", 2: "height", 3: "width"},
+            "timestep": {0: "batch_size"},
+            "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "height", 3: "width"},
+        }
+
+    def rename_ambiguous_inputs(self, inputs):
+        return inputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        # Force batch_size=1: ZImageTransformer patching only supports single-item lists.
+        # The list-based forward (x: list[Tensor], cap_feats: list[Tensor]) is unrolled
+        # for batch_size=1 to remain OV-traceable.
+        # Use ZIMAGE_CAP_SEQ for cap to match what the patcher pads to at inference time.
+        # This ensures cap_seqlens (burned as a JIT constant) always matches.
+        from optimum.exporters.openvino.model_patcher import ZIMAGE_CAP_SEQ
+
+        kwargs["batch_size"] = 1
+        kwargs["sequence_length"] = ZIMAGE_CAP_SEQ
+        return super().generate_dummy_inputs(framework=framework, **kwargs)
+
+
+@register_in_tasks_manager("qwen3-text-encoder", *["feature-extraction"], library_name="diffusers")
+class ZImageTextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+    """
+    Export config for the Qwen3Model text encoder used in ZImagePipeline.
+
+    The patched forward (via ZImageTextEncoderModelPatcher) returns hidden_states[-2]
+    directly as the main output tensor.
+    """
+
+    _MODEL_PATCHER = ZImageTextEncoderModelPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+        }

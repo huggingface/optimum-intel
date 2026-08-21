@@ -11383,3 +11383,624 @@ class MuseGlimmerLanguageModelPatcher(OVDecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
+
+
+# Fixed cap sequence length for ZImage OV export.
+# All cap (text) tokens are padded / truncated to this length before tracing.
+# Must be a multiple of SEQ_MULTI_OF (32).  128 = 4 × 32 covers most prompts.
+ZIMAGE_CAP_SEQ = 128
+
+
+def _z_image_rope_embedder_call(self, ids: "torch.Tensor"):
+    """
+    Patched RopeEmbedder.__call__ for OV export.
+
+    Returns a real-valued tensor of shape [seq_len, total_freq, 2]
+    where [..., 0] = cos and [..., 1] = sin.
+    This avoids complex-tensor indexing which OV cannot convert.
+    """
+    import torch
+
+    device = ids.device
+
+    # Lazily precompute real (cos, sin) lookup tables
+    if not hasattr(self, "_ov_freqs_cos") or self._ov_freqs_cos is None:
+        raw_freqs = self.precompute_freqs_cis(self.axes_dims, self.axes_lens, theta=self.theta)
+        self._ov_freqs_cos = [f.real.float() for f in raw_freqs]
+        self._ov_freqs_sin = [f.imag.float() for f in raw_freqs]
+        self.freqs_cis = raw_freqs  # keep original for non-export use
+
+    # Move to the correct device
+    if self._ov_freqs_cos[0].device != device:
+        self._ov_freqs_cos = [f.to(device) for f in self._ov_freqs_cos]
+        self._ov_freqs_sin = [f.to(device) for f in self._ov_freqs_sin]
+
+    result_cos, result_sin = [], []
+    for i in range(len(self.axes_dims)):
+        index = ids[:, i]  # [seq_len] integer indices
+        result_cos.append(self._ov_freqs_cos[i][index])  # [seq_len, freq_i] real
+        result_sin.append(self._ov_freqs_sin[i][index])  # [seq_len, freq_i] real
+
+    cos = torch.cat(result_cos, dim=-1)  # [seq_len, total_freq]
+    sin = torch.cat(result_sin, dim=-1)  # [seq_len, total_freq]
+    # Stack as [seq_len, total_freq, 2] where last dim = [cos, sin]
+    return torch.stack([cos, sin], dim=-1)
+
+
+def _z_image_attn_proc_call(
+    self,
+    attn,
+    hidden_states: "torch.Tensor",
+    encoder_hidden_states=None,
+    attention_mask=None,
+    freqs_cis=None,
+):
+    """
+    Patched ZSingleStreamAttnProcessor.__call__ for OV export.
+
+    Replaces torch.view_as_complex / view_as_real with real-number RoPE.
+    freqs_cis is now [batch, seq_len, head_dim//2, 2] (cos, sin stacked).
+    """
+    import torch
+
+    def apply_rotary_emb_real(x_in, freqs_cis_real):
+        """Real-number RoPE: avoids view_as_complex/view_as_real."""
+        # x_in:          [batch, seq, heads, head_dim]
+        # freqs_cis_real:[batch, seq, head_dim//2, 2]  (last dim: [cos, sin])
+        cos = freqs_cis_real[..., 0]  # [batch, seq, head_dim//2]
+        sin = freqs_cis_real[..., 1]  # [batch, seq, head_dim//2]
+
+        x_float = x_in.float()
+        x_pairs = x_float.reshape(*x_float.shape[:-1], -1, 2)  # [batch, seq, heads, head_dim//2, 2]
+
+        # Broadcast cos/sin over the heads dimension
+        cos = cos.unsqueeze(2)  # [batch, seq, 1, head_dim//2]
+        sin = sin.unsqueeze(2)
+
+        out_real = x_pairs[..., 0] * cos - x_pairs[..., 1] * sin  # [batch, seq, heads, head_dim//2]
+        out_imag = x_pairs[..., 0] * sin + x_pairs[..., 1] * cos
+        out = torch.stack([out_real, out_imag], dim=-1).flatten(-2)  # [batch, seq, heads, head_dim]
+        return out.type_as(x_in)
+
+    query = attn.to_q(hidden_states)
+    key = attn.to_k(hidden_states)
+    value = attn.to_v(hidden_states)
+
+    query = query.unflatten(-1, (attn.heads, -1))
+    key = key.unflatten(-1, (attn.heads, -1))
+    value = value.unflatten(-1, (attn.heads, -1))
+
+    if attn.norm_q is not None:
+        query = attn.norm_q(query)
+    if attn.norm_k is not None:
+        key = attn.norm_k(key)
+
+    if freqs_cis is not None:
+        query = apply_rotary_emb_real(query, freqs_cis)
+        key = apply_rotary_emb_real(key, freqs_cis)
+
+    dtype = query.dtype
+    query, key = query.to(dtype), key.to(dtype)
+
+    if attention_mask is not None and attention_mask.ndim == 2:
+        attention_mask = attention_mask[:, None, None, :]
+
+    # Standard SDPA
+    hidden_states = torch.nn.functional.scaled_dot_product_attention(
+        query.transpose(1, 2),
+        key.transpose(1, 2),
+        value.transpose(1, 2),
+        attn_mask=attention_mask.bool() if attention_mask is not None else None,
+        dropout_p=0.0,
+        is_causal=False,
+    ).transpose(1, 2)
+
+    hidden_states = hidden_states.flatten(2, 3)
+    hidden_states = hidden_states.to(dtype)
+
+    output = attn.to_out[0](hidden_states)
+    if len(attn.to_out) > 1:
+        output = attn.to_out[1](output)
+
+    return output
+
+
+def _patched_z_image_pad_with_ids(
+    self,
+    feat: "torch.Tensor",
+    pos_grid_size,
+    pos_start,
+    device=None,
+    noise_mask_val=None,
+):
+    """
+    Patched _pad_with_ids for OV export — resolution agnostic.
+
+    The original implementation derives the padded length from ``len(feat)``, a
+    Python ``int`` that the tracer burns into the IR as a constant, and branches on
+    ``if pad_len > 0``.  Both make the exported graph valid only for the resolution
+    used at export time.
+
+    Here every length comes from ``feat.shape[0]``, which the tracer keeps symbolic,
+    and the pad branch is replaced by a branchless gather:
+
+      - ``padded_feat`` repeats the last row via ``index_select`` with clamped indices
+        (identical to ``feat[-1:].repeat(pad_len, 1)``)
+      - ``pos_ids`` gathers the coordinate grid and zeroes the rows past the grid
+        (identical to appending ``create_coordinate_grid((1, 1, 1), (0, 0, 0))``)
+    """
+    import torch
+    from diffusers.models.transformers.transformer_z_image import SEQ_MULTI_OF
+
+    ori_len = feat.shape[0]  # traced symbolically — stays dynamic in the IR
+    total_len = ori_len + (-ori_len) % SEQ_MULTI_OF
+
+    ori_pos_ids = self.create_coordinate_grid(size=pos_grid_size, start=pos_start, device=device).flatten(0, 2)
+
+    idx = torch.arange(total_len, device=feat.device)
+    pad_mask = idx >= ori_len
+
+    # Repeat the last feature row over the padded tail (branchless equivalent of
+    # torch.cat([feat, feat[-1:].repeat(pad_len, 1)])).
+    feat_idx = torch.minimum(idx, idx * 0 + ori_len - 1)
+    padded_feat = feat.index_select(0, feat_idx)
+
+    # The caption grid is already rounded up to SEQ_MULTI_OF, so it can be longer
+    # than ori_len; only rows beyond the grid are zero position ids.
+    n_pos = ori_pos_ids.shape[0]
+    pos_idx = torch.minimum(idx, idx * 0 + n_pos - 1)
+    pos_ids = ori_pos_ids.index_select(0, pos_idx)
+    pos_ids = torch.where(
+        (idx >= n_pos).unsqueeze(-1),
+        torch.zeros_like(pos_ids),
+        pos_ids,
+    )
+
+    noise_mask = [noise_mask_val] * total_len if noise_mask_val is not None else None
+    return padded_feat, pos_ids, pad_mask, total_len, noise_mask
+
+
+def _patched_z_image_patchify_image(self, image: "torch.Tensor", patch_size: int, f_patch_size: int):
+    """
+    Patched _patchify_image for OV export — resolution agnostic.
+
+    Same maths as the original, but uses ``reshape`` (``view`` requires a contiguous
+    layout that the tracer cannot always prove) and keeps all token counts as traced
+    shape expressions instead of Python ints.
+    """
+    pH, pW, pF = patch_size, patch_size, f_patch_size
+    channels, frames, height, width = image.shape
+    f_tokens, h_tokens, w_tokens = frames // pF, height // pH, width // pW
+    image = image.reshape(channels, f_tokens, pF, h_tokens, pH, w_tokens, pW)
+    image = image.permute(1, 3, 5, 2, 4, 6, 0).reshape(f_tokens * h_tokens * w_tokens, pF * pH * pW * channels)
+    return image, (frames, height, width), (f_tokens, h_tokens, w_tokens)
+
+
+def _patched_z_image_unpatchify(
+    self,
+    x,
+    size,
+    patch_size,
+    f_patch_size,
+    x_pos_offsets=None,
+):
+    """
+    Patched unpatchify for OV export (batch_size=1, non-omni only) — resolution agnostic.
+
+    The original slices ``x[i][:ori_len]`` with a Python ``int``, which the tracer turns
+    into a constant Slice and which therefore keeps the image tokens of the export
+    resolution at any other resolution.  ``index_select`` over a traced ``arange`` keeps
+    the same semantics with a fully dynamic length.
+    """
+    import torch
+
+    assert x_pos_offsets is None, "omni_mode not supported for OV export"
+
+    pH = pW = patch_size
+    pF = f_patch_size
+
+    result = []
+    for xi, (frames, height, width) in zip(x, size):
+        f_tokens, h_tokens, w_tokens = frames // pF, height // pH, width // pW
+        ori_len = f_tokens * h_tokens * w_tokens
+        tokens = xi.index_select(0, torch.arange(ori_len, device=xi.device))
+        # "f h w pf ph pw c -> c (f pf) (h ph) (w pw)"
+        result.append(
+            tokens.reshape(f_tokens, h_tokens, w_tokens, pF, pH, pW, self.out_channels)
+            .permute(6, 0, 3, 1, 4, 2, 5)
+            .reshape(self.out_channels, frames, height, width)
+        )
+    return result
+
+
+def _patched_z_image_prepare_sequence(
+    self,
+    feats,
+    pos_ids,
+    inner_pad_mask,
+    pad_token,
+    noise_mask=None,
+    device=None,
+):
+    """
+    Patched _prepare_sequence for OV export (batch_size=1 only).
+
+    Replaces:
+      - index_put_ (feats_cat[bool_mask] = pad_token) with torch.where
+      - pad_sequence with unsqueeze (no variable-length batching needed)
+
+    Dynamic-shape-safe: avoids Python-level len()/shape[] constants that would
+    be burned as static constants in OV IR and fail at different resolutions.
+    """
+    import torch
+
+    # batch_size=1: process the single element
+    feat = feats[0]  # [seq_len, dim]
+    pos_id = pos_ids[0]  # [seq_len, 3]
+    pad_mask = inner_pad_mask[0]  # [seq_len] bool
+
+    # Apply pad token using torch.where (avoids aten::index_put_)
+    # pad_token may be shape [1, dim] or [dim]; broadcast directly to [seq_len, dim]
+    feat = torch.where(pad_mask.unsqueeze(-1), pad_token.view(1, -1).expand_as(feat), feat)
+
+    # RoPE: call helper directly to avoid class-level __call__ dispatch issue
+    # (Python's special method lookup bypasses instance-level __call__ patches)
+    # NOTE: Do NOT truncate freqs_cis with a Python-level seq_len constant!
+    # When called from _patched_z_image_inner_forward, pos_id always has the
+    # same length as feat (both come from the same patchify_and_embed output),
+    # so freqs_cis[:seq_len] would be a no-op but burns seq_len as a static
+    # constant in OV IR, causing VariadicSplit/Slice failures at other resolutions.
+    freqs_cis = _z_image_rope_embedder_call(self.rope_embedder, pos_id)  # [N, total_freq, 2]
+    # freqs_cis already has the same length as feat; no truncation needed.
+
+    # Expand to batch dimension (unsqueeze avoids aten::pad_sequence)
+    feats_batched = feat.unsqueeze(0)  # [1, N, dim]
+    freqs_batched = freqs_cis.unsqueeze(0)  # [1, N, total_freq, 2]
+
+    # Dynamic attention mask: derive shape from feat tensor via ones_like
+    # (avoids static torch.ones((1, seq_len), ...) which burns seq_len as constant)
+    attn_mask = torch.ones_like(feat[:, 0]).unsqueeze(0).bool()  # [1, N] — fully dynamic
+
+    seq_len = feat.shape[0]  # kept for backward compat in return signature
+    return feats_batched, freqs_batched, attn_mask, [seq_len], None
+
+
+def _patched_z_image_build_unified_sequence(
+    self,
+    x,
+    x_freqs,
+    x_seqlens,
+    x_noise_mask,
+    cap,
+    cap_freqs,
+    cap_seqlens,
+    cap_noise_mask,
+    siglip,
+    siglip_freqs,
+    siglip_seqlens,
+    siglip_noise_mask,
+    omni_mode,
+    device,
+):
+    """
+    Patched _build_unified_sequence for OV export (batch_size=1, non-omni only).
+
+    Replaces pad_sequence + bool-masked creation with torch.cat + unsqueeze.
+
+    Dynamic-shape-safe: does NOT slice x[0][:x_len] / cap[0][:cap_len] with
+    Python-level x_seqlens[0]/cap_seqlens[0] constants — those are burned as
+    static OV constants and fail at resolutions different from the export dummy.
+    For batch_size=1 with no batch-padding, x[0] and cap[0] already contain
+    exactly the right tokens, so slicing is a no-op and can be omitted safely.
+    """
+    import torch
+
+    # batch_size=1: use full tensors without static-constant slicing
+    # (x[0][:x_len] would burn x_len as a constant and fail at other resolutions)
+    x_sq = x[0]  # [N, dim] — full image sequence, dynamic N
+    cap_sq = cap[0]  # [M, dim] — full cap sequence, dynamic M (=ZIMAGE_CAP_SEQ)
+    x_freqs_sq = x_freqs[0]  # [N, total_freq, 2]
+    cap_freqs_sq = cap_freqs[0]  # [M, total_freq, 2]
+
+    # Basic mode order: [x, cap]
+    unified_sq = torch.cat([x_sq, cap_sq], dim=0)  # [N+M, dim]
+    unified_freqs_sq = torch.cat([x_freqs_sq, cap_freqs_sq], dim=0)  # [N+M, total_freq, 2]
+
+    # Expand to batch dimension
+    unified = unified_sq.unsqueeze(0)  # [1, N+M, dim]
+    unified_freqs = unified_freqs_sq.unsqueeze(0)  # [1, N+M, total_freq, 2]
+
+    # Dynamic attention mask: derive shape from unified tensor (avoids burned constant)
+    attn_mask = torch.ones_like(unified_sq[:, 0]).unsqueeze(0).bool()  # [1, N+M] dynamic
+
+    return unified, unified_freqs, attn_mask, None  # noise_mask_tensor=None for non-omni
+
+
+def _patched_z_image_inner_forward(
+    model,
+    x,
+    t,
+    cap_feats,
+    return_dict=True,
+    patch_size=2,
+    f_patch_size=1,
+    **kwargs,
+):
+    """
+    OV-friendly inner forward for ZImageTransformer2DModel (batch_size=1, non-omni only).
+
+    This replaces the original model forward to eliminate ALL static sequence-length
+    constants that would be burned into the OV IR and fail at resolutions different
+    from the export dummy input.
+
+    Root cause of static shapes in the original forward:
+
+      # Line 1: burns x_seqlens as Python list of ints
+      x_seqlens = [len(xi) for xi in x]          # e.g. [1024]
+      x = all_x_embedder(torch.cat(x, dim=0))    # [N, hidden]
+      # Line 2: creates VariadicSplit with constant split sizes [1024]
+      list(x.split(x_seqlens, dim=0))             # FAILS at N=4096!
+
+    Fix: for batch_size=1, torch.cat(x, dim=0) == x[0] (single image).
+    After embedding, just wrap in [x_emb] — no split needed.
+
+    Similarly for cap_seqlens.  All attention masks are created with ones_like
+    (tensor-derived, fully dynamic) instead of torch.ones((1, static_N), ...).
+    """
+    import torch
+    from diffusers.models.modeling_outputs import Transformer2DModelOutput
+
+    assert not isinstance(x[0], list), "omni_mode not supported for OV export"
+    device = x[0].device
+
+    # Timestep embedding (non-omni mode only)
+    adaln_input = model.t_embedder(t * model.t_scale).type_as(x[0])
+
+    # Patchify: produces lists of length batch_size=1
+    (
+        x,
+        cap_feats,
+        x_size,
+        x_pos_ids,
+        cap_pos_ids,
+        x_pad_mask,
+        cap_pad_mask,
+    ) = model.patchify_and_embed(x, cap_feats, patch_size, f_patch_size)
+
+    # ── Image embed & refine ────────────────────────────────────────────────
+    # DYNAMIC: do NOT compute x_seqlens = [len(xi) for xi in x] (static!)
+    # For batch_size=1: torch.cat(x, dim=0) == x[0]. Pass [x_emb] directly —
+    # no VariadicSplit is created.
+    x_emb = model.all_x_embedder[f"{patch_size}-{f_patch_size}"](torch.cat(x, dim=0))
+    x, x_freqs, x_mask, x_seqlens, _ = model._prepare_sequence(
+        [x_emb],  # [full_tensor] — no static split
+        x_pos_ids,
+        x_pad_mask,
+        model.x_pad_token,
+        None,
+        device,
+    )
+    for layer in model.noise_refiner:
+        x = layer(x, x_mask, x_freqs, adaln_input, None, None, None)
+
+    # ── Cap embed & refine ──────────────────────────────────────────────────
+    # DYNAMIC: do NOT compute cap_seqlens = [len(ci) for ci in cap_feats] (static!)
+    cap_emb = model.cap_embedder(torch.cat(cap_feats, dim=0))
+    cap_feats, cap_freqs, cap_mask, cap_seqlens, _ = model._prepare_sequence(
+        [cap_emb],  # [full_tensor] — no static split
+        cap_pos_ids,
+        cap_pad_mask,
+        model.cap_pad_token,
+        None,
+        device,
+    )
+    for layer in model.context_refiner:
+        cap_feats = layer(cap_feats, cap_mask, cap_freqs)
+
+    # ── Unified sequence ────────────────────────────────────────────────────
+    unified, unified_freqs, unified_mask, _ = model._build_unified_sequence(
+        x,
+        x_freqs,
+        x_seqlens,
+        None,  # x_noise_mask
+        cap_feats,
+        cap_freqs,
+        cap_seqlens,
+        None,  # cap_noise_mask
+        None,  # siglip
+        None,  # siglip_freqs
+        None,  # siglip_seqlens
+        None,  # siglip_noise_mask
+        False,  # omni_mode
+        device,
+    )
+
+    # ── Main transformer layers ─────────────────────────────────────────────
+    for layer in model.layers:
+        unified = layer(unified, unified_mask, unified_freqs, adaln_input, None, None, None)
+
+    # ── Final layer ─────────────────────────────────────────────────────────
+    unified = model.all_final_layer[f"{patch_size}-{f_patch_size}"](unified, c=adaln_input)
+
+    # ── Unpatchify ──────────────────────────────────────────────────────────
+    result = model.unpatchify(list(unified.unbind(dim=0)), x_size, patch_size, f_patch_size, None)
+
+    return (result,) if not return_dict else Transformer2DModelOutput(sample=result)
+
+
+class ZImageTransformerModelPatcher(ModelPatcher):
+    """
+    Model patcher for ZImageTransformer2DModel OV export.
+
+    Patches:
+    - RopeEmbedder.__call__: returns real [seq, freq, 2] instead of complex
+    - ZSingleStreamAttnProcessor.__call__: real-number RoPE, avoids view_as_complex
+    - ZImageTransformer2DModel._prepare_sequence: avoids index_put_, pad_sequence,
+      creates dynamic attention masks via ones_like (no static seq_len constant)
+    - ZImageTransformer2DModel._build_unified_sequence: avoids pad_sequence and
+      static slicing; uses dynamic attention mask via ones_like
+    - ZImageTransformer2DModel._pad_with_ids / _patchify_image / unpatchify: derive
+      every token count from tensor shapes (traced symbolically) instead of Python
+      ints, and replace the `if pad_len > 0` branch by a branchless gather, so the
+      IR is resolution agnostic
+    - ZImageTransformer2DModel.forward: replaced by _patched_z_image_inner_forward
+      which eliminates the VariadicSplit nodes caused by:
+        x_seqlens = [len(xi) for xi in x]       # burned as static [1024]
+        list(x.split(x_seqlens, dim=0))          # VariadicSplit → fails at 4096!
+      The fix: for batch_size=1, wrap embedded tensor in [x_emb] — no split needed.
+
+    Only supports batch_size=1, non-omni mode (single image per inference call).
+    """
+
+    def __enter__(self):
+        super().__enter__()
+
+        # Import the processor class to patch at class level
+        # (Python's special method lookup always goes to the type, not the instance,
+        #  so we must patch at class level, not instance level)
+        from diffusers.models.transformers.transformer_z_image import ZSingleStreamAttnProcessor as _ZAttnProc
+
+        # 1. Patch ZSingleStreamAttnProcessor at class level to use real RoPE
+        _ZAttnProc._orig_ov_call = _ZAttnProc.__call__
+        _ZAttnProc.__call__ = _z_image_attn_proc_call
+
+        # 2. Patch _prepare_sequence
+        self._model._orig_ov_prepare_sequence = self._model._prepare_sequence
+        self._model._prepare_sequence = types.MethodType(_patched_z_image_prepare_sequence, self._model)
+
+        # 3. Patch _build_unified_sequence
+        self._model._orig_ov_build_unified = self._model._build_unified_sequence
+        self._model._build_unified_sequence = types.MethodType(
+            _patched_z_image_build_unified_sequence, self._model
+        )
+
+        # 3b. Patch the patchify / pad / unpatchify helpers so that no token count is
+        #     baked into the IR as a constant — this is what makes the exported model
+        #     usable at resolutions other than the one used for tracing.
+        self._model._orig_ov_pad_with_ids = self._model._pad_with_ids
+        self._model._pad_with_ids = types.MethodType(_patched_z_image_pad_with_ids, self._model)
+        self._model._orig_ov_patchify_image = self._model._patchify_image
+        self._model._patchify_image = types.MethodType(_patched_z_image_patchify_image, self._model)
+        self._model._orig_ov_unpatchify = self._model.unpatchify
+        self._model.unpatchify = types.MethodType(_patched_z_image_unpatchify, self._model)
+
+        # 4. Wrap forward to accept/return standard batched tensors
+        #    hidden_states: [B, C, H, W]   (no F dim — we add it internally)
+        #    timestep:      [B]
+        #    encoder_hidden_states: [B, seq_len, cap_feat_dim]
+        # Call _patched_z_image_inner_forward (not the original forward) to ensure
+        # all static-sequence-length constants are eliminated from the OV IR.
+        _model_ref = self._model
+
+        def patched_forward(hidden_states, timestep, encoder_hidden_states):
+            import torch
+
+            # ── Cap sequence ────────────────────────────────────────────────────
+            # Pad/truncate cap tokens to ZIMAGE_CAP_SEQ so the cap embedder
+            # always sees the same fixed-size input.  This is safe: extra tokens
+            # are zero-filled and contribute only a small additive bias.
+            cap_feat_dim = encoder_hidden_states.shape[2]
+            cap_len = encoder_hidden_states.shape[1]
+            if cap_len < ZIMAGE_CAP_SEQ:
+                pad = torch.zeros(
+                    1, ZIMAGE_CAP_SEQ - cap_len, cap_feat_dim,
+                    dtype=encoder_hidden_states.dtype,
+                    device=encoder_hidden_states.device,
+                )
+                encoder_hidden_states = torch.cat([encoder_hidden_states, pad], dim=1)
+            elif cap_len > ZIMAGE_CAP_SEQ:
+                encoder_hidden_states = encoder_hidden_states[:, :ZIMAGE_CAP_SEQ]
+
+            # Add frame dimension: [B, C, H, W] -> [B, C, 1, H, W]
+            x_with_f = hidden_states.unsqueeze(2)
+            # Convert to list of [C, 1, H, W] for the model
+            x = list(x_with_f.unbind(0))
+            # Convert cap_feats to list of [ZIMAGE_CAP_SEQ, cap_feat_dim]
+            cap_feats = list(encoder_hidden_states.unbind(0))
+
+            # Call the dynamic inner forward (avoids all static seq-length constants)
+            out = _patched_z_image_inner_forward(_model_ref, x, timestep, cap_feats, return_dict=False)
+
+            # Stack list output [B x [C, 1, H, W]] into tensor [B, C, 1, H, W]
+            result = torch.stack(out[0], dim=0)
+            # Remove frame dimension: [B, C, 1, H, W] -> [B, C, H, W]
+            return result.squeeze(2)
+
+        self._model.forward = patched_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        # Restore ZSingleStreamAttnProcessor class-level patch
+        try:
+            from diffusers.models.transformers.transformer_z_image import ZSingleStreamAttnProcessor as _ZAttnProc
+
+            if hasattr(_ZAttnProc, "_orig_ov_call"):
+                _ZAttnProc.__call__ = _ZAttnProc._orig_ov_call
+                del _ZAttnProc._orig_ov_call
+        except ImportError:
+            pass
+
+        # Restore model methods
+        if hasattr(self._model, "_orig_ov_prepare_sequence"):
+            self._model._prepare_sequence = self._model._orig_ov_prepare_sequence
+            del self._model._orig_ov_prepare_sequence
+        if hasattr(self._model, "_orig_ov_build_unified"):
+            self._model._build_unified_sequence = self._model._orig_ov_build_unified
+            del self._model._orig_ov_build_unified
+        if hasattr(self._model, "_orig_ov_pad_with_ids"):
+            self._model._pad_with_ids = self._model._orig_ov_pad_with_ids
+            del self._model._orig_ov_pad_with_ids
+        if hasattr(self._model, "_orig_ov_patchify_image"):
+            self._model._patchify_image = self._model._orig_ov_patchify_image
+            del self._model._orig_ov_patchify_image
+        if hasattr(self._model, "_orig_ov_unpatchify"):
+            self._model.unpatchify = self._model._orig_ov_unpatchify
+            del self._model._orig_ov_unpatchify
+        # Forward is restored by the base ModelPatcher via _orig_forward mechanism
+
+
+class ZImageTextEncoderModelPatcher(ModelPatcher):
+    """
+    Model patcher for the Qwen3-based text encoder used in ZImagePipeline.
+
+    The pipeline uses hidden_states[-2] from the Qwen3 model as text features.
+    This patcher wraps forward to return hidden_states[-2] directly as the
+    last_hidden_state output so it matches the CLIPText export interface.
+    """
+
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs=None,
+    ):
+        super().__init__(config, model, model_kwargs)
+        _orig_forward = self.orig_forward
+
+        @functools.wraps(_orig_forward)
+        def patched_forward(input_ids, attention_mask):
+            out = _orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+            )
+            # Return second-to-last hidden state as the text features
+            # (ZImagePipeline uses prompt_embeds[i][prompt_masks[i]] from hidden_states[-2])
+            # Must return a dict so ts_patched_forward can call .values() on it.
+            return {"last_hidden_state": out.hidden_states[-2]}
+
+        self.patched_forward = patched_forward
+
+    def __enter__(self):
+        super().__enter__()
+        # Ensure SDPA is used for tracing (avoids boolean mask issues with eager mode)
+        if hasattr(self._model, "config") and hasattr(self._model.config, "_attn_implementation"):
+            self._model.config._orig_ov_attn_impl = self._model.config._attn_implementation
+            self._model.config._attn_implementation = "sdpa"
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if hasattr(self._model, "config") and hasattr(self._model.config, "_orig_ov_attn_impl"):
+            self._model.config._attn_implementation = self._model.config._orig_ov_attn_impl
+            del self._model.config._orig_ov_attn_impl
