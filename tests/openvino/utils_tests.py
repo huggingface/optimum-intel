@@ -210,6 +210,7 @@ HUB_MODEL_NAMES = {
     "gemma3n": "optimum-intel-internal-testing/tiny-random-gemma3n",
     "gemma3n_text": "optimum-intel-internal-testing/tiny-random-gemma3n-text",
     "gemma4": "optimum-intel-internal-testing/tiny-random-gemma4",
+    "gemma4_dflash": "optimum-intel-internal-testing/tiny-random-gemma4-dflash",
     "gemma4_moe": "optimum-intel-internal-testing/tiny-random-gemma4-moe",
     "gemma4_unified": "optimum-intel-internal-testing/tiny-random-gemma4-unified",
     "falcon": "optimum-intel-internal-testing/really-tiny-falcon-testing",
@@ -306,7 +307,9 @@ HUB_MODEL_NAMES = {
     "qwen3_omni_moe": "optimum-intel-internal-testing/tiny-random-qwen3-omni",
     "qwen3_next": "optimum-intel-internal-testing/tiny-random-qwen3-next",
     "qwen3_5": "optimum-intel-internal-testing/tiny-random-qwen3.5",
+    "qwen3_5_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-dflash",
     "qwen3_5_moe": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
+    "qwen3_5_moe_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-dflash",
     "qwen3_asr": "optimum-intel-internal-testing/tiny-random-qwen3-asr",
     "qwen3_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
     "fun_asr": "optimum-intel-internal-testing/tiny-random-fun-asr",
@@ -368,8 +371,10 @@ HUB_MODEL_NAMES = {
     "ltx2": "optimum-intel-internal-testing/tiny-random-ltx2",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
+    "qwen3_eagle3_target": "Qwen/Qwen3-1.7B",
     "flux.2-klein": "optimum-intel-internal-testing/tiny-random-flux.2-klein",
     "qwen3_vl_eagle3": "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
+    "qwen3_vl_eagle3_target": "optimum-intel-internal-testing/tiny-random-qwen3-vl-layer10",
     "videochat_flash_qwen": "optimum-intel-internal-testing/tiny-videochat-flash-qwen",
 }
 
@@ -391,23 +396,22 @@ def _resolve_cached_model_paths(model_names: dict) -> dict:
 
 MODEL_NAMES = _resolve_cached_model_paths(HUB_MODEL_NAMES)
 
-EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7B")}
+EAGLE3_MODELS = {"qwen3_eagle3": ("qwen3_eagle3", "qwen3_eagle3_target")}
 
 DFLASH_MODELS = {
-    "qwen3_dflash": (
-        "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
-        "optimum-intel-internal-testing/tiny-random-qwen3",
-    )
+    "qwen3_dflash": ("qwen3_dflash", "qwen3"),
+}
+
+DFLASH_VLM_MODELS = {
+    "qwen3_5_dflash": ("qwen3_5_dflash", "qwen3_5"),
+    "qwen3_5_moe_dflash": ("qwen3_5_moe_dflash", "qwen3_5_moe"),
+    "gemma4_dflash": ("gemma4_dflash", "gemma4"),
 }
 
 # VLM-based Eagle3 draft models (AngelSlim Eagle3LlamaForCausalLM architecture).
 # These use Qwen3-VL MRoPE and target VLM models for speculative decoding.
-# Only used in the decoder test (not genai, since the VLM target needs image-text-to-text export).
 EAGLE3_VLM_MODELS = {
-    "qwen3_vl_eagle3": (
-        "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
-        "optimum-intel-internal-testing/tiny-random-qwen3-vl-layer10",
-    ),
+    "qwen3_vl_eagle3": ("qwen3_vl_eagle3", "qwen3_vl_eagle3_target"),
 }
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
@@ -678,6 +682,9 @@ REMOTE_CODE_MODELS = (
     "minicpm3",
     "deepseek",
     "qwen3_dflash",
+    "qwen3_5_dflash",
+    "qwen3_5_moe_dflash",
+    "gemma4_dflash",
     "qwen3_eagle3",
     "qwen3_vl_eagle3",
     "qwen3_asr",
@@ -848,6 +855,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "chatglm4": "chatglm",
     "codegen2": "codegen",
     "falcon-40b": "falcon",
+    "gemma4_dflash": "qwen3",
     "gemma4_moe": "gemma4",
     "gpt_oss_mxfp4": "gpt_oss",
     "llama_awq": "llama",
@@ -859,7 +867,13 @@ TEST_NAME_TO_MODEL_TYPE = {
     "opt_gptq": "opt",
     "perceiver_text": "perceiver",
     "perceiver_vision": "perceiver",
+    "qwen3_5_dflash": "qwen3",
+    "qwen3_5_moe_dflash": "qwen3",
     "qwen3_dflash": "qwen3",
+    "qwen3_eagle3": "llama",
+    "qwen3_eagle3_target": "qwen3",
+    "qwen3_vl_eagle3": "llama",
+    "qwen3_vl_eagle3_target": "qwen3_vl",
     "qwen3_vl_embedding": "qwen3_vl",
     "swin-window": "swin",
     "vit-with-attentions": "vit",

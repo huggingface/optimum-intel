@@ -18,6 +18,7 @@ import re
 from collections import Counter, defaultdict
 from typing import Any, Dict, Iterable, Sequence
 
+from .model_configs import LMInputEmbedsConfigHelper
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +31,17 @@ def _is_rank3_hidden_output(output, hidden_size: int) -> bool:
     return bool(last_dim.is_static and int(last_dim.get_length()) == hidden_size)
 
 
-def _discover_decoder_stack(source_model) -> Sequence[str]:
+def _discover_decoder_stack(source_model, decoder_config) -> Sequence[str]:
     """Return the one ordered decoder-layer module stack."""
     recorders = getattr(source_model, "can_record_outputs", {})
     recorder = recorders.get("hidden_states") if isinstance(recorders, dict) else None
     # Transformers accepts either a decoder-layer class directly or an OutputRecorder wrapper.
     decoder_layer_class = getattr(recorder, "target_class", recorder)
+    if not isinstance(decoder_layer_class, type):
+        text_model = getattr(getattr(source_model, "model", None), "language_model", None)
+        recorders = getattr(text_model, "can_record_outputs", {})
+        recorder = recorders.get("hidden_states") if isinstance(recorders, dict) else None
+        decoder_layer_class = getattr(recorder, "target_class", recorder)
     if not isinstance(decoder_layer_class, type):
         raise ValueError("Transformers does not declare a decoder-layer class for hidden_states.")
     # Composite wrappers can contain multiple decoder stacks; validate one contiguous stack.
@@ -48,7 +54,7 @@ def _discover_decoder_stack(source_model) -> Sequence[str]:
             continue
         stacks[prefix][int(raw_index)] = module_name
 
-    configured_count = int(source_model.config.num_hidden_layers)
+    configured_count = int(decoder_config.num_hidden_layers)
     candidates = {}
     for prefix, indexed_modules in stacks.items():
         indices = sorted(indexed_modules)
@@ -169,7 +175,7 @@ def _discover_locators_for_scope(
     return locators
 
 
-def discover_hidden_state_rt_info(source_model, ov_model) -> Dict[str, Any]:
+def discover_hidden_state_rt_info(source_model, ov_model, decoder_config) -> Dict[str, Any]:
     """
     Return hidden-state locator metadata without changing ``ov_model``.
 
@@ -178,8 +184,8 @@ def discover_hidden_state_rt_info(source_model, ov_model) -> Dict[str, Any]:
     the language-model head.
     """
 
-    decoder_modules = _discover_decoder_stack(source_model)
-    hidden_size = int(source_model.config.hidden_size)
+    decoder_modules = _discover_decoder_stack(source_model, decoder_config)
+    hidden_size = int(decoder_config.hidden_size)
     ops = ov_model.get_ordered_ops()
     scope_prefix = _infer_scope_prefix(ops, decoder_modules[0].rpartition(".")[0], len(decoder_modules))
     lm_heads = [name for name, _ in source_model.named_modules() if name.rsplit(".", 1)[-1] == "lm_head"]
@@ -207,11 +213,17 @@ def add_hidden_states_rt_info(source_model, ov_model, config: Any):
     """Best-effort hidden-state locator annotation that leaves the graph untouched."""
     hidden_states_rt_info_key = "hidden_states_decoder_layers"
 
-    if "text-generation" not in (getattr(config, "task", "") or ""):
+    if not isinstance(config, LMInputEmbedsConfigHelper) and "text-generation" not in (
+        getattr(config, "task", "") or ""
+    ):
+        return
+
+    decoder_config = getattr(config, "_config", None)
+    if decoder_config is None:
         return
 
     try:
-        annotation = discover_hidden_state_rt_info(source_model, ov_model)
+        annotation = discover_hidden_state_rt_info(source_model, ov_model, decoder_config)
         ov_model.set_rt_info(
             json.dumps(annotation, separators=(",", ":")),
             hidden_states_rt_info_key,
