@@ -1451,6 +1451,7 @@ class Gemma4TextOpenVINOConfig(Gemma3TextOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Gemma4DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Gemma4DummyPastKeyValuesGenerator
     MIN_TRANSFORMERS_VERSION = "5.5"
+    MAX_TRANSFORMERS_VERSION = "5.12.99"
 
     def add_past_key_values(self, inputs_or_outputs: dict[str, dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
@@ -5038,6 +5039,8 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "5.5"
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Gemma4ConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyTextInputGenerator)
+    MIN_TRANSFORMERS_VERSION = "5.5"
+    MAX_TRANSFORMERS_VERSION = "5.12.99"
 
     def __init__(
         self,
