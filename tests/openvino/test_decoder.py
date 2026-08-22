@@ -37,7 +37,6 @@ from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 
-
 if is_transformers_version(">=", "4.55"):
     from transformers import Mxfp4Config
 
@@ -100,6 +99,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "minicpm3",
         "arctic",
         "deepseek",
+        "cohere2_moe",
         ## not supporter after v5
         "llama4",
         "bitnet",
@@ -198,6 +198,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "dbrx": 2,
         "cohere": 2,
         "cohere2": 2,
+        "cohere2_moe": 2,
         "qwen2": 2,
         "qwen2_moe": 4,
         "arctic": 4,
