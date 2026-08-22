@@ -173,7 +173,7 @@ class ExportModelTest(unittest.TestCase):
         if model_type in REMOTE_CODE_MODELS:
             loading_kwargs["trust_remote_code"] = True
 
-        if model_type in ["muse_glimmer", "mistral3"]:
+        if model_type == "muse_glimmer":
             # the tiny checkpoint is stored in bfloat16, force fp32 so tracing does not mix dtypes
             loading_kwargs["dtype"] = torch.float32
 
