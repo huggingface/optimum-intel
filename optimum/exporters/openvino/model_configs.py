@@ -7293,6 +7293,12 @@ class KokoroOpenVINOConfig(OpenVINOConfig):
             "phonemes": {0: "batch_size", 1: "phoneme_length"},
         }
 
+    @property
+    def output_name_aliases(self) -> Dict[str, List[str]]:
+        # The second output is the predicted phoneme durations returned by
+        # KModel.forward_with_tokens (pred_dur)
+        return {"phonemes": ["pred_dur"]}
+
 
 @register_in_tasks_manager(
     "trocr",
