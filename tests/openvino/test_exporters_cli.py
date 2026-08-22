@@ -137,6 +137,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
+        ("image-text-to-text", "mistral3"),
         ("image-text-to-text", "muse_glimmer"),
     ]
     # filter architectures depending on min/max transformers supported versions
@@ -174,6 +175,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
         "lfm2_moe": 2,
         "llava": 2,
+        "mistral3": 2,
         "sana": 2,
         "ltx-video": 2,
         "ltx2": 2,
