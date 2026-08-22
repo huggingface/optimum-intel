@@ -869,7 +869,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(EAGLE3_MODELS.items())
     def test_load_and_infer_with_eagle3_model(self, model_arch, model_pair):
-        draft_model_id, target_model_id = model_pair
+        draft_model_name, target_model_name = model_pair
+        draft_model_id, target_model_id = MODEL_NAMES[draft_model_name], MODEL_NAMES[target_model_name]
 
         ov_model = OVModelForCausalLM.from_pretrained(draft_model_id, export=True, trust_remote_code=True)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
