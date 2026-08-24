@@ -34,6 +34,7 @@ jobs:
             "*export*",
             "*seq2seq*",
             "*transformation*",
+            "*diffusion*",
           ]
 
     runs-on: ubuntu-22.04
@@ -80,3 +81,8 @@ jobs:
         run: |
           uv pip install "transformers>=5.15,<5.16"
           pytest tests/openvino/${{ matrix.test-pattern }} -k "muse_glimmer" --durations=0
+
+      - name: LTX-2.3 Validation
+        run: |
+          uv pip install diffusers==0.40.0 "transformers>=5.10,<5.11"
+          pytest tests/openvino/${{ matrix.test-pattern }} -k ltx2_3 --durations=0
