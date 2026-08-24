@@ -268,7 +268,7 @@ def _generate_test_params():
         if arch in REMOTE_CODE_MODELS:
             continue
 
-        if arch in { # seq2seq models
+        if arch in {  # seq2seq models
             "bigbird_pegasus",
             "blenderbot-small",
             "longt5",
@@ -278,7 +278,7 @@ def _generate_test_params():
         }:
             continue
 
-        if arch in { #4.57.6 models
+        if arch in {  # 4.57.6 models
             "data2vec-text",
             "got_ocr2",
             "flaubert",
@@ -297,7 +297,7 @@ def _generate_test_params():
         }:
             continue
 
-        if arch in { #max transformers 5.0 required
+        if arch in {  # max transformers 5.0 required
             "gemma",
             "gemma2",
             "gemma3_text",
@@ -309,14 +309,14 @@ def _generate_test_params():
         if arch == "qwen3_5":  # max transformers 5.2.* required
             continue
 
-        if arch in { #max transformers 5.3.0 required
+        if arch in {  # max transformers 5.3.0 required
             "falcon_mamba",
             "granitemoehybrid",
             "mamba",
         }:
             continue
 
-        if arch in { #max transformers 5.4.0 required
+        if arch in {  # max transformers 5.4.0 required
             "lfm2",
             "lfm2_moe",
         }:
