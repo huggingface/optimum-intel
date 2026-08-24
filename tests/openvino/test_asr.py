@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 import torch
 from parameterized import parameterized
-from transformers import AutoProcessor, set_seed
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, set_seed
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
 from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED
@@ -32,8 +32,10 @@ from optimum.intel.utils.import_utils import is_transformers_version
 
 class OVASRTest(unittest.TestCase):
     """
-    Test ASR model types (Qwen3-ASR, FunASR).
+    Test ASR model types (Qwen3-ASR, FunASR, Cohere ASR).
     Compares OpenVINO model output to original PyTorch model output.
+    Cohere ASR additionally gets behavior-specific tests below since it is a native
+    (non trust-remote-code) model with export edge cases the other architectures don't hit.
     """
 
     SUPPORTED_ARCHITECTURES = ("qwen3_asr", "fun_asr")
@@ -46,19 +48,9 @@ class OVASRTest(unittest.TestCase):
         audio_data = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
         return audio_data, sample_rate
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @pytest.mark.skipif(
-        is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
-        reason="Currently, we support Qwen3-ASR and FunASR only for transformers==4.57 since they are trust-remote-code models.",
-    )
-    def test_compare_to_transformers(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
-        set_seed(SEED)
-
-        ref = self._get_pt_reference(model_arch)
-
+    def _compare_generated_text(self, model_id, ref, trust_remote_code):
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
-            model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, trust_remote_code=trust_remote_code, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
         )
 
         # For models with standalone preprocess_input, verify it reproduces the reference inputs.
@@ -89,6 +81,28 @@ class OVASRTest(unittest.TestCase):
         del ref["pt_model"]
         del ov_model
         gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.skipif(
+        is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
+        reason="Currently, we support Qwen3-ASR and FunASR only for transformers==4.57 since they are trust-remote-code models.",
+    )
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ref = self._get_pt_reference(model_arch)
+        self._compare_generated_text(model_id, ref, trust_remote_code=True)
+
+    def test_compare_to_transformers_cohere_asr(self):
+        # cohere_asr is natively supported by transformers (no trust_remote_code), so it isn't
+        # pinned to the transformers==4.57 window the remote-code architectures above require.
+        if "cohere_asr" not in CONFIG_MAPPING_NAMES:
+            self.skipTest("cohere_asr is not available in this transformers version")
+
+        model_id = MODEL_NAMES["cohere_asr"]
+        set_seed(SEED)
+        ref = self._get_pt_reference_cohere_asr()
+        self._compare_generated_text(model_id, ref, trust_remote_code=False)
 
     def _get_pt_reference(self, model_arch):
         if model_arch == "fun_asr":
@@ -210,23 +224,57 @@ class OVASRTest(unittest.TestCase):
             "pt_model": transformers_model,
         }
 
+    def _get_pt_reference_cohere_asr(self):
+        model_id = MODEL_NAMES["cohere_asr"]
+        processor = AutoProcessor.from_pretrained(model_id)
 
-class OVCohereASRTest(unittest.TestCase):
-    """
-    Cohere ASR specific behaviors that don't fit the generic compare-to-transformers pattern above.
-    """
+        np.random.seed(SEED)
+        audio_data = (np.random.randn(16000 * 5).astype(np.float32)) * 0.01
+        inputs = processor(audio_data, language="en", sampling_rate=16000, return_tensors="pt")
+        inputs.pop("audio_chunk_index", None)
 
-    SUPPORTED_ARCHITECTURES = ()
-    if "cohere_asr" in CONFIG_MAPPING_NAMES:
-        SUPPORTED_ARCHITECTURES += ("cohere_asr",)
+        transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id)
+        transformers_model.eval()
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+        decoder_start_token_id = getattr(transformers_model.config, "decoder_start_token_id", None) or 0
+        decoder_input_ids = torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id
+        gen_kwargs = {"max_new_tokens": 8, "do_sample": False, "num_beams": 1}
+
+        with torch.no_grad():
+            pt_generated_ids = transformers_model.generate(
+                input_features=inputs["input_features"],
+                attention_mask=inputs.get("attention_mask"),
+                decoder_input_ids=decoder_input_ids,
+                **gen_kwargs,
+            )
+        if hasattr(pt_generated_ids, "sequences"):
+            pt_generated_ids = pt_generated_ids.sequences
+
+        prompt_len = decoder_input_ids.shape[1]
+        pt_text = processor.batch_decode(pt_generated_ids[:, prompt_len:], skip_special_tokens=True)[0]
+
+        return {
+            "input_features": inputs["input_features"],
+            "decoder_input_ids": decoder_input_ids,
+            "attention_mask": inputs.get("attention_mask"),
+            "pt_text": pt_text,
+            "gen_kwargs": gen_kwargs,
+            "decode_fn": lambda ids, prompt_len: processor.batch_decode(ids[:, prompt_len:], skip_special_tokens=True)[
+                0
+            ],
+            "preprocess_check": None,
+            "pt_model": transformers_model,
+        }
+
     @pytest.mark.run_slow
     @slow
-    def test_generate_non_30s_multiple_audio(self, model_arch):
+    def test_cohere_asr_generate_non_30s_multiple_audio(self):
         # The encoder used to inherit the Whisper dummy generator, which pins input_features to
         # 3000 frames, so any audio that was not a multiple of 30s failed at inference time
-        model_id = MODEL_NAMES[model_arch]
+        if "cohere_asr" not in CONFIG_MAPPING_NAMES:
+            self.skipTest("cohere_asr is not available in this transformers version")
+
+        model_id = MODEL_NAMES["cohere_asr"]
         model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
         processor = AutoProcessor.from_pretrained(model_id)
 
@@ -259,13 +307,15 @@ class OVCohereASRTest(unittest.TestCase):
         del model
         gc.collect()
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow
     @slow
-    def test_padded_batch_matches_single(self, model_arch):
+    def test_cohere_asr_padded_batch_matches_single(self):
         # Clips of different lengths are padded to a common size, and the frame level mask has to
         # survive the eightfold subsampling for cross attention to skip the padded tail
-        model_id = MODEL_NAMES[model_arch]
+        if "cohere_asr" not in CONFIG_MAPPING_NAMES:
+            self.skipTest("cohere_asr is not available in this transformers version")
+
+        model_id = MODEL_NAMES["cohere_asr"]
         model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
         processor = AutoProcessor.from_pretrained(model_id)
 
@@ -287,13 +337,15 @@ class OVCohereASRTest(unittest.TestCase):
         del model
         gc.collect()
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow
     @slow
-    def test_with_past_decoder_is_stateful(self, model_arch):
+    def test_cohere_asr_with_past_decoder_is_stateful(self):
         # The with-past export used to produce a plain decoder without beam_idx or KV cache state,
         # which stateful consumers such as openvino_genai.WhisperPipeline require
-        model_id = MODEL_NAMES[model_arch]
+        if "cohere_asr" not in CONFIG_MAPPING_NAMES:
+            self.skipTest("cohere_asr is not available in this transformers version")
+
+        model_id = MODEL_NAMES["cohere_asr"]
         model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE, stateful=True)
         self.assertTrue(model_has_state(model.decoder.model))
         decoder_input_names = {decoder_input.get_any_name() for decoder_input in model.decoder.model.inputs}
@@ -317,13 +369,15 @@ class OVCohereASRTest(unittest.TestCase):
         del model
         gc.collect()
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow
     @slow
-    def test_exported_processor_is_self_contained(self, model_arch):
+    def test_cohere_asr_exported_processor_is_self_contained(self):
         # Reloading the processor straight from an export directory has to work without copying
         # tokenizer files over by hand
-        model_id = MODEL_NAMES[model_arch]
+        if "cohere_asr" not in CONFIG_MAPPING_NAMES:
+            self.skipTest("cohere_asr is not available in this transformers version")
+
+        model_id = MODEL_NAMES["cohere_asr"]
         with TemporaryDirectory() as tmp_dir:
             model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
             model.save_pretrained(tmp_dir)
