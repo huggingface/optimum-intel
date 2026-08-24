@@ -78,6 +78,8 @@ from optimum.exporters.openvino.input_generators import (
     DummyVideoChatFlashQwenProjectorInputGenerator,
     DummyVisionPositionIdsInputGenerator,
     DummyVisionPositionIdsPhi4InputGenerator,
+    DummyZImageCapFeatInputGenerator,
+    DummyZImageTransformerVisionInputGenerator,
     Eagle3DummyGenerator,
     Eagle3VLMDummyGenerator,
     FunASRDummyAudioInputGenerator,
@@ -7310,48 +7312,6 @@ class TrOCROpenVINOConfig(TextSeq2SeqOpenVINOConfig):
         num_layers="decoder_layers",
         decoder_num_attention_heads="decoder_attention_heads",
         hidden_size="hidden_size",
-    )
-
-
-class DummyZImageTransformerVisionInputGenerator(DummyUnetVisionInputGenerator):
-    """Generates dummy latent inputs for ZImageTransformer2DModel export.
-
-    Uses 64x64 latent (= 512x512 / 8) as the trace resolution.  The traced graph is
-    resolution agnostic (see ZImageTransformerModelPatcher), so this only determines
-    the shape of the example input, not the resolutions the exported model supports.
-    """
-
-    SUPPORTED_INPUT_NAMES = (
-        "pixel_values",
-        "pixel_mask",
-        "sample",
-        "latent_sample",
-        "hidden_states",
-    )
-
-    # No __init__ override: DummyVisionInputGenerator already defaults to
-    # batch_size=2, num_channels=3, width=64, height=64 (= a 64x64 latent, i.e. a
-    # 512x512 image at the VAE's spatial factor of 8), and takes num_channels from
-    # the normalized config.
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name == "hidden_states":
-            return self.random_float_tensor(
-                [self.batch_size, self.num_channels, self.height, self.width],
-                framework=framework,
-                dtype=float_dtype,
-            )
-        return super().generate(input_name, framework, int_dtype, float_dtype)
-
-
-class DummyZImageCapFeatInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
-    """Generates dummy text-feature inputs for ZImageTransformer2DModel export."""
-
-    SUPPORTED_INPUT_NAMES = (
-        "decoder_input_ids",
-        "decoder_attention_mask",
-        "encoder_outputs",
-        "encoder_hidden_states",
     )
 
 
