@@ -23,7 +23,7 @@ from parameterized import parameterized
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, set_seed
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
-from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED
+from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS, SEED
 
 from optimum.exporters.openvino.stateful import model_has_state
 from optimum.intel import OVModelForSpeechSeq2Seq
@@ -38,7 +38,12 @@ class OVASRTest(unittest.TestCase):
     (non trust-remote-code) model with export edge cases the other architectures don't hit.
     """
 
-    SUPPORTED_ARCHITECTURES = ("qwen3_asr", "fun_asr")
+    SUPPORTED_ARCHITECTURES = ()
+    # Qwen3-ASR and FunASR are trust-remote-code models we currently support only for transformers==4.57
+    if is_transformers_version(">=", "4.57") and is_transformers_version("<", "4.58"):
+        SUPPORTED_ARCHITECTURES += ("qwen3_asr", "fun_asr")
+    if "cohere_asr" in CONFIG_MAPPING_NAMES:
+        SUPPORTED_ARCHITECTURES += ("cohere_asr",)
 
     def _generate_audio_data(self):
         np.random.seed(SEED)
@@ -82,31 +87,18 @@ class OVASRTest(unittest.TestCase):
         del ov_model
         gc.collect()
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @pytest.mark.skipif(
-        is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
-        reason="Currently, we support Qwen3-ASR and FunASR only for transformers==4.57 since they are trust-remote-code models.",
-    )
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ref = self._get_pt_reference(model_arch)
-        self._compare_generated_text(model_id, ref, trust_remote_code=True)
-
-    def test_compare_to_transformers_cohere_asr(self):
-        # cohere_asr is natively supported by transformers (no trust_remote_code), so it isn't
-        # pinned to the transformers==4.57 window the remote-code architectures above require.
-        if "cohere_asr" not in CONFIG_MAPPING_NAMES:
-            self.skipTest("cohere_asr is not available in this transformers version")
-
-        model_id = MODEL_NAMES["cohere_asr"]
-        set_seed(SEED)
-        ref = self._get_pt_reference_cohere_asr()
-        self._compare_generated_text(model_id, ref, trust_remote_code=False)
+        self._compare_generated_text(model_id, ref, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
 
     def _get_pt_reference(self, model_arch):
         if model_arch == "fun_asr":
             return self._get_pt_reference_funasr()
+        elif model_arch == "cohere_asr":
+            return self._get_pt_reference_cohere_asr()
         else:
             return self._get_pt_reference_qwen3_asr()
 
@@ -268,12 +260,10 @@ class OVASRTest(unittest.TestCase):
 
     @pytest.mark.run_slow
     @slow
+    @pytest.mark.skipif("cohere_asr" not in CONFIG_MAPPING_NAMES, reason="cohere_asr requires a newer transformers")
     def test_cohere_asr_generate_non_30s_multiple_audio(self):
         # The encoder used to inherit the Whisper dummy generator, which pins input_features to
         # 3000 frames, so any audio that was not a multiple of 30s failed at inference time
-        if "cohere_asr" not in CONFIG_MAPPING_NAMES:
-            self.skipTest("cohere_asr is not available in this transformers version")
-
         model_id = MODEL_NAMES["cohere_asr"]
         model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
         processor = AutoProcessor.from_pretrained(model_id)
@@ -309,12 +299,10 @@ class OVASRTest(unittest.TestCase):
 
     @pytest.mark.run_slow
     @slow
+    @pytest.mark.skipif("cohere_asr" not in CONFIG_MAPPING_NAMES, reason="cohere_asr requires a newer transformers")
     def test_cohere_asr_padded_batch_matches_single(self):
         # Clips of different lengths are padded to a common size, and the frame level mask has to
         # survive the eightfold subsampling for cross attention to skip the padded tail
-        if "cohere_asr" not in CONFIG_MAPPING_NAMES:
-            self.skipTest("cohere_asr is not available in this transformers version")
-
         model_id = MODEL_NAMES["cohere_asr"]
         model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
         processor = AutoProcessor.from_pretrained(model_id)
@@ -339,12 +327,10 @@ class OVASRTest(unittest.TestCase):
 
     @pytest.mark.run_slow
     @slow
+    @pytest.mark.skipif("cohere_asr" not in CONFIG_MAPPING_NAMES, reason="cohere_asr requires a newer transformers")
     def test_cohere_asr_with_past_decoder_is_stateful(self):
         # The with-past export used to produce a plain decoder without beam_idx or KV cache state,
         # which stateful consumers such as openvino_genai.WhisperPipeline require
-        if "cohere_asr" not in CONFIG_MAPPING_NAMES:
-            self.skipTest("cohere_asr is not available in this transformers version")
-
         model_id = MODEL_NAMES["cohere_asr"]
         model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE, stateful=True)
         self.assertTrue(model_has_state(model.decoder.model))
@@ -371,12 +357,10 @@ class OVASRTest(unittest.TestCase):
 
     @pytest.mark.run_slow
     @slow
+    @pytest.mark.skipif("cohere_asr" not in CONFIG_MAPPING_NAMES, reason="cohere_asr requires a newer transformers")
     def test_cohere_asr_exported_processor_is_self_contained(self):
         # Reloading the processor straight from an export directory has to work without copying
         # tokenizer files over by hand
-        if "cohere_asr" not in CONFIG_MAPPING_NAMES:
-            self.skipTest("cohere_asr is not available in this transformers version")
-
         model_id = MODEL_NAMES["cohere_asr"]
         with TemporaryDirectory() as tmp_dir:
             model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
