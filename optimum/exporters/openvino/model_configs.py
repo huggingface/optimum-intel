@@ -51,6 +51,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMVImageInputGenerator,
     DummyMiniCPMVResampleInputGenerator,
+    DummyMolmo2VisionInputGenerator,
     DummyMuseGlimmerVisionInputGenerator,
     DummyPhi3VisionProjectionInputGenerator,
     DummyQwen2VLLMInputGenerator,
@@ -157,6 +158,8 @@ from optimum.exporters.openvino.model_patcher import (
     MiniCPMModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
+    Molmo2VisionEmbeddingsModelPatcher,
+    Molmo2LMModelPatcher,
     MistralModelPatcher,
     MixtralModelPatcher,
     ModelPatcher,
@@ -2259,6 +2262,99 @@ class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return InternVLChatImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+
+@register_in_tasks_manager(
+    "molmo2_text",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class Molmo2TextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    # Molmo2 is a trust-remote-code architecture; its remote modeling code relies on the
+    # transformers 4.57 RoPE / cache APIs and is incompatible with transformers>=5.0.
+    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
+    # Molmo2 text uses an explicit ``head_dim`` that differs from ``hidden_size // num_heads``,
+    # so the normalized config must expose it directly (NormalizedTextConfig reads it from the
+    # underlying config attributes).
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = OVDecoderModelPatcher
+
+
+@register_in_tasks_manager("molmo2", *["image-text-to-text"], library_name="transformers")
+class Molmo2OpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
+    SUPPORTS_PAST = True
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyMolmo2VisionInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            behavior=behavior,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            # The vision dummy generator needs access to both the vit and adapter sub-configs,
+            # so we keep the full config as the normalized config for that behavior.
+            self._config = config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if not self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {
+            "images": {0: "batch_size", 1: "num_crops"},
+            "pooled_patches_idx": {0: "batch_size", 1: "num_pooled_patches"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if not self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"last_hidden_state": {0: "num_image_tokens"}}
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return Molmo2VisionEmbeddingsModelPatcher(self, model, model_kwargs)
+
+    def with_behavior(self, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            # Molmo2 applies bidirectional attention between image placeholder tokens at prefill
+            # (token_type_ids == 1), so the language model needs token_type_ids as an input and a
+            # patcher that bakes the bidirectional mask into the traced graph.
+            model_type = self._orig_config.text_config.model_type
+            return get_vlm_text_generation_config(
+                model_type,
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Molmo2LMModelPatcher,
+                inputs_update={"token_type_ids": {0: "batch_size", 1: "sequence_length"}},
+            )
+        return super().with_behavior(behavior)
 
 
 @register_in_tasks_manager(

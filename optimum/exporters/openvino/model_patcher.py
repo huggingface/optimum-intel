@@ -3041,13 +3041,13 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
-        model.__orig_forward = model.forward
+        self._image_embed_orig_forward = model.forward
         model.forward = types.MethodType(llava_vision_embed_forward, model)
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        self._model.forward = self._model.__orig_forward
+        self._model.forward = self._image_embed_orig_forward
 
 
 class MairaImageEmbeddingModelPatcher(ModelPatcher):
@@ -3663,6 +3663,26 @@ class InputEmbeddingPatcher(ModelPatcher):
 
 def phi3_vision_embeddings_forward(self, pixel_values: torch.FloatTensor):
     return self.get_img_features(pixel_values)
+
+
+def molmo2_vision_embeddings_forward(self, images: torch.FloatTensor, pooled_patches_idx: torch.LongTensor):
+    # ``self`` is the full Molmo2ForConditionalGeneration model. The heavy, data-dependent
+    # ``build_batched_images`` step (that turns the processor outputs into the ``images`` /
+    # ``pooled_patches_idx`` tensors) is executed on the runtime side; here we only trace the
+    # weight-bearing vision backbone that maps those tensors to the pooled image features.
+    return _get_model_attribute(self, "vision_backbone")(images, pooled_patches_idx)
+
+
+class Molmo2VisionEmbeddingsModelPatcher(LlavaImageEmbeddingModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        self._image_embed_orig_forward = model.forward
+        model.forward = types.MethodType(molmo2_vision_embeddings_forward, model)
+        ModelPatcher.__init__(self, config, model, model_kwargs)
 
 
 class Phi3VisionImageEmbeddingsPatcher(ModelPatcher):
@@ -5259,6 +5279,78 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+
+
+class Molmo2LMModelPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        model_forward = self.orig_forward
+
+        # Molmo2 applies bidirectional attention between image placeholder tokens at prefill via an
+        # OR-mask (``token_type_ids == 1`` on both query and key). During export the language model is
+        # traced with an already-initialized past, so the reference forward takes its
+        # ``is_prefill=False`` branch and drops the OR-mask, yielding a purely-causal graph.
+        # We rebuild the causal base with the model's own trace-friendly ``create_causal_mask`` (the
+        # same construction the plain-causal export already uses) and then un-mask attention between
+        # image tokens using pure broadcasting over ``token_type_ids`` (no ``torch.full`` static
+        # shapes and no ``vmap`` gather from ``token_type_ids_mask_function``), so the bidirectional
+        # image attention is baked into the exported language model while staying shape-dynamic.
+        @functools.wraps(model_forward)
+        def forward_with_bidirectional_mask(*args, **kwargs):
+            bound_args = inspect.signature(model_forward).bind(*args, **kwargs)
+            bound_args.apply_defaults()
+            token_type_ids = bound_args.arguments.get("token_type_ids")
+            attention_mask = bound_args.arguments.get("attention_mask")
+            inputs_embeds = bound_args.arguments.get("inputs_embeds")
+            past_key_values = bound_args.arguments.get("past_key_values")
+            cache_position = bound_args.arguments.get("cache_position")
+            position_ids = bound_args.arguments.get("position_ids")
+            if token_type_ids is not None and isinstance(attention_mask, torch.Tensor) and attention_mask.ndim == 2:
+                from transformers.masking_utils import create_causal_mask
+
+                if cache_position is None:
+                    past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+                    cache_position = torch.arange(
+                        past_seen_tokens,
+                        past_seen_tokens + inputs_embeds.shape[1],
+                        device=inputs_embeds.device,
+                    )
+                causal_mask = create_causal_mask(
+                    config=self._model.config.get_text_config(),
+                    input_embeds=inputs_embeds,
+                    attention_mask=attention_mask,
+                    cache_position=cache_position,
+                    past_key_values=past_key_values,
+                    position_ids=position_ids,
+                )
+                if causal_mask is not None:
+                    # Derive lengths from graph-input tensors (not the derived causal_mask) so the
+                    # slice/broadcast stays shape-dynamic in the traced graph.
+                    seq_len = inputs_embeds.shape[1]
+                    target_len = attention_mask.shape[-1]
+                    # Align token_type_ids to the key/value (target) length.
+                    token_type_ids = torch.nn.functional.pad(
+                        token_type_ids, (0, target_len - token_type_ids.shape[-1]), value=0
+                    )
+                    is_image = token_type_ids == 1  # [batch, target_len]
+                    query_is_image = is_image[:, target_len - seq_len : target_len]  # [batch, seq_len]
+                    # Bidirectional attention where both query and key are image tokens.
+                    both_image = (query_is_image.unsqueeze(2) & is_image.unsqueeze(1)).unsqueeze(1)
+                    causal_mask = causal_mask.masked_fill(both_image, 0.0)
+                    bound_args.arguments["attention_mask"] = causal_mask
+                    bound_args.arguments["cache_position"] = cache_position
+                    # token_type_ids has been consumed into the 4D mask; drop it so the reference
+                    # forward does not rebuild the mask (already-4D masks are returned unchanged).
+                    bound_args.arguments["token_type_ids"] = None
+            return model_forward(*bound_args.args, **bound_args.kwargs)
+
+        self.orig_forward = forward_with_bidirectional_mask
 
 
 # Forward method of the language model of Gemma3n, needs to be patched to pass 'per_layer_inputs',
