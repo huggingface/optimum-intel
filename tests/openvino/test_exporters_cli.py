@@ -1250,6 +1250,10 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
 
             if is_prequantized:
+                # Already-quantized models (e.g. compressed-tensors) are exported as-is, without
+                # going through NNCF weight compression, so none of the `--awq`/`--gptq`/
+                # `--scale-estimation`/`--lora-correction` NNCF algorithms below ever run for
+                # them; there is nothing to check.
                 return
 
             # Starting from NNCF 2.17 there is a support for data-free AWQ
