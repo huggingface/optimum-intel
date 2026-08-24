@@ -610,6 +610,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_vl",
         "videochat_flash_qwen",
         "muse_glimmer",
+        "gemma4",
+        "gemma4_moe",
+        "gemma4_unified",
     ]
     SUPPORT_AUDIO = ["qwen3_omni_moe"]
     # "llama" is registered for image-text-to-text
