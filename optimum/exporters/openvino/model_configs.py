@@ -49,6 +49,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
+    DummyMiniCPMV4_6VisionInputGenerator,
     DummyMiniCPMVImageInputGenerator,
     DummyMiniCPMVResampleInputGenerator,
     DummyMuseGlimmerVisionInputGenerator,
@@ -155,6 +156,7 @@ from optimum.exporters.openvino.model_patcher import (
     MambaPatcher,
     MiniCPM3Patcher,
     MiniCPMModelPatcher,
+    MiniCPMV4_6VisionEmbeddingsModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
     MistralModelPatcher,
@@ -3265,6 +3267,61 @@ class MiniCPMOOpenVINOConfig(MiniCPMVOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
     MAX_TRANSFORMERS_VERSION = "4.51.3"
     MODEL_TYPE = "minicpmo"
+
+
+@register_in_tasks_manager("minicpmv4_6", *["image-text-to-text"], library_name="transformers")
+class MiniCPMV4_6OpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "5.7.0"
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMV4_6VisionInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            behavior=behavior,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            # keep the full model config so the dummy generator can access both
+            # the nested ``vision_config`` and the top-level ``merge_kernel_size``
+            self._config = config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {0: "batch_size", 3: "packed_width"},
+                "position_ids": {1: "num_patches"},
+                "window_index": {0: "num_patches"},
+                "merge_index": {0: "num_window_tokens"},
+            }
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "num_tokens"}}
+        return {}
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return MiniCPMV4_6VisionEmbeddingsModelPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
 
 
 class Phi3VisionConfigBehavior(str, enum.Enum):

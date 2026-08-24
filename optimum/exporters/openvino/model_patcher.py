@@ -3035,6 +3035,10 @@ def maira_vision_embed_forward(self, pixel_values):
 
 
 class LlavaImageEmbeddingModelPatcher(ModelPatcher):
+    # Traced forward used to export the image-embedding submodel. Subclasses
+    # only override this to reuse the identical save/restore logic below.
+    _patched_forward = staticmethod(llava_vision_embed_forward)
+
     def __init__(
         self,
         config: "OpenVINOConfig",
@@ -3042,7 +3046,7 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
-        model.forward = types.MethodType(llava_vision_embed_forward, model)
+        model.forward = types.MethodType(type(self)._patched_forward, model)
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -3620,6 +3624,111 @@ class MiniCPMVImageEmbeddingsModelPatcher(ModelPatcher):
         if is_torch_version(">=", "2.0.0"):
             for layer in self._model.encoder.layers:
                 layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+def _minicpmv4_6_vision_full_attention(attn, hidden_states):
+    # Full self-attention over a single packed image (one NaViT segment).
+    # Replaces the cu_seqlens-based variable length attention of
+    # MiniCPMV4_6VisionAttention which is data-dependent and not traceable.
+    batch, seq_len, _ = hidden_states.shape
+    query = attn.q_proj(hidden_states).view(batch, seq_len, -1, attn.head_dim).transpose(1, 2)
+    key = attn.k_proj(hidden_states).view(batch, seq_len, -1, attn.head_dim).transpose(1, 2)
+    value = attn.v_proj(hidden_states).view(batch, seq_len, -1, attn.head_dim).transpose(1, 2)
+    attn_output = F.scaled_dot_product_attention(query, key, value, scale=attn.scaling)
+    attn_output = attn_output.transpose(1, 2).reshape(batch, seq_len, -1)
+    return attn.out_proj(attn_output)
+
+
+def _minicpmv4_6_vision_window_attention(attn, hidden_states, window_size):
+    # Attention restricted to non-overlapping windows of `window_size` tokens.
+    # The tokens are assumed to be already grouped window-contiguous, so the
+    # windowed attention is expressed as batched full attention over
+    # (num_windows, window_size) instead of using cu_seqlens.
+    batch, seq_len, embed_dim = hidden_states.shape
+    num_windows = seq_len // window_size
+    windows = hidden_states.view(num_windows, window_size, embed_dim)
+    query = attn.q_proj(windows).view(num_windows, window_size, -1, attn.head_dim).transpose(1, 2)
+    key = attn.k_proj(windows).view(num_windows, window_size, -1, attn.head_dim).transpose(1, 2)
+    value = attn.v_proj(windows).view(num_windows, window_size, -1, attn.head_dim).transpose(1, 2)
+    attn_output = F.scaled_dot_product_attention(query, key, value, scale=attn.scaling)
+    attn_output = attn_output.transpose(1, 2).reshape(num_windows, window_size, embed_dim).reshape(batch, seq_len, embed_dim)
+    return attn.out_proj(attn_output)
+
+
+def _minicpmv4_6_vision_embeddings_forward(self, pixel_values, position_ids, window_index, merge_index):
+    """Traceable forward for the MiniCPM-V-4.6 vision tower + merger.
+
+    Runs the whole ``get_image_features`` pipeline (patch embeddings, encoder,
+    intermediate window-attention merger, remaining encoder, post layernorm and
+    the final downsample merger) for a single NaViT-packed image.
+
+    The data-dependent index tensors (``position_ids`` for the interpolated
+    position embeddings, ``window_index`` for the window-attention merger and
+    ``merge_index`` for the final merger) are precomputed on the runtime side
+    and passed as inputs, so the traced graph stays dynamic w.r.t. the number
+    of visual patches. All spatial ``reshape``/``permute`` groupings of the
+    original implementation are expressed as ``index_select`` + ``reshape`` so
+    the graph is valid for any image resolution.
+    """
+    vision_tower = self.model.vision_tower
+    merger = self.model.merger
+    window_h, window_w = vision_tower.vit_merger.window_kernel_size
+    window_size = window_h * window_w
+    merge_h, merge_w = merger.merge_kernel_size
+
+    # patch embeddings + interpolated position embeddings
+    patch_embeds = vision_tower.embeddings.patch_embedding(pixel_values)
+    hidden_states = patch_embeds.flatten(2).transpose(1, 2)
+    hidden_states = hidden_states + vision_tower.embeddings.position_embedding(position_ids)
+
+    insert_layer_id = vision_tower.config.insert_layer_id
+    for layer_index, encoder_layer in enumerate(vision_tower.encoder.layers):
+        residual = hidden_states
+        hidden_states = encoder_layer.layer_norm1(hidden_states)
+        hidden_states = _minicpmv4_6_vision_full_attention(encoder_layer.self_attn, hidden_states)
+        hidden_states = residual + hidden_states
+        residual = hidden_states
+        hidden_states = encoder_layer.layer_norm2(hidden_states)
+        hidden_states = encoder_layer.mlp(hidden_states)
+        hidden_states = residual + hidden_states
+
+        if layer_index == insert_layer_id:
+            vit_merger = vision_tower.vit_merger
+            residual = hidden_states
+            merged = vit_merger.layer_norm1(hidden_states)
+            merged = merged.index_select(1, window_index)
+            merged = _minicpmv4_6_vision_window_attention(vit_merger.self_attn, merged, window_size)
+            merged = merged.index_select(1, torch.argsort(window_index))
+            hidden_states = residual + merged
+            # channel-wise 2x2 window merge expressed as index_select + reshape
+            regrouped = hidden_states[0].index_select(0, window_index)
+            embed_dim = regrouped.shape[-1]
+            merged_tokens = regrouped.reshape(-1, window_size * embed_dim)
+            merge_residual = regrouped.reshape(-1, window_size, embed_dim).mean(dim=1)
+            merged_tokens = vit_merger.pre_norm(merged_tokens)
+            merged_tokens = vit_merger.linear_1(merged_tokens)
+            merged_tokens = vit_merger.act(merged_tokens)
+            merged_tokens = vit_merger.linear_2(merged_tokens)
+            hidden_states = (merged_tokens + merge_residual).unsqueeze(0)
+
+    hidden_states = vision_tower.post_layernorm(hidden_states)
+
+    # final downsample merger (16x mode) expressed as index_select + reshape
+    downsample_mlp = merger.mlp[0]
+    regrouped = hidden_states[0].index_select(0, merge_index)
+    embed_dim = regrouped.shape[-1]
+    merged_tokens = regrouped.reshape(-1, merge_h * merge_w * embed_dim)
+    merged_tokens = downsample_mlp.pre_norm(merged_tokens).view(-1, downsample_mlp.linear_1.in_features)
+    merged_tokens = downsample_mlp.linear_1(merged_tokens)
+    merged_tokens = downsample_mlp.act(merged_tokens)
+    merged_tokens = downsample_mlp.linear_2(merged_tokens)
+    return merged_tokens
+
+
+class MiniCPMV4_6VisionEmbeddingsModelPatcher(LlavaImageEmbeddingModelPatcher):
+    # Reuses the image-embedding save/restore logic from
+    # LlavaImageEmbeddingModelPatcher; only the traced forward differs.
+    _patched_forward = staticmethod(_minicpmv4_6_vision_embeddings_forward)
 
 
 class LlavaQwen2ImageEmbeddingsModelPatcher(ModelPatcher):
@@ -9968,7 +10077,22 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DynamicCache
+        # ``Qwen3_5DynamicCache`` only exists in the transformers releases the
+        # original qwen3_5 support targeted (<= 5.2.x). Starting with the
+        # transformers version required by MiniCPM-V-4.6 (>= 5.7.0) the hybrid
+        # linear/full attention cache was folded into the standard
+        # ``DynamicCache`` and the per-layer states moved to
+        # ``cache.layers[idx].conv_states``. The wrapper below only relies on a
+        # ``Cache`` base to be recognised as a cache object, so fall back to the
+        # standard ``DynamicCache`` on newer transformers.
+        try:
+            from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DynamicCache as _Qwen3_5CacheBase
+
+            legacy_qwen3_5_cache = True
+        except ImportError:
+            from transformers.cache_utils import DynamicCache as _Qwen3_5CacheBase
+
+            legacy_qwen3_5_cache = False
 
         from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
 
@@ -9985,7 +10109,7 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
             self._text_model = self._model.model
             self._text_config = self._model.model.config
 
-        class Qwen3_5DynamicCacheWrap(Qwen3_5DynamicCache):
+        class Qwen3_5DynamicCacheWrap(_Qwen3_5CacheBase):
             def __init__(self, config, conv_states, recurrent_states, key_cache, value_cache):
                 # Call parent constructor with all required arguments
                 super().__init__(config=config)
@@ -9994,6 +10118,17 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
                 self.recurrent_states = recurrent_states
                 self.key_cache = key_cache
                 self.value_cache = value_cache
+                # ``layer_types``/``transformer_layers``/``last_linear_layer`` are
+                # provided by the legacy ``Qwen3_5DynamicCache`` but not by the
+                # standard ``DynamicCache`` used on transformers >= 5.7, so derive
+                # them from the config to keep the wrapper self-contained.
+                self.layer_types = list(config.layer_types)
+                self.transformer_layers = [
+                    i for i, layer_type in enumerate(self.layer_types) if layer_type == "full_attention"
+                ]
+                self.last_linear_layer = max(
+                    i for i, layer_type in enumerate(self.layer_types) if layer_type == "linear_attention"
+                )
                 self.full_attn_mapping = {}
                 self.linear_attn_mapping = {}
                 full_attn_layer_idx = 0
@@ -10033,11 +10168,29 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
                     return 0
                 return self.key_cache[layer_idx].shape[-2]
 
-            @property
-            def has_previous_state(self):
+            def get_mask_sizes(self, query_length: int, layer_idx: Optional[int] = None) -> tuple[int, int]:
+                """Return the (kv_length, kv_offset) used to build the attention mask.
+
+                Required by transformers >= 5.7 ``create_causal_mask``, which reads the
+                key-value length from the cache instead of the 2D attention mask. The
+                standard implementation would consult ``self.layers`` which this wrapper
+                bypasses, so derive the length from the tracked full-attention cache.
+                """
+                past_seen_tokens = self.get_seq_length()
+                return past_seen_tokens + query_length, 0
+
+            def _has_previous_state(self):
                 """We have a previous state if the last linear (conv) layer was already updated."""
                 layer_idx = self.linear_attn_mapping[self.last_linear_layer]
                 return self.conv_states[layer_idx] is not None
+
+            if legacy_qwen3_5_cache:
+                # transformers <= 5.2 accesses ``has_previous_state`` as a property.
+                has_previous_state = property(_has_previous_state)
+            else:
+                # transformers >= 5.7 calls ``has_previous_state(layer_idx=None)``.
+                def has_previous_state(self, layer_idx: Optional[int] = None) -> bool:
+                    return self._has_previous_state()
 
         # the patch is needed to include KV-cache, Conv, and SSM states in the inputs and outputs.
         def patched_forward(

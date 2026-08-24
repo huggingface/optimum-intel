@@ -80,3 +80,8 @@ jobs:
         run: |
           uv pip install "transformers>=5.15,<5.16"
           pytest tests/openvino/${{ matrix.test-pattern }} -k "muse_glimmer" --durations=0
+
+      - name: MiniCPM-V-4.6 Validation
+        run: |
+          uv pip install "transformers>=5.7,<5.8"
+          pytest tests/openvino/${{ matrix.test-pattern }} -k "minicpmv4_6" --durations=0
