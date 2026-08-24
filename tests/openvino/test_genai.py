@@ -593,7 +593,7 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
     )
     SPECULATIVE_DECODING_VLM_MODELS = _filter_models(
         [
-            (model_arch, model_pair, "Eagle3", "2026.999", "image-text-to-text")
+            (model_arch, model_pair, "Eagle3", "2026.4", "image-text-to-text")
             for model_arch, model_pair in EAGLE3_VLM_MODELS.items()
         ]
         + [
