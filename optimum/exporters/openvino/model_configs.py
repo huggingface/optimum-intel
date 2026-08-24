@@ -7361,19 +7361,6 @@ class ZImageTransformerOpenVINOConfig(UNetOpenVINOConfig):
             "sample": {0: "batch_size", 2: "height", 3: "width"},
         }
 
-    def rename_ambiguous_inputs(self, inputs):
-        return inputs
-
-    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
-        # Trace with batch_size=2 so the batch dimension is actually exercised: at
-        # batch_size=1 a leaked per-item constant would fold away silently and only
-        # surface later as a shape error at inference time.
-        from optimum.exporters.openvino.model_patcher import ZIMAGE_CAP_SEQ
-
-        kwargs["batch_size"] = 2
-        kwargs["sequence_length"] = ZIMAGE_CAP_SEQ
-        return super().generate_dummy_inputs(framework=framework, **kwargs)
-
 
 @register_in_tasks_manager("qwen3-text-encoder", *["feature-extraction"], library_name="diffusers")
 class ZImageTextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
