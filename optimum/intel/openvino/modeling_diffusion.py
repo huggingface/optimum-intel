@@ -128,9 +128,10 @@ else:
     SanaSprintPipeline = object
 
 if is_diffusers_version(">=", "0.37.0"):
-    from diffusers import ZImagePipeline
+    from diffusers import ZImageImg2ImgPipeline, ZImagePipeline
 else:
     ZImagePipeline = object
+    ZImageImg2ImgPipeline = object
 
 
 if is_diffusers_version(">=", "0.35.0"):
@@ -2469,10 +2470,16 @@ class _OVZImageTransformerAdapter:
         return getattr(self._ov_transformer, name)
 
 
-class OVZImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, ZImagePipeline):
-    main_input_name = "prompt"
-    export_feature = "text-to-image"
-    auto_model_class = ZImagePipeline
+class _OVZImagePipelineMixin:
+    """Behaviour shared by the OpenVINO Z-Image pipelines.
+
+    The text-to-image and image-to-image pipelines drive the transformer with the same
+    list-based convention and build prompt embeddings the same way, so the adapter
+    wrapping and the ``_encode_prompt`` override live here rather than in each class.
+
+    Listed first among the bases so these two methods win over the diffusers pipeline
+    they are mixed into.
+    """
 
     def __call__(self, *args, **kwargs):
         """Wrap transformer with ZImage-to-OV adapter before calling the pipeline."""
@@ -2480,7 +2487,7 @@ class OVZImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, ZImag
         if not isinstance(orig_transformer, _OVZImageTransformerAdapter):
             self.transformer = _OVZImageTransformerAdapter(orig_transformer)
         try:
-            return ZImagePipeline.__call__(self, *args, **kwargs)
+            return self.auto_model_class.__call__(self, *args, **kwargs)
         finally:
             self.transformer = orig_transformer
 
@@ -2531,6 +2538,32 @@ class OVZImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, ZImag
             embeddings_list.append(prompt_embeds[i][prompt_masks[i]])
 
         return embeddings_list
+
+
+class OVZImagePipeline(_OVZImagePipelineMixin, OVDiffusionPipeline, OVTextualInversionLoaderMixin, ZImagePipeline):
+    """
+    OpenVINO-powered pipeline corresponding to [diffusers.ZImagePipeline](https://huggingface.co/docs/diffusers/api/pipelines/z_image).
+    """
+
+    main_input_name = "prompt"
+    export_feature = "text-to-image"
+    auto_model_class = ZImagePipeline
+
+
+class OVZImageImg2ImgPipeline(
+    _OVZImagePipelineMixin, OVDiffusionPipeline, OVTextualInversionLoaderMixin, ZImageImg2ImgPipeline
+):
+    """
+    OpenVINO-powered pipeline corresponding to [diffusers.ZImageImg2ImgPipeline](https://huggingface.co/docs/diffusers/api/pipelines/z_image).
+
+    Reuses the text-to-image export unchanged: image-to-image only changes how the
+    initial latents are built (encode the input image with the VAE, then add noise at the
+    timestep selected by ``strength``) and runs the same denoising loop afterwards.
+    """
+
+    main_input_name = "image"
+    export_feature = "image-to-image"
+    auto_model_class = ZImageImg2ImgPipeline
 
 
 SUPPORTED_OV_PIPELINES = [
@@ -2638,7 +2671,9 @@ if is_diffusers_version(">=", "0.37.0"):
 
 if is_diffusers_version(">=", "0.37.0"):
     SUPPORTED_OV_PIPELINES.append(OVZImagePipeline)
+    SUPPORTED_OV_PIPELINES.append(OVZImageImg2ImgPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["z-image"] = OVZImagePipeline
+    OV_IMAGE2IMAGE_PIPELINES_MAPPING["z-image"] = OVZImageImg2ImgPipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,

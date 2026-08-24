@@ -1619,6 +1619,58 @@ class OVZImagePipelineTest(unittest.TestCase):
                     for image in images:
                         self.assertTupleEqual(image.shape, (height, width, 3))
 
+    def test_img2img_reuses_the_text2image_export(self):
+        """OVZImageImg2ImgPipeline runs off the plain text-to-image export.
+
+        Image-to-image needs no separate export: it reuses the same transformer, text
+        encoder and VAE, and only differs in how the initial latents are built (encode
+        the input image, then add noise at the timestep chosen by ``strength``).
+        """
+        from PIL import Image
+
+        from optimum.intel.openvino import OVPipelineForImage2Image, OVZImageImg2ImgPipeline
+        from optimum.intel.openvino.utils import TemporaryDirectory
+
+        pipe = self._build_tiny_pipeline()
+        height, width = 64, 64
+
+        with TemporaryDirectory() as src_dir, TemporaryDirectory() as ov_dir:
+            pipe.save_pretrained(src_dir)
+
+            import subprocess
+
+            result = subprocess.run(
+                f"optimum-cli export openvino --model {src_dir} --task text-to-image {ov_dir}",
+                shell=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, msg=f"Export failed:\n{result.stderr}")
+
+            # The VAE encoder is what image-to-image needs on top of text-to-image.
+            self.assertTrue((Path(ov_dir) / "vae_encoder" / "openvino_model.xml").is_file())
+
+            ov_pipe = OVZImageImg2ImgPipeline.from_pretrained(ov_dir, device=OPENVINO_DEVICE)
+            self.assertIsInstance(
+                OVPipelineForImage2Image.from_pretrained(ov_dir, device=OPENVINO_DEVICE),
+                OVZImageImg2ImgPipeline,
+            )
+
+            init_image = Image.fromarray(
+                np.random.RandomState(SEED).randint(0, 256, (height, width, 3), dtype=np.uint8)
+            )
+            for strength in (0.3, 0.8):
+                with self.subTest(strength=strength):
+                    images = ov_pipe(
+                        "a beautiful landscape",
+                        image=init_image,
+                        strength=strength,
+                        num_inference_steps=2,
+                        output_type="np",
+                    ).images
+                    self.assertEqual(len(images), 1)
+                    self.assertTupleEqual(images[0].shape, (height, width, 3))
+
     def test_pipeline_class_dispatch(self):
         """OVDiffusionPipeline.from_pretrained dispatches to OVZImagePipeline."""
         from optimum.intel.openvino import OVDiffusionPipeline, OVZImagePipeline
