@@ -7361,14 +7361,12 @@ class ZImageTransformerOpenVINOConfig(UNetOpenVINOConfig):
         return inputs
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
-        # Force batch_size=1: ZImageTransformer patching only supports single-item lists.
-        # The list-based forward (x: list[Tensor], cap_feats: list[Tensor]) is unrolled
-        # for batch_size=1 to remain OV-traceable.
-        # Use ZIMAGE_CAP_SEQ for cap to match what the patcher pads to at inference time.
-        # This ensures cap_seqlens (burned as a JIT constant) always matches.
+        # Trace with batch_size=2 so the batch dimension is actually exercised: at
+        # batch_size=1 a leaked per-item constant would fold away silently and only
+        # surface later as a shape error at inference time.
         from optimum.exporters.openvino.model_patcher import ZIMAGE_CAP_SEQ
 
-        kwargs["batch_size"] = 1
+        kwargs["batch_size"] = 2
         kwargs["sequence_length"] = ZIMAGE_CAP_SEQ
         return super().generate_dummy_inputs(framework=framework, **kwargs)
 

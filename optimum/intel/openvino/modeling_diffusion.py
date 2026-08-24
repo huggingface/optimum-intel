@@ -2411,64 +2411,59 @@ class _OVZImageTransformerAdapter:
     where x_list is a list of [C,1,H,W] tensors (with frame dim) and cap_feats_list is a list
     of variable-length [seq_len, dim] tensors.
 
-    The exported OV model expects single-item batches (batch=1) with no frame dim:
-        hidden_states [1, C, H, W], timestep scalar, encoder_hidden_states [1, CAP_SEQ, dim]
-    and returns sample [1, C, H, W].
+    The exported OV model is natively batched and takes tensors without the frame dim:
+        hidden_states [B, C, H, W], timestep [B], encoder_hidden_states [B, M, dim]
+    and returns sample [B, C, H, W].  Batch size, resolution and caption length are all
+    dynamic dimensions of the IR, so a single infer request serves the whole batch.
 
-    This adapter processes each batch item individually, mirroring the logic in
-    ZImageTransformerModelPatcher.patched_forward.
+    Captions have different lengths per prompt, so they are right-padded to the longest
+    one in the batch to form a rectangular tensor.
     """
 
-    _ZIMAGE_CAP_SEQ = 128
-
-    def __init__(self, ov_transformer, cap_seq: int = 128):
+    def __init__(self, ov_transformer):
         self._ov_transformer = ov_transformer
-        self._ZIMAGE_CAP_SEQ = cap_seq
 
     def __call__(self, x, t, cap_feats, return_dict=True, **kwargs):
         import torch
 
-        results = []
+        # x: list of [C, 1, H, W] → [B, C, H, W]
+        hidden_states = torch.stack([x_item.squeeze(1) for x_item in x], dim=0)
+
         batch_size = len(x)
-        for i, (x_item, cf_item) in enumerate(zip(x, cap_feats)):
-            # x_item: [C, 1, H, W] → squeeze F → [C, H, W] → add batch → [1, C, H, W]
-            hs = x_item.squeeze(1).unsqueeze(0)  # [1, C, H, W]
+        if not isinstance(t, torch.Tensor):
+            t = torch.tensor([t])
+        timestep = t.reshape(-1)
+        if timestep.numel() == 1 and batch_size > 1:
+            timestep = timestep.expand(batch_size)
 
-            # t may be scalar or [batch] tensor — extract per-item timestep
-            if isinstance(t, torch.Tensor) and t.numel() > 1:
-                t_item = t[i : i + 1]
-            else:
-                t_item = t
+        # cap_feats: list of [seq_len_i, dim] → [B, max_seq_len, dim], zero padded
+        cap_dim = cap_feats[0].shape[-1]
+        max_cap_len = max(cf.shape[0] for cf in cap_feats)
+        encoder_hidden_states = torch.zeros(
+            batch_size, max_cap_len, cap_dim, dtype=cap_feats[0].dtype
+        )
+        for i, cf in enumerate(cap_feats):
+            encoder_hidden_states[i, : cf.shape[0]] = cf
 
-            # cf_item: [seq_len, dim] → pad/truncate → [1, CAP_SEQ, dim]
-            cap_feat_dim = cf_item.shape[-1]
-            enc_hs = torch.zeros(1, self._ZIMAGE_CAP_SEQ, cap_feat_dim, dtype=cf_item.dtype)
-            L = min(cf_item.shape[0], self._ZIMAGE_CAP_SEQ)
-            enc_hs[0, :L] = cf_item[:L]
+        ov_out = self._ov_transformer(
+            hidden_states=hidden_states,
+            timestep=timestep,
+            encoder_hidden_states=encoder_hidden_states,
+            return_dict=False,
+        )
 
-            ov_out = self._ov_transformer(
-                hidden_states=hs,
-                timestep=t_item,
-                encoder_hidden_states=enc_hs,
-                return_dict=False,
-            )
+        if isinstance(ov_out, (tuple, list)):
+            sample = ov_out[0]
+        elif hasattr(ov_out, "sample"):
+            sample = ov_out.sample
+        else:
+            sample = list(ov_out.values())[0] if hasattr(ov_out, "values") else ov_out
 
-            # Extract sample from output
-            if isinstance(ov_out, (tuple, list)):
-                sample = ov_out[0]
-            elif hasattr(ov_out, "sample"):
-                sample = ov_out.sample
-            else:
-                sample = list(ov_out.values())[0] if hasattr(ov_out, "values") else ov_out
+        if not isinstance(sample, torch.Tensor):
+            sample = torch.from_numpy(sample)
 
-            if not isinstance(sample, torch.Tensor):
-                sample = torch.from_numpy(sample)
-
-            # sample: [1, C, H, W] → squeeze batch → [C, H, W] → add F dim → [C, 1, H, W]
-            sample = sample.squeeze(0).unsqueeze(1)
-            results.append(sample)
-
-        return (results,)
+        # [B, C, H, W] → list of [C, 1, H, W], the convention ZImagePipeline expects back
+        return ([s.unsqueeze(1) for s in sample.unbind(0)],)
 
     def __getattr__(self, name):
         return getattr(self._ov_transformer, name)
@@ -2479,13 +2474,11 @@ class OVZImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, ZImag
     export_feature = "text-to-image"
     auto_model_class = ZImagePipeline
 
-    _ZIMAGE_CAP_SEQ = 128  # must match ZIMAGE_CAP_SEQ in model_patcher.py
-
     def __call__(self, *args, **kwargs):
         """Wrap transformer with ZImage-to-OV adapter before calling the pipeline."""
         orig_transformer = self.transformer
         if not isinstance(orig_transformer, _OVZImageTransformerAdapter):
-            self.transformer = _OVZImageTransformerAdapter(orig_transformer, self._ZIMAGE_CAP_SEQ)
+            self.transformer = _OVZImageTransformerAdapter(orig_transformer)
         try:
             return ZImagePipeline.__call__(self, *args, **kwargs)
         finally:

@@ -18,6 +18,7 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+import openvino as ov
 import torch
 from diffusers import (
     AutoPipelineForImage2Image,
@@ -1563,6 +1564,60 @@ class OVZImagePipelineTest(unittest.TestCase):
                     images = output.images
                     self.assertEqual(len(images), 1)
                     self.assertTupleEqual(images[0].shape, (height, width, 3))
+
+    def test_inference_batched_prompts(self):
+        """One exported OVZImagePipeline serves any batch size in a single infer request.
+
+        The transformer IR is natively batched, so batch size is a dynamic dimension.
+        Prompts of different lengths are padded to the longest caption in the batch, so
+        the mixed-length case exercises the caption padding path.
+        """
+        from optimum.intel.openvino import OVZImagePipeline
+        from optimum.intel.openvino.utils import TemporaryDirectory
+
+        pipe = self._build_tiny_pipeline()
+        height, width = 64, 64
+
+        with TemporaryDirectory() as src_dir, TemporaryDirectory() as ov_dir:
+            pipe.save_pretrained(src_dir)
+
+            import subprocess
+
+            result = subprocess.run(
+                f"optimum-cli export openvino --model {src_dir} --task text-to-image {ov_dir}",
+                shell=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, msg=f"Export failed:\n{result.stderr}")
+
+            # The exported transformer must keep a dynamic batch dimension.
+            transformer = Path(ov_dir) / "transformer" / "openvino_model.xml"
+            model = ov.Core().read_model(transformer)
+            self.assertTrue(
+                model.input("hidden_states").get_partial_shape()[0].is_dynamic,
+                msg="transformer was exported with a static batch dimension",
+            )
+            self.assertTrue(model.output(0).get_partial_shape()[0].is_dynamic)
+
+            ov_pipe = OVZImagePipeline.from_pretrained(ov_dir, device=OPENVINO_DEVICE)
+            prompt_batches = [
+                ["a beautiful landscape"],
+                ["a beautiful landscape", "a red fox"],
+                ["a cat", "an astronaut riding a horse on the moon, cinematic, ultra detailed", "blue flowers"],
+            ]
+            for prompts in prompt_batches:
+                with self.subTest(batch_size=len(prompts)):
+                    images = ov_pipe(
+                        list(prompts),  # the pipeline rewrites the list it is given
+                        num_inference_steps=1,
+                        height=height,
+                        width=width,
+                        output_type="np",
+                    ).images
+                    self.assertEqual(len(images), len(prompts))
+                    for image in images:
+                        self.assertTupleEqual(image.shape, (height, width, 3))
 
     def test_pipeline_class_dispatch(self):
         """OVDiffusionPipeline.from_pretrained dispatches to OVZImagePipeline."""
