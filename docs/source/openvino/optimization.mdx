@@ -191,7 +191,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick={() => {
-                    navigator.clipboard.writeText('optimum-cli export openvino --task image-text-to-text -m OpenGVLab/InternVL2-1B --trust-remote-code --weight-format int4 --dataset contextual ./save_dir');
+                    navigator.clipboard.writeText('optimum-cli export openvino --task image-text-to-text -m OpenGVLab/InternVL2-1B --trust-remote-code --weight-format int4 --dataset textvqa ./save_dir');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -202,7 +202,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick={() => {
-                    navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'contextual\')).save_pretrained(\'save_dir\')');
+                    navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'textvqa\')).save_pretrained(\'save_dir\')');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -215,7 +215,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick={() => {
-                    navigator.clipboard.writeText('optimum-cli export openvino --task image-text-to-text -m OpenGVLab/InternVL2-1B --trust-remote-code --quant-mode int8 --dataset contextual ./save_dir');
+                    navigator.clipboard.writeText('optimum-cli export openvino --task image-text-to-text -m OpenGVLab/InternVL2-1B --trust-remote-code --quant-mode int8 --dataset textvqa ./save_dir');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -226,7 +226,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick={() => {
-                    navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVQuantizationConfig(bits=8, dataset=\'contextual\')).save_pretrained(\'save_dir\')');
+                    navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVQuantizationConfig(bits=8, dataset=\'textvqa\')).save_pretrained(\'save_dir\')');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -1091,7 +1091,7 @@ model = OVModelForVisualCausalLM.from_pretrained(
             "lm_model": OVQuantizationConfig(bits=8),
             "text_embeddings_model": OVWeightQuantizationConfig(bits=8),
         },
-        dataset="contextual",
+        dataset="textvqa",
     )
 )
 ```
