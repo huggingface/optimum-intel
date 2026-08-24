@@ -379,6 +379,8 @@ def init_model_configs():
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["z-image"] = "ZImagePipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS.setdefault("image-to-image", {})
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["image-to-image"]["z-image"] = "ZImageImg2ImgPipeline"
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS.setdefault("inpainting", {})
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["inpainting"]["z-image"] = "ZImageInpaintPipeline"
     if is_diffusers_available():
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS.setdefault("text-to-video", {})
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx-video"] = "LTXPipeline"

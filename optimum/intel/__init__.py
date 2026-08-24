@@ -144,6 +144,7 @@ except OptionalDependencyNotAvailable:
             "OVQwenImagePipeline",
             "OVZImagePipeline",
             "OVZImageImg2ImgPipeline",
+            "OVZImageInpaintPipeline",
             "OVPipelineForImage2Image",
             "OVPipelineForImage2Video",
             "OVPipelineForText2Image",
@@ -179,6 +180,7 @@ else:
             "OVQwenImagePipeline",
             "OVZImagePipeline",
             "OVZImageImg2ImgPipeline",
+            "OVZImageInpaintPipeline",
             "OVPipelineForImage2Image",
             "OVPipelineForImage2Video",
             "OVPipelineForText2Image",
@@ -277,6 +279,7 @@ if TYPE_CHECKING:
             OVStableDiffusionXLInpaintPipeline,
             OVStableDiffusionXLPipeline,
             OVZImageImg2ImgPipeline,
+            OVZImageInpaintPipeline,
             OVZImagePipeline,
         )
     else:
@@ -304,6 +307,7 @@ if TYPE_CHECKING:
             OVStableDiffusionXLInpaintPipeline,
             OVStableDiffusionXLPipeline,
             OVZImageImg2ImgPipeline,
+            OVZImageInpaintPipeline,
             OVZImagePipeline,
         )
 

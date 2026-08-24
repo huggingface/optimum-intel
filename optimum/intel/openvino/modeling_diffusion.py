@@ -128,10 +128,11 @@ else:
     SanaSprintPipeline = object
 
 if is_diffusers_version(">=", "0.37.0"):
-    from diffusers import ZImageImg2ImgPipeline, ZImagePipeline
+    from diffusers import ZImageImg2ImgPipeline, ZImageInpaintPipeline, ZImagePipeline
 else:
     ZImagePipeline = object
     ZImageImg2ImgPipeline = object
+    ZImageInpaintPipeline = object
 
 
 if is_diffusers_version(">=", "0.35.0"):
@@ -2566,6 +2567,22 @@ class OVZImageImg2ImgPipeline(
     auto_model_class = ZImageImg2ImgPipeline
 
 
+class OVZImageInpaintPipeline(
+    _OVZImagePipelineMixin, OVDiffusionPipeline, OVTextualInversionLoaderMixin, ZImageInpaintPipeline
+):
+    """
+    OpenVINO-powered pipeline corresponding to [diffusers.ZImageInpaintPipeline](https://huggingface.co/docs/diffusers/api/pipelines/z_image).
+
+    Reuses the text-to-image export unchanged, like the image-to-image pipeline: only the
+    latent preparation differs, blending the VAE-encoded original back into the unmasked
+    region at every denoising step.
+    """
+
+    main_input_name = "image"
+    export_feature = "inpainting"
+    auto_model_class = ZImageInpaintPipeline
+
+
 SUPPORTED_OV_PIPELINES = [
     OVStableDiffusionPipeline,
     OVStableDiffusionImg2ImgPipeline,
@@ -2672,8 +2689,10 @@ if is_diffusers_version(">=", "0.37.0"):
 if is_diffusers_version(">=", "0.37.0"):
     SUPPORTED_OV_PIPELINES.append(OVZImagePipeline)
     SUPPORTED_OV_PIPELINES.append(OVZImageImg2ImgPipeline)
+    SUPPORTED_OV_PIPELINES.append(OVZImageInpaintPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["z-image"] = OVZImagePipeline
     OV_IMAGE2IMAGE_PIPELINES_MAPPING["z-image"] = OVZImageImg2ImgPipeline
+    OV_INPAINT_PIPELINES_MAPPING["z-image"] = OVZImageInpaintPipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,

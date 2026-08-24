@@ -130,6 +130,7 @@ if is_diffusers_available():
         OVStableDiffusionXLInpaintPipeline,
         OVStableDiffusionXLPipeline,
         OVZImageImg2ImgPipeline,
+        OVZImageInpaintPipeline,
         OVZImagePipeline,
     )
 
