@@ -189,6 +189,7 @@ HUB_MODEL_NAMES = {
     "deberta-v2": "optimum-intel-internal-testing/tiny-random-DebertaV2Model",
     "decilm": "optimum-intel-internal-testing/tiny-random-decilm",
     "deepseek": "optimum-intel-internal-testing/tiny-random-deepseek-v3",
+    "deepseek_ocr2": "optimum-intel-internal-testing/tiny-random-deepseek-ocr-2",
     "deit": "optimum-intel-internal-testing/tiny-random-DeiTModel",
     "convnext": "optimum-intel-internal-testing/tiny-random-convnext",
     "convnextv2": "optimum-intel-internal-testing/tiny-random-ConvNextV2Model",
@@ -519,6 +520,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 1,
         "vision_embeddings_merger_model": 10,
+    },
+    "deepseek_ocr2": {
+        "lm_model": 36,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 32,
+        "vision_embeddings_tiles_model": 32,
     },
     "qwen3_vl": {
         "lm_model": 30,
@@ -878,9 +885,9 @@ TEST_NAME_TO_MODEL_TYPE = {
 def get_transformers_versions(model_type, library_name="transformers"):
     supported_model_type = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES[library_name]
     export_config = next(iter(supported_model_type[model_type]["openvino"].values()))
-    min_transformers = str(getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", "0"))
-    max_transformers = str(getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", "999"))
-    return min_transformers, max_transformers
+    min_transformers = getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", None) or "0"
+    max_transformers = getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", None) or "999"
+    return str(min_transformers), str(max_transformers)
 
 
 def is_model_type_transformers_compatible(model_type, library_name="transformers"):
