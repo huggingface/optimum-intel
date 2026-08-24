@@ -5597,14 +5597,53 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
         return self.vision_embeddings(pixel_values, image_position_ids=image_position_ids).last_hidden_state
+    
+    def get_multimodal_embeddings(
+        self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        inputs_embeds, attention_mask, position_ids = super().get_multimodal_embeddings(
+            input_ids, pixel_values, attention_mask, position_ids, **kwargs
+        )
+
+        pixel_values_videos = kwargs.get("pixel_values_videos")
+        video_position_ids = kwargs.get("video_position_ids")
+        if pixel_values_videos is not None and video_position_ids is not None:
+            video_embeds = self.get_vision_embeddings(
+                pixel_values_videos.flatten(0, 1),
+                input_ids=input_ids,
+                image_position_ids=video_position_ids.flatten(0, 1),
+            )
+            if video_embeds is not None:
+                inputs_embeds, attention_mask, position_ids = self.merge_vision_text_embeddings(
+                    vision_embeds=video_embeds,
+                    inputs_embeds=inputs_embeds,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    vision_token_id=self.config.video_token_id,
+                    image_position_ids=video_position_ids.flatten(0, 1),
+                )
+
+        return inputs_embeds, attention_mask, position_ids
 
     def merge_vision_text_embeddings(
-        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+        self,
+        vision_embeds,
+        inputs_embeds,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        vision_token_id=None,
+        **kwargs
     ):
+        if vision_token_id is None:
+            raise ValueError("vision_token_id must be provided for merging vision and text embeddings")
+
         image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
         # The vision embedder keeps padding patches; drop them so the number of soft tokens
         # matches the number of image placeholder positions in the text sequence.
+        # image_position_ids kwarg is used for both images and videos
         image_position_ids = kwargs.get("image_position_ids")
         if image_position_ids is not None:
             image_position_ids = (
@@ -5615,7 +5654,7 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
             valid_mask = (image_position_ids != -1).all(dim=-1).reshape(-1)
             image_features = image_features.reshape(-1, image_features.shape[-1])[valid_mask]
 
-        special_image_mask = (input_ids == self.config.image_token_id).unsqueeze(-1)
+        special_image_mask = (input_ids == vision_token_id).unsqueeze(-1)
         special_image_mask = special_image_mask.expand_as(inputs_embeds)
         image_features = image_features.to(inputs_embeds.dtype)
         inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
@@ -5631,6 +5670,8 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         attention_mask=None,
         mm_token_type_ids=None,
         image_position_ids=None,
+        pixel_values_videos=None,
+        video_position_ids=None,
         **kwargs,
     ):
         model_inputs = super().prepare_inputs_for_generation(
@@ -5645,7 +5686,9 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         # Map mm_token_type_ids (from the Gemma4Unified processor) to token_type_ids and
         # propagate the patch positions needed by the vision embedder.
         model_inputs["token_type_ids"] = mm_token_type_ids
-        model_inputs["image_position_ids"] = image_position_ids
+        model_inputs["image_position_ids"] = image_position_ids if past_key_values is None else None
+        model_inputs["pixel_values_videos"] = pixel_values_videos if past_key_values is None else None
+        model_inputs["video_position_ids"] = video_position_ids if past_key_values is None else None
         return model_inputs
 
     def forward(self, input_ids, pixel_values=None, token_type_ids=None, **kwargs):
@@ -5671,10 +5714,9 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
     ):
         if processor is None:
             raise ValueError("Processor is required.")
-        if video is not None:
-            raise ValueError("Video input is not supported")
         if audio is not None:
             raise ValueError("Audio input is not supported")
+
         if getattr(tokenizer, "chat_template", None) is None:
             if image is not None:
                 # If chat template is not available we need to add image token manually, as there's a requirement
@@ -5683,7 +5725,11 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
                 image_token = getattr(processor, "image_token", "<|image|>")
                 if image_token not in text:
                     text = f"{image_token}{text}"
-            return processor(images=image, text=text, return_tensors="pt")
+            if video is not None:
+                video_token = getattr(processor, "video_token", "<|video|>")
+                if video_token not in text:
+                    text = f"{video_token}{text}"
+            return processor(text=text, images=image, videos=video, return_tensors="pt")
 
         conversation = [
             {
@@ -5695,6 +5741,8 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         ]
         if image is not None:
             conversation[0]["content"].insert(0, {"type": "image"})
+        if video is not None:
+            conversation[0]["content"].insert(0, {"type": "video"})
 
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
         return processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
@@ -5714,6 +5762,8 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         )
         model_kwargs.pop("mm_token_type_ids", None)
         model_kwargs.pop("image_position_ids", None)
+        model_kwargs.pop("pixel_values_videos", None)
+        model_kwargs.pop("video_position_ids", None)
         return model_kwargs
 
 
