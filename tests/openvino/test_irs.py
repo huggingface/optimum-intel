@@ -268,6 +268,16 @@ def _generate_test_params():
         if arch in REMOTE_CODE_MODELS:
             continue
 
+        if arch in { # seq2seq models
+            "bigbird_pegasus",
+            "blenderbot-small",
+            "longt5",
+            "m2m_100",
+            "mbart",
+            "t5",
+        }:
+            continue
+
         if arch in { #4.57.6 models
             "data2vec-text",
             "got_ocr2",
