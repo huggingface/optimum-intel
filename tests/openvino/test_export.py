@@ -127,6 +127,7 @@ class ExportModelTest(unittest.TestCase):
         "qwen3_omni_moe": OVModelForMultimodalLM,
         "muse_glimmer": OVModelForVisualCausalLM,
         "deepseek_ocr2": OVModelForVisualCausalLM,
+        "molmo2": OVModelForVisualCausalLM,
     }
 
     # filter architectures depending on min/max transformers supported versions

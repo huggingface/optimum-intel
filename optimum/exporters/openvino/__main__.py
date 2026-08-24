@@ -589,9 +589,17 @@ def main_export(
             # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)
             task_model_loading = task
             if library_name == "transformers":
-                has_remote_code = hasattr(config, "auto_map")
+                auto_map = getattr(config, "auto_map", None)
+                has_remote_code = auto_map is not None
                 if has_remote_code and trust_remote_code and task == "image-text-to-text":
-                    task_model_loading = "text-generation"
+                    # Some remote-code VLMs (e.g. molmo2) only register an
+                    # `AutoModelForImageTextToText` entry in their `auto_map` and cannot be
+                    # loaded through `AutoModelForCausalLM`. Only fall back to text-generation
+                    # loading when the remote code actually exposes a causal-LM auto class.
+                    if isinstance(auto_map, dict) and "AutoModelForCausalLM" not in auto_map:
+                        task_model_loading = "image-text-to-text"
+                    else:
+                        task_model_loading = "text-generation"
 
             model = TasksManager.get_model_from_task(
                 task_model_loading,

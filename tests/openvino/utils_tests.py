@@ -144,6 +144,126 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+def _create_tiny_molmo2_model():
+    """Generate a tiny random Molmo2 (allenai/MolmoWeb-4B) VLM and return its local path.
+
+    Preserves the real ``molmo2`` architecture (model_type / architectures / auto_map,
+    nested vit / adapter / text sub-configs and their roles, the full tokenizer
+    vocabulary and every image special-token id, and the vision spatial contract),
+    reducing only scale parameters. The result is cached on disk under the system
+    temp dir so repeated test collection is cheap.
+    """
+    from transformers import AutoConfig, AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
+
+    original_model_id = "allenai/MolmoWeb-4B"
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_molmo2"
+    marker = output_dir / "TINY_MODEL_CACHE_MARKER"
+    cache_marker = "tiny_molmo2_v2"
+    cfg_path = output_dir / "config.json"
+
+    def _valid_cache():
+        if not (marker.exists() and cfg_path.exists()):
+            return False
+        try:
+            if marker.read_text().strip() != cache_marker:
+                return False
+            c = json.loads(cfg_path.read_text())
+            assert c.get("model_type") == "molmo2"
+            assert c.get("architectures") == ["Molmo2ForConditionalGeneration"]
+            assert c["text_config"]["hidden_size"] == 64
+            assert c["text_config"]["vocab_size"] == 151936
+            assert c["adapter_config"]["text_hidden_size"] == c["text_config"]["hidden_size"]
+            assert c.get("image_patch_id") == 151938
+        except Exception:
+            return False
+        return True
+
+    if _valid_cache():
+        return str(output_dir)
+
+    if output_dir.is_dir():
+        import shutil
+
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    torch.manual_seed(SEED)
+    cfg = AutoConfig.from_pretrained(original_model_id, trust_remote_code=True)
+
+    t = cfg.text_config
+    t.hidden_size = 64
+    t.num_attention_heads = 4
+    t.num_key_value_heads = 2
+    t.head_dim = 32
+    t.num_hidden_layers = 2
+    t.intermediate_size = 64
+
+    v = cfg.vit_config
+    v.hidden_size = 64
+    v.intermediate_size = 128
+    v.num_hidden_layers = 2
+    v.num_attention_heads = 2
+    v.num_key_value_heads = 2
+    v.head_dim = 32
+
+    a = cfg.adapter_config
+    a.hidden_size = 64
+    a.num_attention_heads = 2
+    a.num_key_value_heads = 2
+    a.head_dim = 32
+    a.intermediate_size = 128
+    a.text_hidden_size = t.hidden_size
+    a.vit_layers = [-1, -2]
+
+    cfg.dtype = "float32"
+    cfg.torch_dtype = "float32"
+    cfg.initializer_range = 0.05
+    for sub in (t, v, a):
+        sub.initializer_range = 0.05
+        if hasattr(sub, "dtype"):
+            sub.dtype = "float32"
+        if hasattr(sub, "torch_dtype"):
+            sub.torch_dtype = "float32"
+
+    model = AutoModelForImageTextToText.from_config(cfg, trust_remote_code=True)
+    model = model.to(torch.float32)
+    model.save_pretrained(output_dir, safe_serialization=True)
+
+    processor = AutoProcessor.from_pretrained(original_model_id, trust_remote_code=True)
+    # The remote Molmo2Processor overrides `optional_attributes` and omits
+    # `audio_tokenizer`, so ProcessorMixin.__init__ never sets it while
+    # save_pretrained still references it. Provide the expected default.
+    if not hasattr(processor, "audio_tokenizer"):
+        processor.audio_tokenizer = None
+    processor.save_pretrained(output_dir)
+    try:
+        tok = AutoTokenizer.from_pretrained(original_model_id, trust_remote_code=True)
+        tok.save_pretrained(output_dir)
+    except Exception:
+        pass
+
+    import shutil
+
+    from huggingface_hub import hf_hub_download
+
+    for fname in [
+        "configuration_molmo2.py",
+        "modeling_molmo2.py",
+        "image_processing_molmo2.py",
+        "processing_molmo2.py",
+        "chat_template.jinja",
+        "generation_config.json",
+    ]:
+        try:
+            src = hf_hub_download(original_model_id, fname)
+            shutil.copy(src, output_dir / fname)
+        except Exception:
+            pass
+
+    marker.write_text(cache_marker)
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -266,6 +386,7 @@ HUB_MODEL_NAMES = {
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
     "mistral-nemo": "optimum-intel-internal-testing/tiny-random-mistral-nemo",
+    "molmo2": _create_tiny_molmo2_model(),
     "mixtral": "optimum-intel-internal-testing/tiny-mixtral",
     "mixtral_awq": "optimum-intel-internal-testing/tiny-mixtral-AWQ-4bit",
     "mobilebert": "optimum-intel-internal-testing/tiny-random-MobileBertModel",
@@ -488,6 +609,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 30,
     },
+    "molmo2": {
+        "lm_model": 18,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 20,
+    },
     "llava_next": {
         "lm_model": 30,
         "text_embeddings_model": 1,
@@ -683,6 +809,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_asr",
     "fun_asr",
     "videochat_flash_qwen",
+    "molmo2",
 )
 
 if is_transformers_version("<", "5"):

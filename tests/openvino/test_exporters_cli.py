@@ -138,6 +138,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
         ("image-text-to-text", "muse_glimmer"),
+        ("image-text-to-text", "molmo2"),
     ]
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = [
@@ -194,6 +195,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "qwen3_vl_eagle3": 0,
         "qwen3_vl_embedding": 2,
         "muse_glimmer": 2,
+        "molmo2": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {

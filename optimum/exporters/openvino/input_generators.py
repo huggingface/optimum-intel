@@ -1048,6 +1048,65 @@ class LTX2VocoderDummyInputGenerator(DummyVisionInputGenerator):
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
+class DummyMolmo2VisionInputGenerator(DummyVisionInputGenerator):
+    """Dummy input generator for the Molmo2 vision backbone submodel.
+
+    The Molmo2 vision backbone consumes already-patchified crops (``images``) together with
+    the per-token pooling indices (``pooled_patches_idx``) that are produced on the runtime
+    side by the image processor / ``build_batched_images`` logic. Both tensors have a couple
+    of dynamic axes (number of crops and number of pooled tokens), so we generate small but
+    valid dummy values here.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("images", "pooled_patches_idx")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 1,
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        config = normalized_config.config
+        vit_config = getattr(config, "vit_config", config)
+        # Number of patches per crop (e.g. (378/14)**2 == 729).
+        self.num_patches = getattr(vit_config, "image_num_pos", None)
+        if self.num_patches is None:
+            image_size = getattr(vit_config, "image_default_input_size", [378, 378])
+            patch = getattr(vit_config, "image_patch_size", 14)
+            self.num_patches = (image_size[0] // patch) * (image_size[1] // patch)
+        patch_size = getattr(vit_config, "image_patch_size", 14)
+        # Pixels per patch: patch_h * patch_w * num_channels.
+        self.pixels_per_patch = patch_size * patch_size * 3
+        # Pooling window size (Molmo2 pools 2x2 patches by default).
+        self.pool_dim = 4
+        self.batch_size = batch_size
+        # Small dummy values for the two dynamic axes.
+        self.num_crops = 2
+        self.num_pooled_patches = 8
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "images":
+            return self.random_float_tensor(
+                shape=[self.batch_size, self.num_crops, self.num_patches, self.pixels_per_patch],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "pooled_patches_idx":
+            # Valid pooling indices point into the flattened (num_crops * num_patches) patch grid.
+            # Keeping every index >= 0 makes all pooled tokens valid, matching the number of
+            # image-patch placeholder tokens on the runtime side.
+            return self.random_int_tensor(
+                shape=[self.batch_size, self.num_pooled_patches, self.pool_dim],
+                min_value=0,
+                max_value=self.num_crops * self.num_patches,
+                framework=framework,
+                dtype=int_dtype,
+            )
+
+
 class DummyMiniCPMVImageInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("pixel_values", "patch_attention_mask", "position_ids")
 

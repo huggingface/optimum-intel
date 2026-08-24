@@ -602,6 +602,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_omni_moe",
         "muse_glimmer",
         "deepseek_ocr2",
+        "molmo2",
     ]
     SUPPORT_VIDEO = [
         "llava_next_video",
@@ -642,6 +643,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "phi4mm",
         "videochat_flash_qwen",
         "gemma3n",
+        "molmo2",
     ]
     IMAGE = Image.open(
         requests.get(
@@ -671,6 +673,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "qwen3_5_moe",
             "gemma4_unified",
             "muse_glimmer",
+            "molmo2",
         ]:
             from transformers import AutoModelForImageTextToText
 
