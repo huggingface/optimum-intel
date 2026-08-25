@@ -5444,7 +5444,9 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
         if pixel_values_videos is not None and video_position_ids is not None:
             flatten_pixel_values_videos = pixel_values_videos.flatten(0, 1)
             flatten_video_position_ids = video_position_ids.flatten(0, 1)
-            video_embeds = self.get_vision_embeddings(flatten_pixel_values_videos, input_ids=input_ids, image_position_ids=flatten_video_position_ids)
+            video_embeds = self.get_vision_embeddings(
+                flatten_pixel_values_videos, input_ids=input_ids, image_position_ids=flatten_video_position_ids
+            )
             if video_embeds is not None:
                 inputs_embeds, attention_mask, position_ids = self.merge_vision_text_embeddings(
                     video_embeds,
@@ -5466,11 +5468,11 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
         attention_mask=None,
         position_ids=None,
         vision_token_id=None,
-        **kwargs
+        **kwargs,
     ):
         if vision_token_id is None:
             raise ValueError("vision_token_id must be provided for merging vision and text embeddings")
-        
+
         image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
         if input_ids is None:
@@ -5597,7 +5599,7 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
         return self.vision_embeddings(pixel_values, image_position_ids=image_position_ids).last_hidden_state
-    
+
     def get_multimodal_embeddings(
         self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, **kwargs
     ):
@@ -5648,7 +5650,7 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         attention_mask=None,
         position_ids=None,
         vision_token_id=None,
-        **kwargs
+        **kwargs,
     ):
         if vision_token_id is None:
             raise ValueError("vision_token_id must be provided for merging vision and text embeddings")
