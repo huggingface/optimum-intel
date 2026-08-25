@@ -1255,7 +1255,7 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
 
     @staticmethod
     def _auto_cls(model_arch: str):
-        if model_arch.startswith("ltx2"):
+        if model_arch in ["ltx2", "ltx2.3"]:
             from diffusers import LTX2ImageToVideoPipeline
 
             return LTX2ImageToVideoPipeline
