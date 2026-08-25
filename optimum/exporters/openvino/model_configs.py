@@ -204,10 +204,10 @@ from optimum.exporters.openvino.model_patcher import (
     SentenceTransformersTransformerPatcher,
     SpeechT5ModelPatcher,
     VideoChatFlashQwenVisionEmbeddingModelPatcher,
-    ZImageTextEncoderModelPatcher,
-    ZImageTransformerModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
+    ZImageTextEncoderModelPatcher,
+    ZImageTransformerModelPatcher,
     _get_model_attribute,
 )
 from optimum.exporters.tasks import TasksManager

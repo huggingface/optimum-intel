@@ -11757,9 +11757,7 @@ class ZImageTransformerModelPatcher(ModelPatcher):
         _model_ref = self._model
 
         def patched_forward(hidden_states, timestep, encoder_hidden_states):
-            return _patched_z_image_batched_forward(
-                _model_ref, hidden_states, timestep, encoder_hidden_states
-            )
+            return _patched_z_image_batched_forward(_model_ref, hidden_states, timestep, encoder_hidden_states)
 
         self._model.forward = patched_forward
 
@@ -11792,7 +11790,7 @@ class ZImageTextEncoderModelPatcher(ModelPatcher):
 
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs=None,
     ):
