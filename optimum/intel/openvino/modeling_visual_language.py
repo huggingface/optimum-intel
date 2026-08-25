@@ -5601,9 +5601,23 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
     def get_multimodal_embeddings(
         self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, **kwargs
     ):
-        inputs_embeds, attention_mask, position_ids = super().get_multimodal_embeddings(
-            input_ids, pixel_values, attention_mask, position_ids, **kwargs
+        embeds_from_args = kwargs.pop("inputs_embeds", None)
+        inputs_embeds = (
+            embeds_from_args if embeds_from_args is not None else self.get_text_embeddings(input_ids, **kwargs)
         )
+
+        if pixel_values is not None:
+            image_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, **kwargs)
+            if image_embeds is not None:
+                inputs_embeds, attention_mask, position_ids = self.merge_vision_text_embeddings(
+                    vision_embeds=image_embeds,
+                    inputs_embeds=inputs_embeds,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    vision_token_id=self.config.image_token_id,
+                    image_position_ids=kwargs.get("image_position_ids"),
+                )
 
         pixel_values_videos = kwargs.get("pixel_values_videos")
         video_position_ids = kwargs.get("video_position_ids")
