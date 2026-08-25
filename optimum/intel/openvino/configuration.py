@@ -453,7 +453,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 64,
         "quant_method": OVQuantizationMethod.AWQ,
-        "group_size_fallback": "adjust",
     },
     "google/gemma-4-26B-A4B-it": {
         "bits": 4,
