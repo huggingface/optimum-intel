@@ -312,6 +312,126 @@ def _get_kokoro_submodels_fn_and_export_configs(
     return custom_export_configs, fn_get_submodels
 
 
+def _get_qwen3_tts_submodels_fn_and_export_configs(
+    model,
+    library_name: str = "qwen3_tts",
+    task: Optional[str] = None,
+    preprocessors: List = None,
+    custom_export_configs: Dict[str, "OpenVINOConfig"] = None,
+    fn_get_submodels: Callable = None,
+):
+    # Qwen3-TTS is split into the fewest graphs its call structure allows, so that the export
+    # carries no PyTorch weights at all. The generation orchestration (sampling, m-RoPE index
+    # math, chunking, ICL prompt assembly) stays in PyTorch and drives these graphs:
+    #
+    #   talker_model          28-layer decoder + codec_head, one call per 12.5 Hz frame
+    #   code_predictor_model   5-layer decoder + per-depth lm_head, num_code_groups-1 per frame
+    #   text_embeddings        text token ids -> talker hidden states (projection baked in)
+    #   talker_embeddings      first-codebook ids -> talker hidden states
+    #   code_predictor_embeddings  per-depth residual tables, stacked and picked by step
+    #   speaker_encoder        ECAPA-TDNN, once per reference audio (voice clone)
+    #   codec_encoder          reference waveform -> residual codes (ICL)
+    #   codec_decoder          generated codes -> 24 kHz waveform
+    #
+    # Each output head is folded into the stack it follows, because it is applied to that
+    # stack's hidden states on the same call path. The embedding tables cannot be folded the
+    # same way - they are looked up all over prompt assembly, far from any stack call, and one
+    # OpenVINO graph computes all of its outputs on every call - so each kind of table gets its
+    # own graph, with the code predictor's per-depth tables stacked into one.
+    from optimum.exporters.openvino.model_configs import (
+        Qwen3TTSCodecDecoderOpenVINOConfig,
+        Qwen3TTSCodecEncoderOpenVINOConfig,
+        Qwen3TTSDecoderStackOpenVINOConfig,
+        Qwen3TTSEmbeddingOpenVINOConfig,
+        Qwen3TTSSpeakerEncoderOpenVINOConfig,
+        Qwen3TTSSteppedDecoderStackOpenVINOConfig,
+        Qwen3TTSSteppedEmbeddingOpenVINOConfig,
+        Qwen3TTSTextEmbeddingOpenVINOConfig,
+    )
+    from optimum.exporters.openvino.model_patcher import (
+        Qwen3TTSCodecDecoderWrapper,
+        Qwen3TTSCodecEncoderWrapper,
+        Qwen3TTSDecoderStackWrapper,
+        Qwen3TTSEmbeddingWrapper,
+        Qwen3TTSSpeakerEncoderWrapper,
+        Qwen3TTSSteppedDecoderStackWrapper,
+        Qwen3TTSSteppedEmbeddingWrapper,
+    )
+
+    talker = model.talker
+    code_predictor = talker.code_predictor
+    codec_model = model.speech_tokenizer.model
+    talker_config = talker.model.config
+    code_predictor_config = code_predictor.model.config
+
+    custom_export_configs = {
+        "talker_model": Qwen3TTSDecoderStackOpenVINOConfig(talker_config, task="feature-extraction"),
+        "code_predictor_model": Qwen3TTSSteppedDecoderStackOpenVINOConfig(
+            code_predictor_config, task="feature-extraction"
+        ),
+        "text_embeddings": Qwen3TTSTextEmbeddingOpenVINOConfig(talker_config, task="feature-extraction"),
+        "talker_embeddings": Qwen3TTSEmbeddingOpenVINOConfig(talker_config, task="feature-extraction"),
+        "code_predictor_embeddings": Qwen3TTSSteppedEmbeddingOpenVINOConfig(
+            code_predictor_config, task="feature-extraction"
+        ),
+        "codec_encoder": Qwen3TTSCodecEncoderOpenVINOConfig(codec_model.config, task="feature-extraction"),
+        "codec_decoder": Qwen3TTSCodecDecoderOpenVINOConfig(
+            codec_model.config.decoder_config, task="feature-extraction"
+        ),
+    }
+
+    def _get_qwen3_tts_submodels(model):
+        talker = model.talker
+        code_predictor = talker.code_predictor
+        codec_model = model.speech_tokenizer.model
+        submodels = {
+            "talker_model": Qwen3TTSDecoderStackWrapper(talker.model, head=talker.codec_head).eval(),
+            "code_predictor_model": Qwen3TTSSteppedDecoderStackWrapper(
+                code_predictor.model,
+                heads=code_predictor.lm_head,
+                input_projection=code_predictor.small_to_mtp_projection,
+            ).eval(),
+            "text_embeddings": Qwen3TTSEmbeddingWrapper(
+                talker.config,
+                embedding=talker.get_text_embeddings(),
+                projection=talker.text_projection,
+            ).eval(),
+            "talker_embeddings": Qwen3TTSEmbeddingWrapper(
+                talker.config, embedding=talker.get_input_embeddings()
+            ).eval(),
+            "code_predictor_embeddings": Qwen3TTSSteppedEmbeddingWrapper(
+                code_predictor.config, embeddings=code_predictor.get_input_embeddings()
+            ).eval(),
+            "codec_encoder": Qwen3TTSCodecEncoderWrapper(
+                codec_model.config,
+                encoder=codec_model.encoder,
+                num_quantizers=codec_model.encoder_valid_num_quantizers,
+            ).eval(),
+            "codec_decoder": Qwen3TTSCodecDecoderWrapper(
+                codec_model.config.decoder_config, decoder=codec_model.decoder
+            ).eval(),
+        }
+        if model.speaker_encoder is not None:
+            submodels["speaker_encoder"] = Qwen3TTSSpeakerEncoderWrapper(
+                model.config.speaker_encoder_config, speaker_encoder=model.speaker_encoder
+            ).eval()
+        return submodels
+
+    # The code predictor is fed embeddings in the talker's width and narrows them itself, so
+    # its graph input is sized by the talker rather than by its own hidden size.
+    custom_export_configs["code_predictor_model"].input_hidden_size = talker_config.hidden_size
+
+    # The speaker encoder only exists on the voice-clone (``base``) variants.
+    if model.speaker_encoder is not None:
+        custom_export_configs["speaker_encoder"] = Qwen3TTSSpeakerEncoderOpenVINOConfig(
+            model.config.speaker_encoder_config, task="feature-extraction"
+        )
+
+    fn_get_submodels = _get_qwen3_tts_submodels
+
+    return custom_export_configs, fn_get_submodels
+
+
 MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llava",
     "llava_next",

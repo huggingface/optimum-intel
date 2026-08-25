@@ -16,6 +16,7 @@
 import unittest
 from pathlib import Path
 
+import openvino
 import torch
 from parameterized import parameterized
 from sentence_transformers import SentenceTransformer, models
@@ -64,7 +65,11 @@ from optimum.intel import (
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version
+from optimum.intel.utils.import_utils import (
+    _transformers_version,
+    is_qwen_tts_available,
+    is_transformers_version,
+)
 from optimum.utils import logging
 from optimum.utils.save_utils import maybe_load_preprocessors
 
@@ -282,6 +287,52 @@ class ExportModelTest(unittest.TestCase):
                             self.assertFalse(
                                 component_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
                             )
+
+    @unittest.skipUnless(is_qwen_tts_available(), "qwen_tts package is not installed")
+    def test_export_qwen3_tts(self):
+        """Qwen3-TTS is exported component-wise, so check the shape of the export itself.
+
+        It cannot go through ``_openvino_export`` above: that path loads via an AutoModel class
+        and asserts the result is an ``OVBaseModel``, while Qwen3-TTS is loaded from the
+        out-of-tree ``qwen_tts`` package and served by a dedicated runtime class.
+        """
+        from optimum.intel.utils.modeling_utils import _Qwen3TTSForTextToSpeech
+
+        model = _Qwen3TTSForTextToSpeech.from_pretrained(MODEL_NAMES["qwen3_tts"])
+        expected_submodels = {
+            "talker_model",
+            "code_predictor_model",
+            "text_embeddings",
+            "talker_embeddings",
+            "code_predictor_embeddings",
+            "speaker_encoder",
+            "codec_encoder",
+            "codec_decoder",
+        }
+
+        with TemporaryDirectory() as tmpdirname:
+            export_from_model(model=model, output=Path(tmpdirname), task="text-to-audio", stateful=True)
+
+            exported = {p.stem[len("openvino_") :] for p in Path(tmpdirname).glob("openvino_*.xml")}
+            self.assertTrue(expected_submodels.issubset(exported), f"missing: {expected_submodels - exported}")
+
+            # The export is self-contained: no checkpoint is copied next to the IRs.
+            self.assertFalse(list(Path(tmpdirname).glob("*.safetensors")))
+            self.assertFalse(list(Path(tmpdirname, "speech_tokenizer").glob("*.safetensors")))
+
+            # The configs the runtime rebuilds the pipeline from must survive the export.
+            for asset in ("config.json", "generation_config.json", "speech_tokenizer/config.json"):
+                self.assertTrue(Path(tmpdirname, asset).is_file(), f"missing asset {asset}")
+
+            # The checkpoint's own precision is kept rather than upcast to fp32.
+            core = openvino.Core()
+            talker = core.read_model(Path(tmpdirname, "openvino_talker_model.xml"))
+            weight_types = {
+                op.get_element_type().get_type_name()
+                for op in talker.get_ops()
+                if op.get_type_name() == "Constant" and op.get_output_size() and len(op.get_output_shape(0)) == 2
+            }
+            self.assertIn("bf16", weight_types, f"talker weights were not kept in bf16: {weight_types}")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, model_type: str):

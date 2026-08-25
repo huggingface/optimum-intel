@@ -80,6 +80,7 @@ from optimum.intel.utils.import_utils import (
     compare_versions,
     is_openvino_tokenizers_available,
     is_openvino_version,
+    is_qwen_tts_available,
     is_transformers_version,
 )
 from optimum.utils.save_utils import maybe_save_preprocessors
@@ -149,6 +150,10 @@ class OVCLIExportTestCase(unittest.TestCase):
     ]
 
     # Add custom model types
+    if is_qwen_tts_available():
+        # Qwen3-TTS is exported through the out-of-tree `qwen_tts` library, so it is not part of
+        # the transformers/diffusers sets the filter above keeps.
+        SUPPORTED_ARCHITECTURES.append(("text-to-audio", "qwen3_tts"))
     if is_transformers_version("==", "4.57.6"):
         SUPPORTED_ARCHITECTURES.append(
             ("text-generation-with-past", "qwen3_vl_eagle3"),
@@ -182,6 +187,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "sam": 0,  # no tokenizer
         "speecht5": 2,
         "kokoro": 0,  # uses g2p, no tokenizer
+        "qwen3_tts": 2,
         "clip": 2,
         "mamba": 2,
         "falcon_mamba": 2,
@@ -826,6 +832,27 @@ class OVCLIExportTestCase(unittest.TestCase):
         for config in TRANSFORMERS_4BIT_CONFIGURATIONS
         if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
     ]
+
+    if is_qwen_tts_available():
+        # int4 is applied per component for Qwen3-TTS: only the talker is quantized to 4 bits,
+        # everything else falls back to 8, and the codec and speaker encoder stay floating point.
+        SUPPORTED_4BIT_CONFIGURATIONS.append(
+            (
+                "text-to-audio",
+                "qwen3_tts",
+                "int4",
+                {
+                    "talker_model": {"int4": 28, "int8": 2},
+                    "code_predictor_model": {"int8": 16},
+                    "text_embeddings": {"int8": 2},
+                    "talker_embeddings": {"int8": 2},
+                    "code_predictor_embeddings": {"int8": 2},
+                    "speaker_encoder": {},
+                    "codec_encoder": {},
+                    "codec_decoder": {},
+                },
+            )
+        )
 
     def _openvino_export(
         self,
