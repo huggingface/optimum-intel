@@ -600,6 +600,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5",
         "qwen3_5_moe",
         "qwen3_omni_moe",
+        "mistral3",
         "muse_glimmer",
         "deepseek_ocr2",
     ]
@@ -618,10 +619,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORT_AUDIO_OUTPUT = ["qwen3_omni_moe"]
     OVMODEL_CLASS = OVModelForVisualCausalLM
     TASK = "image-text-to-text"
-
-    # Architectures that segfault inside the OpenVINO CPU plugin's AVX2 JIT kernels. They only crash on
-    # hosts without AVX-512 (the CI runners); reproducible anywhere with ONEDNN_MAX_CPU_ISA=AVX2.
-    SEGFAULTING_ARCHITECTURES = {"gemma4"}
 
     # filter architectures depending on min/max transformers supported versions declared on their
     # OpenVINO export config
@@ -663,6 +660,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "llava",
             "llava_next",
             "llava_next_mistral",
+            "mistral3",
             "qwen2_vl",
             "qwen2_5_vl",
             "got_ocr2",
@@ -747,9 +745,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             # Qwen3OmniMoeForConditionalGeneration has a custom generate() interface incompatible with this flow
             self.skipTest("qwen3_omni_moe comparison tested via dedicated test methods")
 
-        if model_arch in self.SEGFAULTING_ARCHITECTURES:
-            self.skipTest(f"{model_arch}: OpenVINO CPU plugin crashes on the AVX2 inference path")
-
         def compare_outputs(inputs, ov_model, transformers_model, generation_config):
             transformers_inputs = copy.deepcopy(inputs)
             if model_arch == "videochat_flash_qwen":
@@ -781,6 +776,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(
             model_id, trust_remote_code=trust_remote_code, **loading_kwargs
         )
+
         transformers_model.eval()
         if "internvl_chat" in model_arch:
             tokenizer = AutoTokenizer.from_pretrained(model_id, trast_remote_code=trust_remote_code)
@@ -988,9 +984,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_generate_utils(self, model_arch):
-        if model_arch in self.SEGFAULTING_ARCHITECTURES:
-            self.skipTest(f"{model_arch}: OpenVINO CPU plugin crashes on the AVX2 inference path")
-
         model_id = MODEL_NAMES[model_arch]
         trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
         model = self.OVMODEL_CLASS.from_pretrained(
