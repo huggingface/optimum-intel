@@ -369,6 +369,7 @@ HUB_MODEL_NAMES = {
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
     "flux.2-klein": "optimum-intel-internal-testing/tiny-random-flux.2-klein",
+    "z-image": "optimum-intel-internal-testing/tiny-random-z-image",
     "qwen3_vl_eagle3": "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
     "videochat_flash_qwen": "optimum-intel-internal-testing/tiny-videochat-flash-qwen",
 }
@@ -470,6 +471,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vae_decoder": 60,
         "vae_encoder": 44,
         "text_encoder": 394,
+    },
+    "z-image": {
+        "transformer": 104,
+        "vae_decoder": 60,
+        "vae_encoder": 44,
+        "text_encoder": 16,
     },
     "flux-fill": {
         "transformer": 56,

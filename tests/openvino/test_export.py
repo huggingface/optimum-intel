@@ -60,6 +60,7 @@ from optimum.intel import (
     OVStableDiffusionPipeline,
     OVStableDiffusionXLImg2ImgPipeline,
     OVStableDiffusionXLPipeline,
+    OVZImagePipeline,
 )
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
@@ -124,6 +125,7 @@ class ExportModelTest(unittest.TestCase):
         "gemma4_unified": OVModelForVisualCausalLM,
         "gemma3n": OVModelForVisualCausalLM,
         "flux.2-klein": OVFlux2KleinPipeline,
+        "z-image": OVZImagePipeline,
         "qwen3_omni_moe": OVModelForMultimodalLM,
         "muse_glimmer": OVModelForVisualCausalLM,
         "deepseek_ocr2": OVModelForVisualCausalLM,
@@ -146,6 +148,7 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-3": {"text_encoder_3": "8.0"},
         "flux": {"text_encoder_2": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "flux.2-klein": {"transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
+        "z-image": {"text_encoder": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "stable-diffusion-xl-refiner": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "ltx-video": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "ltx2": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},

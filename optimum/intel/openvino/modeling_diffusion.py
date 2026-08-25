@@ -992,8 +992,9 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(
-                # GemmaTokenizer uses inf as model_max_length; LTX and QwenImage text encoders do not
-                # pad their input to model_max_length, so their sequence dimension must stay dynamic
+                # GemmaTokenizer uses inf as model_max_length; LTX, QwenImage and Z-Image text
+                # encoders do not pad their input to model_max_length (Z-Image pads to its own
+                # max_sequence_length), so their sequence dimension must stay dynamic
                 self.text_encoder.model,
                 batch_size,
                 (
@@ -1001,6 +1002,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     if "Gemma" not in self.tokenizer.__class__.__name__
                     and not self.__class__.__name__.startswith("OVLTX")
                     and not self.__class__.__name__.startswith("OVQwenImage")
+                    and not self.__class__.__name__.startswith("OVZImage")
                     and not getattr(self, "_is_ltx_pipeline", False)
                     else -1
                 ),
@@ -2418,8 +2420,13 @@ class _OVZImageTransformerAdapter:
     and returns sample [B, C, H, W].  Batch size, resolution and caption length are all
     dynamic dimensions of the IR, so a single infer request serves the whole batch.
 
-    Captions have different lengths per prompt, so they are right-padded to the longest
-    one in the batch to form a rectangular tensor.
+    Items are batched together only when their captions are the same length. The exported
+    graph carries no attention mask — it does not need one while every item has the same
+    caption length — so batch-padding a shorter caption would let the padding be attended
+    as if it were real text. That happens whenever prompts of different lengths are
+    batched, classifier-free guidance being the common case: it appends the (shorter)
+    negative prompt to the batch. Such calls are split into per-length groups instead,
+    which matches what the reference pipeline computes with its attention mask.
     """
 
     def __init__(self, ov_transformer):
@@ -2428,9 +2435,6 @@ class _OVZImageTransformerAdapter:
     def __call__(self, x, t, cap_feats, return_dict=True, **kwargs):
         import torch
 
-        # x: list of [C, 1, H, W] → [B, C, H, W]
-        hidden_states = torch.stack([x_item.squeeze(1) for x_item in x], dim=0)
-
         batch_size = len(x)
         if not isinstance(t, torch.Tensor):
             t = torch.tensor([t])
@@ -2438,34 +2442,38 @@ class _OVZImageTransformerAdapter:
         if timestep.numel() == 1 and batch_size > 1:
             timestep = timestep.expand(batch_size)
 
-        # cap_feats: list of [seq_len_i, dim] → [B, max_seq_len, dim], zero padded
-        cap_dim = cap_feats[0].shape[-1]
-        max_cap_len = max(cf.shape[0] for cf in cap_feats)
-        encoder_hidden_states = torch.zeros(
-            batch_size, max_cap_len, cap_dim, dtype=cap_feats[0].dtype
-        )
+        groups = {}
         for i, cf in enumerate(cap_feats):
-            encoder_hidden_states[i, : cf.shape[0]] = cf
+            groups.setdefault(cf.shape[0], []).append(i)
 
-        ov_out = self._ov_transformer(
-            hidden_states=hidden_states,
-            timestep=timestep,
-            encoder_hidden_states=encoder_hidden_states,
-            return_dict=False,
-        )
+        samples = [None] * batch_size
+        for indices in groups.values():
+            # x: list of [C, 1, H, W] → [B, C, H, W]
+            hidden_states = torch.stack([x[i].squeeze(1) for i in indices], dim=0)
+            encoder_hidden_states = torch.stack([cap_feats[i] for i in indices], dim=0)
 
-        if isinstance(ov_out, (tuple, list)):
-            sample = ov_out[0]
-        elif hasattr(ov_out, "sample"):
-            sample = ov_out.sample
-        else:
-            sample = list(ov_out.values())[0] if hasattr(ov_out, "values") else ov_out
+            ov_out = self._ov_transformer(
+                hidden_states=hidden_states,
+                timestep=timestep[indices],
+                encoder_hidden_states=encoder_hidden_states,
+                return_dict=False,
+            )
 
-        if not isinstance(sample, torch.Tensor):
-            sample = torch.from_numpy(sample)
+            if isinstance(ov_out, (tuple, list)):
+                sample = ov_out[0]
+            elif hasattr(ov_out, "sample"):
+                sample = ov_out.sample
+            else:
+                sample = list(ov_out.values())[0] if hasattr(ov_out, "values") else ov_out
 
-        # [B, C, H, W] → list of [C, 1, H, W], the convention ZImagePipeline expects back
-        return ([s.unsqueeze(1) for s in sample.unbind(0)],)
+            if not isinstance(sample, torch.Tensor):
+                sample = torch.from_numpy(sample)
+
+            # [B, C, H, W] → [C, 1, H, W] each, the convention ZImagePipeline expects back
+            for position, item in zip(indices, sample.unbind(0)):
+                samples[position] = item.unsqueeze(1)
+
+        return (samples,)
 
     def __getattr__(self, name):
         return getattr(self._ov_transformer, name)
@@ -2483,12 +2491,18 @@ class _OVZImagePipelineMixin:
     """
 
     def __call__(self, *args, **kwargs):
-        """Wrap transformer with ZImage-to-OV adapter before calling the pipeline."""
+        """Wrap transformer with ZImage-to-OV adapter before calling the pipeline.
+
+        Delegates to OVDiffusionPipeline.__call__ rather than straight to
+        auto_model_class.__call__: that is where numpy random states are converted to
+        torch generators and where a statically reshaped pipeline overrides the requested
+        height/width.
+        """
         orig_transformer = self.transformer
         if not isinstance(orig_transformer, _OVZImageTransformerAdapter):
             self.transformer = _OVZImageTransformerAdapter(orig_transformer)
         try:
-            return self.auto_model_class.__call__(self, *args, **kwargs)
+            return OVDiffusionPipeline.__call__(self, *args, **kwargs)
         finally:
             self.transformer = orig_transformer
 
@@ -2507,18 +2521,20 @@ class _OVZImagePipelineMixin:
         if isinstance(prompt, str):
             prompt = [prompt]
 
-        for i, prompt_item in enumerate(prompt):
-            messages = [{"role": "user", "content": prompt_item}]
-            prompt_item = self.tokenizer.apply_chat_template(
-                messages,
+        # Build a new list rather than assigning back into the caller's: reusing the same
+        # prompt list for a second call would otherwise wrap it in the chat template twice.
+        templated_prompt = [
+            self.tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt_item}],
                 tokenize=False,
                 add_generation_prompt=True,
                 enable_thinking=True,
             )
-            prompt[i] = prompt_item
+            for prompt_item in prompt
+        ]
 
         text_inputs = self.tokenizer(
-            prompt,
+            templated_prompt,
             padding="max_length",
             max_length=max_sequence_length,
             truncation=True,

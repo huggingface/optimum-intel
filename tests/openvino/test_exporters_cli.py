@@ -137,6 +137,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
+        ("text-to-image", "z-image"),
         ("image-text-to-text", "muse_glimmer"),
     ]
     # filter architectures depending on min/max transformers supported versions
@@ -168,6 +169,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "stable-diffusion-3": 6,
         "flux": 4,
         "flux.2-klein": 2,
+        "z-image": 2,
         "flux-fill": 4,
         "lfm2": (
             2 if is_openvino_version(">=", "2026.0") else 0

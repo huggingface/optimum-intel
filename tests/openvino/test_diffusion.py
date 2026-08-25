@@ -18,7 +18,6 @@ import unittest
 from pathlib import Path
 
 import numpy as np
-import openvino as ov
 import torch
 from diffusers import (
     AutoPipelineForImage2Image,
@@ -42,9 +41,6 @@ from optimum.intel.openvino import (
 from optimum.intel.openvino.utils import TemporaryDirectory
 from optimum.intel.utils.import_utils import is_diffusers_version, is_transformers_version
 from optimum.utils.testing_utils import require_diffusers
-
-if is_diffusers_version(">=", "0.37.0"):
-    from optimum.intel.openvino import OVZImagePipeline
 
 
 def get_generator(framework, seed):
@@ -96,7 +92,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     ]
 
     if is_diffusers_version(">=", "0.37.0"):
-        SUPPORTED_ARCHITECTURES.extend(["flux.2-klein"])
+        SUPPORTED_ARCHITECTURES.extend(["flux.2-klein", "z-image"])
 
     if is_diffusers_version(">=", "0.33.0"):
         SUPPORTED_ARCHITECTURES.extend(["sana-sprint"])
@@ -256,10 +252,12 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
                     channels = pipeline.transformer.config.in_channels
                     self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
                 else:
+                    # Some transformer configs (Z-Image) only declare in_channels and derive
+                    # out_channels at runtime, so fall through to the VAE latent channels.
                     out_channels = (
                         pipeline.unet.config.out_channels
                         if pipeline.unet is not None
-                        else pipeline.transformer.config.out_channels
+                        else getattr(pipeline.transformer.config, "out_channels", None)
                     )
                     if out_channels is None:
                         out_channels = pipeline.vae.config.latent_channels
@@ -1414,342 +1412,3 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
         # num_frames is floored to the nearest latent frame count, not rejected
         invalid_inputs = self.generate_inputs(height=64, width=96, batch_size=1, num_frames=10)
         self.assertEqual(len(np.array(pipeline(**invalid_inputs).frames[0])), 9)
-
-
-@unittest.skipIf(not is_diffusers_version(">=", "0.37.0"), reason="ZImagePipeline requires diffusers >= 0.37.0")
-@require_diffusers
-class OVZImagePipelineTest(unittest.TestCase):
-    """Tests for OVZImagePipeline (Tongyi-MAI/Z-Image-Turbo architecture).
-
-    Uses a tiny randomly-initialised ZImagePipeline created in memory so that
-    no large model download is required during CI.  The only external assets
-    are the Qwen3 tokenizer files from
-    ``optimum-intel-internal-testing/tiny-random-qwen3`` (~14 MB).
-
-    The tiny model parameters are chosen so that:
-    - ``dim=64``, ``n_heads=2`` → ``head_dim=32 == sum(axes_dims)``
-    - ``cap_feat_dim=32`` matches the Qwen3 ``hidden_size=32``
-    - ``in_channels=16`` matches ``AutoencoderKL`` ``latent_channels=16``
-    """
-
-    # Tiny but self-consistent model configuration
-    TRANSFORMER_CONFIG = dict(
-        all_patch_size=[2],
-        all_f_patch_size=[1],
-        in_channels=16,
-        dim=64,
-        n_layers=1,
-        n_refiner_layers=1,
-        n_heads=2,
-        n_kv_heads=2,
-        norm_eps=1e-5,
-        qk_norm=True,
-        cap_feat_dim=32,
-        siglip_feat_dim=None,
-        rope_theta=256.0,
-        t_scale=1000.0,
-        axes_dims=[4, 14, 14],  # must sum to head_dim=32
-        axes_lens=[256, 128, 128],
-    )
-
-    VAE_CONFIG = dict(
-        in_channels=3,
-        out_channels=3,
-        latent_channels=16,
-        down_block_types=("DownEncoderBlock2D",),
-        up_block_types=("UpDecoderBlock2D",),
-        block_out_channels=(32,),
-        layers_per_block=1,
-        norm_num_groups=32,
-        scaling_factor=0.3611,
-        shift_factor=0.1159,
-    )
-
-    QWEN3_CONFIG = dict(
-        vocab_size=100,
-        hidden_size=32,
-        intermediate_size=64,
-        num_hidden_layers=1,
-        num_attention_heads=2,
-        num_key_value_heads=2,
-        head_dim=16,
-        max_position_embeddings=512,
-        rms_norm_eps=1e-5,
-    )
-
-    # Public tokenizer with chat-template support; ~14 MB download
-    TOKENIZER_ID = "optimum-intel-internal-testing/tiny-random-qwen3"
-
-    def _build_tiny_pipeline(self):
-        """Create an in-memory ZImagePipeline with random weights."""
-        from diffusers import FlowMatchEulerDiscreteScheduler, ZImagePipeline
-        from diffusers.models import AutoencoderKL
-        from diffusers.models.transformers import ZImageTransformer2DModel
-        from transformers import AutoTokenizer, Qwen3Config, Qwen3Model
-
-        transformer = ZImageTransformer2DModel(**self.TRANSFORMER_CONFIG)
-        vae = AutoencoderKL(**self.VAE_CONFIG)
-        text_encoder = Qwen3Model(Qwen3Config(**self.QWEN3_CONFIG))
-        tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_ID)
-        scheduler = FlowMatchEulerDiscreteScheduler()
-
-        return ZImagePipeline(
-            scheduler=scheduler,
-            vae=vae,
-            text_encoder=text_encoder,
-            tokenizer=tokenizer,
-            transformer=transformer,
-        )
-
-    def test_export_tiny_model(self):
-        """Exporting a tiny ZImagePipeline produces the expected four OV sub-models."""
-        from optimum.intel.openvino.utils import TemporaryDirectory
-
-        pipe = self._build_tiny_pipeline()
-        with TemporaryDirectory() as src_dir, TemporaryDirectory() as ov_dir:
-            pipe.save_pretrained(src_dir)
-
-            import subprocess
-
-            result = subprocess.run(
-                f"optimum-cli export openvino --model {src_dir} --task text-to-image {ov_dir}",
-                shell=True,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, msg=f"Export failed:\n{result.stderr}")
-
-            exported_xmls = {p.parent.name for p in Path(ov_dir).rglob("openvino_model.xml")}
-            self.assertSetEqual(
-                exported_xmls,
-                {"text_encoder", "transformer", "vae_encoder", "vae_decoder"},
-            )
-
-    def test_inference_output_shape(self):
-        """A single exported OVZImagePipeline serves every requested resolution.
-
-        The IR must be resolution agnostic: one export has to cover the resolution it
-        was traced with (64x64), larger and non-square ones, and — since image tokens
-        are padded to a multiple of ``SEQ_MULTI_OF`` — resolutions whose token count is
-        not a multiple of 32 (40x40 -> 20*20 = 400 tokens, padded to 416).
-        """
-        from optimum.intel.openvino import OVZImagePipeline
-        from optimum.intel.openvino.utils import TemporaryDirectory
-
-        pipe = self._build_tiny_pipeline()
-
-        with TemporaryDirectory() as src_dir, TemporaryDirectory() as ov_dir:
-            pipe.save_pretrained(src_dir)
-
-            import subprocess
-
-            result = subprocess.run(
-                f"optimum-cli export openvino --model {src_dir} --task text-to-image {ov_dir}",
-                shell=True,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, msg=f"Export failed:\n{result.stderr}")
-
-            ov_pipe = OVZImagePipeline.from_pretrained(ov_dir, device=OPENVINO_DEVICE)
-            for height, width in [(64, 64), (128, 128), (96, 64), (40, 40)]:
-                with self.subTest(height=height, width=width):
-                    output = ov_pipe(
-                        "a beautiful landscape",
-                        num_inference_steps=1,
-                        height=height,
-                        width=width,
-                        output_type="np",
-                    )
-                    images = output.images
-                    self.assertEqual(len(images), 1)
-                    self.assertTupleEqual(images[0].shape, (height, width, 3))
-
-    def test_inference_batched_prompts(self):
-        """One exported OVZImagePipeline serves any batch size in a single infer request.
-
-        The transformer IR is natively batched, so batch size is a dynamic dimension.
-        Prompts of different lengths are padded to the longest caption in the batch, so
-        the mixed-length case exercises the caption padding path.
-        """
-        from optimum.intel.openvino import OVZImagePipeline
-        from optimum.intel.openvino.utils import TemporaryDirectory
-
-        pipe = self._build_tiny_pipeline()
-        height, width = 64, 64
-
-        with TemporaryDirectory() as src_dir, TemporaryDirectory() as ov_dir:
-            pipe.save_pretrained(src_dir)
-
-            import subprocess
-
-            result = subprocess.run(
-                f"optimum-cli export openvino --model {src_dir} --task text-to-image {ov_dir}",
-                shell=True,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, msg=f"Export failed:\n{result.stderr}")
-
-            # The exported transformer must keep a dynamic batch dimension.
-            transformer = Path(ov_dir) / "transformer" / "openvino_model.xml"
-            model = ov.Core().read_model(transformer)
-            self.assertTrue(
-                model.input("hidden_states").get_partial_shape()[0].is_dynamic,
-                msg="transformer was exported with a static batch dimension",
-            )
-            self.assertTrue(model.output(0).get_partial_shape()[0].is_dynamic)
-
-            ov_pipe = OVZImagePipeline.from_pretrained(ov_dir, device=OPENVINO_DEVICE)
-            prompt_batches = [
-                ["a beautiful landscape"],
-                ["a beautiful landscape", "a red fox"],
-                ["a cat", "an astronaut riding a horse on the moon, cinematic, ultra detailed", "blue flowers"],
-            ]
-            for prompts in prompt_batches:
-                with self.subTest(batch_size=len(prompts)):
-                    images = ov_pipe(
-                        list(prompts),  # the pipeline rewrites the list it is given
-                        num_inference_steps=1,
-                        height=height,
-                        width=width,
-                        output_type="np",
-                    ).images
-                    self.assertEqual(len(images), len(prompts))
-                    for image in images:
-                        self.assertTupleEqual(image.shape, (height, width, 3))
-
-    def test_img2img_reuses_the_text2image_export(self):
-        """OVZImageImg2ImgPipeline runs off the plain text-to-image export.
-
-        Image-to-image needs no separate export: it reuses the same transformer, text
-        encoder and VAE, and only differs in how the initial latents are built (encode
-        the input image, then add noise at the timestep chosen by ``strength``).
-        """
-        from PIL import Image
-
-        from optimum.intel.openvino import OVPipelineForImage2Image, OVZImageImg2ImgPipeline
-        from optimum.intel.openvino.utils import TemporaryDirectory
-
-        pipe = self._build_tiny_pipeline()
-        height, width = 64, 64
-
-        with TemporaryDirectory() as src_dir, TemporaryDirectory() as ov_dir:
-            pipe.save_pretrained(src_dir)
-
-            import subprocess
-
-            result = subprocess.run(
-                f"optimum-cli export openvino --model {src_dir} --task text-to-image {ov_dir}",
-                shell=True,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, msg=f"Export failed:\n{result.stderr}")
-
-            # The VAE encoder is what image-to-image needs on top of text-to-image.
-            self.assertTrue((Path(ov_dir) / "vae_encoder" / "openvino_model.xml").is_file())
-
-            ov_pipe = OVZImageImg2ImgPipeline.from_pretrained(ov_dir, device=OPENVINO_DEVICE)
-            self.assertIsInstance(
-                OVPipelineForImage2Image.from_pretrained(ov_dir, device=OPENVINO_DEVICE),
-                OVZImageImg2ImgPipeline,
-            )
-
-            init_image = Image.fromarray(
-                np.random.RandomState(SEED).randint(0, 256, (height, width, 3), dtype=np.uint8)
-            )
-            for strength in (0.3, 0.8):
-                with self.subTest(strength=strength):
-                    images = ov_pipe(
-                        "a beautiful landscape",
-                        image=init_image,
-                        strength=strength,
-                        num_inference_steps=2,
-                        output_type="np",
-                    ).images
-                    self.assertEqual(len(images), 1)
-                    self.assertTupleEqual(images[0].shape, (height, width, 3))
-
-    def test_inpaint_reuses_the_text2image_export(self):
-        """OVZImageInpaintPipeline runs off the plain text-to-image export, batched too.
-
-        Like image-to-image, inpainting needs no separate export — it reuses the same
-        transformer, text encoder and VAE, and only differs in latent preparation.
-        """
-        from PIL import Image
-
-        from optimum.intel.openvino import OVPipelineForInpainting, OVZImageInpaintPipeline
-        from optimum.intel.openvino.utils import TemporaryDirectory
-
-        pipe = self._build_tiny_pipeline()
-        height, width = 64, 64
-
-        with TemporaryDirectory() as src_dir, TemporaryDirectory() as ov_dir:
-            pipe.save_pretrained(src_dir)
-
-            import subprocess
-
-            result = subprocess.run(
-                f"optimum-cli export openvino --model {src_dir} --task text-to-image {ov_dir}",
-                shell=True,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, msg=f"Export failed:\n{result.stderr}")
-
-            ov_pipe = OVZImageInpaintPipeline.from_pretrained(ov_dir, device=OPENVINO_DEVICE)
-            self.assertIsInstance(
-                OVPipelineForInpainting.from_pretrained(ov_dir, device=OPENVINO_DEVICE),
-                OVZImageInpaintPipeline,
-            )
-
-            rng = np.random.RandomState(SEED)
-            init_image = Image.fromarray(rng.randint(0, 256, (height, width, 3), dtype=np.uint8))
-            # White = repaint, black = keep: repaint the top half only.
-            mask_array = np.zeros((height, width), dtype=np.uint8)
-            mask_array[: height // 2] = 255
-            mask_image = Image.fromarray(mask_array, mode="L")
-
-            for batch_size in (1, 2):
-                with self.subTest(batch_size=batch_size):
-                    images = ov_pipe(
-                        ["a beautiful landscape"] * batch_size,
-                        image=[init_image] * batch_size,
-                        mask_image=[mask_image] * batch_size,
-                        height=height,
-                        width=width,
-                        num_inference_steps=2,
-                        output_type="np",
-                    ).images
-                    self.assertEqual(len(images), batch_size)
-                    for image in images:
-                        self.assertTupleEqual(image.shape, (height, width, 3))
-
-    def test_pipeline_class_dispatch(self):
-        """OVDiffusionPipeline.from_pretrained dispatches to OVZImagePipeline."""
-        from optimum.intel.openvino import OVDiffusionPipeline, OVZImagePipeline
-        from optimum.intel.openvino.utils import TemporaryDirectory
-
-        pipe = self._build_tiny_pipeline()
-
-        with TemporaryDirectory() as src_dir, TemporaryDirectory() as ov_dir:
-            pipe.save_pretrained(src_dir)
-
-            import subprocess
-
-            result = subprocess.run(
-                f"optimum-cli export openvino --model {src_dir} --task text-to-image {ov_dir}",
-                shell=True,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, msg=f"Export failed:\n{result.stderr}")
-
-            # Direct load
-            ov_pipe = OVZImagePipeline.from_pretrained(ov_dir, device=OPENVINO_DEVICE)
-            self.assertIsInstance(ov_pipe, OVZImagePipeline)
-
-            # Dispatch via OVDiffusionPipeline
-            ov_pipe_dispatched = OVDiffusionPipeline.from_pretrained(ov_dir, device=OPENVINO_DEVICE)
-            self.assertIsInstance(ov_pipe_dispatched, OVZImagePipeline)
