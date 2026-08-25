@@ -929,6 +929,11 @@ TEST_NAME_TO_MODEL_TYPE = {
     "vit-with-attentions": "vit",
     "vit-with-hidden-states": "vit",
     "wav2vec2-hf": "wav2vec2",
+    # The architecture lists are filtered against the exporter's registered model types,
+    # which for diffusers are components ("z-image-transformer") rather than pipeline names
+    # ("z-image"). Map the test name onto its transformer component so the z-image entries
+    # in test_export.py / test_exporters_cli.py are collected instead of silently deselected.
+    "z-image": "z-image-transformer",
 }
 
 
