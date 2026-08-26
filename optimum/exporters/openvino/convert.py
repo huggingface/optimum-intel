@@ -1172,7 +1172,9 @@ def get_zimage_models_for_export(pipeline, exporter, int_dtype, float_dtype):
         exporter=exporter,
         library_name="diffusers",
         task="feature-extraction",
-        model_type="qwen3-text-encoder",
+        # Z-Image's own config, not the shared "qwen3-text-encoder": see
+        # ZImageTextEncoderOpenVINOConfig for why the registrations must stay separate.
+        model_type="z-image-text-encoder",
     )
     text_encoder_export_config = text_encoder_config_constructor(
         text_encoder.config,

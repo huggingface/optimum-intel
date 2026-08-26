@@ -7475,13 +7475,19 @@ class ZImageTransformerOpenVINOConfig(UNetOpenVINOConfig):
         }
 
 
-@register_in_tasks_manager("qwen3-text-encoder", *["feature-extraction"], library_name="diffusers")
+@register_in_tasks_manager("z-image-text-encoder", *["feature-extraction"], library_name="diffusers")
 class ZImageTextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
     """
     Export config for the Qwen3Model text encoder used in ZImagePipeline.
 
     The patched forward (via ZImageTextEncoderModelPatcher) returns hidden_states[-2]
     directly as the main output tensor.
+
+    Registered under its own model type rather than the shared "qwen3-text-encoder": both
+    are Qwen3 encoders, but this one exports a single last_hidden_state, while
+    Qwen3TextEncoderOpenVINOConfig also exports every hidden_states.N. Reusing the shared
+    key would overwrite that registration (this class is defined later in the file) and
+    strip the per-layer outputs that Flux.2-Klein indexes.
     """
 
     _MODEL_PATCHER = ZImageTextEncoderModelPatcher
