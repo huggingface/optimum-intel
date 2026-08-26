@@ -11490,13 +11490,15 @@ def _z_image_rope_embedder_call(self, ids: "torch.Tensor"):
 
     result_cos, result_sin = [], []
     for i in range(len(self.axes_dims)):
-        index = ids[:, i]  # [seq_len] integer indices
-        result_cos.append(self._ov_freqs_cos[i][index])  # [seq_len, freq_i] real
-        result_sin.append(self._ov_freqs_sin[i][index])  # [seq_len, freq_i] real
+        # ids is [..., seq_len, 3]: 2D for a batch-shared grid, 3D when every batch item
+        # carries its own position ids. Indexing on the last axis handles both.
+        index = ids[..., i]  # [..., seq_len] integer indices
+        result_cos.append(self._ov_freqs_cos[i][index])  # [..., seq_len, freq_i] real
+        result_sin.append(self._ov_freqs_sin[i][index])  # [..., seq_len, freq_i] real
 
-    cos = torch.cat(result_cos, dim=-1)  # [seq_len, total_freq]
-    sin = torch.cat(result_sin, dim=-1)  # [seq_len, total_freq]
-    # Stack as [seq_len, total_freq, 2] where last dim = [cos, sin]
+    cos = torch.cat(result_cos, dim=-1)  # [..., seq_len, total_freq]
+    sin = torch.cat(result_sin, dim=-1)  # [..., seq_len, total_freq]
+    # Stack as [..., seq_len, total_freq, 2] where last dim = [cos, sin]
     return torch.stack([cos, sin], dim=-1)
 
 
@@ -11558,12 +11560,19 @@ def _z_image_attn_proc_call(
     if attention_mask is not None and attention_mask.ndim == 2:
         attention_mask = attention_mask[:, None, None, :]
 
+    if attention_mask is not None and attention_mask.dtype == torch.bool:
+        # Eager-style additive mask: OpenVINO handles a float bias added to the attention
+        # scores more predictably than a boolean Select, so convert before SDPA.
+        attention_mask = torch.zeros_like(attention_mask, dtype=query.dtype).masked_fill(
+            ~attention_mask, torch.finfo(query.dtype).min
+        )
+
     # Standard SDPA
     hidden_states = torch.nn.functional.scaled_dot_product_attention(
         query.transpose(1, 2),
         key.transpose(1, 2),
         value.transpose(1, 2),
-        attn_mask=attention_mask.bool() if attention_mask is not None else None,
+        attn_mask=attention_mask.to(query.dtype) if attention_mask is not None else None,
         dropout_p=0.0,
         is_causal=False,
     ).transpose(1, 2)
@@ -11578,50 +11587,14 @@ def _z_image_attn_proc_call(
     return output
 
 
-def _z_image_pad_to_multiple(feat: "torch.Tensor", pos_grid_size, pos_start, create_coordinate_grid, device):
-    """
-    Batched, dynamic-shape-safe equivalent of ZImageTransformer2DModel._pad_with_ids.
-
-    The stock helper derives the padded length from ``len(feat)`` — a Python ``int`` the
-    tracer bakes into the IR — and branches on ``if pad_len > 0``.  Here the length comes
-    from ``feat.shape[1]``, which the tracer keeps symbolic, and the branch is replaced by
-    a gather with clamped indices.
-
-    ``feat`` is [B, L, D].  Every item of a batch shares one padding layout, so the
-    position ids and the pad mask are computed once, as [T, 3] and [T], and broadcast over
-    the batch instead of being materialised per item.
-
-    Returns (padded_feat [B, T, D], pos_ids [T, 3], pad_mask [T]).
-    """
-    import torch
-    from diffusers.models.transformers.transformer_z_image import SEQ_MULTI_OF
-
-    ori_len = feat.shape[1]  # traced symbolically — stays dynamic in the IR
-    total_len = ori_len + (-ori_len) % SEQ_MULTI_OF
-
-    ori_pos_ids = create_coordinate_grid(size=pos_grid_size, start=pos_start, device=device).flatten(0, 2)
-
-    idx = torch.arange(total_len, device=feat.device)
-    pad_mask = idx >= ori_len
-
-    # Repeat the last row over the padded tail — branchless equivalent of
-    # torch.cat([feat, feat[-1:].repeat(pad_len, 1)]).
-    padded_feat = feat.index_select(1, torch.minimum(idx, idx * 0 + ori_len - 1))
-
-    # The caption grid is already rounded up to SEQ_MULTI_OF, so it can be longer than
-    # ori_len; only rows past the end of the grid get zero position ids.
-    n_pos = ori_pos_ids.shape[0]
-    pos_ids = ori_pos_ids.index_select(0, torch.minimum(idx, idx * 0 + n_pos - 1))
-    pos_ids = torch.where((idx >= n_pos).unsqueeze(-1), torch.zeros_like(pos_ids), pos_ids)
-
-    return padded_feat, pos_ids, pad_mask
-
-
 def _patched_z_image_batched_forward(
     model,
     hidden_states: "torch.Tensor",
     timestep: "torch.Tensor",
     encoder_hidden_states: "torch.Tensor",
+    encoder_attention_mask: "torch.Tensor",
+    txt_ids: "torch.Tensor",
+    img_ids: "torch.Tensor",
     patch_size: int = 2,
     f_patch_size: int = 1,
 ):
@@ -11637,17 +11610,37 @@ def _patched_z_image_batched_forward(
     This rewrite keeps everything as [B, ...] tensors, so batch size, height, width and
     caption length are all dynamic dimensions of the exported model.
 
-    Every item of a batch shares one resolution and one caption length, so the position
-    ids, RoPE frequencies and pad masks are computed once and broadcast: the frequencies
-    stay at [1, T, freq, 2] and broadcast over the batch inside the attention processor.
-    Attention masks are ``None`` for the same reason — upstream ``_prepare_sequence``
-    likewise returns ``None`` when all sequences in a batch have equal length.
+    Position ids are inputs rather than something the graph derives, following the same
+    design as the Flux export. That is what lets one infer request serve prompts of
+    different lengths: upstream offsets the image tokens past the caption
+    (``pos_start=(cap_len + 1, 0, 0)``) using each item's own caption length rounded up to
+    SEQ_MULTI_OF, so in a ragged batch the *image* position ids differ per item too. A
+    graph that computed them from shapes could only ever produce one shared grid.
 
-    Inputs:  hidden_states [B, C, H, W], timestep [B], encoder_hidden_states [B, M, cap_dim]
+    Inputs:
+      hidden_states          [B, C, H, W]
+      timestep               [B]
+      encoder_hidden_states  [B, M, cap_dim]  captions batch-padded to M
+      encoder_attention_mask [B, M]           eager additive mask over *real* caption
+                                              tokens: 0 on a real token, a large negative
+                                              value elsewhere
+      txt_ids                [B, M, 3]        caption position ids, 1..T_i then 0 past T_i
+      img_ids                [B, N, 3]        image position ids, offset by each T_i
+
     Returns: sample [B, C_out, H, W]
+
+    The two caption padding levels upstream keeps distinct are encoded in these inputs:
+
+      * SEQ_MULTI_OF padding (real length L_i up to the rounded T_i) is *attended*, with
+        the embedding replaced by the learned ``cap_pad_token``. Those slots are masked in
+        ``encoder_attention_mask`` but carry a non-zero ``txt_ids`` position.
+      * batch padding (past T_i, up to M) is masked out of attention entirely. Those slots
+        carry position id 0, which is what marks them — real caption positions are 1-based.
+
+    Masks are eager/additive floats (0 to keep, ``finfo.min`` to drop) rather than booleans,
+    so the attention bias is a plain add rather than a Select in the exported graph.
     """
     import torch
-    from diffusers.models.transformers.transformer_z_image import SEQ_MULTI_OF
 
     pH = pW = patch_size
     pF = f_patch_size
@@ -11657,18 +11650,26 @@ def _patched_z_image_batched_forward(
     # ── Timestep embedding ──────────────────────────────────────────────────────
     adaln_input = model.t_embedder(timestep * model.t_scale).type_as(hidden_states)
 
-    # ── Caption: pad to SEQ_MULTI_OF, embed, apply the pad token ────────────────
-    cap_ori_len = encoder_hidden_states.shape[1]
-    cap_total_len = cap_ori_len + (-cap_ori_len) % SEQ_MULTI_OF
-    cap_padded, cap_pos_ids, cap_pad_mask = _z_image_pad_to_multiple(
-        encoder_hidden_states,
-        (cap_total_len, 1, 1),
-        (1, 0, 0),
-        model.create_coordinate_grid,
-        device,
+    # ── Caption ─────────────────────────────────────────────────────────────────
+    # Everything past a real token gets cap_pad_token. For the batch-padded tail that is
+    # irrelevant work — those positions are masked out of attention below — but it keeps
+    # the SEQ_MULTI_OF slots exactly as upstream sets them without a second mask input.
+    cap = model.cap_embedder(encoder_hidden_states)
+    cap = torch.where(
+        (encoder_attention_mask >= 0).unsqueeze(-1),
+        cap,
+        model.cap_pad_token.view(1, 1, -1),
     )
+    cap_freqs = _z_image_rope_embedder_call(model.rope_embedder, txt_ids)
+    # Position id 0 on the first axis marks batch padding; upstream numbers real caption
+    # positions from 1. Build the attention bias the same way the input mask is expressed.
+    keep = torch.zeros_like(encoder_attention_mask)
+    drop = torch.full_like(encoder_attention_mask, torch.finfo(encoder_attention_mask.dtype).min)
+    cap_bias = torch.where(txt_ids[..., 0] > 0, keep, drop)
+    for layer in model.context_refiner:
+        cap = layer(cap, cap_bias, cap_freqs)
 
-    # ── Image: patchify, then pad to SEQ_MULTI_OF ───────────────────────────────
+    # ── Image: patchify, then pad out to the length img_ids declares ────────────
     x = hidden_states.unsqueeze(2)  # [B, C, H, W] -> [B, C, 1, H, W]
     batch, channels, frames, height, width = x.shape
     f_tokens, h_tokens, w_tokens = frames // pF, height // pH, width // pW
@@ -11678,38 +11679,32 @@ def _patched_z_image_batched_forward(
     x = x.permute(0, 2, 4, 6, 3, 5, 7, 1)
     x = x.reshape(batch, f_tokens * h_tokens * w_tokens, pF * pH * pW * channels)
 
-    x_padded, x_pos_ids, x_pad_mask = _z_image_pad_to_multiple(
-        x,
-        (f_tokens, h_tokens, w_tokens),
-        (cap_total_len + 1, 0, 0),
-        model.create_coordinate_grid,
-        device,
-    )
+    # Image tokens are uniform across the batch (one resolution per call), so the padded
+    # length and pad mask are shared; only the position ids in img_ids differ per item.
+    ori_len = f_tokens * h_tokens * w_tokens
+    total_len = img_ids.shape[1]
+    idx = torch.arange(total_len, device=device)
+    x_pad_mask = idx >= ori_len
+    x = x.index_select(1, torch.minimum(idx, idx * 0 + ori_len - 1))
 
-    # ── Embed and refine (the pad token is applied after embedding, as upstream) ─
-    x = model.all_x_embedder[key](x_padded)
+    x = model.all_x_embedder[key](x)
     x = torch.where(x_pad_mask.view(1, -1, 1), model.x_pad_token.view(1, 1, -1), x)
-    x_freqs = _z_image_rope_embedder_call(model.rope_embedder, x_pos_ids).unsqueeze(0)
+    x_freqs = _z_image_rope_embedder_call(model.rope_embedder, img_ids)
     for layer in model.noise_refiner:
         x = layer(x, None, x_freqs, adaln_input, None, None, None)
-
-    cap = model.cap_embedder(cap_padded)
-    cap = torch.where(cap_pad_mask.view(1, -1, 1), model.cap_pad_token.view(1, 1, -1), cap)
-    cap_freqs = _z_image_rope_embedder_call(model.rope_embedder, cap_pos_ids).unsqueeze(0)
-    for layer in model.context_refiner:
-        cap = layer(cap, None, cap_freqs)
 
     # ── Unified sequence, basic-mode order [x, cap] ─────────────────────────────
     unified = torch.cat([x, cap], dim=1)
     unified_freqs = torch.cat([x_freqs, cap_freqs], dim=1)
+    # Image tokens are always attended (bias 0); the caption tail may not be.
+    unified_bias = torch.cat([torch.zeros_like(x[..., 0]), cap_bias], dim=1)
 
     for layer in model.layers:
-        unified = layer(unified, None, unified_freqs, adaln_input, None, None, None)
+        unified = layer(unified, unified_bias, unified_freqs, adaln_input, None, None, None)
 
     unified = model.all_final_layer[key](unified, c=adaln_input)
 
     # ── Unpatchify: drop the caption tail and the SEQ_MULTI_OF padding ──────────
-    ori_len = f_tokens * h_tokens * w_tokens
     tokens = unified.index_select(1, torch.arange(ori_len, device=device))
     # "b (f h w) (pf ph pw c) -> b c (f pf) (h ph) (w pw)"
     out = tokens.reshape(batch, f_tokens, h_tokens, w_tokens, pF, pH, pW, model.out_channels)
@@ -11751,13 +11746,18 @@ class ZImageTransformerModelPatcher(ModelPatcher):
         _ZAttnProc.__call__ = _z_image_attn_proc_call
 
         # 2. Replace forward with the batched, resolution-agnostic implementation
-        #    hidden_states:         [B, C, H, W]   (the frame dim is added internally)
-        #    timestep:              [B]
-        #    encoder_hidden_states: [B, seq_len, cap_feat_dim]
+        #    hidden_states:          [B, C, H, W]   (the frame dim is added internally)
+        #    timestep:               [B]
+        #    encoder_hidden_states:  [B, seq_len, cap_feat_dim]
+        #    encoder_attention_mask: [B, seq_len]
+        #    txt_ids:                [B, seq_len, 3]
+        #    img_ids:                [B, img_seq_len, 3]
         _model_ref = self._model
 
-        def patched_forward(hidden_states, timestep, encoder_hidden_states):
-            return _patched_z_image_batched_forward(_model_ref, hidden_states, timestep, encoder_hidden_states)
+        def patched_forward(hidden_states, timestep, encoder_hidden_states, encoder_attention_mask, txt_ids, img_ids):
+            return _patched_z_image_batched_forward(
+                _model_ref, hidden_states, timestep, encoder_hidden_states, encoder_attention_mask, txt_ids, img_ids
+            )
 
         self._model.forward = patched_forward
 

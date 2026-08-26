@@ -2325,6 +2325,66 @@ class DummyZImageTransformerVisionInputGenerator(DummyUnetVisionInputGenerator):
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
+class DummyZImagePositionIdsInputGenerator(DummyInputGenerator):
+    """Generates the position-id and caption-mask inputs for ZImageTransformer2DModel.
+
+    Z-Image takes its RoPE position ids as graph inputs (as the Flux export does) so that a
+    single infer request can serve prompts of different lengths: upstream offsets the image
+    tokens past each item's caption, so in a ragged batch the image position ids differ per
+    batch item and cannot be derived from shapes inside the graph.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("encoder_attention_mask", "txt_ids", "img_ids")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        width: int = 64,
+        height: int = 64,
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        patch_size: int = 2,
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.height_tokens = height // patch_size
+        self.width_tokens = width // patch_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        from diffusers.models.transformers.transformer_z_image import SEQ_MULTI_OF
+
+        if input_name == "encoder_attention_mask":
+            # Eager additive mask: 0 keeps a token, finfo.min drops it. All-zero here means
+            # "every dummy caption token is real", which is what the tracer needs to see.
+            return torch.zeros(self.batch_size, self.sequence_length, dtype=DTYPE_MAPPER.pt(float_dtype))
+
+        if input_name == "txt_ids":
+            ids = torch.zeros(self.batch_size, self.sequence_length, 3, dtype=torch.int32)
+            # Caption positions are 1-based; 0 is reserved to mark batch padding.
+            ids[:, :, 0] = torch.arange(1, self.sequence_length + 1, dtype=torch.int32)
+            return ids
+
+        # img_ids: the (f, h, w) grid offset past the caption, zero-padded to SEQ_MULTI_OF.
+        num_tokens = self.height_tokens * self.width_tokens
+        padded = num_tokens + (-num_tokens) % SEQ_MULTI_OF
+        grid = torch.stack(
+            torch.meshgrid(
+                torch.arange(1, dtype=torch.int32),
+                torch.arange(self.height_tokens, dtype=torch.int32),
+                torch.arange(self.width_tokens, dtype=torch.int32),
+                indexing="ij",
+            ),
+            dim=-1,
+        ).reshape(-1, 3)
+        ids = torch.zeros(self.batch_size, padded, 3, dtype=torch.int32)
+        ids[:, :num_tokens] = grid
+        ids[:, :num_tokens, 0] += self.sequence_length + 1
+        return ids
+
+
 class DummyZImageCapFeatInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
     """Generates dummy text-feature inputs for ZImageTransformer2DModel export."""
 

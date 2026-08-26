@@ -80,6 +80,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyVisionPositionIdsInputGenerator,
     DummyVisionPositionIdsPhi4InputGenerator,
     DummyZImageCapFeatInputGenerator,
+    DummyZImagePositionIdsInputGenerator,
     DummyZImageTransformerVisionInputGenerator,
     Eagle3DummyGenerator,
     Eagle3VLMDummyGenerator,
@@ -7438,9 +7439,12 @@ class ZImageTransformerOpenVINOConfig(UNetOpenVINOConfig):
     Export config for ZImageTransformer2DModel.
 
     The patched forward (via ZImageTransformerModelPatcher) accepts:
-      hidden_states:         [B, C, H, W]    — latent without the frame (F) dim
-      timestep:              [B]
-      encoder_hidden_states: [B, seq_len, cap_feat_dim]
+      hidden_states:          [B, C, H, W]    — latent without the frame (F) dim
+      timestep:               [B]
+      encoder_hidden_states:  [B, seq_len, cap_feat_dim]
+      encoder_attention_mask: [B, seq_len]        — 1 on real caption tokens
+      txt_ids:                [B, seq_len, 3]     — caption RoPE position ids
+      img_ids:                [B, img_seq_len, 3] — image RoPE position ids
 
     And returns:
       sample: [B, C, H, W]
@@ -7457,6 +7461,7 @@ class ZImageTransformerOpenVINOConfig(UNetOpenVINOConfig):
         DummyTransformerTimestpsInputGenerator,
         DummyZImageTransformerVisionInputGenerator,
         DummyZImageCapFeatInputGenerator,
+        DummyZImagePositionIdsInputGenerator,
     )
     _MODEL_PATCHER = ZImageTransformerModelPatcher
 
@@ -7466,6 +7471,9 @@ class ZImageTransformerOpenVINOConfig(UNetOpenVINOConfig):
             "hidden_states": {0: "batch_size", 2: "height", 3: "width"},
             "timestep": {0: "batch_size"},
             "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+            "encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
+            "txt_ids": {0: "batch_size", 1: "sequence_length"},
+            "img_ids": {0: "batch_size", 1: "image_sequence_length"},
         }
 
     @property

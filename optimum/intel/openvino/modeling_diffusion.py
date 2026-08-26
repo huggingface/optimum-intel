@@ -800,13 +800,18 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         num_frames: int = -1,
     ):
         is_qwen_image = self.__class__.__name__.startswith("OVQwenImage")
+        is_zimage = self.__class__.__name__.startswith("OVZImage")
         if batch_size == -1 or num_images_per_prompt == -1:
             batch_size = -1
         else:
             # The factor of 2 comes from the guidance scale > 1
             batch_size *= num_images_per_prompt
-            # QwenImage runs the conditional and unconditional passes as separate calls (no batch doubling)
-            if not is_qwen_image and "img_ids" not in {inputs.get_any_name() for inputs in model.inputs}:
+            # QwenImage runs the conditional and unconditional passes as separate calls (no batch doubling).
+            # The img_ids check targets Flux, which folds guidance into an embedding instead of doubling the
+            # batch; Z-Image also has img_ids but does double, so it is excluded from that check.
+            if not is_qwen_image and (
+                is_zimage or "img_ids" not in {inputs.get_any_name() for inputs in model.inputs}
+            ):
                 batch_size *= 2
 
         is_ltx = getattr(self, "_is_ltx_pipeline", False)
@@ -850,17 +855,25 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             elif inputs.get_any_name() == "pooled_projections":
                 shapes[inputs] = [batch_size, self.transformer.config["pooled_projection_dim"]]
             elif inputs.get_any_name() == "img_ids":
-                shapes[inputs] = (
-                    [batch_size, packed_height_width, 3]
-                    if is_diffusers_version("<", "0.31.0")
-                    else [packed_height_width, 3]
-                )
-                if is_flux2:
-                    shapes[inputs] = [batch_size, packed_height_width, 4]
+                if is_zimage:
+                    # Unlike Flux, Z-Image's ids are per batch item and its image tokens are
+                    # padded up to SEQ_MULTI_OF, so the sequence length is not packed_h*packed_w.
+                    shapes[inputs] = [batch_size, -1, 3]
+                else:
+                    shapes[inputs] = (
+                        [batch_size, packed_height_width, 3]
+                        if is_diffusers_version("<", "0.31.0")
+                        else [packed_height_width, 3]
+                    )
+                    if is_flux2:
+                        shapes[inputs] = [batch_size, packed_height_width, 4]
             elif inputs.get_any_name() == "txt_ids":
-                shapes[inputs] = [batch_size, -1, 3] if is_diffusers_version("<", "0.31.0") else [-1, 3]
-                if is_flux2:
-                    shapes[inputs] = [batch_size, -1, 4]
+                if is_zimage:
+                    shapes[inputs] = [batch_size, -1, 3]
+                else:
+                    shapes[inputs] = [batch_size, -1, 3] if is_diffusers_version("<", "0.31.0") else [-1, 3]
+                    if is_flux2:
+                        shapes[inputs] = [batch_size, -1, 4]
             elif inputs.get_any_name() in ["height", "width", "num_frames", "rope_interpolation_scale"]:
                 shapes[inputs] = inputs.get_partial_shape()
             else:
@@ -2413,24 +2426,32 @@ class _OVZImageTransformerAdapter:
     ZImagePipeline calls the transformer as:
         transformer(x_list, t, cap_feats_list, return_dict=False)
     where x_list is a list of [C,1,H,W] tensors (with frame dim) and cap_feats_list is a list
-    of variable-length [seq_len, dim] tensors.
+    of variable-length [seq_len, dim] tensors — ``_encode_prompt`` strips the tokenizer's
+    padding, so prompts of different lengths arrive as a ragged list.
 
-    The exported OV model is natively batched and takes tensors without the frame dim:
-        hidden_states [B, C, H, W], timestep [B], encoder_hidden_states [B, M, dim]
-    and returns sample [B, C, H, W].  Batch size, resolution and caption length are all
-    dynamic dimensions of the IR, so a single infer request serves the whole batch.
+    The exported OV model takes rectangular tensors plus the pieces the graph cannot derive
+    from a ragged batch:
+        hidden_states [B,C,H,W], timestep [B], encoder_hidden_states [B,M,dim],
+        encoder_attention_mask [B,M] (eager additive), txt_ids [B,M,3], img_ids [B,N,3]
+    and returns sample [B,C,H,W]. One infer request serves the whole batch, whatever the
+    prompt lengths.
 
-    Items are batched together only when their captions are the same length. The exported
-    graph carries no attention mask — it does not need one while every item has the same
-    caption length — so batch-padding a shorter caption would let the padding be attended
-    as if it were real text. That happens whenever prompts of different lengths are
-    batched, classifier-free guidance being the common case: it appends the (shorter)
-    negative prompt to the batch. Such calls are split into per-length groups instead,
-    which matches what the reference pipeline computes with its attention mask.
+    This class reproduces on the host what ZImageTransformer2DModel._pad_with_ids does
+    per item: round each caption up to SEQ_MULTI_OF, number its positions from 1, and offset
+    the image grid past it. That offset is why the position ids have to be computed here —
+    it depends on each item's own caption length, so a ragged batch has different image
+    position ids per item.
     """
+
+    SEQ_MULTI_OF = 32
+    PATCH_SIZE = 2
 
     def __init__(self, ov_transformer):
         self._ov_transformer = ov_transformer
+
+    @classmethod
+    def _rounded(cls, length: int) -> int:
+        return length + (-length) % cls.SEQ_MULTI_OF
 
     def __call__(self, x, t, cap_feats, return_dict=True, **kwargs):
         import torch
@@ -2442,38 +2463,69 @@ class _OVZImageTransformerAdapter:
         if timestep.numel() == 1 and batch_size > 1:
             timestep = timestep.expand(batch_size)
 
-        groups = {}
-        for i, cf in enumerate(cap_feats):
-            groups.setdefault(cf.shape[0], []).append(i)
+        # x: list of [C, 1, H, W] → [B, C, H, W]
+        hidden_states = torch.stack([x_item.squeeze(1) for x_item in x], dim=0)
 
-        samples = [None] * batch_size
-        for indices in groups.values():
-            # x: list of [C, 1, H, W] → [B, C, H, W]
-            hidden_states = torch.stack([x[i].squeeze(1) for i in indices], dim=0)
-            encoder_hidden_states = torch.stack([cap_feats[i] for i in indices], dim=0)
+        # Image token grid — same for every item, only its offset differs.
+        height_tokens = hidden_states.shape[2] // self.PATCH_SIZE
+        width_tokens = hidden_states.shape[3] // self.PATCH_SIZE
+        num_img_tokens = height_tokens * width_tokens
+        padded_img_tokens = self._rounded(num_img_tokens)
+        img_grid = torch.stack(
+            torch.meshgrid(
+                torch.arange(1, dtype=torch.int32),
+                torch.arange(height_tokens, dtype=torch.int32),
+                torch.arange(width_tokens, dtype=torch.int32),
+                indexing="ij",
+            ),
+            dim=-1,
+        ).reshape(-1, 3)
 
-            ov_out = self._ov_transformer(
-                hidden_states=hidden_states,
-                timestep=timestep[indices],
-                encoder_hidden_states=encoder_hidden_states,
-                return_dict=False,
-            )
+        real_lengths = [cf.shape[0] for cf in cap_feats]
+        rounded_lengths = [self._rounded(length) for length in real_lengths]
+        max_cap_len = max(rounded_lengths)
+        cap_dim = cap_feats[0].shape[-1]
 
-            if isinstance(ov_out, (tuple, list)):
-                sample = ov_out[0]
-            elif hasattr(ov_out, "sample"):
-                sample = ov_out.sample
-            else:
-                sample = list(ov_out.values())[0] if hasattr(ov_out, "values") else ov_out
+        encoder_hidden_states = torch.zeros(batch_size, max_cap_len, cap_dim, dtype=cap_feats[0].dtype)
+        # Eager additive mask: 0 on a real token, finfo.min elsewhere.
+        mask_dtype = cap_feats[0].dtype
+        encoder_attention_mask = torch.full((batch_size, max_cap_len), torch.finfo(mask_dtype).min, dtype=mask_dtype)
+        txt_ids = torch.zeros(batch_size, max_cap_len, 3, dtype=torch.int32)
+        img_ids = torch.zeros(batch_size, padded_img_tokens, 3, dtype=torch.int32)
 
-            if not isinstance(sample, torch.Tensor):
-                sample = torch.from_numpy(sample)
+        for i, (cap, real_len, rounded_len) in enumerate(zip(cap_feats, real_lengths, rounded_lengths)):
+            encoder_hidden_states[i, :real_len] = cap
+            # Only real tokens; the graph fills the rest with the learned cap_pad_token.
+            encoder_attention_mask[i, :real_len] = 0.0
+            # Caption positions are 1-based up to the rounded length; the batch-padded tail
+            # keeps position 0, which is what marks it as masked out.
+            txt_ids[i, :rounded_len, 0] = torch.arange(1, rounded_len + 1, dtype=torch.int32)
+            # Image tokens sit immediately after this item's caption.
+            img_ids[i, :num_img_tokens] = img_grid
+            img_ids[i, :num_img_tokens, 0] += rounded_len + 1
 
-            # [B, C, H, W] → [C, 1, H, W] each, the convention ZImagePipeline expects back
-            for position, item in zip(indices, sample.unbind(0)):
-                samples[position] = item.unsqueeze(1)
+        ov_out = self._ov_transformer(
+            hidden_states=hidden_states,
+            timestep=timestep,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_attention_mask,
+            txt_ids=txt_ids,
+            img_ids=img_ids,
+            return_dict=False,
+        )
 
-        return (samples,)
+        if isinstance(ov_out, (tuple, list)):
+            sample = ov_out[0]
+        elif hasattr(ov_out, "sample"):
+            sample = ov_out.sample
+        else:
+            sample = list(ov_out.values())[0] if hasattr(ov_out, "values") else ov_out
+
+        if not isinstance(sample, torch.Tensor):
+            sample = torch.from_numpy(sample)
+
+        # [B, C, H, W] → list of [C, 1, H, W], the convention ZImagePipeline expects back
+        return ([s.unsqueeze(1) for s in sample.unbind(0)],)
 
     def __getattr__(self, name):
         return getattr(self._ov_transformer, name)

@@ -438,7 +438,13 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             and "timestep_cond" not in {inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs}
         ) or (
             ov_pipeline.transformer is not None
-            and "txt_ids" not in {inputs.get_any_name() for inputs in ov_pipeline.transformer.model.inputs}
+            # The txt_ids check targets Flux, which folds guidance into an embedding rather
+            # than doubling the batch. Z-Image also exports txt_ids but does double the batch
+            # for CFG, so it is excluded from that check.
+            and (
+                "txt_ids" not in {inputs.get_any_name() for inputs in ov_pipeline.transformer.model.inputs}
+                or model_arch == "z-image"
+            )
         ):
             if model_arch != "qwenimage":
                 expected_batch *= 2
