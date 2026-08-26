@@ -11512,6 +11512,7 @@ def _z_image_attn_proc_call(
     Replaces torch.view_as_complex / view_as_real with real-number RoPE.
     freqs_cis is now [batch, seq_len, head_dim//2, 2] (cos, sin stacked).
     """
+
     def apply_rotary_emb_real(x_in, freqs_cis_real):
         """Real-number RoPE: avoids view_as_complex/view_as_real."""
         # x_in:          [batch, seq, heads, head_dim]
