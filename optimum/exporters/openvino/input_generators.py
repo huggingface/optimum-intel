@@ -1915,3 +1915,49 @@ class DummyQwen3OmniMoeVisionInputGenerator(DummyQwen3VLVisionEmbedInputGenerato
             return self.random_float_tensor([seq_len, self.embed_dim], framework=framework, dtype=float_dtype)
 
         return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyMuseGlimmerVisionInputGenerator(DummyVisionInputGenerator):
+    """Dummy input for the native MuseGlimmer vision stack.
+
+    The native ``MuseGlimmerVisionModel`` consumes already-flattened patches as a
+    ``[num_patches, patch_size**2 * 3 * patch_temporal]`` tensor plus
+    ``image_grid_thw``. Every tensor the native forward derives from the grid is
+    recomputed inside the exported graph, so only these two inputs are generated.
+    """
+
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "image_grid_thw",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 1,
+        **kwargs,
+    ):
+        self.vision_config = normalized_config.config
+        cfg = self.vision_config
+        self.patch_size = cfg.patch_size
+        self.patch_temporal = cfg.patch_temporal
+        self.merge_size = cfg.merge_size
+        # A single small image: grid t=1, h=w=2*merge_size keeps it small yet
+        # valid for the patch-merge downsample.
+        self.grid_t = 1
+        self.grid_h = self.merge_size * 2
+        self.grid_w = self.merge_size * 2
+        self.patch_dim = self.patch_size * self.patch_size * 3 * self.patch_temporal
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        num_patches = self.grid_t * self.grid_h * self.grid_w
+        if input_name == "pixel_values":
+            shape = [num_patches, self.patch_dim]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "image_grid_thw":
+            grid = torch.tensor([[self.grid_t, self.grid_h, self.grid_w]], dtype=DTYPE_MAPPER.pt(int_dtype))
+            if framework != "pt":
+                return grid.numpy()
+            return grid
+        raise ValueError(f"Unsupported input name {input_name}")
