@@ -403,7 +403,7 @@ HUB_MODEL_NAMES = {
     "wav2vec2-conformer": "optimum-intel-internal-testing/tiny-random-wav2vec2-conformer",
     "whisper": "optimum-intel-internal-testing/tiny-random-whisper",
     "xlm": "optimum-intel-internal-testing/tiny-random-xlm",
-    "xlm-roberta": "optimum-intel-internal-testing/tiny-random-xlm-roberta",
+    "xlm-roberta": "optimum-intel-internal-testing/tiny-random-xlm-roberta",  # used by fill-mask and feature-extraction (e.g. BAAI/bge-m3) tests
     "xglm": "optimum-intel-internal-testing/tiny-random-XGLMForCausalLM",
     "xverse": "optimum-intel-internal-testing/tiny-random-xverse",
     "glm4": "optimum-intel-internal-testing/tiny-random-glm4",
