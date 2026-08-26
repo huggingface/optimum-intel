@@ -465,6 +465,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "afmoe": {"model": 16},
     "bert": {"model": 68 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 70},
     "roberta": {"model": 68},
+    "xlm-roberta": {"model": 34},
     "albert": {"model": 84},
     "vit": {"model": 64},
     "blenderbot": {"model": 70 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 72},
