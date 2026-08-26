@@ -902,7 +902,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 repo_type="dataset",
                 user_agent=http_user_agent(),
             )
-            input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
+            num_frames = 2
+            # Gemma4 requires 32 frames for video input without providing video metadata
+            if model_arch in ["gemma4", "gemma4_moe", "gemma4_unified"]:
+                num_frames = 32
+            input_video, _ = load_video(video_path, num_frames=num_frames, backend="opencv")
             question = "Why is this video funny?"
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video)
             compare_outputs(inputs, ov_model, transformers_model, gen_config)
@@ -1019,7 +1023,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                     repo_type="dataset",
                     user_agent=http_user_agent(),
                 )
-                input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
+                num_frames = 2
+                # Gemma4 requires 32 frames for video input without providing video metadata
+                if model_arch in ["gemma4", "gemma4_moe", "gemma4_unified"]:
+                    num_frames = 32
+                input_video, _ = load_video(video_path, num_frames=num_frames, backend="opencv")
                 question = "Why is this video funny?"
                 inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
                 outputs = model.generate(**inputs, max_new_tokens=10)
