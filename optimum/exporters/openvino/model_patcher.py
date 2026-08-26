@@ -3085,6 +3085,78 @@ class LlavaNextVideoImageEmbeddingModelPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
+# Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L223-L248
+# Mistral3Model.get_image_features() with only projector.norm() applied instead of full projector forward,
+# as the patch_merger cycle block (unfold loop) cannot be traced to OpenVINO IR.
+def mistral3_vision_embed_forward(self, pixel_values):
+    vision_tower = _get_model_attribute(self, "vision_tower")
+    multi_modal_projector = _get_model_attribute(self, "multi_modal_projector")
+
+    if pixel_values.is_floating_point():
+        pixel_values = pixel_values.to(next(vision_tower.parameters()).dtype)
+
+    image_features = vision_tower(pixel_values, output_hidden_states=True)
+
+    vision_feature_layer = self.config.vision_feature_layer
+    if isinstance(vision_feature_layer, int):
+        selected_image_feature = image_features.hidden_states[vision_feature_layer]
+    else:
+        hs_pool = [image_features.hidden_states[layer_idx] for layer_idx in vision_feature_layer]
+        selected_image_feature = torch.cat(hs_pool, dim=-1)
+
+    if selected_image_feature.is_floating_point():
+        selected_image_feature = selected_image_feature.to(multi_modal_projector.norm.weight.dtype)
+
+    image_features = multi_modal_projector.norm(selected_image_feature.squeeze(0))
+    return image_features
+
+
+# Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L76-L94
+# and https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L118-L124
+# Mistral3MultiModalProjector.forward() and Mistral3PatchMerger.forward() with norm and cycle block excluded.
+# norm is moved to vision_embed_forward, cycle block runs in PyTorch at runtime.
+def mistral3_multi_modal_projector_forward(self, image_features):
+    hidden_states = self.patch_merger.merging_layer(image_features)
+    hidden_states = self.linear_1(hidden_states)
+    hidden_states = self.act(hidden_states)
+    hidden_states = self.linear_2(hidden_states)
+    return hidden_states
+
+
+class Mistral3ImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(mistral3_vision_embed_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Mistral3MultiModalProjectorPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(mistral3_multi_modal_projector_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
 def _embednb_forward(self, ids: torch.Tensor) -> torch.Tensor:
     def rope(pos: torch.Tensor, dim: int, theta: int) -> torch.Tensor:
         assert dim % 2 == 0, "The dimension must be even."
@@ -10811,8 +10883,6 @@ def _ltx2_connectors_top_level_forward_patched(
     Reference (diffusers==0.38.0): pipelines/ltx2/connectors.py,
     LTX2TextConnectors.forward L397-476 and per_layer_masked_mean_norm L14-78.
     """
-    import torch
-
     if text_encoder_hidden_states.ndim == 3:
         text_encoder_hidden_states = text_encoder_hidden_states.unflatten(2, (self.config.caption_channels, -1))
 
@@ -11462,3 +11532,366 @@ class MuseGlimmerLanguageModelPatcher(OVDecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
+
+
+# Caption sequence length of the dummy input used to trace the ZImage transformer.
+# It only sets the shape of the tracing example: caption length is a dynamic dimension
+# of the exported model, and at inference _OVZImageTransformerAdapter pads each batch to
+# its own longest caption.
+ZIMAGE_CAP_SEQ = 128
+
+
+def _z_image_rope_embedder_call(self, ids: "torch.Tensor"):
+    """
+    Patched RopeEmbedder.__call__ for OV export.
+
+    Returns a real-valued tensor of shape [seq_len, total_freq, 2]
+    where [..., 0] = cos and [..., 1] = sin.
+    This avoids complex-tensor indexing which OV cannot convert.
+    """
+    device = ids.device
+
+    # Lazily precompute real (cos, sin) lookup tables
+    if not hasattr(self, "_ov_freqs_cos") or self._ov_freqs_cos is None:
+        raw_freqs = self.precompute_freqs_cis(self.axes_dims, self.axes_lens, theta=self.theta)
+        self._ov_freqs_cos = [f.real.float() for f in raw_freqs]
+        self._ov_freqs_sin = [f.imag.float() for f in raw_freqs]
+        self.freqs_cis = raw_freqs  # keep original for non-export use
+
+    # Move to the correct device
+    if self._ov_freqs_cos[0].device != device:
+        self._ov_freqs_cos = [f.to(device) for f in self._ov_freqs_cos]
+        self._ov_freqs_sin = [f.to(device) for f in self._ov_freqs_sin]
+
+    result_cos, result_sin = [], []
+    for i in range(len(self.axes_dims)):
+        # ids is [..., seq_len, 3]: 2D for a batch-shared grid, 3D when every batch item
+        # carries its own position ids. Indexing on the last axis handles both.
+        index = ids[..., i]  # [..., seq_len] integer indices
+        result_cos.append(self._ov_freqs_cos[i][index])  # [..., seq_len, freq_i] real
+        result_sin.append(self._ov_freqs_sin[i][index])  # [..., seq_len, freq_i] real
+
+    cos = torch.cat(result_cos, dim=-1)  # [..., seq_len, total_freq]
+    sin = torch.cat(result_sin, dim=-1)  # [..., seq_len, total_freq]
+    # Stack as [..., seq_len, total_freq, 2] where last dim = [cos, sin]
+    return torch.stack([cos, sin], dim=-1)
+
+
+def _z_image_attn_proc_call(
+    self,
+    attn,
+    hidden_states: "torch.Tensor",
+    encoder_hidden_states=None,
+    attention_mask=None,
+    freqs_cis=None,
+):
+    """
+    Patched ZSingleStreamAttnProcessor.__call__ for OV export.
+
+    Replaces torch.view_as_complex / view_as_real with real-number RoPE.
+    freqs_cis is now [batch, seq_len, head_dim//2, 2] (cos, sin stacked).
+    """
+
+    def apply_rotary_emb_real(x_in, freqs_cis_real):
+        """Real-number RoPE: avoids view_as_complex/view_as_real."""
+        # x_in:          [batch, seq, heads, head_dim]
+        # freqs_cis_real:[batch, seq, head_dim//2, 2]  (last dim: [cos, sin])
+        cos = freqs_cis_real[..., 0]  # [batch, seq, head_dim//2]
+        sin = freqs_cis_real[..., 1]  # [batch, seq, head_dim//2]
+
+        x_float = x_in.float()
+        x_pairs = x_float.reshape(*x_float.shape[:-1], -1, 2)  # [batch, seq, heads, head_dim//2, 2]
+
+        # Broadcast cos/sin over the heads dimension
+        cos = cos.unsqueeze(2)  # [batch, seq, 1, head_dim//2]
+        sin = sin.unsqueeze(2)
+
+        out_real = x_pairs[..., 0] * cos - x_pairs[..., 1] * sin  # [batch, seq, heads, head_dim//2]
+        out_imag = x_pairs[..., 0] * sin + x_pairs[..., 1] * cos
+        out = torch.stack([out_real, out_imag], dim=-1).flatten(-2)  # [batch, seq, heads, head_dim]
+        return out.type_as(x_in)
+
+    query = attn.to_q(hidden_states)
+    key = attn.to_k(hidden_states)
+    value = attn.to_v(hidden_states)
+
+    query = query.unflatten(-1, (attn.heads, -1))
+    key = key.unflatten(-1, (attn.heads, -1))
+    value = value.unflatten(-1, (attn.heads, -1))
+
+    if attn.norm_q is not None:
+        query = attn.norm_q(query)
+    if attn.norm_k is not None:
+        key = attn.norm_k(key)
+
+    if freqs_cis is not None:
+        query = apply_rotary_emb_real(query, freqs_cis)
+        key = apply_rotary_emb_real(key, freqs_cis)
+
+    dtype = query.dtype
+    query, key = query.to(dtype), key.to(dtype)
+
+    if attention_mask is not None and attention_mask.ndim == 2:
+        attention_mask = attention_mask[:, None, None, :]
+
+    if attention_mask is not None and attention_mask.dtype == torch.bool:
+        # Eager-style additive mask: OpenVINO handles a float bias added to the attention
+        # scores more predictably than a boolean Select, so convert before SDPA.
+        attention_mask = torch.zeros_like(attention_mask, dtype=query.dtype).masked_fill(
+            ~attention_mask, torch.finfo(query.dtype).min
+        )
+
+    # Standard SDPA
+    hidden_states = torch.nn.functional.scaled_dot_product_attention(
+        query.transpose(1, 2),
+        key.transpose(1, 2),
+        value.transpose(1, 2),
+        attn_mask=attention_mask.to(query.dtype) if attention_mask is not None else None,
+        dropout_p=0.0,
+        is_causal=False,
+    ).transpose(1, 2)
+
+    hidden_states = hidden_states.flatten(2, 3)
+    hidden_states = hidden_states.to(dtype)
+
+    output = attn.to_out[0](hidden_states)
+    if len(attn.to_out) > 1:
+        output = attn.to_out[1](output)
+
+    return output
+
+
+def _patched_z_image_batched_forward(
+    model,
+    hidden_states: "torch.Tensor",
+    timestep: "torch.Tensor",
+    encoder_hidden_states: "torch.Tensor",
+    encoder_attention_mask: "torch.Tensor",
+    txt_ids: "torch.Tensor",
+    img_ids: "torch.Tensor",
+    patch_size: int = 2,
+    f_patch_size: int = 1,
+):
+    """
+    Natively batched, resolution-agnostic forward for ZImageTransformer2DModel (non-omni).
+
+    The stock forward is built around Python lists holding one entry per batch item, so it
+    bakes both the batch size and the token count into the IR:
+
+        x_seqlens = [len(xi) for xi in x]     # e.g. [1024] — static
+        list(x.split(x_seqlens, dim=0))       # VariadicSplit — wrong at any other size
+
+    This rewrite keeps everything as [B, ...] tensors, so batch size, height, width and
+    caption length are all dynamic dimensions of the exported model.
+
+    Position ids are inputs rather than something the graph derives, following the same
+    design as the Flux export. That is what lets one infer request serve prompts of
+    different lengths: upstream offsets the image tokens past the caption
+    (``pos_start=(cap_len + 1, 0, 0)``) using each item's own caption length rounded up to
+    SEQ_MULTI_OF, so in a ragged batch the *image* position ids differ per item too. A
+    graph that computed them from shapes could only ever produce one shared grid.
+
+    Inputs:
+      hidden_states          [B, C, H, W]
+      timestep               [B]
+      encoder_hidden_states  [B, M, cap_dim]  captions batch-padded to M
+      encoder_attention_mask [B, M]           eager additive mask over *real* caption
+                                              tokens: 0 on a real token, a large negative
+                                              value elsewhere
+      txt_ids                [B, M, 3]        caption position ids, 1..T_i then 0 past T_i
+      img_ids                [B, N, 3]        image position ids, offset by each T_i
+
+    Returns: sample [B, C_out, H, W]
+
+    The two caption padding levels upstream keeps distinct are encoded in these inputs:
+
+      * SEQ_MULTI_OF padding (real length L_i up to the rounded T_i) is *attended*, with
+        the embedding replaced by the learned ``cap_pad_token``. Those slots are masked in
+        ``encoder_attention_mask`` but carry a non-zero ``txt_ids`` position.
+      * batch padding (past T_i, up to M) is masked out of attention entirely. Those slots
+        carry position id 0, which is what marks them — real caption positions are 1-based.
+
+    Masks are eager/additive floats (0 to keep, ``finfo.min`` to drop) rather than booleans,
+    so the attention bias is a plain add rather than a Select in the exported graph.
+    """
+    pH = pW = patch_size
+    pF = f_patch_size
+    key = f"{patch_size}-{f_patch_size}"
+    device = hidden_states.device
+
+    # ── Timestep embedding ──────────────────────────────────────────────────────
+    adaln_input = model.t_embedder(timestep * model.t_scale).type_as(hidden_states)
+
+    # ── Caption ─────────────────────────────────────────────────────────────────
+    # Everything past a real token gets cap_pad_token. For the batch-padded tail that is
+    # irrelevant work — those positions are masked out of attention below — but it keeps
+    # the SEQ_MULTI_OF slots exactly as upstream sets them without a second mask input.
+    cap = model.cap_embedder(encoder_hidden_states)
+    cap = torch.where(
+        (encoder_attention_mask >= 0).unsqueeze(-1),
+        cap,
+        model.cap_pad_token.view(1, 1, -1),
+    )
+    cap_freqs = _z_image_rope_embedder_call(model.rope_embedder, txt_ids)
+    # Position id 0 on the first axis marks batch padding; upstream numbers real caption
+    # positions from 1. Build the attention bias the same way the input mask is expressed.
+    keep = torch.zeros_like(encoder_attention_mask)
+    drop = torch.full_like(encoder_attention_mask, torch.finfo(encoder_attention_mask.dtype).min)
+    cap_bias = torch.where(txt_ids[..., 0] > 0, keep, drop)
+    for layer in model.context_refiner:
+        cap = layer(cap, cap_bias, cap_freqs)
+
+    # ── Image: patchify, then pad out to the length img_ids declares ────────────
+    x = hidden_states.unsqueeze(2)  # [B, C, H, W] -> [B, C, 1, H, W]
+    batch, channels, frames, height, width = x.shape
+    f_tokens, h_tokens, w_tokens = frames // pF, height // pH, width // pW
+
+    # "b c (f pf) (h ph) (w pw) -> b (f h w) (pf ph pw c)"
+    x = x.reshape(batch, channels, f_tokens, pF, h_tokens, pH, w_tokens, pW)
+    x = x.permute(0, 2, 4, 6, 3, 5, 7, 1)
+    x = x.reshape(batch, f_tokens * h_tokens * w_tokens, pF * pH * pW * channels)
+
+    # Image tokens are uniform across the batch (one resolution per call), so the padded
+    # length and pad mask are shared; only the position ids in img_ids differ per item.
+    ori_len = f_tokens * h_tokens * w_tokens
+    total_len = img_ids.shape[1]
+    idx = torch.arange(total_len, device=device)
+    x_pad_mask = idx >= ori_len
+    x = x.index_select(1, torch.minimum(idx, idx * 0 + ori_len - 1))
+
+    x = model.all_x_embedder[key](x)
+    x = torch.where(x_pad_mask.view(1, -1, 1), model.x_pad_token.view(1, 1, -1), x)
+    x_freqs = _z_image_rope_embedder_call(model.rope_embedder, img_ids)
+    for layer in model.noise_refiner:
+        x = layer(x, None, x_freqs, adaln_input, None, None, None)
+
+    # ── Unified sequence, basic-mode order [x, cap] ─────────────────────────────
+    unified = torch.cat([x, cap], dim=1)
+    unified_freqs = torch.cat([x_freqs, cap_freqs], dim=1)
+    # Image tokens are always attended (bias 0); the caption tail may not be.
+    unified_bias = torch.cat([torch.zeros_like(x[..., 0]), cap_bias], dim=1)
+
+    for layer in model.layers:
+        unified = layer(unified, unified_bias, unified_freqs, adaln_input, None, None, None)
+
+    unified = model.all_final_layer[key](unified, c=adaln_input)
+
+    # ── Unpatchify: drop the caption tail and the SEQ_MULTI_OF padding ──────────
+    tokens = unified.index_select(1, torch.arange(ori_len, device=device))
+    # "b (f h w) (pf ph pw c) -> b c (f pf) (h ph) (w pw)"
+    out = tokens.reshape(batch, f_tokens, h_tokens, w_tokens, pF, pH, pW, model.out_channels)
+    out = out.permute(0, 7, 1, 4, 2, 5, 3, 6)
+    out = out.reshape(batch, model.out_channels, frames, height, width)
+
+    return out.squeeze(2)  # [B, C_out, 1, H, W] -> [B, C_out, H, W]
+
+
+class ZImageTransformerModelPatcher(ModelPatcher):
+    """
+    Model patcher for ZImageTransformer2DModel OV export (non-omni mode).
+
+    Patches:
+    - RopeEmbedder.__call__: returns real [seq, freq, 2] instead of complex, which OV
+      cannot represent
+    - ZSingleStreamAttnProcessor.__call__: real-number RoPE, avoids view_as_complex
+    - ZImageTransformer2DModel.forward: replaced by _patched_z_image_batched_forward,
+      a natively batched rewrite that keeps everything as [B, ...] tensors.  The stock
+      forward is written around per-item Python lists and bakes both the batch size and
+      the token count into the IR:
+        x_seqlens = [len(xi) for xi in x]       # burned as static [1024]
+        list(x.split(x_seqlens, dim=0))          # VariadicSplit — wrong at other sizes
+      The rewrite leaves batch size, height, width and caption length as dynamic
+      dimensions of the exported model.
+
+    The attention processor is patched at class level, not on the instance: Python looks
+    up special methods such as __call__ on the type, so an instance-level patch is
+    ignored.
+    """
+
+    def __enter__(self):
+        super().__enter__()
+
+        from diffusers.models.transformers.transformer_z_image import ZSingleStreamAttnProcessor as _ZAttnProc
+
+        # 1. Real-valued RoPE in the attention processor (class level — see docstring)
+        _ZAttnProc._orig_ov_call = _ZAttnProc.__call__
+        _ZAttnProc.__call__ = _z_image_attn_proc_call
+
+        # 2. Replace forward with the batched, resolution-agnostic implementation
+        #    hidden_states:          [B, C, H, W]   (the frame dim is added internally)
+        #    timestep:               [B]
+        #    encoder_hidden_states:  [B, seq_len, cap_feat_dim]
+        #    encoder_attention_mask: [B, seq_len]
+        #    txt_ids:                [B, seq_len, 3]
+        #    img_ids:                [B, img_seq_len, 3]
+        _model_ref = self._model
+
+        def patched_forward(hidden_states, timestep, encoder_hidden_states, encoder_attention_mask, txt_ids, img_ids):
+            return _patched_z_image_batched_forward(
+                _model_ref, hidden_states, timestep, encoder_hidden_states, encoder_attention_mask, txt_ids, img_ids
+            )
+
+        self._model.forward = patched_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        # Restore ZSingleStreamAttnProcessor class-level patch
+        try:
+            from diffusers.models.transformers.transformer_z_image import ZSingleStreamAttnProcessor as _ZAttnProc
+
+            if hasattr(_ZAttnProc, "_orig_ov_call"):
+                _ZAttnProc.__call__ = _ZAttnProc._orig_ov_call
+                del _ZAttnProc._orig_ov_call
+        except ImportError:
+            pass
+
+        # Forward is restored by the base ModelPatcher via the _orig_forward mechanism.
+        # No model methods are patched: _patched_z_image_batched_forward reimplements
+        # patchify / pad / unpatchify inline rather than overriding them.
+
+
+class ZImageTextEncoderModelPatcher(ModelPatcher):
+    """
+    Model patcher for the Qwen3-based text encoder used in ZImagePipeline.
+
+    The pipeline uses hidden_states[-2] from the Qwen3 model as text features.
+    This patcher wraps forward to return hidden_states[-2] directly as the
+    last_hidden_state output so it matches the CLIPText export interface.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs=None,
+    ):
+        super().__init__(config, model, model_kwargs)
+        _orig_forward = self.orig_forward
+
+        @functools.wraps(_orig_forward)
+        def patched_forward(input_ids, attention_mask):
+            out = _orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+            )
+            # Return second-to-last hidden state as the text features
+            # (ZImagePipeline uses prompt_embeds[i][prompt_masks[i]] from hidden_states[-2])
+            # Must return a dict so ts_patched_forward can call .values() on it.
+            return {"last_hidden_state": out.hidden_states[-2]}
+
+        self.patched_forward = patched_forward
+
+    def __enter__(self):
+        super().__enter__()
+        # Ensure SDPA is used for tracing (avoids boolean mask issues with eager mode)
+        if hasattr(self._model, "config") and hasattr(self._model.config, "_attn_implementation"):
+            self._model.config._orig_ov_attn_impl = self._model.config._attn_implementation
+            self._model.config._attn_implementation = "sdpa"
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if hasattr(self._model, "config") and hasattr(self._model.config, "_orig_ov_attn_impl"):
+            self._model.config._attn_implementation = self._model.config._orig_ov_attn_impl
+            del self._model.config._orig_ov_attn_impl
