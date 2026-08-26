@@ -144,6 +144,56 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+def _create_tiny_mistral3_model():
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_mistral3"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+
+    if config_file.exists() and weights_file.exists():
+        return str(output_dir)
+
+    from transformers import AutoConfig, AutoModelForImageTextToText, AutoProcessor
+
+    model_id = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
+
+    torch.manual_seed(SEED)
+
+    config = AutoConfig.from_pretrained(model_id)
+
+    config.tie_word_embeddings = False
+    config.text_config.tie_word_embeddings = False
+
+    config.text_config.num_hidden_layers = 2
+    config.text_config.hidden_size = 64
+    config.text_config.intermediate_size = 128
+    config.text_config.num_attention_heads = 4
+    config.text_config.num_key_value_heads = 2
+    config.text_config.head_dim = 16
+    config.text_config.max_position_embeddings = 512
+
+    config.vision_config.num_hidden_layers = 2
+    config.vision_config.hidden_size = 64
+    config.vision_config.intermediate_size = 128
+    config.vision_config.num_attention_heads = 4
+    config.vision_config.head_dim = 16
+    config.vision_config.image_size = 56
+
+    for subconfig in (config, config.text_config, config.vision_config):
+        subconfig.dtype = "float32"
+        subconfig.torch_dtype = "float32"
+
+    model = AutoModelForImageTextToText.from_config(config).float().eval()
+    processor = AutoProcessor.from_pretrained(model_id)
+    processor.image_processor.size = {"longest_edge": 56}
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    model.save_pretrained(output_dir, safe_serialization=True)
+    processor.save_pretrained(output_dir)
+
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -266,6 +316,7 @@ HUB_MODEL_NAMES = {
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
     "mistral-nemo": "optimum-intel-internal-testing/tiny-random-mistral-nemo",
+    "mistral3": _create_tiny_mistral3_model(),
     "mixtral": "optimum-intel-internal-testing/tiny-mixtral",
     "mixtral_awq": "optimum-intel-internal-testing/tiny-mixtral-AWQ-4bit",
     "mobilebert": "optimum-intel-internal-testing/tiny-random-MobileBertModel",
@@ -510,6 +561,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "lm_model": 30,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 15,
+    },
+    "mistral3": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 16,
+        "multi_modal_projector_model": 3,
     },
     "qwen2_vl": {
         "lm_model": 30,
