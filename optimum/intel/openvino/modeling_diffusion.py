@@ -2454,8 +2454,6 @@ class _OVZImageTransformerAdapter:
         return length + (-length) % cls.SEQ_MULTI_OF
 
     def __call__(self, x, t, cap_feats, return_dict=True, **kwargs):
-        import torch
-
         batch_size = len(x)
         if not isinstance(t, torch.Tensor):
             t = torch.tensor([t])
@@ -2565,8 +2563,6 @@ class _OVZImagePipelineMixin:
         (see ZImageTextEncoderModelPatcher), so we read that directly instead
         of calling with output_hidden_states=True.
         """
-        import torch
-
         if prompt_embeds is not None:
             return prompt_embeds
 

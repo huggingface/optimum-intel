@@ -10883,8 +10883,6 @@ def _ltx2_connectors_top_level_forward_patched(
     Reference (diffusers==0.38.0): pipelines/ltx2/connectors.py,
     LTX2TextConnectors.forward L397-476 and per_layer_masked_mean_norm L14-78.
     """
-    import torch
-
     if text_encoder_hidden_states.ndim == 3:
         text_encoder_hidden_states = text_encoder_hidden_states.unflatten(2, (self.config.caption_channels, -1))
 
@@ -11472,8 +11470,6 @@ def _z_image_rope_embedder_call(self, ids: "torch.Tensor"):
     where [..., 0] = cos and [..., 1] = sin.
     This avoids complex-tensor indexing which OV cannot convert.
     """
-    import torch
-
     device = ids.device
 
     # Lazily precompute real (cos, sin) lookup tables
@@ -11516,8 +11512,6 @@ def _z_image_attn_proc_call(
     Replaces torch.view_as_complex / view_as_real with real-number RoPE.
     freqs_cis is now [batch, seq_len, head_dim//2, 2] (cos, sin stacked).
     """
-    import torch
-
     def apply_rotary_emb_real(x_in, freqs_cis_real):
         """Real-number RoPE: avoids view_as_complex/view_as_real."""
         # x_in:          [batch, seq, heads, head_dim]
@@ -11640,8 +11634,6 @@ def _patched_z_image_batched_forward(
     Masks are eager/additive floats (0 to keep, ``finfo.min`` to drop) rather than booleans,
     so the attention bias is a plain add rather than a Select in the exported graph.
     """
-    import torch
-
     pH = pW = patch_size
     pF = f_patch_size
     key = f"{patch_size}-{f_patch_size}"
