@@ -1,8 +1,10 @@
+import base64
 import copy
 import enum
 import hashlib
 import importlib
 import inspect
+import io
 import logging
 import math
 import os
@@ -732,6 +734,7 @@ MODEL_PARTS_CLS_MAPPING = {
     "vision_resampler": OVVisionResampler,
     "multi_modal_projector": OVMultiModalProjector,
     "vision_embeddings_merger": OVVisionEmbedding,
+    "vision_embeddings_tiles": OVVisionEmbedding,
     "vision_embeddings_pos": OVVisionProjection,
     "audio_embeddings": OVAudioEmbeddings,
     "audio_forward_embeddings": OVAudioEmbeddings,
@@ -2120,6 +2123,109 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
         video_features = self.multi_modal_projector(video_features)
         video_features = torch.split(torch.from_numpy(video_features), frames, dim=0)
         return video_features
+
+
+class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = ["multi_modal_projector"]
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, image_sizes=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+
+        image_features = self.vision_embeddings(pixel_values).last_hidden_state
+        image_features = torch.from_numpy(image_features) if isinstance(image_features, np.ndarray) else image_features
+
+        # Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L75-L96
+        patch_size = self.config.vision_config.patch_size
+        spatial_merge_size = self.config.spatial_merge_size
+        d = image_features.shape[-1]
+
+        if image_sizes is None:
+            # MistralCommonTokenizer, used for checkpoints published in Mistral's own format such as
+            # Mistral-Small-3.2-24B-Instruct-2506, returns pixel_values without image_sizes. It does not pad
+            # images, so the spatial dimensions of the tensor are the image sizes.
+            image_sizes = [pixel_values.shape[-2:]] * pixel_values.shape[0]
+
+        image_sizes_scaled = [(size[0] // patch_size, size[1] // patch_size) for size in image_sizes]
+        tokens_per_image = [h * w for h, w in image_sizes_scaled]
+
+        permuted_tensor = []
+        for image_index, image_tokens in enumerate(image_features.split(tokens_per_image)):
+            h, w = image_sizes_scaled[image_index]
+            image_grid = image_tokens.view(h, w, d).permute(2, 0, 1).unsqueeze(0)
+            grid = torch.nn.functional.unfold(
+                image_grid,
+                kernel_size=spatial_merge_size,
+                stride=spatial_merge_size,
+            )
+            grid = grid.view(d * spatial_merge_size**2, -1).t()
+            permuted_tensor.append(grid)
+
+        image_features = torch.cat(permuted_tensor, dim=0)
+        image_features = self.multi_modal_projector(image_features)
+
+        return image_features
+
+    # Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L258-L280
+    # and https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L313-L324
+    def merge_vision_text_embeddings(
+        self,
+        vision_embeds,
+        inputs_embeds,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        **kwargs,
+    ):
+        image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+
+        special_image_mask = (input_ids == self.config.image_token_id).unsqueeze(-1)
+        special_image_mask = special_image_mask.expand_as(inputs_embeds).to(inputs_embeds.device)
+        image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
+        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None or audio is not None:
+            raise ValueError("Video/Audio input is not supported for Mistral3")
+
+        conversation = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": text}],
+            }
+        ]
+
+        if not hasattr(processor, "image_processor"):
+            # Checkpoints published in Mistral's own format, such as Mistral-Small-3.2-24B-Instruct-2506, only
+            # provide tekken.json and are loaded as MistralCommonTokenizer. It tokenizes text and images in a
+            # single call and accepts images as an URL only, so in-memory images are passed as a data URL.
+            if image is not None:
+                buffer = io.BytesIO()
+                image.convert("RGB").save(buffer, format="PNG")
+                image_url = f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode()}"
+                conversation[0]["content"].insert(0, {"type": "image", "url": image_url})
+            return processor.apply_chat_template(conversation, return_dict=True, return_tensors="pt")
+
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+
+        prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+        inputs = processor(images=image, text=prompt, return_tensors="pt")
+        return inputs
 
 
 class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
@@ -5598,12 +5704,29 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
             raise ValueError("Video input is not supported")
         if audio is not None:
             raise ValueError("Audio input is not supported")
-        # The gemma4_unified processor has no chat template, so build the prompt directly.
-        # An image is referenced by the processor's image token placeholder.
+        if getattr(tokenizer, "chat_template", None) is None:
+            if image is not None:
+                # If chat template is not available we need to add image token manually, as there's a requirement
+                # that image token number should match the number of provided images:
+                # https://github.com/huggingface/transformers/blob/v5.10.0/src/transformers/models/gemma4_unified/processing_gemma4_unified.py#L187
+                image_token = getattr(processor, "image_token", "<|image|>")
+                if image_token not in text:
+                    text = f"{image_token}{text}"
+            return processor(images=image, text=text, return_tensors="pt")
+
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
         if image is not None:
-            image_token = getattr(processor, "image_token", "<|image|>")
-            text = f"{image_token}{text}"
-        return processor(images=image, text=text, return_tensors="pt")
+            conversation[0]["content"].insert(0, {"type": "image"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+        return processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
 
     def _update_model_kwargs_for_generation(
         self,
@@ -5668,6 +5791,132 @@ class _OVGotOCR2ForCausalLM(OVModelForVisualCausalLM):
             raise ValueError("Image is required")
         processed_inputs = processor(image, return_tensors="pt")
         return processed_inputs
+
+
+class _OVDeepseekOCR2ForCausalLM(OVModelForVisualCausalLM):
+    """OpenVINO inference for DeepSeek-OCR-2 (``model_type == "deepseek_ocr2"``).
+
+    The vision encoder is exported as two static-shape submodels: ``vision_embeddings`` for the
+    1024x1024 global view (256 image tokens) and ``vision_embeddings_tiles`` for the 768x768 crop
+    tiles (144 image tokens each). Both submodels already include the multimodal projector, so
+    their output lives in the text-embedding space. The per-image visual feature is
+    ``cat([local_tiles, global, view_separator])`` (mirroring the native
+    ``DeepseekOcr2Model.get_image_features``), which is scattered into the text embeddings at the
+    image placeholder positions (``config.image_token_id``).
+    """
+
+    additional_parts = ["vision_embeddings_tiles"]
+
+    # Image token placeholder id used by DeepSeek-OCR-2 (fallback when config lacks image_token_id).
+    _DEEPSEEK_OCR2_IMAGE_TOKEN_ID = 128815
+
+    @property
+    def image_token_id(self):
+        return getattr(self.config, "image_token_id", self._DEEPSEEK_OCR2_IMAGE_TOKEN_ID)
+
+    @property
+    def view_separator(self):
+        if getattr(self, "_view_separator", None) is None:
+            self._view_separator = torch.tensor(self.config.view_separator, dtype=torch.float32)
+        return self._view_separator
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        # Skip vision on cached decode steps.
+        if input_ids is not None and input_ids.shape[1] == 1 and kwargs.get("past_key_values") is not None:
+            return None
+
+        pixel_values = torch.as_tensor(pixel_values) if not isinstance(pixel_values, torch.Tensor) else pixel_values
+        pixel_values_local = kwargs.get("pixel_values_local")
+        num_local_patches = kwargs.get("num_local_patches")
+
+        global_features = self.vision_embeddings(pixel_values.to(torch.float32)).last_hidden_state
+        global_features = torch.from_numpy(global_features).to(torch.float32)  # (B, 256, txt)
+        batch_size, hidden = global_features.shape[0], global_features.shape[-1]
+
+        per_image_local = [None] * batch_size
+        if pixel_values_local is not None and num_local_patches is not None:
+            num_local_patches = torch.as_tensor(num_local_patches).reshape(-1).tolist()
+            pixel_values_local = (
+                torch.as_tensor(pixel_values_local)
+                if not isinstance(pixel_values_local, torch.Tensor)
+                else pixel_values_local
+            )
+            if pixel_values_local.shape[0] > 0:
+                local_features = self.vision_embeddings_tiles(pixel_values_local.to(torch.float32)).last_hidden_state
+                local_features = torch.from_numpy(local_features).to(torch.float32)  # (total, 144, txt)
+                per_image_local = list(torch.split(local_features, num_local_patches, dim=0))
+
+        view_sep = self.view_separator[None, :]  # (1, txt)
+        features = []
+        for idx in range(batch_size):
+            global_flat = global_features[idx].reshape(-1, hidden)
+            if per_image_local[idx] is not None:
+                local_flat = per_image_local[idx].reshape(-1, per_image_local[idx].shape[-1])
+                features.append(torch.cat([local_flat, global_flat, view_sep], dim=0))
+            else:
+                features.append(torch.cat([global_flat, view_sep], dim=0))
+        return torch.cat(features, dim=0)
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        vision_embeds = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        mask = (input_ids == self.image_token_id).unsqueeze(-1).expand_as(inputs_embeds)
+        inputs_embeds = inputs_embeds.masked_scatter(mask, vision_embeds.to(inputs_embeds.dtype))
+        return inputs_embeds, attention_mask, position_ids
+
+    def forward(self, input_ids, pixel_values=None, pixel_values_local=None, num_local_patches=None, **kwargs):
+        return super().forward(
+            input_ids,
+            pixel_values=pixel_values,
+            pixel_values_local=pixel_values_local,
+            num_local_patches=num_local_patches,
+            **kwargs,
+        )
+
+    def prepare_inputs_for_generation(
+        self, input_ids, past_key_values=None, inputs_embeds=None, pixel_values=None, attention_mask=None, **kwargs
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        # Carry the extra DeepSeek-OCR-2 local-tile inputs on the prefill step only.
+        if past_key_values is None:
+            model_inputs["pixel_values_local"] = kwargs.get("pixel_values_local")
+            model_inputs["num_local_patches"] = kwargs.get("num_local_patches")
+        else:
+            model_inputs["pixel_values"] = None
+            model_inputs["pixel_values_local"] = None
+            model_inputs["num_local_patches"] = None
+        return model_inputs
+
+    @staticmethod
+    def preprocess_inputs(
+        text: Optional[str] = None,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("processor is required")
+        if video is not None or audio is not None:
+            raise ValueError("Video/audio inputs are not supported")
+        if image is None:
+            raise ValueError("Image input is required for DeepSeek-OCR-2")
+        if text is None:
+            text = "Free OCR."
+        if "<image>" not in text:
+            text = "<image>\n" + text
+        return processor(images=image, text=text, return_tensors="pt")
 
 
 class _OVIdefics3ForCausalLM(OVModelForVisualCausalLM):
@@ -7346,10 +7595,112 @@ if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.rot_pos_emb = Qwen3_5VisionModel.rot_pos_emb
 
 
+class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
+    """OpenVINO runtime for the native MuseGlimmer VLM.
+
+    The vision stack is exported as a single graph that consumes flattened patches
+    ``pixel_values`` ``[num_patches, patch_dim]`` plus ``image_grid_thw``
+    ``[num_images, 3]`` and returns the projected per-token features
+    ``[num_out_tokens, text_hidden]`` (vision tower -> adapter -> projection ->
+    perception norm, with the 2x2 patch merge). Features are scattered into the
+    positions of the ``<image>`` / ``<video>`` tokens in the prompt.
+    """
+
+    def get_experts_implementation(self):
+        # transformers>=5.15 `generate` queries the experts implementation to decide
+        # on a decode-time MoE kernel swap; that swap is a no-op on CPU (OpenVINO),
+        # since the MoE kernel is baked into the exported graph.
+        return "openvino_impl"
+
+    def set_experts_implementation(self, experts_implementation):
+        # No-op: the MoE kernel is baked into the exported OpenVINO graph.
+        return
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, image_grid_thw=None, **kwargs):
+        # Vision features are only consumed on the prefill step.
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        if pixel_values is None:
+            return None
+
+        pixel_values = pixel_values if isinstance(pixel_values, torch.Tensor) else torch.as_tensor(pixel_values)
+        pixel_values = pixel_values.float()
+        if image_grid_thw is None:
+            raise ValueError("image_grid_thw is required for MuseGlimmer vision embeddings.")
+        grid = image_grid_thw if isinstance(image_grid_thw, torch.Tensor) else torch.as_tensor(image_grid_thw)
+        # The exported graph recomputes every grid-derived tensor internally, so it
+        # only needs the flattened patches and image_grid_thw.
+        feats = self.vision_embeddings(pixel_values=pixel_values, image_grid_thw=grid).last_hidden_state
+        return torch.from_numpy(feats) if isinstance(feats, np.ndarray) else feats
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        **kwargs,
+    ):
+        inputs_embeds = self.get_text_embeddings(input_ids)
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        is_prefill = input_ids is not None and input_ids.shape[1] != 1
+        # Images and videos share the same vision graph (video_grid_thw plays the role
+        # of image_grid_thw); each modality is scattered into its own placeholder token.
+        if is_prefill and pixel_values is not None:
+            image_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, image_grid_thw=image_grid_thw)
+            if image_embeds is not None:
+                image_mask = input_ids == self.config.image_token_id
+                inputs_embeds[image_mask] = image_embeds.to(inputs_embeds.dtype)
+        if is_prefill and pixel_values_videos is not None:
+            video_embeds = self.get_vision_embeddings(
+                pixel_values_videos, input_ids=input_ids, image_grid_thw=video_grid_thw
+            )
+            if video_embeds is not None:
+                video_mask = input_ids == self.config.video_token_id
+                inputs_embeds[video_mask] = video_embeds.to(inputs_embeds.dtype)
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+
+        content = []
+        if image is not None:
+            content.append({"type": "image"})
+        if video is not None:
+            content.append({"type": "video"})
+        content.append({"type": "text", "text": text})
+        messages = [{"role": "user", "content": content}]
+        prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = processor(
+            text=prompt,
+            images=[image] if image is not None else None,
+            videos=[video] if video is not None else None,
+            return_tensors="pt",
+        )
+        return inputs
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
+    "muse_glimmer": _OVMuseGlimmerForCausalLM,
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
     "llava_next_video": _OVLlavaNextVideoForCausalLM,
+    "mistral3": _OVMistral3ForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
     "maira2": _OVMaira2ForCausalLM,
@@ -7377,4 +7728,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_omni_moe": _OVQwen3OmniMoeForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
+    "deepseek_ocr2": _OVDeepseekOCR2ForCausalLM,
 }

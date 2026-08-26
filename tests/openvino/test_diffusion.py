@@ -33,6 +33,7 @@ from utils_tests import HUB_MODEL_NAMES, MODEL_NAMES, OPENVINO_DEVICE, SEED
 from optimum.intel.openvino import (
     OVDiffusionPipeline,
     OVPipelineForImage2Image,
+    OVPipelineForImage2Video,
     OVPipelineForInpainting,
     OVPipelineForText2Image,
     OVPipelineForText2Video,
@@ -96,6 +97,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     if is_diffusers_version(">=", "0.33.0"):
         SUPPORTED_ARCHITECTURES.extend(["sana-sprint"])
 
+    if is_diffusers_version(">=", "0.35.0"):
+        SUPPORTED_ARCHITECTURES.extend(["qwenimage"])
+
     if is_transformers_version("<", "5") or is_diffusers_version(">=", "0.37"):
         SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
 
@@ -156,7 +160,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
-        height, width, batch_size = 64, 64, 1
+        height, width, batch_size = 64, 64, 2
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
         auto_cls = self.AUTOMODEL_CLASS if "sana" not in model_arch else DiffusionPipeline
@@ -179,7 +183,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             np.testing.assert_allclose(ov_output, diffusers_output, atol=atol, rtol=1e-2)
 
         # test on inputs nondivisible on 64
-        height, width, batch_size = 96, 96, 1
+        height, width, batch_size = 96, 96, 2
 
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
@@ -242,7 +246,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             elif output_type == "pt":
                 self.assertEqual(outputs.shape, (batch_size, 3, height, width))
             else:
-                if model_arch == "flux":
+                if model_arch in ["flux", "qwenimage"]:
                     packed_height = height // pipeline.vae_scale_factor // 2
                     packed_width = width // pipeline.vae_scale_factor // 2
                     channels = pipeline.transformer.config.in_channels
@@ -434,7 +438,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             ov_pipeline.transformer is not None
             and "txt_ids" not in {inputs.get_any_name() for inputs in ov_pipeline.transformer.model.inputs}
         ):
-            expected_batch *= 2
+            if model_arch != "qwenimage":
+                expected_batch *= 2
         self.assertEqual(
             ov_pipeline.batch_size,
             expected_batch,
@@ -1057,6 +1062,8 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = []
     if is_diffusers_version(">=", "0.28.2"):
         SUPPORTED_ARCHITECTURES.extend(["ltx-video"])
+    if is_diffusers_version(">=", "0.38.0"):
+        SUPPORTED_ARCHITECTURES.extend(["ltx2"])
 
     OVMODEL_CLASS = OVPipelineForText2Video
     AUTOMODEL_CLASS = DiffusionPipeline
@@ -1206,3 +1213,200 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
         inputs.pop("width")
         image = pipeline(**inputs).frames[0]
         self.assertTupleEqual(image.shape[-3:-1], (32, 32))
+
+
+class OVPipelineForImage2VideoTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = []
+    if is_diffusers_version(">=", "0.32"):
+        SUPPORTED_ARCHITECTURES.extend(["ltx-video"])
+    if is_diffusers_version(">=", "0.38.0"):
+        SUPPORTED_ARCHITECTURES.extend(["ltx2"])
+
+    OVMODEL_CLASS = OVPipelineForImage2Video
+    AUTOMODEL_CLASS = DiffusionPipeline
+
+    TASK = "image-to-video"
+
+    def generate_inputs(self, height=128, width=128, batch_size=1, num_frames=4):
+        inputs = {
+            "image": _generate_images(height=height, width=width, batch_size=batch_size),
+            "prompt": ["a dog running in a field"] * batch_size,
+            "negative_prompt": ["static, motionless"] * batch_size,
+            "height": height,
+            "width": width,
+            "num_inference_steps": 2,
+            "num_frames": num_frames,
+            "guidance_scale": 4.5,
+        }
+
+        return inputs
+
+    @require_diffusers
+    def test_load_vanilla_model_which_is_not_supported(self):
+        with self.assertRaises(Exception) as context:
+            _ = self.OVMODEL_CLASS.from_pretrained(HUB_MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
+
+        self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
+
+    @staticmethod
+    def _auto_cls(model_arch: str):
+        if model_arch == "ltx2":
+            from diffusers import LTX2ImageToVideoPipeline
+
+            return LTX2ImageToVideoPipeline
+        from diffusers import LTXImageToVideoPipeline
+
+        return LTXImageToVideoPipeline
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_ov_pipeline_class_dispatch(self, model_arch: str):
+        auto_cls = self._auto_cls(model_arch)
+        auto_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+
+        self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_num_videos_per_prompt(self, model_arch: str):
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+
+        # batch_size > 1 combined with num_videos_per_prompt > 1 is not supported by
+        # LTXImageToVideoPipeline itself, so those combinations are left out here.
+        for batch_size, num_videos_per_prompt in [(1, 1), (1, 3), (3, 1)]:
+            for height in [64, 96]:
+                for width in [96, 128]:
+                    inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+                    outputs = pipeline(**inputs, num_videos_per_prompt=num_videos_per_prompt).frames
+                    self.assertEqual(len(outputs), batch_size * num_videos_per_prompt)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_compare_to_diffusers_pipeline(self, model_arch: str):
+        height, width, batch_size = 64, 96, 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+        diffusers_pipeline = self._auto_cls(model_arch).from_pretrained(MODEL_NAMES[model_arch])
+
+        for output_type in ["np", "pt"]:
+            inputs["output_type"] = output_type
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
+            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_shape(self, model_arch: str):
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+
+        height, width, batch_size = 96, 128, 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+
+        for output_type in ["np", "pt"]:
+            inputs["output_type"] = output_type
+            outputs = pipeline(**inputs).frames
+            if output_type == "np":
+                self.assertEqual(outputs.shape, (batch_size, 1, height, width, 3))
+            elif output_type == "pt":
+                self.assertEqual(outputs.shape, (batch_size, 1, 3, height, width))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_image_reproducibility(self, model_arch: str):
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+
+        height, width, batch_size = 64, 96, 1
+        # I2V keeps the first latent frame as image conditioning, so use a generated frame too.
+        num_frames = getattr(pipeline, "vae_temporal_compression_ratio", 1) + 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, num_frames=num_frames)
+
+        for generator_framework in ["np", "pt"]:
+            ov_outputs_1 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
+            ov_outputs_2 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
+            ov_outputs_3 = pipeline(**inputs, generator=get_generator(generator_framework, SEED + 1))
+
+            self.assertFalse(np.array_equal(ov_outputs_1.frames[0], ov_outputs_3.frames[0]))
+            np.testing.assert_allclose(ov_outputs_1.frames[0], ov_outputs_2.frames[0], atol=1e-4, rtol=1e-2)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    def test_height_width_properties(self, model_arch: str):
+        batch_size, height, width, num_images_per_prompt = 2, 96, 128, 1
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES[model_arch], export=True, compile=False, dynamic_shapes=True, device=OPENVINO_DEVICE
+        )
+
+        self.assertTrue(ov_pipeline.is_dynamic)
+        self.assertEqual(ov_pipeline.batch_size, -1)
+        self.assertEqual(ov_pipeline.height, -1)
+        self.assertEqual(ov_pipeline.width, -1)
+
+        ov_pipeline.reshape(
+            batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images_per_prompt
+        )
+
+        self.assertFalse(ov_pipeline.is_dynamic)
+        expected_batch = batch_size * num_images_per_prompt
+        expected_batch *= 2
+        self.assertEqual(
+            ov_pipeline.batch_size,
+            expected_batch,
+        )
+        self.assertEqual(ov_pipeline.height, height)
+        self.assertEqual(ov_pipeline.width, width)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_static_shape_generation(self, model_arch):
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], compile=False, device=OPENVINO_DEVICE)
+        pipeline.reshape(batch_size=1, height=64, width=96)
+        pipeline.compile()
+        # generation with incompatible size
+        height, width, batch_size = 96, 128, 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        from optimum.intel.openvino.modeling_diffusion import logger as diffusers_logger
+
+        with self.assertLogs(diffusers_logger, logging.WARN) as warning_log:
+            image = np.array(pipeline(**inputs).frames[0])
+            self.assertTrue(
+                any(
+                    "Incompatible width argument provided" in log or "Incompatible height argument provided" in log
+                    for log in warning_log.output
+                )
+            )
+        self.assertTupleEqual(image.shape[-3:-1], (64, 96))
+        # generation without height / width provided
+        inputs.pop("height")
+        inputs.pop("width")
+        image = np.array(pipeline(**inputs).frames[0])
+        self.assertTupleEqual(image.shape[-3:-1], (64, 96))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_image_resize_behavior(self, model_arch: str):
+        from PIL import Image
+
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+
+        height, width = 64, 96
+        inputs = self.generate_inputs(height=height, width=width, batch_size=1)
+        # Replace with an image that has different dimensions than requested
+        inputs["image"] = Image.new("RGB", (256, 256))
+
+        outputs = pipeline(**inputs).frames
+        output_frame = np.array(outputs[0])
+        # Output resolution must match the requested height/width, not the input image size
+        self.assertEqual(output_frame.shape[-3], height)
+        self.assertEqual(output_frame.shape[-2], width)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_num_frames_validation(self, model_arch: str):
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+
+        valid_inputs = self.generate_inputs(height=64, width=96, batch_size=1, num_frames=9)
+        self.assertEqual(len(np.array(pipeline(**valid_inputs).frames[0])), 9)
+
+        # num_frames is floored to the nearest latent frame count, not rejected
+        invalid_inputs = self.generate_inputs(height=64, width=96, batch_size=1, num_frames=10)
+        self.assertEqual(len(np.array(pipeline(**invalid_inputs).frames[0])), 9)
