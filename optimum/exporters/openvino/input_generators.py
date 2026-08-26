@@ -2292,3 +2292,67 @@ class DummyDeepseekOCR2VisionTilesInputGenerator(DummyVisionInputGenerator):
         super().__init__(
             task, normalized_config, batch_size=batch_size, num_channels=num_channels, width=768, height=768
         )
+
+
+class DummyFgclip2VisionInputGenerator(DummyVisionInputGenerator):
+    """
+    Generates dummy pre-patchified `pixel_values` and `spatial_shapes` inputs for
+    FG-CLIP2's SigLIP2-NaFlex-style vision tower.
+
+    `pixel_values` is pre-patchified upstream by the processor to shape
+    `(batch, num_patches, num_channels * patch_size * patch_size)`, and
+    `spatial_shapes` (`batch, 2`) drives a per-sample `F.interpolate` call in
+    `Fgclip2VisionEmbeddings.resize_positional_embeddings` that resizes the
+    learned positional embeddings to the image-specific grid. Export is pinned
+    to FG-CLIP2's own fixed canonical resolution (the `num_patches`/`patch_size`
+    from `vision_config`, i.e. a square `sqrt(num_patches) x sqrt(num_patches)`
+    patch grid) so that loop traces to one static shape. True arbitrary
+    -resolution NaFlex dynamism is out of scope for this export.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "spatial_shapes")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        **kwargs,
+    ):
+        self.task = task
+        # `Fgclip2VisionEmbeddings.resize_positional_embeddings` unrolls a
+        # Python `for i in range(batch_size)` loop whose trip count is read
+        # directly from `spatial_shapes.shape[0]` at trace time, baking the
+        # *image* batch size into the exported graph as a static constant --
+        # in addition to the fixed canonical resolution. We therefore always
+        # export with exactly one canonical image per call (the common
+        # one-image, N-labels zero-shot-image-classification usage pattern,
+        # matching the existing `clip`/`siglip` test convention) rather than
+        # the generic `DEFAULT_DUMMY_SHAPES["batch_size"]`. Batching multiple
+        # images in a single call is a known, documented limitation, out of
+        # scope for this export (same category as the resolution trade-off).
+        self.batch_size = 1
+        vision_config = normalized_config.config.vision_config
+        self.num_channels = vision_config.num_channels
+        self.patch_size = vision_config.patch_size
+        self.num_patches = vision_config.num_patches
+        self.grid_size = int(self.num_patches**0.5)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "spatial_shapes":
+            # Constant (height, width) == (grid_size, grid_size) for every sample:
+            # random_int_tensor samples in [min_value, max_value), so setting
+            # max_value = min_value + 1 yields a fixed value.
+            return self.random_int_tensor(
+                shape=[self.batch_size, 2],
+                min_value=self.grid_size,
+                max_value=self.grid_size + 1,
+                framework=framework,
+                dtype=int_dtype,
+            )
+        patch_dim = self.num_channels * self.patch_size * self.patch_size
+        return self.random_float_tensor(
+            shape=[self.batch_size, self.num_patches, patch_dim],
+            framework=framework,
+            dtype=float_dtype,
+        )

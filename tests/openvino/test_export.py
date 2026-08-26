@@ -19,7 +19,7 @@ from pathlib import Path
 import torch
 from parameterized import parameterized
 from sentence_transformers import SentenceTransformer, models
-from transformers import AutoConfig, AutoTokenizer, GenerationConfig
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 from utils_tests import (
     MODEL_NAMES,
     OPENVINO_DEVICE,
@@ -94,6 +94,7 @@ class ExportModelTest(unittest.TestCase):
         "sam": OVSamModel,
         "speecht5": OVModelForTextToSpeechSeq2Seq,
         "clip": OVModelForZeroShotImageClassification,
+        "fgclip2": OVModelForZeroShotImageClassification,
         "stable-diffusion-3": OVStableDiffusion3Pipeline,
         "flux": OVFluxPipeline,
         "qwenimage": OVQwenImagePipeline,
@@ -209,6 +210,13 @@ class ExportModelTest(unittest.TestCase):
             # rotary embedding. The CLI export backfills it; mirror that here for the direct model load.
             loading_kwargs["config"] = _ensure_qwen3_omni_rope_scaling(AutoConfig.from_pretrained(model_name))
             model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
+        elif model_type == "fgclip2":
+            # `fgclip2`'s `auto_map` only registers `AutoModelForCausalLM` (see
+            # `TasksManager._CUSTOM_CLASSES` registration in
+            # `optimum/exporters/openvino/model_configs.py`); the plain
+            # `AutoModelForZeroShotImageClassification` (`auto_model.auto_model_class`)
+            # cannot load it even with `trust_remote_code=True`.
+            model = AutoModelForCausalLM.from_pretrained(model_name, **loading_kwargs)
         else:
             model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
 

@@ -994,7 +994,14 @@ class OVModelForZeroShotImageClassification(OVModel):
     auto_model_class = AutoModelForZeroShotImageClassification
     export_feature = "zero-shot-image-classification"
 
-    def forward(self, input_ids, pixel_values, attention_mask: Optional[torch.Tensor] = None, **kwargs):
+    def forward(
+        self,
+        input_ids,
+        pixel_values,
+        attention_mask: Optional[torch.Tensor] = None,
+        spatial_shapes: Optional[torch.Tensor] = None,
+        **kwargs,
+    ):
         self.compile()
 
         np_inputs = isinstance(input_ids, np.ndarray)
@@ -1002,11 +1009,22 @@ class OVModelForZeroShotImageClassification(OVModel):
         input_ids = ensure_numpy(input_ids)
         pixel_values = ensure_numpy(pixel_values)
         attention_mask = ensure_numpy(attention_mask)
+        spatial_shapes = ensure_numpy(spatial_shapes)
 
         inputs = {"input_ids": input_ids, "pixel_values": pixel_values}
         # Add the attention_mask when needed
         if "attention_mask" in self.input_names:
             inputs["attention_mask"] = attention_mask if attention_mask is not None else np.ones_like(input_ids)
+        # SigLIP2-NaFlex-style vision towers (e.g. FG-CLIP2) require an explicit
+        # `spatial_shapes` (batch, 2) side-tensor driving per-sample positional-
+        # embedding interpolation. Default to the fixed canonical resolution the
+        # IR was exported with if the caller does not supply one.
+        if "spatial_shapes" in self.input_names:
+            if spatial_shapes is None:
+                num_patches = pixel_values.shape[1]
+                grid_size = int(round(num_patches**0.5))
+                spatial_shapes = np.full((pixel_values.shape[0], 2), grid_size, dtype=np.int64)
+            inputs["spatial_shapes"] = spatial_shapes
         outputs = self._inference(inputs)
         logits_per_image = (
             torch.from_numpy(outputs["logits_per_image"]).to(self.device)

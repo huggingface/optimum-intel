@@ -43,6 +43,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyAudioPhi4MMInputGenerator,
     DummyDeepseekOCR2VisionInputGenerator,
     DummyDeepseekOCR2VisionTilesInputGenerator,
+    DummyFgclip2VisionInputGenerator,
     DummyFluxTextInputGenerator,
     DummyFluxTransformerInputGenerator,
     DummyGemma4UnifiedVisionInputGenerator,
@@ -118,6 +119,7 @@ from optimum.exporters.openvino.model_patcher import (
     DeepseekOCR2VisionEmbeddingsPatcher,
     DeepseekPatcher,
     FalconModelPatcher,
+    Fgclip2ModelPatcher,
     FluxTransformerModelPatcher,
     FunASRModelPatcher,
     Gemma2ModelPatcher,
@@ -366,6 +368,20 @@ def init_model_configs():
             "transformers",
             "Qwen3OmniMoeForConditionalGeneration",
         )
+
+    # FG-CLIP2 is loaded via trust_remote_code; its config.json `auto_map` only registers
+    # `AutoModelForCausalLM` -> `Fgclip2Model` as a loading-convenience alias (the model is a
+    # non-generative CLIP/SigLIP-style dual-tower embedding model, not an autoregressive
+    # decoder), so it cannot be resolved through the stock AutoModelForZeroShotImageClassification
+    # / AutoModelForFeatureExtraction mappings and needs an explicit custom class.
+    TasksManager._CUSTOM_CLASSES[("pt", "fgclip2", "zero-shot-image-classification")] = (
+        "transformers",
+        "AutoModelForCausalLM",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "fgclip2", "feature-extraction")] = (
+        "transformers",
+        "AutoModelForCausalLM",
+    )
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
@@ -6820,6 +6836,40 @@ class SiglipOpenVINOConfig(TextAndVisionOpenVINOConfig):
             }
         else:
             return super().outputs
+
+
+@register_in_tasks_manager("fgclip2", *["feature-extraction", "zero-shot-image-classification"])
+class Fgclip2OpenVINOConfig(SiglipOpenVINOConfig):
+    """
+    FG-CLIP2 (`fgclip2`) OpenVINO export config. Mirrors `SiglipOpenVINOConfig` --
+    same dual-tower CLIP-style `logits_per_image`/`logits_per_text`/`text_embeds`
+    /`image_embeds` output contract -- with two additions required by FG-CLIP2's
+    SigLIP2-NaFlex-style vision tower:
+      * `pixel_values` is pre-patchified: `(batch, num_patches, num_channels *
+        patch_size * patch_size)` instead of `(batch, num_channels, height, width)`.
+      * a `spatial_shapes` (`batch, 2`) side-tensor drives per-sample positional-
+        embedding interpolation in `Fgclip2VisionEmbeddings.resize_positional_embeddings`.
+
+    Exported at FG-CLIP2's own fixed canonical resolution (a square
+    `sqrt(num_patches) x sqrt(num_patches)` patch grid, derived from
+    `vision_config.num_patches`/`vision_config.patch_size`) so that per-sample
+    interpolation loop traces to one static shape -- the same trade-off the
+    existing `siglip` (fixed-resolution) OV config already makes. Arbitrary
+    -resolution NaFlex dynamism is a known, documented limitation, out of scope
+    for this export. Like `siglip`, no `attention_mask` input is declared (the
+    text tower is always used with fixed-length, unmasked padding).
+    """
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyFgclip2VisionInputGenerator)
+    _MODEL_PATCHER = Fgclip2ModelPatcher
+
+    @property
+    def inputs(self) -> dict:
+        return {
+            "input_ids": {0: "text_batch_size", 1: "sequence_length"},
+            "pixel_values": {0: "image_batch_size", 1: "num_patches"},
+            "spatial_shapes": {0: "image_batch_size"},
+        }
 
 
 @register_in_tasks_manager(
