@@ -265,6 +265,7 @@ HUB_MODEL_NAMES = {
     "falcon": "optimum-intel-internal-testing/really-tiny-falcon-testing",
     "falcon-40b": "optimum-intel-internal-testing/tiny-random-falcon-40b",
     "falcon_mamba": "optimum-intel-internal-testing/tiny-falcon-mamba",
+    "fgclip2": "optimum-intel-internal-testing/tiny-random-Fgclip2Model",
     "flaubert": "optimum-intel-internal-testing/tiny-random-flaubert",
     "flux": "optimum-intel-internal-testing/tiny-random-flux",
     "flux-fill": "optimum-intel-internal-testing/tiny-random-flux-fill",
@@ -657,6 +658,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     },
     "kokoro": {"model": 352},
     "clip": {"model": 130},
+    "fgclip2": {"model": 68},
     "mamba": {"model": 324 if is_transformers_version("==", "5.0") else 322},
     "falcon_mamba": {"model": 164 if is_transformers_version("==", "5.0") else 162},
     "minicpmo": {
@@ -740,6 +742,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_asr",
     "fun_asr",
     "videochat_flash_qwen",
+    "fgclip2",
 )
 
 if is_transformers_version("<", "5"):
@@ -770,6 +773,7 @@ ARCH_TO_MODEL_CLASS = {
     "electra": "OVModelForFeatureExtraction",
     "clip": "OVModelForZeroShotImageClassification",
     "siglip": "OVModelForZeroShotImageClassification",
+    "fgclip2": "OVModelForZeroShotImageClassification",
 }
 
 

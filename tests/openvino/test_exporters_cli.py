@@ -117,6 +117,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
+        ("zero-shot-image-classification", "fgclip2"),
         ("text-to-audio", "kokoro"),
         ("text-generation-with-past", "cohere2"),
         ("text-generation", "lfm2"),
@@ -183,6 +184,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "speecht5": 2,
         "kokoro": 0,  # uses g2p, no tokenizer
         "clip": 2,
+        "fgclip2": 2,
         "mamba": 2,
         "falcon_mamba": 2,
         "qwen3": 2,

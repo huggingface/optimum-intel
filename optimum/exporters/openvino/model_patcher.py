@@ -204,6 +204,49 @@ class SAMModelPatcher(ModelPatcher):
         self.patched_forward = patched_forward
 
 
+class Fgclip2ModelPatcher(ModelPatcher):
+    """
+    Works around a known upstream bug in `qihoo360/fg-clip2-so400m`'s custom
+    `modeling_fgclip2.py`: `Fgclip2TextEmbeddings.__init__` precomputes several
+    tensors (`position_ids` -- registered via `register_buffer(..., persistent=
+    False)` -- plus the plain instance attributes `mask1`/`mask2`, used by the
+    "box"/"long" `walk_type` variants) at module-construction time. Because
+    these are neither model parameters nor persistent buffers, `from_pretrained`
+    's low-memory / meta-device fast-init path never materializes them once the
+    checkpoint is loaded -- they are left as leftover, uninitialized (`mask1`/
+    `mask2`) or garbage-valued (`position_ids`) tensors, which crashes any
+    embedding lookup using them (`IndexError: index out of range in self`) with
+    plain PyTorch inference, independent of OpenVINO/export. This reproduces
+    with a vanilla `transformers.AutoModelForCausalLM.from_pretrained(...,
+    trust_remote_code=True)` call and is therefore not an OpenVINO-side issue --
+    it is fixed here (recomputing the exact same values a fresh, from-scratch
+    construction of `Fgclip2TextEmbeddings` produces) so the model can be
+    exported and used at all.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: PreTrainedModel,
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        text_embeddings = model.text_model.embeddings
+        text_config = model.config.text_config
+        longtext_len = text_config.longtext_len
+        keep_len = text_config.keep_len
+        device = text_embeddings.token_embedding.weight.device
+
+        text_embeddings.position_ids = torch.arange(longtext_len, device=device).expand((1, -1))
+        mask1 = torch.zeros([longtext_len, 1], device=device)
+        mask1[:keep_len, :] = 1
+        mask2 = torch.zeros([longtext_len, 1], device=device)
+        mask2[keep_len:, :] = 1
+        text_embeddings.mask1 = mask1
+        text_embeddings.mask2 = mask2
+
+
 class SentenceTransformersTransformerPatcher(ModelPatcher):
     def __init__(
         self,

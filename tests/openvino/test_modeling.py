@@ -2000,3 +2000,101 @@ class OVModelForZeroShotImageClassificationIntegrationTest(unittest.TestCase):
         del transformers_model
         del ov_model
         gc.collect()
+
+    def test_fgclip2_zero_shot_image_classification(self):
+        # `fgclip2` (`qihoo360/fg-clip2-so400m`) needs a dedicated test method
+        # rather than an entry in `SUPPORTED_ARCHITECTURES`/`test_compare_to_transformers`
+        # above, because:
+        #   1. It requires `trust_remote_code=True` end-to-end (both OV export
+        #      and the Transformers reference model), and its `auto_map` only
+        #      registers `AutoModelForCausalLM` (not
+        #      `AutoModelForZeroShotImageClassification`), so it must be loaded
+        #      via `AutoModelForCausalLM` (see `TasksManager._CUSTOM_CLASSES`
+        #      registration in `optimum/exporters/openvino/model_configs.py`).
+        #   2. Its NaFlex-style vision tower is exported at a FIXED canonical
+        #      resolution (see `Fgclip2OpenVINOConfig`/
+        #      `DummyFgclip2VisionInputGenerator`): a per-sample Python loop in
+        #      `resize_positional_embeddings` bakes the exact `spatial_shapes`
+        #      values into the trace. The shared `IMAGE_URL` (a non-square COCO
+        #      photo) does NOT resize to the canonical patch grid and would
+        #      raise an OpenVINO `Broadcast` shape-mismatch error, so a
+        #      synthetic SQUARE image is used here instead. This is a known,
+        #      accepted, documented limitation of the current export (arbitrary
+        #      NaFlex-style dynamic resolution is out of scope), not a test bug.
+        model_arch = "fgclip2"
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForZeroShotImageClassification.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, trust_remote_code=True
+        )
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
+        # Square image so the processor's `spatial_shapes` output matches the
+        # fixed canonical resolution baked into the export.
+        image_size = ov_model.config.vision_config.patch_size * int(ov_model.config.vision_config.num_patches**0.5)
+        IMAGE = Image.fromarray(np.random.randint(0, 255, (image_size, image_size, 3), dtype=np.uint8))
+        labels = ["a photo of a cat", "a photo of a dog"]
+        # `max_length` is capped by both `max_position_embeddings` (position
+        # embedding table size) and `longtext_len` (position_ids buffer length)
+        # -- see `Fgclip2TextEmbeddings.forward`. The processor's own built-in
+        # default (64, from the generic `Siglip2Processor` fallback) can exceed
+        # a reduced tiny-model config, so it must be capped explicitly.
+        max_length = min(ov_model.config.text_config.max_position_embeddings, ov_model.config.text_config.longtext_len)
+        inputs = processor(
+            images=IMAGE,
+            text=labels,
+            padding="max_length",
+            max_length=max_length,
+            truncation=True,
+            return_tensors="pt",
+        )
+
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True)
+        # Work around an upstream bug in `modeling_fgclip2.py`, independent of
+        # OpenVINO/export: `Fgclip2TextEmbeddings.__init__` precomputes
+        # `position_ids` (non-persistent buffer) and `mask1`/`mask2` (plain
+        # tensor attributes, not buffers/parameters), which `from_pretrained`'s
+        # fast-init/meta-device loading path never (re-)materializes, leaving
+        # garbage/meta tensors. Recompute them exactly as a fresh construction
+        # would, matching the fix applied on the OV export side by
+        # `Fgclip2ModelPatcher` (optimum/exporters/openvino/model_patcher.py).
+        text_embeddings = transformers_model.text_model.embeddings
+        text_config = transformers_model.config.text_config
+        text_embeddings.position_ids = torch.arange(text_config.longtext_len).expand((1, -1))
+        mask1 = torch.zeros((text_config.longtext_len, 1))
+        mask1[: text_config.keep_len, :] = 1.0
+        mask2 = torch.zeros((text_config.longtext_len, 1))
+        mask2[text_config.keep_len :, :] = 1.0
+        text_embeddings.mask1 = mask1
+        text_embeddings.mask2 = mask2
+
+        # test end-to-end inference
+        ov_outputs = ov_model(**inputs)
+
+        self.assertTrue("logits_per_image" in ov_outputs)
+        self.assertIsInstance(ov_outputs.logits_per_image, torch.Tensor)
+        self.assertTrue("logits_per_text" in ov_outputs)
+        self.assertIsInstance(ov_outputs.logits_per_text, torch.Tensor)
+        self.assertTrue("text_embeds" in ov_outputs)
+        self.assertIsInstance(ov_outputs.text_embeds, torch.Tensor)
+        self.assertTrue("image_embeds" in ov_outputs)
+        self.assertIsInstance(ov_outputs.image_embeds, torch.Tensor)
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(ov_outputs.logits_per_image, transformers_outputs.logits_per_image, atol=1e-3))
+        self.assertTrue(torch.allclose(ov_outputs.logits_per_text, transformers_outputs.logits_per_text, atol=1e-3))
+        self.assertTrue(torch.allclose(ov_outputs.text_embeds, transformers_outputs.text_embeds, atol=1e-3))
+        self.assertTrue(torch.allclose(ov_outputs.image_embeds, transformers_outputs.image_embeds, atol=1e-3))
+
+        # NumPy input/output path
+        np_inputs = {k: v.numpy() for k, v in inputs.items()}
+        np_outputs = ov_model(**np_inputs)
+        self.assertIsInstance(np_outputs.logits_per_image, np.ndarray)
+
+        del transformers_model
+        del ov_model
+        gc.collect()

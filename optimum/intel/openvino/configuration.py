@@ -512,6 +512,17 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
+    # Encoder-only dual-tower CLIP-style model (no KV-cache/decode loop), so
+    # DYNAMIC_QUANTIZATION_GROUP_SIZE does not apply -- pure data-free weight-only
+    # compression on both towers' Linear layers. `intermediate_size` (4304) is not
+    # evenly divisible by the default group_size (128), hence `group_size_fallback`.
+    "qihoo360/fg-clip2-so400m": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "group_size_fallback": "adjust",
+    },
 }
 
 _DEFAULT_8BIT_WQ_CONFIGS = {
@@ -621,6 +632,18 @@ _DEFAULT_INT8_FQ_CONFIGS = {
         "num_samples": 1,
         "smooth_quant_alpha": 0.9,
     },
+    # NOTE: unlike `openai/clip-vit-*`, fg-clip2-so400m is exported with a FIXED
+    # canonical resolution (see `Fgclip2OpenVINOConfig`/`DummyFgclip2VisionInputGenerator`)
+    # because its NaFlex-style vision tower traces a per-sample Python loop whose
+    # target interpolation size is read from the runtime `spatial_shapes` tensor.
+    # Full (activation) INT8 quantization calibrates on real, variously-sized images
+    # from `conceptual_captions`, which mostly do NOT resize to the canonical
+    # (16, 16) patch grid baked in at export time, causing a shape-mismatch
+    # (`Broadcast`) error during statistics collection. A default full-quantization
+    # recipe is therefore intentionally NOT registered here; use `--weight-format
+    # int8`/`--weight-format int4` (see `_DEFAULT_4BIT_WQ_CONFIGS` below) instead,
+    # which only quantize weights and require no calibration-time forward passes
+    # with mismatched image resolutions.
 }
 
 # Default quantization ignored scope configs. For each model id it is a dict of `{ov_model_name: ignored_scope}`.
