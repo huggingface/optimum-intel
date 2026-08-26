@@ -330,6 +330,21 @@ class OVQuantizerTest(unittest.TestCase):
             },
         ),
         (
+            OVModelForFeatureExtraction,
+            "xlm-roberta",
+            OVQuantizationConfig(
+                dtype="int8",
+                dataset="c4",
+                num_samples=1,
+            ),
+            {
+                "model": 12,
+            },
+            {
+                "model": {"int8": 15},
+            },
+        ),
+        (
             OVModelForZeroShotImageClassification,
             "clip",
             OVQuantizationConfig(
