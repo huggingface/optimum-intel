@@ -8213,6 +8213,7 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
                     cache_params.conv_states[mamba_idx] = new_conv_state
                     cache_params.recurrent_states[mamba_idx] = new_recurrent_state
                 return out
+
             return _forward
 
         for layer in self._model.model.layers:
