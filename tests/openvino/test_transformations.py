@@ -263,6 +263,55 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
+    "muse_glimmer": {
+        "convert": [
+            "SDPAFusion",
+            "SDPAFusionMatcher",
+            "MakeStateful",
+            "TransposeConvert",
+            "CommonFusions",
+            "LinOpSequenceFusion",
+            "ReshapeAMatMul",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "MultiplyFusions",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertBroadcast3",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "RMSFusion",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    },
+    "deepseek_ocr2": {
+        "model_class": "OVModelForVisualCausalLM",
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "TransposeMatMul",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    },
 }
 
 if is_transformers_version(">=", "5.0.0"):
@@ -294,6 +343,67 @@ if is_diffusers_version(">=", "0.35.0"):
         "compile": [
             "RoPEFusionGPTNEOX",
             "RoPEFusion",
+        ],
+    }
+
+
+if is_diffusers_version(">=", "0.38.0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["ltx2"] = {
+        "model_class": "OVLTX2Pipeline",
+        "convert": [
+            "SDPAFusion",
+            "PackMultiHeadAttention",
+            "CommonFusions",
+            "TransposeConvert",
+            "TransposeFuse",
+            "ReverseInputChannelsFusion",
+            "BroadcastTransition",
+        ],
+        "compile": [
+            "CausalMaskPreprocessFusion",
+            "CommonDecompositions",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "DecompressionHandling",
+            "LinOpSequenceFusion",
+            "MultiplyFusions",
+            "RoPEFusion",
+            "RoPEFusionGPTNEOX",
+            "SDPASubgraphFusion",
+            "Snippets",
+            "Tokenization",
+        ],
+    }
+
+
+if is_diffusers_version(">=", "0.37.0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["z-image"] = {
+        "model_class": "OVZImagePipeline",
+        "convert": [
+            "CommonFusions",
+            "SDPAFusion",
+            "TransposeFuse",
+        ],
+        "compile": [
+            "CausalMaskPreprocessFusion",
+            "CommonDecompositions",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "DecompressionHandling",
+            "MultiplyFusions",
+            "RoPEFusion",
+            "RoPEFusionGPTNEOX",
+            "SDPASubgraphFusion",
+            "Snippets",
+            "Tokenization",
         ],
     }
 

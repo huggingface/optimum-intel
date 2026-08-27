@@ -108,6 +108,7 @@ if is_diffusers_available():
         OVFluxPipeline,
         OVLatentConsistencyModelImg2ImgPipeline,
         OVLatentConsistencyModelPipeline,
+        OVLTX2ImageToVideoPipeline,
         OVLTX2Pipeline,
         OVLTXImageToVideoPipeline,
         OVLTXPipeline,
@@ -128,6 +129,9 @@ if is_diffusers_available():
         OVStableDiffusionXLImg2ImgPipeline,
         OVStableDiffusionXLInpaintPipeline,
         OVStableDiffusionXLPipeline,
+        OVZImageImg2ImgPipeline,
+        OVZImageInpaintPipeline,
+        OVZImagePipeline,
     )
 
 

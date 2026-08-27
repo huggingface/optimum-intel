@@ -92,7 +92,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     ]
 
     if is_diffusers_version(">=", "0.37.0"):
-        SUPPORTED_ARCHITECTURES.extend(["flux.2-klein"])
+        SUPPORTED_ARCHITECTURES.extend(["flux.2-klein", "z-image"])
 
     if is_diffusers_version(">=", "0.33.0"):
         SUPPORTED_ARCHITECTURES.extend(["sana-sprint"])
@@ -252,10 +252,12 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
                     channels = pipeline.transformer.config.in_channels
                     self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
                 else:
+                    # Some transformer configs (Z-Image) only declare in_channels and derive
+                    # out_channels at runtime, so fall through to the VAE latent channels.
                     out_channels = (
                         pipeline.unet.config.out_channels
                         if pipeline.unet is not None
-                        else pipeline.transformer.config.out_channels
+                        else getattr(pipeline.transformer.config, "out_channels", None)
                     )
                     if out_channels is None:
                         out_channels = pipeline.vae.config.latent_channels
@@ -436,7 +438,13 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             and "timestep_cond" not in {inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs}
         ) or (
             ov_pipeline.transformer is not None
-            and "txt_ids" not in {inputs.get_any_name() for inputs in ov_pipeline.transformer.model.inputs}
+            # The txt_ids check targets Flux, which folds guidance into an embedding rather
+            # than doubling the batch. Z-Image also exports txt_ids but does double the batch
+            # for CFG, so it is excluded from that check.
+            and (
+                "txt_ids" not in {inputs.get_any_name() for inputs in ov_pipeline.transformer.model.inputs}
+                or model_arch == "z-image"
+            )
         ):
             if model_arch != "qwenimage":
                 expected_batch *= 2
@@ -1219,6 +1227,8 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = []
     if is_diffusers_version(">=", "0.32"):
         SUPPORTED_ARCHITECTURES.extend(["ltx-video"])
+    if is_diffusers_version(">=", "0.38.0"):
+        SUPPORTED_ARCHITECTURES.extend(["ltx2"])
 
     OVMODEL_CLASS = OVPipelineForImage2Video
     AUTOMODEL_CLASS = DiffusionPipeline
@@ -1246,12 +1256,20 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
 
         self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 
+    @staticmethod
+    def _auto_cls(model_arch: str):
+        if model_arch == "ltx2":
+            from diffusers import LTX2ImageToVideoPipeline
+
+            return LTX2ImageToVideoPipeline
+        from diffusers import LTXImageToVideoPipeline
+
+        return LTXImageToVideoPipeline
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_ov_pipeline_class_dispatch(self, model_arch: str):
-        from diffusers import LTXImageToVideoPipeline
-
-        auto_cls = LTXImageToVideoPipeline
+        auto_cls = self._auto_cls(model_arch)
         auto_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
@@ -1274,12 +1292,10 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
-        from diffusers import LTXImageToVideoPipeline
-
         height, width, batch_size = 64, 96, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
-        diffusers_pipeline = LTXImageToVideoPipeline.from_pretrained(MODEL_NAMES[model_arch])
+        diffusers_pipeline = self._auto_cls(model_arch).from_pretrained(MODEL_NAMES[model_arch])
 
         for output_type in ["np", "pt"]:
             inputs["output_type"] = output_type
@@ -1309,7 +1325,9 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         height, width, batch_size = 64, 96, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        # I2V keeps the first latent frame as image conditioning, so use a generated frame too.
+        num_frames = getattr(pipeline, "vae_temporal_compression_ratio", 1) + 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, num_frames=num_frames)
 
         for generator_framework in ["np", "pt"]:
             ov_outputs_1 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
