@@ -480,9 +480,9 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             # (AttributeError: 'Qwen3Config' object has no attribute 'pad_token_id')
             self.MIN_TRANSFORMERS_VERSION = "4.55.0"
             self.MAX_TRANSFORMERS_VERSION = "4.57.6"
-        if self.is_guard and use_past:
-            self.use_past_in_inputs = True
-            self.stateful = True
+            if use_past:
+                self.use_past_in_inputs = True
+                self.stateful = True
         if self.dflash:
             model_type = getattr(config, "model_type", "")
             if model_type != "qwen3":
