@@ -415,6 +415,11 @@ class OVModelForFeatureExtraction(OVModel):
 
         if config.model_type == "sam":
             return OVSamModel._from_pretrained(model_id, config, *args, **kwargs)
+        archs = getattr(config, "architectures", None)
+        if isinstance(archs, list) and len(archs) > 0 and archs[0] == "Qwen3ForGuardModel":
+            from .modeling_guard import OVModelForGuard
+
+            return OVModelForGuard._from_pretrained(model_id, config, *args, **kwargs)
         if config.model_type in MODEL_TYPE_TO_CLS_MAPPING.keys():
             from .modeling_visual_language import OVModelForVisualCausalLM
 
