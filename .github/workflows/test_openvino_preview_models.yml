@@ -63,26 +63,31 @@ jobs:
           uv pip install --pre -U openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
       - name: Qwen3.5 and Qwen3.5-Moe Validation
+        if: ${{ matrix.test-pattern != '*diffusion*' }}
         run: |
           uv pip install "transformers>=5.2,<5.3"
           pytest tests/openvino/${{ matrix.test-pattern }} -k "qwen3_5 or qwen3_5_moe" --durations=0
 
       - name: Gemma 4 Unified Validation
+        if: ${{ matrix.test-pattern != '*diffusion*' }}
         run: |
           uv pip install "transformers>=5.10,<5.11"
           pytest tests/openvino/${{ matrix.test-pattern }} -k gemma4_unified --durations=0
 
       - name: Deepseek-OCR-2 Validation
+        if: ${{ matrix.test-pattern != '*diffusion*' }}
         run: |
           uv pip install "transformers>=5.11,<5.12"
           pytest tests/openvino/${{ matrix.test-pattern }} -k deepseek_ocr2 --durations=0
 
       - name: Muse-Glimmer Validation
+        if: ${{ matrix.test-pattern != '*diffusion*' }}
         run: |
           uv pip install "transformers>=5.15,<5.16"
           pytest tests/openvino/${{ matrix.test-pattern }} -k "muse_glimmer" --durations=0
 
       - name: LTX-2.3 Validation
+        if: ${{ matrix.test-pattern == '*diffusion*' }}
         run: |
           uv pip install diffusers==0.40.0 "transformers>=5.10,<5.11"
           pytest tests/openvino/${{ matrix.test-pattern }} -k ltx2_3 --durations=0

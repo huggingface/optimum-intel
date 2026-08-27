@@ -3182,7 +3182,11 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
 
     @property
     def inputs(self):
-        return {
+        # `cross_modality_gate` and `stg_perturbation_mask` carry the guidance modes the pipeline
+        # otherwise selects with Python flags (`isolate_modalities`, `spatio_temporal_guidance_blocks`),
+        # which a static graph cannot branch on. STG only exists for checkpoints with perturbable
+        # blocks, so its mask is exported only then.
+        inputs = {
             "hidden_states": {0: "batch_size", 1: "video_sequence_length"},
             "audio_hidden_states": {0: "batch_size", 1: "audio_sequence_length"},
             "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
@@ -3198,7 +3202,11 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
             "audio_timestep": {0: "batch_size"},
             "video_coords": {0: "batch_size", 2: "video_sequence_length"},
             "audio_coords": {0: "batch_size", 2: "audio_sequence_length"},
+            "cross_modality_gate": {},
         }
+        if getattr(self._normalized_config.config, "perturbed_attn", False):
+            inputs["stg_perturbation_mask"] = {}
+        return inputs
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:

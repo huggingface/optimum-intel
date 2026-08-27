@@ -930,6 +930,8 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         "audio_encoder_attention_mask",
         "timestep",
         "audio_timestep",
+        "cross_modality_gate",
+        "stg_perturbation_mask",
     )
 
     def __init__(
@@ -953,6 +955,7 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         self.audio_scale_factor = normalized_config.config.audio_scale_factor
         self.cross_attention_dim = normalized_config.config.cross_attention_dim
         self.caption_channels = normalized_config.config.caption_channels
+        self.num_layers = normalized_config.config.num_layers
         self.encoder_seq_length = kwargs.get("sequence_length", DEFAULT_DUMMY_SHAPES["sequence_length"])
 
         # Width of the text embeddings the transformer consumes, per modality.
@@ -1016,6 +1019,12 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         if input_name == "audio_timestep":
             # Audio uses a scalar-per-batch [B] timestep (not per-token, unlike video).
             return self.random_float_tensor([self.batch_size], framework=framework, dtype=float_dtype)
+        if input_name == "cross_modality_gate":
+            # Guidance switches, traced at their neutral values: 1.0 keeps the audio<->video
+            # cross-attention residuals, and an all-ones mask leaves every self-attention unperturbed.
+            return torch.tensor(1.0)
+        if input_name == "stg_perturbation_mask":
+            return torch.ones(self.num_layers)
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 

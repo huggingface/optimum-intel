@@ -11050,7 +11050,21 @@ class _LTX2TraceSafeAttnProcessor:
 
     Reference (diffusers==0.38.0): models/transformers/transformer_ltx2.py,
     LTX2AudioVideoAttnProcessor.__call__ L161-228 (prepare_attention_mask at L175).
+
+    Self-attentions of perturbable blocks are given a `guidance_state` and their block index, so
+    spatio-temporal guidance is driven by the traced `stg_perturbation_mask` input rather than by
+    the caller's Python list of block indices (which tracing would bake into the graph).
     """
+
+    def __init__(self, guidance_state=None, block_idx=None):
+        self._guidance_state = guidance_state
+        self._block_idx = block_idx
+
+    def _stg_weight(self):
+        if self._guidance_state is None or self._block_idx is None:
+            return None
+        mask = self._guidance_state.get("stg_perturbation_mask")
+        return None if mask is None else mask[self._block_idx]
 
     def __call__(
         self,
@@ -11064,9 +11078,8 @@ class _LTX2TraceSafeAttnProcessor:
         all_perturbed=None,
     ):
         # `perturbation_mask` / `all_perturbed` are passed by LTX2PerturbedAttnProcessor blocks
-        # (perturbed_attn=True, e.g. LTX-2.3). For base CFG generation (no STG) they are None, in
-        # which case the full attention path below is exactly equivalent, so we accept and ignore
-        # them. STG (non-None perturbation_mask) is not supported by this static-IR export.
+        # (perturbed_attn=True, e.g. LTX-2.3). The export ignores them and reads the per-block
+        # perturbation weight off `guidance_state` instead, so STG can be switched on at runtime.
         # Use trace-safe RoPE — original has in-place addcmul_ on views which can break tracing
         apply_rotary = _ltx2_apply_split_rotary_emb
 
@@ -11089,6 +11102,7 @@ class _LTX2TraceSafeAttnProcessor:
         query = attn.to_q(hidden_states)
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
+        value_proj = value
 
         query = attn.norm_q(query)
         key = attn.norm_k(key)
@@ -11120,6 +11134,16 @@ class _LTX2TraceSafeAttnProcessor:
         hidden_states = hidden_states.transpose(1, 2).flatten(2, 3)
         hidden_states = hidden_states.to(query.dtype)
 
+        # Spatio-temporal guidance: the reference processor replaces the attention output with the
+        # raw value projection in the selected blocks (`torch.lerp(value, hidden_states, mask)`,
+        # with the mask all-zeros for every batch element the pipeline perturbs). Blending against
+        # a traced weight keeps the block choice a runtime input; the `w * h + (1 - w) * v` form is
+        # used over `lerp` because it reproduces `hidden_states` bit-exactly at w=1 (STG disabled).
+        stg_weight = self._stg_weight()
+        if stg_weight is not None:
+            stg_weight = stg_weight.to(hidden_states.dtype)
+            hidden_states = hidden_states * stg_weight + value_proj * (1.0 - stg_weight)
+
         if attn.to_gate_logits is not None:
             hidden_states = hidden_states.unflatten(2, (attn.heads, -1))
             gates = 2.0 * torch.sigmoid(gate_logits)
@@ -11136,7 +11160,12 @@ def _ltx2_text_encoder_final_norm(model):
     Locate the text tower's final norm (`Gemma3TextModel.norm`), whose output is the real
     `last_hidden_state`. Returns None if the layout is unfamiliar, so the caller can fall back.
     """
-    for path in (("model", "language_model", "norm"), ("language_model", "model", "norm"), ("model", "norm"), ("norm",)):
+    for path in (
+        ("model", "language_model", "norm"),
+        ("language_model", "model", "norm"),
+        ("model", "norm"),
+        ("norm",),
+    ):
         module = model
         for attr in path:
             module = getattr(module, attr, None)
@@ -11207,14 +11236,57 @@ class LTX2TextEncoderPatcher(ModelPatcher):
         self.patched_forward = patched_forward
 
 
+def _ltx2_cross_modality_gated_forward(orig_forward, guidance_state):
+    """
+    Wrap an audio<->video cross-attention so its output can be zeroed by a traced scalar.
+
+    `isolate_modalities=True` makes the reference blocks skip these two attentions entirely, and
+    their results only ever enter the block as the additive residuals `hidden_states + a2v_gate *
+    a2v_attn_hidden_states` / `audio_hidden_states + v2a_gate * v2a_attn_hidden_states`. Scaling the
+    attention output by 0 is therefore exactly equivalent, and unlike the Python flag it survives
+    tracing as a runtime input.
+    """
+    import functools
+
+    @functools.wraps(orig_forward)
+    def forward(*args, **kwargs):
+        out = orig_forward(*args, **kwargs)
+        gate = guidance_state.get("cross_modality_gate")
+        if gate is None:
+            return out
+        return out * gate.to(out.dtype)
+
+    return forward
+
+
 class LTX2TransformerPatcher(ModelPatcher):
     """
     Export patcher for the LTX2 transformer: installs the trace-safe attention processor and
     wraps forward to force return_dict=False and emit a named-output dict.
+
+    The guidance modes the pipeline drives with Python flags (`isolate_modalities` for modality
+    isolation guidance, `spatio_temporal_guidance_blocks` for STG) are re-expressed as traced
+    tensor inputs, since a static IR cannot branch on them at runtime: `cross_modality_gate` scales
+    the audio<->video cross-attention residuals, and `stg_perturbation_mask` holds one blend weight
+    per block for the self-attentions of perturbable blocks. Both are neutral (all ones) by default.
     """
 
     def __enter__(self):
         super().__enter__()
+
+        self._guidance_state = {}
+
+        # Self-attentions that STG may perturb, mapped to the index of the block they belong to
+        # (only blocks configured with `perturbed_attn` take part, matching the reference model).
+        perturbable_attns = {}
+        transformer_blocks = getattr(self._model, "transformer_blocks", None) or []
+        for block_idx, block in enumerate(transformer_blocks):
+            if not getattr(block, "perturbed_attn", False):
+                continue
+            for attn_name in ("attn1", "audio_attn1"):
+                attn = getattr(block, attn_name, None)
+                if attn is not None:
+                    perturbable_attns[id(attn)] = block_idx
 
         # Replace attention processors with trace-safe version
         # (original prepare_attention_mask has data-dependent branches that break tracing)
@@ -11222,7 +11294,18 @@ class LTX2TransformerPatcher(ModelPatcher):
         for name, module in self._model.named_modules():
             if hasattr(module, "processor") and hasattr(module, "set_processor"):
                 self._orig_processors[name] = module.processor
-                module.set_processor(_LTX2TraceSafeAttnProcessor())
+                module.set_processor(
+                    _LTX2TraceSafeAttnProcessor(self._guidance_state, perturbable_attns.get(id(module)))
+                )
+
+        self._orig_cross_modality_forwards = []
+        for block in transformer_blocks:
+            for attn_name in ("audio_to_video_attn", "video_to_audio_attn"):
+                attn = getattr(block, attn_name, None)
+                if attn is None:
+                    continue
+                self._orig_cross_modality_forwards.append((attn, attn.forward))
+                attn.forward = _ltx2_cross_modality_gated_forward(attn.forward, self._guidance_state)
 
         # Wrap forward to return dict (needed for output naming) and force return_dict=False internally
         self._orig_model_forward = self._model.forward
@@ -11243,6 +11326,7 @@ class LTX2TransformerPatcher(ModelPatcher):
             encoder_hidden_states,
             audio_encoder_hidden_states,
             timestep,
+            audio_timestep=None,
             encoder_attention_mask=None,
             audio_encoder_attention_mask=None,
             num_frames=None,
@@ -11254,8 +11338,13 @@ class LTX2TransformerPatcher(ModelPatcher):
             audio_coords=None,
             sigma=None,
             audio_sigma=None,
+            cross_modality_gate=None,
+            stg_perturbation_mask=None,
             **kwargs,
         ):
+            self._guidance_state["cross_modality_gate"] = cross_modality_gate
+            self._guidance_state["stg_perturbation_mask"] = stg_perturbation_mask
+
             # `sigma`/`audio_sigma` drive the prompt cross-attention modulation path used when the
             # checkpoint sets cross_attn_mod=True (e.g. LTX-2.3). Both pipelines pass
             # `sigma=t.expand(batch)` — the same scalar-per-batch tensor they pass as
@@ -11265,9 +11354,11 @@ class LTX2TransformerPatcher(ModelPatcher):
             # conditioning mask, and `prompt_adaln` would then emit one modulation vector per video
             # token, which does not broadcast against the text sequence.
             extra_forward_kwargs = {}
+            if audio_timestep is not None and "audio_timestep" in _fwd_params:
+                extra_forward_kwargs["audio_timestep"] = audio_timestep
             if _supports_sigma:
                 if sigma is None:
-                    sigma = kwargs.get("audio_timestep")
+                    sigma = audio_timestep
                     if sigma is None:
                         sigma = timestep
                     if sigma is not None and sigma.ndim > 1:
@@ -11299,11 +11390,19 @@ class LTX2TransformerPatcher(ModelPatcher):
                 return {"out_sample": result[0], "audio_out_sample": result[1]}
             return result
 
+        # The exporter derives the traced inputs and their order from `inspect.signature(model.forward)`,
+        # and `functools.wraps` would make that resolve to the wrapped model's signature — under which
+        # the guidance inputs do not exist and would be dropped from the IR without a word.
+        patched_forward.__signature__ = inspect.signature(patched_forward, follow_wrapped=False)
+
         self._model.forward = patched_forward
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._orig_model_forward
+
+        for attn, orig_forward in self._orig_cross_modality_forwards:
+            attn.forward = orig_forward
 
         # Restore original attention processors
         for name, module in self._model.named_modules():

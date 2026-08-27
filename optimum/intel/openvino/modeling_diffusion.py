@@ -1481,6 +1481,9 @@ class OVModelTransformerLTX2(OVPipelinePart):
         audio_num_frames: Optional[int] = None,
         video_coords: Optional[torch.Tensor] = None,
         audio_coords: Optional[torch.Tensor] = None,
+        isolate_modalities: bool = False,
+        spatio_temporal_guidance_blocks: Optional[List[int]] = None,
+        perturbation_mask: Optional[torch.Tensor] = None,
         attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
         **kwargs,
@@ -1548,6 +1551,48 @@ class OVModelTransformerLTX2(OVPipelinePart):
         if audio_coords is not None:
             model_inputs["audio_coords"] = audio_coords
 
+        # Modality isolation guidance and spatio-temporal guidance are extra transformer passes the
+        # pipeline runs alongside the CFG one, selected with Python flags. The export turns them into
+        # tensor inputs; exports predating them can only serve the plain pass, so ask for a re-export
+        # rather than silently returning an unguided prediction.
+        if "cross_modality_gate" in self._ov_input_names:
+            model_inputs["cross_modality_gate"] = torch.tensor(0.0 if isolate_modalities else 1.0)
+        elif isolate_modalities:
+            raise ValueError(
+                "`isolate_modalities=True` requires a `cross_modality_gate` input, which this exported "
+                "LTX-2 transformer does not have. Re-export the model to enable modality isolation "
+                "guidance, or pass `modality_scale=1.0` (and `audio_modality_scale=1.0`) to disable it."
+            )
+
+        stg_blocks = spatio_temporal_guidance_blocks or []
+        if "stg_perturbation_mask" in self._ov_input_names:
+            # The reference model perturbs every batch element when the pipeline leaves the mask
+            # unset; a per-element mask has no equivalent in the traced per-block weights.
+            weight = 0.0
+            if perturbation_mask is not None:
+                unique = torch.unique(torch.as_tensor(perturbation_mask))
+                if unique.numel() > 1:
+                    raise ValueError(
+                        "The exported LTX-2 transformer only supports a `perturbation_mask` that is uniform "
+                        f"across the batch, got {perturbation_mask}."
+                    )
+                weight = float(unique.item())
+            stg_mask = torch.ones(self._stg_num_blocks)
+            for block_idx in stg_blocks:
+                # The reference model matches block indices against the blocks it has, so out-of-range
+                # entries (e.g. the default `[28]` against a 1-block test checkpoint) are a no-op.
+                if 0 <= block_idx < len(stg_mask):
+                    stg_mask[block_idx] = weight
+            model_inputs["stg_perturbation_mask"] = stg_mask
+        elif stg_blocks and self.config.get("perturbed_attn", False):
+            # Without `perturbed_attn` the reference blocks ignore the mask too, so STG is a no-op
+            # there and there is nothing to refuse.
+            raise ValueError(
+                "`spatio_temporal_guidance_blocks` requires a `stg_perturbation_mask` input, which this "
+                "exported LTX-2 transformer does not have. Re-export the model to use spatio-temporal "
+                "guidance, or pass `stg_scale=0.0` (and `audio_stg_scale=0.0`) to disable it."
+            )
+
         ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
 
         model_outputs = {}
@@ -1570,6 +1615,16 @@ class OVModelTransformerLTX2(OVPipelinePart):
             if inp.get_any_name() == "timestep":
                 return len(inp.partial_shape)
         return 1
+
+    @property
+    def _stg_num_blocks(self):
+        # One weight per transformer block. `reshape` may have made the declared dimension dynamic,
+        # so fall back to the config the mask was sized from at export time.
+        for inp in self.model.inputs:
+            if inp.get_any_name() == "stg_perturbation_mask":
+                dim = inp.partial_shape[0]
+                return dim.get_length() if dim.is_static else self.config["num_layers"]
+        return 0
 
 
 class OVModelConnectors(OVPipelinePart):
