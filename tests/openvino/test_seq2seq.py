@@ -747,7 +747,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         if model_arch == "qwen3_omni_moe":
             # Qwen3OmniMoeForConditionalGeneration has a custom generate() interface incompatible with this flow
             self.skipTest("qwen3_omni_moe comparison tested via dedicated test methods")
-        
+
         if model_arch == "gemma4":
             self.skipTest("gemma4 is causing segfault CVS-193103")
 
