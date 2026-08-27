@@ -1136,7 +1136,12 @@ class OVModelForGuardIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForGuard.from_pretrained(
-            model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id,
+            export=True,
+            use_cache=False,
+            trust_remote_code=True,
+            ov_config=F32_CONFIG,
+            device=OPENVINO_DEVICE,
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertFalse(ov_model.stateful)

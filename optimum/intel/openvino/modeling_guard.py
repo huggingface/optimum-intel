@@ -12,7 +12,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import logging
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
@@ -24,11 +23,8 @@ from transformers.file_utils import add_start_docstrings
 from transformers.modeling_outputs import ModelOutput
 
 from ...exporters.openvino.stateful import model_has_state
-from .modeling import MODEL_START_DOCSTRING, OVModel
-from .utils import ensure_numpy
-
-
-logger = logging.getLogger(__name__)
+from .modeling import MODEL_START_DOCSTRING
+from .modeling_decoder import OVBaseDecoderModel
 
 
 GUARD_OUTPUT_NAMES = (
@@ -60,41 +56,49 @@ class OVGuardOutput(ModelOutput):
     """,
     MODEL_START_DOCSTRING,
 )
-class OVModelForGuard(OVModel):
+class OVModelForGuard(OVBaseDecoderModel):
     export_feature = "feature-extraction"
     auto_model_class = AutoModel
 
     def __init__(self, model=None, config=None, **kwargs):
-        self.stateful = model_has_state(model)
-        if self.stateful:
-            # the KV cache is hidden in the model, which makes it dynamic by construction and adds a
-            # 1D `beam_idx` input that the generic reshape cannot handle, cf. OVModelForCausalLM
-            kwargs["dynamic_shapes"] = False
-
+        # unlike other decoder families, guard also has a genuinely cache-less export, so the
+        # requested use_cache must default to what the loaded model actually is, not to True
+        kwargs.setdefault("use_cache", model_has_state(model))
         super().__init__(model, config, **kwargs)
-        self._past_length = 0
 
-    def compile(self):
-        super().compile()
-        if isinstance(self.request, openvino.CompiledModel):
-            # the KV cache lives in the infer request, so the compiled model cannot be called directly
-            self.request = self.request.create_infer_request()
+    def reshape(self, batch_size: int, sequence_length: int):
+        # unlike OVBaseDecoderModel, the stateless IR has no incompatible 1D inputs (e.g. beam_idx),
+        # so it can still be reshaped to a static shape, which the NPU requires
+        if self.stateful:
+            return super().reshape(batch_size, sequence_length)
+        if self._compile_only:
+            raise ValueError(
+                "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
+            )
+        shape = openvino.PartialShape([batch_size, sequence_length])
+        self.model.reshape(dict.fromkeys(self.model.inputs, shape))
+        self.is_dynamic = batch_size == -1 and sequence_length == -1
+        self.request = None
+        return self
 
     def reset_state(self):
         """Forget the cached conversation prefix, so the next call starts a new stream."""
         if self.request is not None and self.stateful:
             self.request.reset_state()
+        self.next_beam_idx = None
         self._past_length = 0
 
     def _inference(self, inputs):
         # self.request is an InferRequest, which unlike a CompiledModel is not callable
         try:
-            return self.request.infer(inputs)
+            self.request.start_async(inputs, share_inputs=True)
+            self.request.wait()
         except Exception as exc:
             message = self._incompatible_inputs_warning(inputs)
             if message is not None:
                 exc.args += (message,)
             raise
+        return {name: self.request.get_tensor(name).data for name in GUARD_OUTPUT_NAMES if name in self.output_names}
 
     def forward(
         self,
@@ -107,40 +111,29 @@ class OVModelForGuard(OVModel):
         self.compile()
 
         np_inputs = isinstance(input_ids, np.ndarray)
-        input_ids = ensure_numpy(input_ids)
-        batch_size, sequence_length = input_ids.shape
-
-        if self.stateful and past_key_values is None:
-            self.reset_state()
-        past_length = self._past_length if self.stateful else 0
-
+        input_ids = torch.as_tensor(input_ids)
         if attention_mask is not None:
-            attention_mask = ensure_numpy(attention_mask)
+            attention_mask = torch.as_tensor(attention_mask)
+        if position_ids is not None:
+            position_ids = torch.as_tensor(position_ids)
+
+        # builds attention_mask/position_ids/beam_idx and resets the KV cache on a new stream,
+        # exactly like OVModelForCausalLM
+        inputs = self.prepare_inputs(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            position_ids=position_ids,
+        )
+        raw_logits = self._inference(inputs)
+        if np_inputs:
+            logits = {name: value.copy() for name, value in raw_logits.items()}
         else:
-            attention_mask = np.ones((batch_size, past_length + sequence_length), dtype=input_ids.dtype)
-
-        inputs = {"input_ids": input_ids}
-        if "attention_mask" in self.input_names:
-            inputs["attention_mask"] = attention_mask
-
-        if "position_ids" in self.input_names:
-            if position_ids is None:
-                position_ids = np.cumsum(attention_mask, axis=1) - 1
-                position_ids[attention_mask == 0] = 1
-                position_ids = position_ids[:, past_length:]
-            inputs["position_ids"] = ensure_numpy(position_ids)
-
-        if "beam_idx" in self.input_names:
-            inputs["beam_idx"] = np.arange(batch_size, dtype=int)
-
-        outputs = self._inference(inputs)
-        logits = {name: outputs[name] for name in GUARD_OUTPUT_NAMES if name in self.output_names}
-        if not np_inputs:
-            logits = {name: torch.from_numpy(value).to(self.device) for name, value in logits.items()}
+            logits = {name: torch.from_numpy(value).clone().to(self.device) for name, value in raw_logits.items()}
 
         if self.stateful:
-            self._past_length += sequence_length
-            # a marker so that the next call knows it continues the same stream, cf. OVModelForCausalLM
+            self._past_length += input_ids.shape[1]
+            # a marker so the next call continues the same stream, cf. OVModelForCausalLM
             past_key_values = ((),)
 
         return OVGuardOutput(past_key_values=past_key_values, **logits)

@@ -475,6 +475,11 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         archs = getattr(config, "architectures", None)
         self.dflash = isinstance(archs, list) and len(archs) > 0 and archs[0] == "DFlashDraftModel"
         self.is_guard = isinstance(archs, list) and len(archs) > 0 and archs[0] == "Qwen3ForGuardModel"
+        if self.is_guard:
+            # remote code requires the 4.55+ Qwen3 rewrite and does not construct at all on transformers 5.x
+            # (AttributeError: 'Qwen3Config' object has no attribute 'pad_token_id')
+            self.MIN_TRANSFORMERS_VERSION = "4.55.0"
+            self.MAX_TRANSFORMERS_VERSION = "4.57.6"
         if self.is_guard and use_past:
             self.use_past_in_inputs = True
             self.stateful = True

@@ -453,26 +453,6 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             quantization_config.tokenizer = model_name_or_path
         return quantization_config
 
-
-@add_start_docstrings(
-    """
-    OpenVINO Model with a causal language modeling head on top (linear layer with weights tied to the input
-    embeddings).
-    """,
-    MODEL_START_DOCSTRING,
-)
-class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
-    export_feature = "text-generation"
-    auto_model_class = AutoModelForCausalLM
-
-    @add_start_docstrings_to_model_forward(
-        INPUTS_DOCSTRING.format("batch_size, sequence_length")
-        + TEXT_GENERATION_EXAMPLE.format(
-            processor_class=_TOKENIZER_FOR_DOC,
-            model_class="OVModelForCausalLM",
-            checkpoint="gpt2",
-        )
-    )
     def prepare_inputs(
         self,
         input_ids: torch.LongTensor,
@@ -574,6 +554,46 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         return inputs
 
+    def _get_past_length(self, past_key_values=None):
+        if past_key_values is None:
+            return 0
+        if self.stateful:
+            return self._past_length
+        if self.config.model_type in MULTI_QUERY_ATTN_MODELS and not (
+            self.config.model_type == "falcon" and self.config.new_decoder_architecture
+        ):
+            return past_key_values[0].shape[-2]
+        seq_length_dim = -2
+        if self.config.model_type == "chatglm" and not hasattr(self.config, "rope_ratio"):
+            seq_length_dim = 0
+        elif self.config.model_type == "qwen":
+            seq_length_dim = 1
+        # input is tuple of pairs
+        if isinstance(past_key_values[0], (tuple, list)):
+            return past_key_values[0][1].shape[seq_length_dim]
+        # past key values comes after flattening
+        return past_key_values[1].shape[seq_length_dim]
+
+
+@add_start_docstrings(
+    """
+    OpenVINO Model with a causal language modeling head on top (linear layer with weights tied to the input
+    embeddings).
+    """,
+    MODEL_START_DOCSTRING,
+)
+class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
+    export_feature = "text-generation"
+    auto_model_class = AutoModelForCausalLM
+
+    @add_start_docstrings_to_model_forward(
+        INPUTS_DOCSTRING.format("batch_size, sequence_length")
+        + TEXT_GENERATION_EXAMPLE.format(
+            processor_class=_TOKENIZER_FOR_DOC,
+            model_class="OVModelForCausalLM",
+            checkpoint="gpt2",
+        )
+    )
     def forward(
         self,
         input_ids: torch.LongTensor,
@@ -795,26 +815,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             **kwargs,
         )
         return result
-
-    def _get_past_length(self, past_key_values=None):
-        if past_key_values is None:
-            return 0
-        if self.stateful:
-            return self._past_length
-        if self.config.model_type in MULTI_QUERY_ATTN_MODELS and not (
-            self.config.model_type == "falcon" and self.config.new_decoder_architecture
-        ):
-            return past_key_values[0].shape[-2]
-        seq_length_dim = -2
-        if self.config.model_type == "chatglm" and not hasattr(self.config, "rope_ratio"):
-            seq_length_dim = 0
-        elif self.config.model_type == "qwen":
-            seq_length_dim = 1
-        # input is tuple of pairs
-        if isinstance(past_key_values[0], (tuple, list)):
-            return past_key_values[0][1].shape[seq_length_dim]
-        # past key values comes after flattening
-        return past_key_values[1].shape[seq_length_dim]
 
     # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
     def _reorder_cache(
