@@ -317,6 +317,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llava_next",
     "llava_next_video",
     "llava-qwen2",
+    "mistral3",
     "internvl_chat",
     "maira2",
     "minicpmv",
@@ -338,8 +339,11 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llama4",
     "minicpmo",
     "videochat_flash_qwen",
+    "deepseek_ocr2",
     "qwen3_omni_moe",
+    "muse_glimmer",
 ]
+
 
 SSM_MODELS = [
     "mamba",
@@ -582,6 +586,17 @@ def load_preprocessors(
                 "Failed to load FunASR Qwen3 tokenizer from subfolder 'Qwen3-0.6B'. "
                 "This tokenizer is required to export OpenVINO tokenizer/detokenizer IR for FunASR."
             ) from e
+    if model_type == "mistral3" and not preprocessors and not subfolder:
+        # Checkpoints published in Mistral's own format (e.g. Mistral-Small-3.2-24B-Instruct-2506) ship only
+        # tekken.json, which transformers resolves to MistralCommonTokenizer. That class rejects the `subfolder`
+        # argument maybe_load_preprocessors always passes, and the resulting error is swallowed there, so without
+        # this retry the model would be exported without any tokenizer.
+        from transformers import AutoTokenizer
+
+        try:
+            preprocessors.append(AutoTokenizer.from_pretrained(src_name_or_path, trust_remote_code=trust_remote_code))
+        except Exception as ex:
+            logger.warning(f"Tokenizer could not be loaded from {src_name_or_path}, saving failed with {ex}")
     if model_type == "phi4mm":
         # audio feature extractor config overrides image processor config during saving, need to save it explicitly
         try:
