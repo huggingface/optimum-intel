@@ -195,7 +195,6 @@ def _create_tiny_mistral3_model():
 
 
 def _create_tiny_qwen3_guard_model():
-    """Generate a tiny random Qwen3Guard-Stream model (remote code) and return its local path."""
     output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_qwen3_guard"
     config_file = output_dir / "config.json"
     weights_file = output_dir / "model.safetensors"

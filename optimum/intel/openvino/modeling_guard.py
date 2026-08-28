@@ -88,6 +88,78 @@ class OVModelForGuard(OVBaseDecoderModel):
         self.next_beam_idx = None
         self._past_length = 0
 
+    def _get_past_length(self, past_key_values=None):
+        if past_key_values is None:
+            return 0
+        if self.stateful:
+            return self._past_length
+        if isinstance(past_key_values[0], (tuple, list)):
+            return past_key_values[0][1].shape[-2]
+        return past_key_values[1].shape[-2]
+
+    def prepare_inputs(
+        self,
+        input_ids: torch.LongTensor,
+        attention_mask: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+    ) -> dict:
+        batch_size = input_ids.shape[0]
+        inputs = {}
+        if not self.stateful:
+            if past_key_values is not None:
+                past_key_values = tuple(
+                    past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
+                )
+                inputs = dict(zip(self.key_value_input_names, past_key_values))
+            elif self.use_cache:
+                for input_name in self.key_value_input_names:
+                    model_inputs = self.model.input(input_name)
+                    shape = model_inputs.get_partial_shape()
+                    shape[0] = batch_size
+                    if shape[2].is_dynamic:
+                        shape[2] = 0
+                    else:
+                        shape[1] = 0
+                    inputs[input_name] = openvino.Tensor(
+                        model_inputs.get_element_type(), [dim.get_length() for dim in shape]
+                    )
+        elif past_key_values is None:
+            if self.request is not None:
+                self.request.reset_state()
+            self.next_beam_idx = np.arange(batch_size, dtype=int)
+            self._past_length = 0
+
+        past_len = self._get_past_length(past_key_values)
+        inputs["input_ids"] = input_ids.cpu().numpy()
+        if "attention_mask" in self.input_names or "position_ids" in self.input_names:
+            if attention_mask is not None:
+                attention_mask = attention_mask.cpu().numpy()
+            else:
+                attention_mask = np.ones(
+                    (input_ids.shape[0], input_ids.shape[1] + past_len), dtype=inputs["input_ids"].dtype
+                )
+
+        if "attention_mask" in self.input_names:
+            inputs["attention_mask"] = attention_mask
+
+        if "position_ids" in self.input_names:
+            if position_ids is not None:
+                position_ids = position_ids.cpu().numpy()
+            else:
+                position_ids = np.cumsum(attention_mask, axis=1) - 1
+                position_ids[attention_mask == 0] = 1
+            if past_key_values:
+                position_ids = position_ids[:, -input_ids.shape[1] :]
+            inputs["position_ids"] = position_ids
+
+        if "beam_idx" in self.input_names:
+            inputs["beam_idx"] = (
+                self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=int)
+            )
+
+        return inputs
+
     def _inference(self, inputs):
         # self.request is an InferRequest, which unlike a CompiledModel is not callable
         try:
@@ -117,8 +189,6 @@ class OVModelForGuard(OVBaseDecoderModel):
         if position_ids is not None:
             position_ids = torch.as_tensor(position_ids)
 
-        # builds attention_mask/position_ids/beam_idx and resets the KV cache on a new stream,
-        # exactly like OVModelForCausalLM
         inputs = self.prepare_inputs(
             input_ids=input_ids,
             attention_mask=attention_mask,
