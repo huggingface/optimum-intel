@@ -3266,10 +3266,10 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
             wpos_ids = wpos_ids.flatten()
             pos_ids.append(torch.stack([hpos_ids, wpos_ids], dim=-1).repeat(t, 1))
         pos_ids = torch.cat(pos_ids, dim=0)
-        max_grid_size = grid_thw[:, 1:].max()
-        rotary_pos_emb_full = self._rotary_pos_emb(max_grid_size)
-        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
-        return rotary_pos_emb
+        # `VisionRotaryEmbedding.forward` changed signature across Transformers versions (seqlen int ->
+        # position_ids tensor). Use `inv_freq` directly — stable across versions and value-identical to
+        # the old `rotary_pos_emb_full[pos_ids].flatten(1)` table lookup.
+        return (pos_ids.unsqueeze(-1) * self._rotary_pos_emb.inv_freq).flatten(1)
 
     def get_multimodal_embeddings(
         self,
@@ -3548,10 +3548,10 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
             wpos_ids = wpos_ids.flatten()
             pos_ids.append(torch.stack([hpos_ids, wpos_ids], dim=-1).repeat(t, 1))
         pos_ids = torch.cat(pos_ids, dim=0)
-        max_grid_size = grid_thw[:, 1:].max()
-        rotary_pos_emb_full = self._rotary_pos_emb(max_grid_size)
-        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
-        return rotary_pos_emb
+        # `VisionRotaryEmbedding.forward` changed signature across Transformers versions (seqlen int ->
+        # position_ids tensor). Use `inv_freq` directly — stable across versions and value-identical to
+        # the old `rotary_pos_emb_full[pos_ids].flatten(1)` table lookup.
+        return (pos_ids.unsqueeze(-1) * self._rotary_pos_emb.inv_freq).flatten(1)
 
     def get_multimodal_embeddings(
         self,
