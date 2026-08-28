@@ -789,6 +789,31 @@ def _apply_default_ignored_scope_config(
 
             merged_ignored_scope = _merge_ignored_scopes(q_config.ignored_scope, default_ignored_scope)
             q_config.ignored_scope = merged_ignored_scope
+
+    # Try to match by folder name
+    if quantization_config_copy is None:
+        model_path = Path(model_id_or_path)
+        for model_id, default_ignored_scopes_per_model in _DEFAULT_IGNORED_SCOPE_CONFIGS.items():
+            short_id = model_id.split("/")[-1]
+            if model_path.name == short_id:
+                quantization_config_copy = quantization_config.clone()
+                for ov_model_name, default_ignored_scope in default_ignored_scopes_per_model.items():
+                    q_config = quantization_config_copy.quantization_configs.get(
+                        ov_model_name, quantization_config_copy.default_config
+                    )
+                    if not q_config:
+                        raise RuntimeError(
+                            "Can't apply default quantization config because corresponding model quantization config is missing."
+                        )
+                    if ov_model_name not in quantization_config_copy.quantization_configs:
+                        # If submodel quantization config is not explicitly defined, clone and modify the default one
+                        q_config = q_config.clone()
+                        quantization_config_copy.quantization_configs[ov_model_name] = q_config
+
+                    merged_ignored_scope = _merge_ignored_scopes(q_config.ignored_scope, default_ignored_scope)
+                    q_config.ignored_scope = merged_ignored_scope
+                break
+
     return quantization_config_copy or quantization_config
 
 
@@ -974,7 +999,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
         dtype (`str`, *optional*):
-            Data type weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4', 'cb4'].
+            Data type weights are compressed to. Possible values: ['int2', 'int4', 'int8', 'mxfp4', 'nf4', 'cb4'].
             Option 'cb4' represents a codebook with 16 fixed fp8 values in E4M3 format.
         qptq (`bool`, *optional*):
             Whether to apply GPTQ algorithm. GPTQ optimizes compressed weights in a layer-wise fashion to minimize the
@@ -1121,16 +1146,30 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 "quantization algorithm is selected and compression ratio is 1.0."
             )
 
-        if self.dtype in ["int4", "int8"]:
-            bits = 4 if self.dtype == "int4" else 8
+        if self.dtype in ["int2", "int4", "int8"]:
+            bits = 2 if self.dtype == "int2" else 4 if self.dtype == "int4" else 8
             if self.bits is not None and self.bits != bits:
                 logger.warning(
                     f"Overriding `bits` parameter to the value `bits`={bits} to match the given {self.dtype} `dtype`."
                 )
             self.bits = bits
 
-        if self.bits not in [4, 8]:
-            raise ValueError(f"Only support quantization to [4,8] bits but found {self.bits}")
+        if self.bits not in [2, 4, 8]:
+            raise ValueError(f"Only support quantization to [2,4,8] bits but found {self.bits}")
+
+        # 2-bit asymmetric is expressible as of CompressWeightsMode.INT2_ASYM (nncf-int2-asym.patch):
+        # at 2 bits the symmetric grid (-2, -1, 0, 1) spends a level on an unused sign for one-sided
+        # groups. Only fall back to symmetric when the installed NNCF genuinely cannot express it --
+        # rewriting `sym` otherwise makes openvino_config.json misreport the recipe, and that record
+        # is the only one that travels with the model.
+        if self.bits == 2 and not self.sym and not (
+            is_nncf_available() and hasattr(nncf.CompressWeightsMode, "INT2_ASYM")
+        ):
+            logger.warning(
+                "INT2 asymmetric weight compression requires an NNCF providing "
+                "CompressWeightsMode.INT2_ASYM. Overriding `sym` to True."
+            )
+            self.sym = True
 
         if self.bits == 8 and self.dtype:
             if self.ratio != 1:
@@ -1179,11 +1218,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             raise ValueError(f"Processor is expected to be a string, but found {self.processor}")
 
         if self.dtype is None:
-            self.dtype = "int4" if self.bits == 4 else "int8"
-        if self.dtype not in ["int4", "int8", "mxfp4", "nf4", "cb4"]:
+            self.dtype = "int2" if self.bits == 2 else "int4" if self.bits == 4 else "int8"
+        if self.dtype not in ["int2", "int4", "int8", "mxfp4", "nf4", "cb4"]:
             raise ValueError(
                 "Weights quantization data type must be one of the following: "
-                f"['int4', 'int8', 'mxfp4', 'nf4', 'cb4'], but found: {self.dtype}."
+                f"['int2', 'int4', 'int8', 'mxfp4', 'nf4', 'cb4'], but found: {self.dtype}."
             )
         if self.dtype in ["mxfp4", "nf4", "cb4"]:
             if self.bits != 4:
@@ -1214,7 +1253,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         Returns a dictionary with the variables that are ready to use for nncf.quantize() call.
         """
 
-        signed_bitness = {4: "int4", 8: "int8"}
+        signed_bitness = {2: "int2", 4: "int4", 8: "int8"}
         mode = self.dtype if self.dtype else signed_bitness[self.bits]
         if mode in signed_bitness.values():
             mode += "_sym" if self.sym else "_asym"
