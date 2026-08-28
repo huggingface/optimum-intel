@@ -11080,8 +11080,16 @@ class _LTX2TraceSafeAttnProcessor:
         # `perturbation_mask` / `all_perturbed` are passed by LTX2PerturbedAttnProcessor blocks
         # (perturbed_attn=True, e.g. LTX-2.3). The export ignores them and reads the per-block
         # perturbation weight off `guidance_state` instead, so STG can be switched on at runtime.
-        # Use trace-safe RoPE — original has in-place addcmul_ on views which can break tracing
-        apply_rotary = _ltx2_apply_split_rotary_emb
+        # Mirror the upstream dispatch on `attn.rope_type` (transformer_ltx2, L192-200). Only the
+        # "split" variant needs a trace-safe rewrite — its original does an in-place addcmul_ on
+        # views; `apply_interleaved_rotary_emb` is already out-of-place, so it is used unchanged.
+        # Both released LTX-2 checkpoints configure "split", which is also the fallback for
+        # diffusers versions predating `rope_type`. Referencing the interleaved helper only inside
+        # the branch keeps this import-safe on those older versions.
+        if getattr(attn, "rope_type", "split") == "interleaved":
+            apply_rotary = transformer_ltx2.apply_interleaved_rotary_emb
+        else:
+            apply_rotary = _ltx2_apply_split_rotary_emb
 
         batch_size, sequence_length, _ = (
             hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape

@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import inspect
+import itertools
 import logging
 import re
 from collections import namedtuple
@@ -48,6 +49,21 @@ InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
 
 OV_XML_FILE_NAME = "openvino_model.xml"
 _MAX_UNCOMPRESSED_SIZE = 1e9
+
+# Class name prefixes of diffusion pipelines whose checkpoints mix 16-bit and fp32 tensors, so that
+# loading them under a single `torch_dtype` loses precision. Used by
+# `restore_high_precision_parameters`; matched with `startswith` the same way
+# `get_diffusion_models_for_export_ext` identifies the LTX families.
+MIXED_PRECISION_PIPELINES = ("LTX2",)
+
+# Class name prefixes of models excluded from the automatic, size-based int8 weight compression that
+# `main_export` applies when no weight format is requested and nncf is installed. LTX-2's transformer
+# and text encoder are both far above `_MAX_UNCOMPRESSED_SIZE`, so they would always be compressed,
+# and int8 weights cost too much video quality for a silent default (measured on LTX-2.0: wwb
+# similarity 0.80 for int8 against the fp32 reference). Compression is still applied when asked for
+# explicitly via `--weight-format` / `--quant-mode`. Matched with `startswith`, like
+# `MIXED_PRECISION_PIPELINES`.
+NO_AUTO_COMPRESSION_MODELS = ("LTX2",)
 
 
 def is_torch_model(model: Union["PreTrainedModel", "ModelMixin"]):
@@ -425,6 +441,106 @@ def save_config(config, save_dir):
         save_dir.mkdir(exist_ok=True, parents=True)
         output_config_file = Path(save_dir / "config.json")
         config.to_json_file(output_config_file, use_diff=True)
+
+
+def _16bit_traceable_module_classes():
+    """
+    Module classes whose parameters survive `__make_16bit_traceable` in their loaded precision.
+
+    Everything else is cast back to fp32, so the source values for those parameters should not have
+    been rounded to 16 bits in the first place.
+    """
+    try:
+        from openvino.frontend.pytorch.patch_model import _get_16bit_extensions
+
+        extensions, _ = _get_16bit_extensions()
+        return set(extensions)
+    except ImportError:
+        classes = {nn.Linear, nn.Embedding}
+        try:
+            from transformers.pytorch_utils import Conv1D
+
+            classes.add(Conv1D)
+        except ImportError:
+            pass
+        return classes
+
+
+def restore_high_precision_parameters(pipeline, model_name_or_path, **loading_kwargs):
+    """
+    Undo the rounding that loading a diffusers pipeline under a single `torch_dtype` inflicts on the
+    parameters that are exported in fp32 anyway.
+
+    `deduce_diffusers_dtype` reads one dtype off the transformer weights and `from_pretrained`
+    applies it to every tensor of every submodel. At export time `__make_16bit_traceable` keeps only
+    `nn.Linear` / `nn.Embedding` / `Conv1D` parameters at 16 bits and casts the rest back to fp32,
+    so bare `nn.Parameter`s become fp32 constants holding values that were needlessly rounded.
+
+    In LTX-2 those are the AdaLN `scale_shift_table` parameters -- the only fp32 tensors in an
+    otherwise bf16 checkpoint (194 of 3510 in LTX-2.0, 290 of 4186 in LTX-2.3), and the source of
+    ~96% of the exported transformer's error against fp32 PyTorch. Reloading those, and only those,
+    tensors at their stored precision leaves the IR layout and size untouched; only the constant
+    values become accurate.
+
+    Restricted to LTX-2 because that is where the mixed-precision checkpoint is known and the win
+    measured; other pipelines would pay the extra checkpoint read for nothing.
+    """
+    if not is_safetensors_available():
+        return
+
+    if not any(pipeline.__class__.__name__.startswith(prefix) for prefix in MIXED_PRECISION_PIPELINES):
+        return
+
+    if Path(model_name_or_path).is_dir():
+        path = Path(model_name_or_path)
+    else:
+        from diffusers import DiffusionPipeline
+
+        path = Path(DiffusionPipeline.download(model_name_or_path, **loading_kwargs))
+
+    variant = loading_kwargs.get("variant")
+    traceable_classes = _16bit_traceable_module_classes()
+
+    from safetensors import safe_open
+
+    for name, component in getattr(pipeline, "components", {}).items():
+        if not isinstance(component, nn.Module) or not (path / name).is_dir():
+            continue
+
+        # Parameters and buffers that are not owned by a module kept 16-bit during tracing.
+        targets = {}
+        for module_name, module in component.named_modules():
+            if module.__class__ in traceable_classes:
+                continue
+            prefix = f"{module_name}." if module_name else ""
+            for attr_name, tensor in itertools.chain(
+                module.named_parameters(recurse=False), module.named_buffers(recurse=False)
+            ):
+                if tensor is not None and tensor.dtype in (torch.float16, torch.bfloat16):
+                    targets[prefix + attr_name] = tensor
+        if not targets:
+            continue
+
+        if variant is not None:
+            files = list((path / name).glob(f"*.{variant}.safetensors"))
+        else:
+            files = [f for f in (path / name).glob("*.safetensors") if len(f.suffixes) == 1]
+
+        restored = 0
+        for safetensors_file in files:
+            with safe_open(safetensors_file, framework="pt", device="cpu") as f:
+                for key in set(f.keys()) & targets.keys():
+                    stored = f.get_tensor(key)
+                    target = targets[key]
+                    if stored.dtype == target.dtype or stored.shape != target.shape:
+                        continue
+                    target.data = stored.to(torch.float32)
+                    restored += 1
+        if restored:
+            logger.info(
+                f"Restored {restored} {name} parameters to their checkpoint precision: a 16-bit "
+                "pipeline dtype would have rounded them even though they are exported in fp32."
+            )
 
 
 def deduce_diffusers_dtype(model_name_or_path, **loading_kwargs):
