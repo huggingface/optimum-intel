@@ -449,10 +449,15 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "scale_estimation": True,
     },
     "google/gemma-4-12B-it": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 64,
-        "quant_method": OVQuantizationMethod.AWQ,
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+                "quant_method": OVQuantizationMethod.AWQ,
+            },
+            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+        },
     },
     "google/gemma-4-26B-A4B-it": {
         "bits": 4,
