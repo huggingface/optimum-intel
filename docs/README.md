@@ -245,7 +245,7 @@ Hugging Face member to migrate your images to this dataset.
 We have an automatic script running with the `make style` comment that will make
 sure that:
 - the docstrings fully take advantage of the line width
-- all code examples are formatted using black, like the code of the 🤗 Optimum
+- all code examples are formatted in black style, like the code of the 🤗 Optimum
   library
 
 This script may have some weird failures if you made a syntax mistake or if you
