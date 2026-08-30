@@ -11418,6 +11418,37 @@ class LTX2TransformerPatcher(ModelPatcher):
                 module.set_processor(self._orig_processors[name])
 
 
+def _ltx2_vocoder_with_bwe_forward(self, mel_spec: "torch.Tensor"):
+    """
+    Mirror of `LTX2VocoderWithBWE.forward` that computes the final trim length without
+    overflowing int32.
+    """
+    # 1. Run stage 1 vocoder to get low sampling rate waveform
+    x = self.vocoder(mel_spec)
+    _, num_channels, num_samples = x.shape
+
+    # Pad to exact multiple of hop_length for exact mel frame count
+    remainder = num_samples % self.config.hop_length
+    if remainder != 0:
+        x = F.pad(x, (0, self.hop_length - remainder))
+
+    # 2. Compute mel spectrogram on vocoder output
+    mel, _, _, _ = self.mel_stft(x.flatten(0, 1))
+    mel = mel.unflatten(0, (-1, num_channels))
+
+    # 3. Run bandwidth extender (BWE) on new mel spectrogram
+    mel_for_bwe = mel.transpose(2, 3)  # [B, C, num_mel_bins, num_frames] --> [B, C, num_frames, num_mel_bins]
+    residual = self.bwe_generator(mel_for_bwe)
+
+    # 4. Residual connection with resampler
+    skip = self.resampler(x)
+    waveform = torch.clamp(residual + skip, -1, 1)
+    # The one deviation from upstream: the ratio is reduced in Python, off the traced graph.
+    upsample_ratio = self.config.output_sampling_rate // self.config.input_sampling_rate
+    waveform = waveform[..., : num_samples * upsample_ratio]
+    return waveform
+
+
 # ------------------------------------------------------------------------------
 # MuseGlimmer (native transformers VLM) export patchers.
 #
