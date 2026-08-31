@@ -1183,7 +1183,15 @@ class OVCacheWithMambaStates(MambaCache):
             self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
 
         self.conv_states = conv_states
-        if self.conv_states is None:
+        if self.conv_states is None and config.model_type == "granitemoehybrid":
+            self.conv_states = []
+            intermediate_size = int(self.mamba_expand * self.hidden_size)
+            conv_dim = intermediate_size + 2 * self.mamba_ngroups * self.ssm_state_size
+            for _ in range(self.num_mamba_layers):
+                conv_state_shape = (self.max_batch_size, conv_dim, self.conv_kernel_size)
+                conv_state: torch.Tensor = torch.zeros(conv_state_shape, device=self.device, dtype=dtype)
+                self.conv_states.append(conv_state)
+        elif self.conv_states is None:
             self.conv_states = []
             for _ in range(self.num_mamba_layers):
                 if (
@@ -1207,7 +1215,18 @@ class OVCacheWithMambaStates(MambaCache):
                 self.conv_states.append(conv_state)
 
         self.ssm_states = ssm_states
-        if self.ssm_states is None:
+        if self.ssm_states is None and config.model_type == "granitemoehybrid":
+            self.ssm_states = []
+            for _ in range(self.num_mamba_layers):
+                ssm_state_shape = (
+                    self.max_batch_size,
+                    self.n_mamba_heads,
+                    self.mamba_headdim,
+                    self.ssm_state_size,
+                )
+                ssm_state: torch.Tensor = torch.zeros(ssm_state_shape, device=self.device, dtype=dtype)
+                self.ssm_states.append(ssm_state)
+        elif self.ssm_states is None:
             self.ssm_states: List[torch.Tensor] = []
             for _ in range(self.num_mamba_layers):
                 if self.n_mamba_heads and self.mamba_headdim:
@@ -1500,6 +1519,7 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         # Overwitten -- uses `cache_params` as opposed to `past_key_values`
 
         if self.use_cache:
+            # `cache_position` should have been initialized in `generate`
             if cache_position is None:
                 if is_transformers_version("<", "5.4"):
                     raise ValueError(
@@ -1507,10 +1527,11 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                         "`model.generate`, you are responsible for passing in a valid `cache_position` if "
                         "you are calling `prepare_inputs_for_generation` directly with `use_cache=True`"
                     )
-                # infer from cache_params: None means prefill (0), otherwise means decoding stage
-                cache_position = torch.tensor(
-                    [0 if cache_params is None else 1], device=input_ids.device, dtype=torch.long
-                )
+                if cache_params is None:
+                    cache_position = torch.arange(0, input_ids.shape[1], device=input_ids.device)
+                else:
+                    cache_position = torch.tensor([self._past_length], device=input_ids.device)
+
             if cache_position[0] > 0:
                 # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)
@@ -1523,7 +1544,7 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                     "qwen3_5_text",
                     "qwen3_5_moe_text",
                 ]:
-                    # LFM2, GraniteMoeHybrid (Granite-4.0), and Qwen3-Next require the attention mask
+                    # LFM2, GraniteMoeHybrid (Granite-4.0) and Qwen3-Next require the attention mask
                     # to be the length of the full context, so default mask from OVModelForCausalLM needs to be used.
                     # Other models like Mamba typically do not require an attention_mask
                     # for the decoding step after the first token so use attention mask of ones.

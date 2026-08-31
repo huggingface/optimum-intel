@@ -354,13 +354,9 @@ class OpenVINOConfigWithPast(OpenVINOConfig, ABC):
             and "attention_mask" in dummy_inputs
             and self.task == "text-generation"
         ):
-            # VLM Eagle3 draft models (e.g. MiniCPM-V-4) export with inputs_embeds instead of input_ids.
-            if "input_ids" in dummy_inputs:
-                seq_len = dummy_inputs["input_ids"].shape[1]
-            elif "inputs_embeds" in dummy_inputs:
-                seq_len = dummy_inputs["inputs_embeds"].shape[1]
-            else:
-                raise KeyError("Neither 'input_ids' nor 'inputs_embeds' found in dummy_inputs")
+            # VLM Eagle3 uses inputs_embeds instead of input_ids
+            main_input = dummy_inputs.get("input_ids", dummy_inputs.get("inputs_embeds"))
+            seq_len = main_input.shape[1]
             past_seq_len = dummy_inputs["past_key_values"][0][1].shape[-2]
             dummy_inputs["attention_mask"] = DummyInputGenerator.pad_input_on_dim(
                 dummy_inputs["attention_mask"], desired_length=past_seq_len + seq_len, dim=1

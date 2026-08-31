@@ -592,6 +592,33 @@ class DummyLLavaMultiModalProjectorInputGenerator(DummyInputGenerator):
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
 
+class DummyMistral3MultiModalProjectorInputGenerator(DummyLLavaMultiModalProjectorInputGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, random_batch_size_range, **kwargs)
+        self.spatial_merge_size = getattr(
+            normalized_config.config, "spatial_merge_size", getattr(normalized_config, "spatial_merge_size", 2)
+        )
+        self.num_merged_patches = self.num_patches // (self.spatial_merge_size**2)
+
+    def generate(
+        self,
+        input_name: str,
+        framework: str = "pt",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+    ):
+        input_dim = self.hidden_size * self.spatial_merge_size**2
+        shape = [self.num_merged_patches, input_dim]
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
 class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
     SUPPORTED_INPUT_NAMES = ["pooled_projections"]
 
@@ -896,9 +923,16 @@ class LTX2VaeDummyInputGenerator(DummyVisionInputGenerator):
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
         self.num_frames = num_frames
+        # Pixel-space properties used to shape the VAE encoder input (`sample`).
+        self.vae_in_channels = getattr(normalized_config.config, "in_channels", 3)
+        self.spatial_compression_ratio = getattr(normalized_config.config, "spatial_compression_ratio", 32)
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name in ["sample", "latent_sample"]:
+        if input_name == "sample":
+            # Pixel-space input with a single conditioning frame; num_frames=1 satisfies the temporal patchify.
+            spatial = self.spatial_compression_ratio
+            return self.random_float_tensor([self.batch_size, self.vae_in_channels, 1, spatial, spatial])
+        if input_name == "latent_sample":
             return self.random_float_tensor(
                 [self.batch_size, self.num_channels, self.num_frames, self.height, self.width]
             )
@@ -921,6 +955,8 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         "audio_coords",
         "audio_encoder_hidden_states",
         "audio_encoder_attention_mask",
+        "timestep",
+        "audio_timestep",
     )
 
     def __init__(
@@ -979,6 +1015,13 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
             return self.random_float_tensor([self.batch_size, self.encoder_seq_length, self.caption_channels])
         if input_name == "audio_encoder_attention_mask":
             return self.random_float_tensor([self.batch_size, self.encoder_seq_length])
+        if input_name == "timestep":
+            # Per-token [B, video_sequence_length]: i2v locks the first frame via the conditioning mask.
+            seq_len = self.num_frames * self.height * self.width
+            return self.random_float_tensor([self.batch_size, seq_len], framework=framework, dtype=float_dtype)
+        if input_name == "audio_timestep":
+            # Audio uses a scalar-per-batch [B] timestep (not per-token, unlike video).
+            return self.random_float_tensor([self.batch_size], framework=framework, dtype=float_dtype)
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
@@ -2153,3 +2196,230 @@ class DummyQwen3OmniMoeVisionInputGenerator(DummyQwen3VLVisionEmbedInputGenerato
             return self.random_float_tensor([seq_len, self.embed_dim], framework=framework, dtype=float_dtype)
 
         return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyQwenImageTransformerVisionInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("hidden_states",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"] // 8,
+        height: int = DEFAULT_DUMMY_SHAPES["height"] // 8,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width=width, height=height, **kwargs)
+        self.in_channels = normalized_config.config.in_channels
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "hidden_states":
+            shape = [self.batch_size, (self.height // 2) * (self.width // 2), self.in_channels]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyQwenImageTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("encoder_hidden_states", "encoder_hidden_states_mask")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.hidden_size = self.normalized_config.config.joint_attention_dim
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "encoder_hidden_states":
+            shape = [self.batch_size, self.sequence_length, self.hidden_size]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "encoder_hidden_states_mask":
+            shape = [self.batch_size, self.sequence_length]
+            return self.random_int_tensor(shape, min_value=1, max_value=2, framework=framework, dtype=int_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyQwenImageResolutionInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("height", "width")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"] // 8,
+        height: int = DEFAULT_DUMMY_SHAPES["height"] // 8,
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        # packed latent resolution (matches the packed image sequence of `hidden_states`)
+        self.packed_height = height // 2
+        self.packed_width = width // 2
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        value = self.packed_height if input_name == "height" else self.packed_width
+        return self.constant_tensor([], value=value, dtype=getattr(torch, int_dtype), framework=framework)
+
+
+class DummyMuseGlimmerVisionInputGenerator(DummyVisionInputGenerator):
+    """Dummy input for the native MuseGlimmer vision stack.
+
+    The native ``MuseGlimmerVisionModel`` consumes already-flattened patches as a
+    ``[num_patches, patch_size**2 * 3 * patch_temporal]`` tensor plus
+    ``image_grid_thw``. Every tensor the native forward derives from the grid is
+    recomputed inside the exported graph, so only these two inputs are generated.
+    """
+
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "image_grid_thw",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 1,
+        **kwargs,
+    ):
+        self.vision_config = normalized_config.config
+        cfg = self.vision_config
+        self.patch_size = cfg.patch_size
+        self.patch_temporal = cfg.patch_temporal
+        self.merge_size = cfg.merge_size
+        # A single small image: grid t=1, h=w=2*merge_size keeps it small yet
+        # valid for the patch-merge downsample.
+        self.grid_t = 1
+        self.grid_h = self.merge_size * 2
+        self.grid_w = self.merge_size * 2
+        self.patch_dim = self.patch_size * self.patch_size * 3 * self.patch_temporal
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        num_patches = self.grid_t * self.grid_h * self.grid_w
+        if input_name == "pixel_values":
+            shape = [num_patches, self.patch_dim]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "image_grid_thw":
+            grid = torch.tensor([[self.grid_t, self.grid_h, self.grid_w]], dtype=DTYPE_MAPPER.pt(int_dtype))
+            if framework != "pt":
+                return grid.numpy()
+            return grid
+        raise ValueError(f"Unsupported input name {input_name}")
+
+
+class DummyDeepseekOCR2VisionInputGenerator(DummyVisionInputGenerator):
+    def __init__(self, task, normalized_config, batch_size=1, num_channels=3, **kwargs):
+        super().__init__(
+            task, normalized_config, batch_size=batch_size, num_channels=num_channels, width=1024, height=1024
+        )
+
+
+class DummyDeepseekOCR2VisionTilesInputGenerator(DummyVisionInputGenerator):
+    def __init__(self, task, normalized_config, batch_size=1, num_channels=3, **kwargs):
+        super().__init__(
+            task, normalized_config, batch_size=batch_size, num_channels=num_channels, width=768, height=768
+        )
+
+
+class DummyZImageTransformerVisionInputGenerator(DummyUnetVisionInputGenerator):
+    """Generates dummy latent inputs for ZImageTransformer2DModel export.
+
+    Uses 64x64 latent (= 512x512 / 8) as the trace resolution.  The traced graph is
+    resolution agnostic (see ZImageTransformerModelPatcher), so this only determines
+    the shape of the example input, not the resolutions the exported model supports.
+    """
+
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "pixel_mask",
+        "sample",
+        "latent_sample",
+        "hidden_states",
+    )
+
+    # No __init__ override: DummyVisionInputGenerator already defaults to
+    # batch_size=2, num_channels=3, width=64, height=64 (= a 64x64 latent, i.e. a
+    # 512x512 image at the VAE's spatial factor of 8), and takes num_channels from
+    # the normalized config.
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "hidden_states":
+            return self.random_float_tensor(
+                [self.batch_size, self.num_channels, self.height, self.width],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyZImagePositionIdsInputGenerator(DummyInputGenerator):
+    """Generates the position-id and caption-mask inputs for ZImageTransformer2DModel.
+
+    Z-Image takes its RoPE position ids as graph inputs (as the Flux export does) so that a
+    single infer request can serve prompts of different lengths: upstream offsets the image
+    tokens past each item's caption, so in a ragged batch the image position ids differ per
+    batch item and cannot be derived from shapes inside the graph.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("encoder_attention_mask", "txt_ids", "img_ids")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        width: int = 64,
+        height: int = 64,
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        patch_size: int = 2,
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.height_tokens = height // patch_size
+        self.width_tokens = width // patch_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        from diffusers.models.transformers.transformer_z_image import SEQ_MULTI_OF
+
+        if input_name == "encoder_attention_mask":
+            # Eager additive mask: 0 keeps a token, finfo.min drops it. All-zero here means
+            # "every dummy caption token is real", which is what the tracer needs to see.
+            return torch.zeros(self.batch_size, self.sequence_length, dtype=DTYPE_MAPPER.pt(float_dtype))
+
+        if input_name == "txt_ids":
+            ids = torch.zeros(self.batch_size, self.sequence_length, 3, dtype=torch.int32)
+            # Caption positions are 1-based; 0 is reserved to mark batch padding.
+            ids[:, :, 0] = torch.arange(1, self.sequence_length + 1, dtype=torch.int32)
+            return ids
+
+        # img_ids: the (f, h, w) grid offset past the caption, zero-padded to SEQ_MULTI_OF.
+        num_tokens = self.height_tokens * self.width_tokens
+        padded = num_tokens + (-num_tokens) % SEQ_MULTI_OF
+        grid = torch.stack(
+            torch.meshgrid(
+                torch.arange(1, dtype=torch.int32),
+                torch.arange(self.height_tokens, dtype=torch.int32),
+                torch.arange(self.width_tokens, dtype=torch.int32),
+                indexing="ij",
+            ),
+            dim=-1,
+        ).reshape(-1, 3)
+        ids = torch.zeros(self.batch_size, padded, 3, dtype=torch.int32)
+        ids[:, :num_tokens] = grid
+        ids[:, :num_tokens, 0] += self.sequence_length + 1
+        return ids
+
+
+class DummyZImageCapFeatInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
+    """Generates dummy text-feature inputs for ZImageTransformer2DModel export."""
+
+    SUPPORTED_INPUT_NAMES = (
+        "decoder_input_ids",
+        "decoder_attention_mask",
+        "encoder_outputs",
+        "encoder_hidden_states",
+    )
