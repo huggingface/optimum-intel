@@ -448,6 +448,12 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "dataset": "textvqa",
         "scale_estimation": True,
     },
+    "google/gemma-4-12B-it": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "quant_method": OVQuantizationMethod.AWQ,
+    },
     "google/gemma-4-26B-A4B-it": {
         "bits": 4,
         "sym": False,
