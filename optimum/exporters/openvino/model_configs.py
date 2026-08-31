@@ -84,6 +84,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyZImageTransformerVisionInputGenerator,
     Eagle3DummyGenerator,
     Eagle3VLMDummyGenerator,
+    Eagle3VLMStandardDummyGenerator,
     FunASRDummyAudioInputGenerator,
     Gemma4DummyPastKeyValuesGenerator,
     GPTBigCodeDummyPastKeyValuesGenerator,
@@ -858,25 +859,37 @@ class LlamaOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         archs = getattr(config, "architectures", None)
         self.eagle3 = False
         self.eagle3_vlm = False
+        self.eagle3_vlm_mrope = False
         if isinstance(archs, list) and len(archs) > 0 and "eagle3" in archs[0].lower():
             self.eagle3 = True
-            # VLM Eagle3 targets a VLM model (e.g. Qwen3-VL) and requires
-            # inputs_embeds instead of input_ids and 3D MRoPE position_ids.
+            # VLM Eagle3 targets a VLM model (e.g. Qwen3-VL, MiniCPM-V-4) and requires
+            # inputs_embeds instead of input_ids.
             target_model_type = getattr(config, "target_model_type", "")
             modal_type = getattr(config, "modal_type", "")
-            if modal_type == "VLM" or target_model_type in {"qwen2_vl", "qwen3_vl"}:
+            if modal_type == "VLM" or target_model_type in {"qwen2_vl", "qwen3_vl", "minicpm_v_4", "minicpmv"}:
                 self.eagle3_vlm = True
                 # VLM Eagle3 always needs KV cache for speculative decoding,
                 # regardless of whether the task includes "-with-past".
                 self.use_past = True
                 self.use_past_in_inputs = True
-                # Eagle3VLMDummyGenerator must precede DummyTextInputGenerator
-                # so it wins for inputs_embeds and position_ids generation.
-                self.DUMMY_INPUT_GENERATOR_CLASSES = (
-                    (Eagle3VLMDummyGenerator,) + self.DUMMY_INPUT_GENERATOR_CLASSES + (Eagle3DummyGenerator,)
-                )
-                # VLM Eagle3 export uses transformers modeling APIs that changed in 5.0.
-                self.MAX_TRANSFORMERS_VERSION = "4.57.6"
+                if target_model_type in {"qwen2_vl", "qwen3_vl"}:
+                    # MRoPE VLM (Qwen-VL): 3D position_ids [3, batch, seq].
+                    self.eagle3_vlm_mrope = True
+                    # Eagle3VLMDummyGenerator must precede DummyTextInputGenerator
+                    # so it wins for inputs_embeds and position_ids generation.
+                    self.DUMMY_INPUT_GENERATOR_CLASSES = (
+                        (Eagle3VLMDummyGenerator,) + self.DUMMY_INPUT_GENERATOR_CLASSES + (Eagle3DummyGenerator,)
+                    )
+                    # VLM Eagle3 export uses transformers modeling APIs that changed in 5.0.
+                    self.MAX_TRANSFORMERS_VERSION = "4.57.6"
+                else:
+                    # Non-MRoPE VLM (MiniCPM-V-4 with LongRoPE): standard 2D position_ids [batch, seq],
+                    # produced by the base DummyTextInputGenerator. Only inputs_embeds is overridden.
+                    self.eagle3_vlm_mrope = False
+                    self.DUMMY_INPUT_GENERATOR_CLASSES = (
+                        (Eagle3VLMStandardDummyGenerator,) + self.DUMMY_INPUT_GENERATOR_CLASSES + (Eagle3DummyGenerator,)
+                    )
+                    self.MAX_TRANSFORMERS_VERSION = "4.57.6"
             else:
                 self.DUMMY_INPUT_GENERATOR_CLASSES += (Eagle3DummyGenerator,)
 
@@ -886,11 +899,14 @@ class LlamaOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         # Eagle3 model has additional conditional input
         if self.eagle3:
             common_inputs["hidden_states"] = {0: "batch_size", 1: "sequence_length", 2: "hidden_size"}
-        # VLM Eagle3 uses inputs_embeds (not input_ids) and 3D MRoPE position_ids
+        # VLM Eagle3 uses inputs_embeds (not input_ids).
+        # Qwen-VL uses 3D MRoPE position_ids; MiniCPM-V-4 uses standard 2D position_ids
+        # (already present from super().inputs).
         if self.eagle3_vlm:
             common_inputs.pop("input_ids", None)
             common_inputs["inputs_embeds"] = {0: "batch_size", 1: "sequence_length", 2: "hidden_size"}
-            common_inputs["position_ids"] = {0: "num_dims", 1: "batch_size", 2: "sequence_length"}
+            if self.eagle3_vlm_mrope:
+                common_inputs["position_ids"] = {0: "num_dims", 1: "batch_size", 2: "sequence_length"}
         return common_inputs
 
     @property

@@ -283,6 +283,35 @@ class Eagle3VLMDummyGenerator(DummyInputGenerator):
             return self.random_int_tensor(shape, max_value=self.sequence_length, framework=framework, dtype=int_dtype)
 
 
+class Eagle3VLMStandardDummyGenerator(DummyInputGenerator):
+    """
+    Dummy input generator for non-MRoPE VLM Eagle-3 speculative decoding (e.g. MiniCPM-V-4).
+
+    Produces `inputs_embeds` (float) only. Unlike Eagle3VLMDummyGenerator, it does not
+    generate `position_ids`: MiniCPM-V-4 uses LongRoPE with standard 2D position_ids,
+    which are produced by the base DummyTextInputGenerator.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("inputs_embeds",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.hidden_size = normalized_config.hidden_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "inputs_embeds":
+            shape = (self.batch_size, self.sequence_length, self.hidden_size)
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
 class QwenDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
         self,

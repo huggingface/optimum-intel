@@ -155,6 +155,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.append(
             ("text-generation-with-past", "qwen3_vl_eagle3"),
         )
+        SUPPORTED_ARCHITECTURES.append(
+            ("text-generation-with-past", "minicpm_v_4_eagle3"),
+        )
 
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
@@ -201,6 +204,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "smollm3": 2,
         "ouro": 2,
         "qwen3_vl_eagle3": 0,
+        "minicpm_v_4_eagle3": 0,
         "qwen3_vl_embedding": 2,
         "muse_glimmer": 2,
     }
@@ -856,7 +860,7 @@ class OVCLIExportTestCase(unittest.TestCase):
 
         # VLM Eagle3 exports a single causal LM (not a multi-component VLM)
         # so it must be loaded with OVModelForCausalLM rather than OVModelForVisualCausalLM.
-        if model_type == "qwen3_vl_eagle3":
+        if model_type in ("qwen3_vl_eagle3", "minicpm_v_4_eagle3"):
             model_cls_name = "OVModelForCausalLM"
         elif task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS:
             model_cls_name = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
