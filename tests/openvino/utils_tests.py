@@ -690,13 +690,13 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "gemma4": {
         "lm_model": 54,
         "text_embeddings_model": 1,
-        "vision_embeddings_model": 10,
+        "vision_embeddings_model": 10 if is_transformers_version("<", "5.10") else 11,
         "text_embeddings_per_layer_model": 1,
     },
     "gemma4_moe": {
         "lm_model": 48,
         "text_embeddings_model": 1,
-        "vision_embeddings_model": 10,
+        "vision_embeddings_model": 10 if is_transformers_version("<", "5.10") else 11,
         "text_embeddings_per_layer_model": 0,
     },
     "smollm3": {"model": 30},

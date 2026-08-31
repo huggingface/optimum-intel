@@ -1520,7 +1520,9 @@ def get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     text_encoder = getattr(pipeline, "text_encoder", None)
     if text_encoder is not None:
         text_encoder.config.output_hidden_states = True
-        text_encoder.text_model.config.output_hidden_states = True
+        # `CLIPTextTransformer` removed since transformers v5.6
+        if hasattr(text_encoder, "text_model"):
+            text_encoder.text_model.config.output_hidden_states = True
         text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
             model=text_encoder,
             exporter=exporter,
@@ -1582,7 +1584,9 @@ def get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     text_encoder_2 = getattr(pipeline, "text_encoder_2", None)
     if text_encoder_2 is not None:
         text_encoder_2.config.output_hidden_states = True
-        text_encoder_2.text_model.config.output_hidden_states = True
+        # `CLIPTextTransformer` removed since transformers v5.6
+        if hasattr(text_encoder_2, "text_model"):
+            text_encoder_2.text_model.config.output_hidden_states = True
         export_config_constructor = TasksManager.get_exporter_config_constructor(
             model=text_encoder_2,
             exporter=exporter,

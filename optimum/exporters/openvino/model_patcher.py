@@ -5326,12 +5326,6 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
 
         self.orig_forward = forward_with_precomputed_mask
 
-    def __enter__(self):
-        super().__enter__()
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-
 
 # Forward method of the language model of Gemma3n, needs to be patched to pass 'per_layer_inputs',
 # as original code fails to create per_layer_inputs without the providing of input_ids,
@@ -5414,7 +5408,7 @@ def gemma3n_language_model_forward(
     return outputs
 
 
-# Creates a dict of causal masks with bidirectional attention for vision tokens
+# Creates a dict of causal masks with bidirectional attention for vision tokens,
 # on sliding_attention layers, matching the behavior of transformers
 # create_causal_mask_mapping when use_bidirectional_attention == "vision".
 # Needs to be patched to pass proper 'sliding_mask' for prefill stage.
@@ -5466,7 +5460,9 @@ def _create_gemma4_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids,
     same_group = (query_groups.unsqueeze(2) == key_groups.unsqueeze(1)) & (key_groups.unsqueeze(1) >= 0)
     same_group = same_group.unsqueeze(1)  # [batch, 1, seq_len, total_len]
 
-    # Undo masking for same-group vision tokens in sliding mask
+    # Un-mask same-group vision tokens in both masks (bidirectional attention within an image).
+    if is_transformers_version(">=", "5.9"):
+        full_mask = full_mask.masked_fill(same_group, 0.0)
     sliding_mask = sliding_mask.masked_fill(same_group, 0.0)
 
     return {
@@ -5674,6 +5670,10 @@ def gemma4_text_attention_forward(
 ) -> tuple:
     from transformers.models.gemma4.modeling_gemma4 import apply_rotary_pos_emb as apply_rotary_pos_emb_gemma4
 
+    # since transformers >= v5.6 (PR #45788) `shared_kv_states` dict and is passed and `kv_shared_layer_index` removed
+    shared_kv_states = kwargs.pop("shared_kv_states", None)
+    legacy_shared_kv_states = hasattr(self, "kv_shared_layer_index")
+
     input_shape = hidden_states.shape[:-1]
     hidden_shape = (*input_shape, -1, self.head_dim)
 
@@ -5684,8 +5684,12 @@ def gemma4_text_attention_forward(
     query_states = apply_rotary_pos_emb_gemma4(query_states, cos, sin, unsqueeze_dim=2)
     query_states = query_states.transpose(1, 2)
 
-    if self.is_kv_shared_layer and past_key_values is not None:
-        key_states, value_states = past_key_values.shared_layers[self.kv_shared_layer_index]
+    if self.is_kv_shared_layer and (not legacy_shared_kv_states or past_key_values is not None):
+        if legacy_shared_kv_states:
+            key_states, value_states = past_key_values.shared_layers[self.kv_shared_layer_index]
+        else:
+            key_states, value_states = shared_kv_states[self.layer_type]
+
         key_states = key_states.to(query_states.device)
         value_states = value_states.to(query_states.device)
     else:
@@ -5700,18 +5704,26 @@ def gemma4_text_attention_forward(
         value_states = value_states.transpose(1, 2)
 
     if past_key_values is not None:
-        cache_kwargs = {
-            "sin": sin,
-            "cos": cos,
-            "cache_position": cache_position,
-            "sliding_window": self.sliding_window,
-        }
-        if not self.is_kv_shared_layer:
-            key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
-        if self.store_full_length_kv:
-            if not hasattr(past_key_values, "shared_layers"):
-                past_key_values.shared_layers = {}
-            past_key_values.shared_layers[self.layer_idx] = key_states, value_states
+        if legacy_shared_kv_states:
+            cache_kwargs = {
+                "sin": sin,
+                "cos": cos,
+                "cache_position": cache_position,
+                "sliding_window": self.sliding_window,
+            }
+            if not self.is_kv_shared_layer:
+                key_states, value_states = past_key_values.update(
+                    key_states, value_states, self.layer_idx, cache_kwargs
+                )
+            if self.store_full_length_kv:
+                if not hasattr(past_key_values, "shared_layers"):
+                    past_key_values.shared_layers = {}
+                past_key_values.shared_layers[self.layer_idx] = key_states, value_states
+        else:
+            if not self.is_kv_shared_layer:
+                key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx)
+            if self.store_full_length_kv and shared_kv_states is not None:
+                shared_kv_states[self.layer_type] = key_states, value_states
 
     attention_interface = gemma4_eager_attention_forward_patched
 
