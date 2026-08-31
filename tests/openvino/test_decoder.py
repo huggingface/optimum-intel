@@ -117,6 +117,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "jais",
         "baichuan2",
         "baichuan2-13b",
+        "ouro",
         # remote modeling code failing with v5
         "aquila",
         "xverse",
@@ -223,6 +224,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "falcon_mamba": 0,
         "arcee": 2,
         "smollm3": 2,
+        "ouro": 8,
         "gpt_oss": 2,
         "gpt_oss_mxfp4": 2,
         "zamba2": 1,
@@ -310,7 +312,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in (
             "xglm",
             "zamba2",
-            "granitemoehybrid",
             "llama4",
             "afmoe",
             "opt",
@@ -459,6 +460,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "internlm2",
             "jais",
             "orion",
+            "ouro",
             "xverse",
         }:
             additional_inputs = {"use_cache": False}
@@ -673,6 +675,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             return
 
         # LFM2, LFM2-MoE and GraniteMoeHybrid generate wrong output with beam search, ticket: CVS-185664
+        # Hybrid recurrent/attention models lack beam search support in OpenVINO (beam_idx not connected
+        # to the Mamba/recurrent states), see CVS-177964.
         if model_arch in ["lfm2", "lfm2_moe", "granitemoehybrid"]:
             return
 
@@ -817,6 +821,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "internlm2",
                 "jais",
                 "orion",
+                "ouro",
                 "xverse",
             }:
                 additional_inputs["use_cache"] = False
@@ -936,12 +941,22 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             ov_cache = ov_out.cache_params
             ov_past_len += cur_len
         # Transformers chunked prefill with the model-specific hybrid cache
+        cache = None
         if model_arch == "granitemoehybrid":
-            from transformers.models.granitemoehybrid.modeling_granitemoehybrid import (
-                HybridMambaAttentionDynamicCache,
-            )
+            try:
+                from transformers.models.granitemoehybrid.modeling_granitemoehybrid import (
+                    HybridMambaAttentionDynamicCache,
+                )
 
-            cache = HybridMambaAttentionDynamicCache(config=transformers_model.config, batch_size=1)
+                cache = HybridMambaAttentionDynamicCache(config=transformers_model.config, batch_size=1)
+            except ImportError:
+                # transformers>=5.5 dropped the model-specific `HybridMambaAttentionDynamicCache`.
+                # Its generic `DynamicCache` replacement does not support multi-token chunked
+                # continuation for the mamba mixer (the recurrent/conv state is only carried over
+                # when `seq_len == 1`), so a chunked reference would be incorrect. Fall back to a
+                # single full-sequence forward as the ground truth instead; OpenVINO chunked
+                # prefill is validated to match full prefill.
+                cache = None
         elif model_arch == "lfm2":
             from transformers.models.lfm2.modeling_lfm2 import Lfm2HybridConvCache
 
@@ -951,25 +966,35 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
             cache = Qwen3NextDynamicCache(config=transformers_model.config)
 
-        past_len = 0
-        for chunk_ids in chunks:
-            cur_len = chunk_ids.shape[1]
-            attn_mask = torch.ones((1, past_len + cur_len), dtype=torch.int64)
+        if cache is None:
+            # Full-sequence forward as the reference ground truth.
             with torch.no_grad():
-                tf_out = transformers_model(
-                    input_ids=chunk_ids, attention_mask=attn_mask, past_key_values=cache, use_cache=True
-                )
-            cache = tf_out.past_key_values
-            past_len += cur_len
+                tf_out = transformers_model(input_ids=full_input_ids, attention_mask=torch.ones_like(full_input_ids))
+        else:
+            past_len = 0
+            for chunk_ids in chunks:
+                cur_len = chunk_ids.shape[1]
+                attn_mask = torch.ones((1, past_len + cur_len), dtype=torch.int64)
+                with torch.no_grad():
+                    tf_out = transformers_model(
+                        input_ids=chunk_ids, attention_mask=attn_mask, past_key_values=cache, use_cache=True
+                    )
+                cache = tf_out.past_key_values
+                past_len += cur_len
+
+        # The last OV chunk only returns logits for its own tokens; compare the last
+        # (next-token) position.
+        ov_logits = ov_out.logits[:, -1]
+        tf_logits = tf_out.logits[:, -1]
 
         self.assertTrue(
             torch.allclose(
-                ov_out.logits,
-                tf_out.logits,
+                ov_logits,
+                tf_logits,
                 atol=5e-2,  # qwen3-next max diff is 0.04301672801375389
             ),
             f"Chunked prefill OV vs transformers mismatch:\n"
-            f"  max diff: {(ov_out.logits - tf_out.logits).abs().max().item()}",
+            f"  max diff: {(ov_logits - tf_logits).abs().max().item()}",
         )
 
         del transformers_model

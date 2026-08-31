@@ -1039,7 +1039,7 @@ class OVCalibrationDatasetBuilder:
                     if isinstance(item, dict)
                     else item
                 )
-                self.model(prompt, height=height, width=width)
+                self.model(prompt=prompt, height=height, width=width)
                 pbar.update(min(num_samples, len(calibration_data)) - pbar.n)
                 if len(calibration_data) >= num_samples:
                     calibration_data = calibration_data[:num_samples]
