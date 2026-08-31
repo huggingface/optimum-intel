@@ -9747,45 +9747,12 @@ class Qwen3_5MTPModule(nn.Module):
     @classmethod
     def from_pretrained_model(cls, model):
         """Create MTP module and load weights from the full Qwen3.5 model checkpoint."""
-        from huggingface_hub import hf_hub_download
-        from safetensors import safe_open
-
         config = model.config
         text_config = getattr(config, "text_config", config)
         mtp_module = cls(text_config)
 
-
-        # Load MTP-specific weights from the checkpoint
-        model_name = getattr(config, "_name_or_path", None)
-        if model_name:
-            try:
-                index_path = hf_hub_download(model_name, "model.safetensors.index.json")
-                import json
-
-                with open(index_path) as f:
-                    index = json.load(f)
-                mtp_keys = [k for k in index["weight_map"].keys() if k.startswith("mtp.")]
-                shard_files = set(index["weight_map"][k] for k in mtp_keys)
-                for shard_file in shard_files:
-                    shard_path = hf_hub_download(model_name, shard_file)
-                    with safe_open(shard_path, framework="pt") as f:
-                        for key in f.keys():
-                            if key.startswith("mtp."):
-                                param_name = key[4:]  # strip "mtp." prefix
-                                tensor = f.get_tensor(key)
-                                _set_nested_attr(mtp_module, param_name, tensor)
-            except Exception:
-                # Try single safetensors file
-                try:
-                    model_path = hf_hub_download(model_name, "model.safetensors-00001-of-00001.safetensors")
-                    with safe_open(model_path, framework="pt") as f:
-                        for key in f.keys():
-                            if key.startswith("mtp."):
-                                param_name = key[4:]
-                                tensor = f.get_tensor(key)
-                                _set_nested_attr(mtp_module, param_name, tensor)
-                except Exception:
-                    pass
+        # Load MTP-specific weights (transformers ignores 'mtp.*' keys on load).
+        _load_mtp_weights(mtp_module, model)
 
         # Override model_type so patch_stateful uses standard decoder path
         # (qwen3_5_text is in SSM_MODELS which routes to hybrid_ssm stateful logic)
@@ -9829,6 +9796,67 @@ def _set_nested_attr(module, name, tensor):
             setattr(module, param_name, nn.Parameter(tensor))
     else:
         setattr(module, param_name, nn.Parameter(tensor))
+
+
+def _load_mtp_weights(mtp_module, model):
+    """Populate an MTP head module with the ``mtp.*`` weights from the checkpoint.
+
+    The transformers modeling code lists ``mtp.*`` in ``_keys_to_ignore_on_load_unexpected``,
+    so these weights are never held on the loaded model and must be read directly from the
+    checkpoint files. Supports both a local export directory and a Hugging Face hub repo id.
+    """
+    import json
+    import os
+
+    from safetensors import safe_open
+
+    model_name = getattr(model.config, "_name_or_path", None)
+    if not model_name:
+        raise ValueError("Cannot load MTP weights: model config has no '_name_or_path'.")
+
+    is_local = os.path.isdir(model_name)
+
+    def _resolve(filename):
+        if is_local:
+            path = os.path.join(model_name, filename)
+            return path if os.path.isfile(path) else None
+        from huggingface_hub import hf_hub_download
+        from huggingface_hub.utils import EntryNotFoundError
+
+        try:
+            return hf_hub_download(model_name, filename)
+        except EntryNotFoundError:
+            return None
+
+    # Determine which safetensors file(s) hold the mtp weights.
+    shard_files = []
+    index_path = _resolve("model.safetensors.index.json")
+    if index_path is not None:
+        with open(index_path) as f:
+            index = json.load(f)
+        mtp_keys = [k for k in index["weight_map"] if k.startswith("mtp.")]
+        shard_files = sorted({index["weight_map"][k] for k in mtp_keys})
+    elif _resolve("model.safetensors") is not None:
+        shard_files = ["model.safetensors"]
+
+    loaded = 0
+    for shard in shard_files:
+        shard_path = _resolve(shard)
+        if shard_path is None:
+            continue
+        with safe_open(shard_path, framework="pt") as f:
+            for key in f.keys():
+                if key.startswith("mtp."):
+                    _set_nested_attr(mtp_module, key[4:], f.get_tensor(key))
+                    loaded += 1
+
+    if loaded == 0:
+        raise RuntimeError(
+            f"No MTP ('mtp.*') weights were loaded from '{model_name}'. The exported MTP head "
+            "would contain random weights, yielding a 0% speculative acceptance rate. Ensure the "
+            "checkpoint contains the MTP weights and is reachable as a local directory or hub repo."
+        )
+    return mtp_module
 
 
 class _MTPDynamicCache:
@@ -10098,42 +10126,12 @@ class Qwen3_5MoeMTPModule(nn.Module):
     @classmethod
     def from_pretrained_model(cls, model):
         """Create MoE MTP module and load weights from the full model checkpoint."""
-        from huggingface_hub import hf_hub_download
-        from safetensors import safe_open
-
         config = model.config
         text_config = getattr(config, "text_config", config)
         mtp_module = cls(text_config)
 
-        model_name = getattr(config, "_name_or_path", None)
-        if model_name:
-            try:
-                index_path = hf_hub_download(model_name, "model.safetensors.index.json")
-                import json
-
-                with open(index_path) as f:
-                    index = json.load(f)
-                mtp_keys = [k for k in index["weight_map"].keys() if k.startswith("mtp.")]
-                shard_files = set(index["weight_map"][k] for k in mtp_keys)
-                for shard_file in shard_files:
-                    shard_path = hf_hub_download(model_name, shard_file)
-                    with safe_open(shard_path, framework="pt") as f:
-                        for key in f.keys():
-                            if key.startswith("mtp."):
-                                param_name = key[4:]  # strip "mtp." prefix
-                                tensor = f.get_tensor(key)
-                                _set_nested_attr(mtp_module, param_name, tensor)
-            except Exception:
-                try:
-                    model_path = hf_hub_download(model_name, "model.safetensors")
-                    with safe_open(model_path, framework="pt") as f:
-                        for key in f.keys():
-                            if key.startswith("mtp."):
-                                param_name = key[4:]
-                                tensor = f.get_tensor(key)
-                                _set_nested_attr(mtp_module, param_name, tensor)
-                except Exception:
-                    pass
+        # Load MTP-specific weights (transformers ignores 'mtp.*' keys on load).
+        _load_mtp_weights(mtp_module, model)
 
         # Override model_type so patch_stateful uses standard decoder path
         mtp_module.config = copy.deepcopy(text_config)
