@@ -283,6 +283,32 @@ class Eagle3VLMDummyGenerator(DummyInputGenerator):
             return self.random_int_tensor(shape, max_value=self.sequence_length, framework=framework, dtype=int_dtype)
 
 
+class Eagle3Qwen3_5DummyGenerator(DummyInputGenerator):
+    """Dummy inputs for Qwen3.5 Eagle-3 draft models."""
+
+    SUPPORTED_INPUT_NAMES = ("inputs_embeds", "position_ids")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.hidden_size = normalized_config.hidden_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "inputs_embeds":
+            shape = (self.batch_size, self.sequence_length, self.hidden_size)
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "position_ids":
+            shape = (4, self.batch_size, self.sequence_length)
+            return self.random_int_tensor(shape, max_value=self.sequence_length, framework=framework, dtype=int_dtype)
+
+
 class QwenDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
         self,

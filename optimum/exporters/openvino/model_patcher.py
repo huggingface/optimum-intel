@@ -8400,6 +8400,59 @@ class LlamaEagle3Attention(LlamaAttention):
         self.q_proj = nn.Linear(config.hidden_size * 2, config.num_attention_heads * self.head_dim, bias=False)
         self.k_proj = nn.Linear(config.hidden_size * 2, config.num_key_value_heads * self.head_dim, bias=False)
         self.v_proj = nn.Linear(config.hidden_size * 2, config.num_key_value_heads * self.head_dim, bias=False)
+        rope_parameters = getattr(config, "rope_parameters", {}) or {}
+        self.qwen3_5 = "partial_rotary_factor" in rope_parameters
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
+        attention_mask: torch.Tensor | None = None,
+        past_key_value: Cache | None = None,
+        cache_position: torch.LongTensor | None = None,
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if past_key_value is None:
+            past_key_value = kwargs.pop("past_key_values", None)
+
+        if not self.qwen3_5:
+            cache_kwargs = (
+                {"past_key_values": past_key_value}
+                if is_transformers_version(">=", "5.0")
+                else {"past_key_value": past_key_value}
+            )
+            return super().forward(
+                hidden_states,
+                position_embeddings=position_embeddings,
+                attention_mask=attention_mask,
+                cache_position=cache_position,
+                **cache_kwargs,
+                **kwargs,
+            )
+
+        input_shape = hidden_states.shape[:-1]
+        hidden_shape = (*input_shape, -1, self.head_dim)
+        query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+        cos, sin = position_embeddings
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+        if past_key_value is not None:
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+        key_states = repeat_kv(key_states, self.num_key_value_groups)
+        value_states = repeat_kv(value_states, self.num_key_value_groups)
+        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) * self.scaling
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        attn_weights = nn.functional.dropout(attn_weights, p=0.0 if not self.training else self.attention_dropout)
+        attn_output = torch.matmul(attn_weights, value_states).transpose(1, 2).contiguous()
+        attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+        return self.o_proj(attn_output), attn_weights
 
 
 # adopted from https://github.com/huggingface/transformers/blob/v4.57.6/src/transformers/models/llama/modeling_llama.py#L268
@@ -8496,7 +8549,13 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
         # adopted from https://github.com/Tencent/AngelSlim/blob/main/angelslim/compressor/speculative/train/models/draft/llama_eagle3.py#L258
         rope_scaling = getattr(config, "rope_scaling", None) or {}
         rope_type = rope_scaling.get("rope_type") or rope_scaling.get("type")
-        if rope_type == "mrope" or rope_scaling.get("mrope_section") is not None:
+        rope_parameters = getattr(config, "rope_parameters", {}) or {}
+        self.qwen3_5 = "partial_rotary_factor" in rope_parameters
+        if self.qwen3_5:
+            from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedding
+
+            self.rotary_emb = Qwen3_5TextRotaryEmbedding(config=config)
+        elif rope_type == "mrope" or rope_scaling.get("mrope_section") is not None:
             self.rotary_emb = Qwen3VLTextRotaryEmbedding(config=config)
         else:
             self.rotary_emb = LlamaRotaryEmbedding(config=config)
@@ -8549,13 +8608,22 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
 
+        rotary_position_ids = position_ids
+        if self.qwen3_5 and position_ids.ndim == 3 and position_ids.shape[0] == 4:
+            # Qwen3.5 uses a text-position plane for the causal mask followed by
+            # the temporal, height, and width planes used by MRoPE.
+            causal_mask_position_ids = position_ids[0]
+            rotary_position_ids = position_ids[1:]
+        else:
+            causal_mask_position_ids = position_ids
+
         if is_transformers_version(">=", "5.5"):
             causal_mask = create_causal_mask(
                 config=self.config,
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
                 past_key_values=past_key_values,
-                position_ids=position_ids,
+                position_ids=causal_mask_position_ids,
             )
         else:
             causal_mask = create_causal_mask(
@@ -8564,7 +8632,7 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
                 attention_mask=attention_mask,
                 cache_position=cache_position,
                 past_key_values=past_key_values,
-                position_ids=position_ids,
+                position_ids=causal_mask_position_ids,
             )
 
         if hidden_states is None:
@@ -8580,14 +8648,14 @@ class LlamaEagle3Model(LlamaPreTrainedModel):
         if hidden_states.shape[-1] != inputs_embeds.shape[-1]:
             hidden_states = self.fc(hidden_states)
 
-        position_embeddings = self.rotary_emb(hidden_states, position_ids=position_ids)
+        position_embeddings = self.rotary_emb(hidden_states, position_ids=rotary_position_ids)
 
         hidden_states = self.midlayer(
             input_emb=inputs_embeds,
             hidden_states=hidden_states,
             attention_mask=causal_mask,
             position_embeddings=position_embeddings,
-            position_ids=position_ids,
+            position_ids=rotary_position_ids,
             past_key_values=past_key_values,
             use_cache=True,
         )

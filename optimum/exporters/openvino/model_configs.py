@@ -83,6 +83,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyZImagePositionIdsInputGenerator,
     DummyZImageTransformerVisionInputGenerator,
     Eagle3DummyGenerator,
+    Eagle3Qwen3_5DummyGenerator,
     Eagle3VLMDummyGenerator,
     FunASRDummyAudioInputGenerator,
     Gemma4DummyPastKeyValuesGenerator,
@@ -857,6 +858,7 @@ class LlamaOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         )
         archs = getattr(config, "architectures", None)
         self.eagle3 = False
+        self.eagle3_qwen3_5 = False
         self.eagle3_vlm = False
         if isinstance(archs, list) and len(archs) > 0 and "eagle3" in archs[0].lower():
             self.eagle3 = True
@@ -878,7 +880,16 @@ class LlamaOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
                 # VLM Eagle3 export uses transformers modeling APIs that changed in 5.0.
                 self.MAX_TRANSFORMERS_VERSION = "4.57.6"
             else:
-                self.DUMMY_INPUT_GENERATOR_CLASSES += (Eagle3DummyGenerator,)
+                rope_parameters = getattr(config, "rope_parameters", {}) or {}
+                self.eagle3_qwen3_5 = "partial_rotary_factor" in rope_parameters
+                if self.eagle3_qwen3_5:
+                    self.DUMMY_INPUT_GENERATOR_CLASSES = (
+                        (Eagle3Qwen3_5DummyGenerator,)
+                        + self.DUMMY_INPUT_GENERATOR_CLASSES
+                        + (Eagle3DummyGenerator,)
+                    )
+                else:
+                    self.DUMMY_INPUT_GENERATOR_CLASSES += (Eagle3DummyGenerator,)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -886,11 +897,15 @@ class LlamaOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         # Eagle3 model has additional conditional input
         if self.eagle3:
             common_inputs["hidden_states"] = {0: "batch_size", 1: "sequence_length", 2: "hidden_size"}
-        # VLM Eagle3 uses inputs_embeds (not input_ids) and 3D MRoPE position_ids
-        if self.eagle3_vlm:
+        # Qwen3.5 and VLM Eagle3 draft models consume embeddings rather than token IDs.
+        if self.eagle3_qwen3_5 or self.eagle3_vlm:
             common_inputs.pop("input_ids", None)
             common_inputs["inputs_embeds"] = {0: "batch_size", 1: "sequence_length", 2: "hidden_size"}
-            common_inputs["position_ids"] = {0: "num_dims", 1: "batch_size", 2: "sequence_length"}
+            if self.eagle3_qwen3_5:
+                # Qwen3.5 always has a text-position plane plus three MRoPE planes.
+                common_inputs["position_ids"] = {1: "batch_size", 2: "sequence_length"}
+            else:
+                common_inputs["position_ids"] = {0: "num_dims", 1: "batch_size", 2: "sequence_length"}
         return common_inputs
 
     @property
