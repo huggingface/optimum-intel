@@ -5563,20 +5563,20 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
                 raise ValueError("`input_features_mask` is required when audio inputs are provided.")
 
             inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
-            audio_features, audio_output_mask = self.audio_embeddings(
+            audio_embeds, audio_output_mask = self.audio_embeddings(
                 {"input_features": audio_input_features, "input_features_mask": audio_attention_mask}
             )
-            audio_features = (
-                torch.from_numpy(audio_features) if isinstance(audio_features, np.ndarray) else audio_features
+            audio_embeds = (
+                torch.from_numpy(audio_embeds) if isinstance(audio_embeds, np.ndarray) else audio_embeds
             )
             audio_output_mask = (
                 torch.from_numpy(audio_output_mask) if isinstance(audio_output_mask, np.ndarray) else audio_output_mask
             )
-            audio_features = audio_features[audio_output_mask.to(dtype=torch.bool)]
+            audio_embeds = audio_embeds[audio_output_mask.to(dtype=torch.bool)]
 
             special_audio_mask = (input_ids == self.config.audio_token_id).unsqueeze(-1)
             special_audio_mask = special_audio_mask.expand_as(inputs_embeds)
-            inputs_embeds = inputs_embeds.masked_scatter(special_audio_mask, audio_features.to(inputs_embeds.dtype))
+            inputs_embeds = inputs_embeds.masked_scatter(special_audio_mask, audio_embeds.to(inputs_embeds.dtype))
 
         pixel_values_videos = kwargs.get("pixel_values_videos")
         video_position_ids = kwargs.get("video_position_ids")
@@ -5827,20 +5827,20 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
                 raise ValueError("`input_features_mask` is required when audio inputs are provided.")
 
             inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
-            audio_features = self.audio_embeddings(audio_input_features)
-            audio_features = (
-                torch.from_numpy(audio_features) if isinstance(audio_features, np.ndarray) else audio_features
+            audio_embeds = self.audio_embeddings(audio_input_features)
+            audio_embeds = (
+                torch.from_numpy(audio_embeds) if isinstance(audio_embeds, np.ndarray) else audio_embeds
             )
             audio_attention_mask = (
                 torch.from_numpy(audio_attention_mask)
                 if isinstance(audio_attention_mask, np.ndarray)
                 else audio_attention_mask
             )
-            audio_features = audio_features[audio_attention_mask.to(dtype=torch.bool)]
+            audio_embeds = audio_embeds[audio_attention_mask.to(dtype=torch.bool)]
 
             special_audio_mask = (input_ids == self.config.audio_token_id).unsqueeze(-1)
             special_audio_mask = special_audio_mask.expand_as(inputs_embeds)
-            inputs_embeds = inputs_embeds.masked_scatter(special_audio_mask, audio_features.to(inputs_embeds.dtype))
+            inputs_embeds = inputs_embeds.masked_scatter(special_audio_mask, audio_embeds.to(inputs_embeds.dtype))
 
         return inputs_embeds, attention_mask, position_ids
 
