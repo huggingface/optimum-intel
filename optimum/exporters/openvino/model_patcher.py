@@ -9490,6 +9490,26 @@ def patched_gemma4_clippable_linear_forward(self, hidden_states: torch.Tensor) -
     return hidden_states
 
 
+# transformers v5.6 replaced the one-hot @ table formulation of the vision patch position
+# embeddings with two `F.embedding` lookups. The two are mathematically identical, but they
+# trace to different graphs (OneHot + MatMul + ReduceSum vs Gather), which changes the
+# exported IR. Keep the original formulation during export so IRs stay stable across
+# transformers versions.
+def patched_gemma4_position_embeddings(
+    self, pixel_position_ids: torch.Tensor, padding_positions: torch.Tensor
+) -> torch.Tensor:
+    # Expanding and permute patch positions to (batch_size, num_patches, 2, position_embedding_size) for matmul.
+    clamped_positions = pixel_position_ids.clamp(min=0)
+    one_hot = F.one_hot(clamped_positions, num_classes=self.position_embedding_size)
+    one_hot = one_hot.permute(0, 2, 1, 3).to(self.position_embedding_table)
+    # Compute positional embeddings and sum across x and y.
+    position_embeddings = one_hot @ self.position_embedding_table
+    position_embeddings = position_embeddings.sum(dim=1)
+    # Zero out embeddings for any padding patches.
+    position_embeddings = torch.where(padding_positions.unsqueeze(-1), 0.0, position_embeddings)
+    return position_embeddings
+
+
 class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
     def __init__(self, config, model, model_kwargs):
         super().__init__(config, model, model_kwargs)
@@ -9498,6 +9518,14 @@ class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
         # Get the vision encoder - it's at model.model.vision_tower.encoder
         vision_model = model.model.vision_tower if is_transformers_version(">=", "5") else model.vision_tower
         self._vision_encoder = vision_model.encoder
+
+        # Restore the pre-v5.6 patch position embedding formulation to keep the exported IR stable.
+        self._patch_embedder = getattr(vision_model, "patch_embedder", None)
+        if self._patch_embedder is not None:
+            self._orig_position_embeddings = self._patch_embedder._position_embeddings
+            self._patch_embedder._position_embeddings = types.MethodType(
+                patched_gemma4_position_embeddings, self._patch_embedder
+            )
 
         # Patch the vision encoder forward to bypass create_bidirectional_mask,
         # which is not compatible with torch.jit.trace due to dynamic masking logic.
@@ -9551,6 +9579,8 @@ class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
         from transformers.models.gemma4.modeling_gemma4 import Gemma4ClippableLinear
 
         self._vision_encoder.forward = self._orig_encoder_forward
+        if self._patch_embedder is not None:
+            self._patch_embedder._position_embeddings = self._orig_position_embeddings
         super().__exit__(exc_type, exc_value, traceback)
 
         for layer in self._vision_encoder.layers:
