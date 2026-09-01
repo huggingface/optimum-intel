@@ -1504,7 +1504,6 @@ class Gemma4UnifiedTextOpenVINOConfig(Gemma4TextOpenVINOConfig):
     # attention, optional global KV heads / head dim), so add_past_key_values is inherited.
     # It has no per-layer embeddings (PLE), so no extra inputs are required.
     MIN_TRANSFORMERS_VERSION = "5.10"
-    MAX_TRANSFORMERS_VERSION = "5.10.99"
 
 
 @register_in_tasks_manager(
@@ -5489,7 +5488,6 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in VLMConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyTextInputGenerator)
     MIN_TRANSFORMERS_VERSION = "5.10"
-    MAX_TRANSFORMERS_VERSION = "5.10.99"
 
     def __init__(
         self,
