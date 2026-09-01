@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import enum
 import logging
 from collections import OrderedDict
@@ -101,6 +102,7 @@ from optimum.exporters.openvino.input_generators import (
     OVMiniCPM3DummyPastKeyValuesGenerator,
     PooledProjectionsDummyInputGenerator,
     Qwen3_5DummyPastKeyValuesGenerator,
+    Qwen3_5MTPDummyInputGenerator,
     Qwen3ASRDummySeq2SeqPastKeyValuesGenerator,
     Qwen3NextDummyPastKeyValuesGenerator,
     QwenDummyPastKeyValuesGenerator,
@@ -7356,11 +7358,11 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
         raise Exception("Unknown Qwen3.5 behavior type.")
 
 
-class Qwen3_5MTPOpenVINOConfig(OpenVINOConfig):
+class Qwen3_5MTPOpenVINOConfig(OpenVINOConfigWithPast):
     """Export configuration for the Qwen3.5 MTP (Multi-Token Prediction) head."""
 
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    SUPPORTS_PAST = True
+    DUMMY_INPUT_GENERATOR_CLASSES = (Qwen3_5MTPDummyInputGenerator, MistralDummyPastKeyValuesGenerator)
     _MODEL_PATCHER = Qwen3_5MTPModelPatcher
 
     def __init__(
@@ -7370,15 +7372,19 @@ class Qwen3_5MTPOpenVINOConfig(OpenVINOConfig):
         float_dtype: str = "fp32",
     ):
         text_config = getattr(config, "text_config", config)
+        # The MTP head is a single decoder layer. Expose num_hidden_layers=1 to the export
+        # config so the KV-cache generator (keyed off `num_layers`) produces a single-layer cache.
+        mtp_config = copy.deepcopy(text_config)
+        mtp_config.num_hidden_layers = 1
         super().__init__(
-            text_config,
+            mtp_config,
             task="text-generation-with-past",
             int_dtype=int_dtype,
             float_dtype=float_dtype,
+            use_past=True,
+            use_past_in_inputs=True,
         )
         self._orig_config = config
-        self.use_past = True
-        self.use_past_in_inputs = True
         self._text_config = text_config
 
     @property
@@ -7404,34 +7410,14 @@ class Qwen3_5MTPOpenVINOConfig(OpenVINOConfig):
             common_outputs["present_key_values.0.value"] = {0: "batch_size", 2: "past_sequence_length + sequence_length"}
         return common_outputs
 
-    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
-        import torch
-
-        text_config = self._text_config
-        batch_size = kwargs.get("batch_size", DEFAULT_DUMMY_SHAPES["batch_size"])
-        sequence_length = kwargs.get("sequence_length", DEFAULT_DUMMY_SHAPES["sequence_length"])
-        past_sequence_length = kwargs.get("sequence_length", DEFAULT_DUMMY_SHAPES["sequence_length"])
-
-        hidden_size = text_config.hidden_size
-        num_kv_heads = text_config.num_key_value_heads
-        head_dim = text_config.head_dim
-
-        dummy_inputs = {
-            "hidden_states": torch.zeros(batch_size, sequence_length, hidden_size),
-            "inputs_embeds": torch.zeros(batch_size, sequence_length, hidden_size),
-            "attention_mask": torch.ones(batch_size, past_sequence_length + sequence_length, dtype=torch.int64),
-            "position_ids": torch.arange(sequence_length).unsqueeze(0).expand(batch_size, -1),
-        }
-        if self.use_past_in_inputs:
-            dummy_inputs["past_key_values"] = [
-                torch.zeros(batch_size, num_kv_heads, past_sequence_length, head_dim),
-                torch.zeros(batch_size, num_kv_heads, past_sequence_length, head_dim),
-            ]
-        return dummy_inputs
-
-    def patch_model_for_export(self, model, model_kwargs=None):
-        model_kwargs = model_kwargs or {}
-        return self._MODEL_PATCHER(self, model, model_kwargs)
+    def overwrite_shape_and_generate_input(self, dummy_input_gen, input_name, framework, input_shapes):
+        # The base "with past" implementation shrinks token-id inputs (input_ids/position_ids) to a
+        # single token. The MTP head is driven instead by full-sequence `hidden_states` / `inputs_embeds`,
+        # so `position_ids` must keep the same sequence length as those inputs. Generate every input at
+        # its natural length (no shrink).
+        return dummy_input_gen.generate(
+            input_name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
+        )
 
 
 class Qwen3_5MoeMTPOpenVINOConfig(Qwen3_5MTPOpenVINOConfig):

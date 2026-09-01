@@ -10465,8 +10465,12 @@ class Qwen3_5MTPModelPatcher(ModelPatcher):
             wrapped_cache = None
             past_key_values_length = 0
             if use_cache:
-                wrapped_cache = _MTPDynamicCache(past_key_values[0].to(dtype), past_key_values[1].to(dtype))
-                past_key_values_length = past_key_values[0].shape[2]
+                # past_key_values follows the standard optimum layout: a list of per-layer
+                # (key, value) tuples. The MTP head has a single decoder layer, so layer 0 holds
+                # the only (key, value) pair.
+                past_key, past_value = past_key_values[0]
+                wrapped_cache = _MTPDynamicCache(past_key.to(dtype), past_value.to(dtype))
+                past_key_values_length = past_key.shape[2]
 
             h_norm = self._model.pre_fc_norm_hidden(hidden_states)
             e_norm = self._model.pre_fc_norm_embedding(inputs_embeds)
