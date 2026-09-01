@@ -495,6 +495,10 @@ class DummyGemma4UnifiedVisionInputGenerator(DummyVisionInputGenerator):
 
 
 class DummyGemma4UnifiedAudioInputGenerator(DummyInputGenerator):
+    """Unified Gemma 4 has no separate audio encoder, so these input features are already audio embeddings;
+    the exported audio model projects them into language-model soft tokens that replace the prompt's audio tokens.
+    """
+
     SUPPORTED_INPUT_NAMES = ("input_features",)
 
     def __init__(
@@ -520,6 +524,10 @@ class DummyGemma4UnifiedAudioInputGenerator(DummyInputGenerator):
 
 
 class DummyGemma4AudioInputGenerator(DummyInputGenerator):
+    """Gemma 4 audio preprocessing converts waveforms into padded frame-level acoustic features;
+    ``input_features_mask`` marks the valid, non-padding frames in ``input_features``.
+    """
+
     SUPPORTED_INPUT_NAMES = ("input_features", "input_features_mask")
 
     def __init__(
@@ -527,6 +535,7 @@ class DummyGemma4AudioInputGenerator(DummyInputGenerator):
         task: str,
         normalized_config: NormalizedConfig,
         batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        # Roughly one second of audio at the feature extractor's 10 ms hop
         sequence_length: int = 100,
         **kwargs,
     ):
