@@ -50,9 +50,9 @@ from .utils import (
     NO_AUTO_COMPRESSION_MODELS,
     clear_class_registry,
     deduce_diffusers_dtype,
+    keep_mixed_precision_parameters,
     load_preprocessors,
     patch_qwenvl_configs,
-    restore_high_precision_parameters,
 )
 
 
@@ -574,6 +574,7 @@ def main_export(
         if dtype in [torch.float16, torch.bfloat16]:
             loading_kwargs["torch_dtype"] = dtype
             patch_16bit = True
+            keep_mixed_precision_parameters()
         if loading_kwargs.get("torch_dtype") == "auto":
             loading_kwargs["torch_dtype"] = dtype
 
@@ -613,19 +614,6 @@ def main_export(
 
         if getattr(model, "dtype", None) in [torch.float16, torch.bfloat16]:
             patch_16bit = True
-
-        if library_name == "diffusers" and patch_16bit:
-            restore_high_precision_parameters(
-                model,
-                model_name_or_path,
-                revision=revision,
-                cache_dir=cache_dir,
-                token=token,
-                local_files_only=local_files_only,
-                force_download=force_download,
-                trust_remote_code=trust_remote_code,
-                **_loading_kwargs,
-            )
 
         needs_pad_token_id = task == "text-classification" and getattr(model.config, "pad_token_id", None) is None
 
