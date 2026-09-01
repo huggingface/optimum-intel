@@ -1326,10 +1326,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "token_type_ids": kwargs.get("token_type_ids"),
                 "pixel_attention_mask": kwargs.get("pixel_attention_mask"),
                 "image_attention_mask": kwargs.get("image_attention_mask"),
-                "audio_input_features": kwargs.get("audio_input_features"),
                 "input_audio_embeds": kwargs.get("input_audio_embeds", kwargs.get("audio_input_features")),
                 "audio_embed_sizes": kwargs.get("audio_embed_sizes"),
-                "audio_attention_mask": kwargs.get("audio_attention_mask"),
                 "input_mode": kwargs.get("input_mode"),
             }
         )
@@ -5654,7 +5652,6 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
         )
         # Map mm_token_type_ids to token_type_ids for the OV language model input
         model_inputs["token_type_ids"] = mm_token_type_ids
-        model_inputs["image_position_ids"] = image_position_ids
         model_inputs["input_features"] = input_features if past_key_values is None else None
         model_inputs["input_features_mask"] = input_features_mask if past_key_values is None else None
         model_inputs["image_position_ids"] = image_position_ids if past_key_values is None else None
@@ -5906,7 +5903,6 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         # Map mm_token_type_ids (from the Gemma4Unified processor) to token_type_ids and
         # propagate the patch positions needed by the vision embedder.
         model_inputs["token_type_ids"] = mm_token_type_ids
-        model_inputs["image_position_ids"] = image_position_ids
         model_inputs["input_features"] = input_features if past_key_values is None else None
         model_inputs["input_features_mask"] = input_features_mask if past_key_values is None else None
         model_inputs["image_position_ids"] = image_position_ids if past_key_values is None else None
