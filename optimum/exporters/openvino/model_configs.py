@@ -215,6 +215,7 @@ from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_diffusers_available,
     is_diffusers_version,
+    is_openvino_version,
     is_transformers_version,
 )
 from optimum.utils.input_generators import (
@@ -274,6 +275,15 @@ COMMON_TEXT2TEXT_GENERATION_TASKS = [
 
 
 logger = logging.getLogger(__name__)
+
+
+def _warn_potential_accuracy_issue_ov_2026_1(model_type: str, min_transformers_version: Optional[str] = None):
+    # Fix CVS-185350: OpenVINO 2026.1.0 inference results mismatch
+    if not is_openvino_version(">=", "2026.1.0"):
+        return
+    if min_transformers_version is not None and not is_transformers_version(">=", min_transformers_version):
+        return
+    logger.warning(f"Model type '{model_type}' may have potential accuracy issues with OpenVINO >= 2026.1.0.")
 
 
 def init_model_configs():
@@ -2042,6 +2052,7 @@ class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+        _warn_potential_accuracy_issue_ov_2026_1(self._OV_2026_1_MODEL_TYPE, min_transformers_version="5.0")
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
@@ -3258,6 +3269,7 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == MiniCPMVConfigBehavior.RESAMPLER:
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMVResampleInputGenerator,)
         self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+        _warn_potential_accuracy_issue_ov_2026_1(self.MODEL_TYPE)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -3972,6 +3984,7 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self._normalized_config.use_embed_dim = True
+        _warn_potential_accuracy_issue_ov_2026_1("qwen3_vl", min_transformers_version="5.0")
 
     @staticmethod
     def get_model_for_behavior(model, behavior: Union[str, QwenVLConfigBehavior]):
@@ -5699,6 +5712,10 @@ class MarianOpenVINOConfig(BartOpenVINOConfig):
     _MODEL_PATCHER = OVSeq2SeqModelPatcher
     MAX_TRANSFORMERS_VERSION = "4.57.6"
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _warn_potential_accuracy_issue_ov_2026_1("marian")
+
 
 class SpeechT5ConfigBehavior(str, enum.Enum):
     ENCODER = "encoder"
@@ -5886,6 +5903,10 @@ class Llama4TextOpenVINOConfig(LlamaOpenVINOConfig):
 )
 class Llama4OpenVINOConfig(GotOCR2OpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _warn_potential_accuracy_issue_ov_2026_1("llama4")
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
