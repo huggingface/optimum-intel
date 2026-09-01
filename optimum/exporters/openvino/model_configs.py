@@ -211,6 +211,7 @@ from optimum.exporters.openvino.model_patcher import (
     ZImageTransformerModelPatcher,
     _get_model_attribute,
 )
+from optimum.exporters.openvino.utils import GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE, GRANITEMOEHYBRID_MAMBA_LAYER_TYPE
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_diffusers_available,
@@ -6167,8 +6168,8 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
             decoder_sequence_name = "past_sequence_length + sequence_length"
             cache_name_prefix = "cache_params.present"
 
-        self.num_mamba_layers = self._normalized_config.layer_types.count("mamba")
-        self.num_attention_layers = self._normalized_config.layer_types.count("attention")
+        self.num_mamba_layers = self._normalized_config.layer_types.count(GRANITEMOEHYBRID_MAMBA_LAYER_TYPE)
+        self.num_attention_layers = self._normalized_config.layer_types.count(GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE)
         for i in range(self.num_mamba_layers):
             # [batch_size, conv_kernel_size - 1, d_model]
             inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}

@@ -17,6 +17,7 @@ from typing import Optional, Tuple
 
 import torch
 
+from optimum.exporters.openvino.utils import GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE, GRANITEMOEHYBRID_MAMBA_LAYER_TYPE
 from optimum.intel.utils.import_utils import is_diffusers_version
 from optimum.utils import (
     DEFAULT_DUMMY_SHAPES,
@@ -1713,8 +1714,8 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             self.mamba_ngroups = config.mamba_n_groups
             self.mamba_headdim = config.mamba_d_head
             self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
-            self.num_attention_layers = config.layer_types.count("attention")
-            self.num_mamba_layers = config.layer_types.count("mamba")
+            self.num_attention_layers = config.layer_types.count(GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE)
+            self.num_mamba_layers = config.layer_types.count(GRANITEMOEHYBRID_MAMBA_LAYER_TYPE)
             self.num_attention_heads = config.num_key_value_heads
             self.sequence_length = 0
 

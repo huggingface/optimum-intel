@@ -56,6 +56,7 @@ from optimum.exporters.openvino.patching_utils import (
     postprocess_past_key_values,
     preprocess_past_key_values,
 )
+from optimum.exporters.openvino.utils import GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE, GRANITEMOEHYBRID_MAMBA_LAYER_TYPE
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
     is_openvino_version,
@@ -8075,10 +8076,10 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
                 mamba_idx = 0
                 attn_idx = 0
                 for i, block_type in enumerate(config.layers_block_type):
-                    if block_type == "mamba":
+                    if block_type == GRANITEMOEHYBRID_MAMBA_LAYER_TYPE:
                         self.mamba_mapping[i] = mamba_idx
                         mamba_idx += 1
-                    elif block_type == "attention":
+                    elif block_type == GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE:
                         self.attn_mapping[i] = attn_idx
                         attn_idx += 1
                 self.num_attn_layers = attn_idx
@@ -8093,6 +8094,9 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
                 if self.num_attn_layers == 0 or self.key_cache[0] is None:
                     return 0
                 return self.key_cache[0].shape[-2]
+
+            def get_query_offset(self, layer_idx: Optional[int] = 0) -> int:
+                return self.get_seq_length(layer_idx=layer_idx)
 
             def get_mask_sizes(self, query_length, layer_idx: int = 0):
                 # transformers >= 5.x passes the scalar `query_length` (int or 0-dim tensor);
@@ -8117,8 +8121,8 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             attention_mask=None,
             cache_params=None,
         ):
-            num_mamba_layers = layer_types.count("mamba")
-            num_attn_layers = layer_types.count("attention")
+            num_mamba_layers = layer_types.count(GRANITEMOEHYBRID_MAMBA_LAYER_TYPE)
+            num_attn_layers = layer_types.count(GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE)
 
             use_cache = False
             wrapped_cache_params = None
