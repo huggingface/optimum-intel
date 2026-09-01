@@ -395,15 +395,8 @@ class OVMultiModalProjector(OVVisionProjection):
 class OVAudioEmbeddings(OVModelPart):
     _model_name = "audio_embeddings"
 
-    def forward(self, *args, **kwargs):
+    def forward(self, inputs):
         self.compile()
-        if len(args) == 1 and not kwargs:
-            inputs = args[0]
-        elif args:
-            input_names = list(self.input_names.keys())
-            inputs = {input_names[index]: value for index, value in enumerate(args)}
-        else:
-            inputs = {name: value for name, value in kwargs.items() if name in self.input_names}
         result = self.request(inputs)
         if len(result) > 1:
             return result[0], result[1]
@@ -1199,6 +1192,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             input_image_embeds=input_image_embeds,
             image_attention_mask=image_attention_mask,
             input_audio_embeds=input_audio_embeds if input_audio_embeds is not None else audio_input_features,
+            audio_input_features=audio_input_features,
             audio_embed_sizes=audio_embed_sizes,
             audio_attention_mask=audio_attention_mask,
             input_mode=input_mode,
@@ -1332,8 +1326,10 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "token_type_ids": kwargs.get("token_type_ids"),
                 "pixel_attention_mask": kwargs.get("pixel_attention_mask"),
                 "image_attention_mask": kwargs.get("image_attention_mask"),
+                "audio_input_features": kwargs.get("audio_input_features"),
                 "input_audio_embeds": kwargs.get("input_audio_embeds", kwargs.get("audio_input_features")),
                 "audio_embed_sizes": kwargs.get("audio_embed_sizes"),
+                "audio_attention_mask": kwargs.get("audio_attention_mask"),
                 "input_mode": kwargs.get("input_mode"),
             }
         )
@@ -5538,7 +5534,7 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
         pixel_values=None,
         attention_mask=None,
         position_ids=None,
-        input_audio_embeds=None,
+        audio_input_features=None,
         audio_attention_mask=None,
         **kwargs,
     ):
@@ -5560,14 +5556,16 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
                     vision_token_id=self.config.image_token_id,
                     **kwargs,
                 )
-        if input_audio_embeds is not None:
+        if audio_input_features is not None:
             if self.audio_embeddings is None:
                 raise ValueError("Audio inputs were provided, but the audio embeddings model is not available.")
             if audio_attention_mask is None:
                 raise ValueError("`input_features_mask` is required when audio inputs are provided.")
 
             inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
-            audio_features, audio_output_mask = self.audio_embeddings(input_audio_embeds, audio_attention_mask)
+            audio_features, audio_output_mask = self.audio_embeddings(
+                {"input_features": audio_input_features, "input_features_mask": audio_attention_mask}
+            )
             audio_features = (
                 torch.from_numpy(audio_features) if isinstance(audio_features, np.ndarray) else audio_features
             )
@@ -5686,7 +5684,7 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
         return super().forward(
             input_ids=input_ids,
             pixel_values=pixel_values,
-            input_audio_embeds=input_features,
+            audio_input_features=input_features,
             audio_attention_mask=input_features_mask,
             token_type_ids=token_type_ids,
             **kwargs,
@@ -5776,7 +5774,14 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         return self.vision_embeddings(pixel_values, image_position_ids=image_position_ids).last_hidden_state
 
     def get_multimodal_embeddings(
-        self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, **kwargs
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        audio_input_features=None,
+        audio_attention_mask=None,
+        **kwargs,
     ):
         embeds_from_args = kwargs.pop("inputs_embeds", None)
         inputs_embeds = (
@@ -5815,6 +5820,28 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
                     image_position_ids=video_position_ids.flatten(0, 1),
                 )
 
+        if audio_input_features is not None:
+            if self.audio_embeddings is None:
+                raise ValueError("Audio inputs were provided, but the audio embeddings model is not available.")
+            if audio_attention_mask is None:
+                raise ValueError("`input_features_mask` is required when audio inputs are provided.")
+
+            inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+            audio_features = self.audio_embeddings(audio_input_features)
+            audio_features = (
+                torch.from_numpy(audio_features) if isinstance(audio_features, np.ndarray) else audio_features
+            )
+            audio_attention_mask = (
+                torch.from_numpy(audio_attention_mask)
+                if isinstance(audio_attention_mask, np.ndarray)
+                else audio_attention_mask
+            )
+            audio_features = audio_features[audio_attention_mask.to(dtype=torch.bool)]
+
+            special_audio_mask = (input_ids == self.config.audio_token_id).unsqueeze(-1)
+            special_audio_mask = special_audio_mask.expand_as(inputs_embeds)
+            inputs_embeds = inputs_embeds.masked_scatter(special_audio_mask, audio_features.to(inputs_embeds.dtype))
+
         return inputs_embeds, attention_mask, position_ids
 
     def merge_vision_text_embeddings(
@@ -5849,47 +5876,6 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         special_image_mask = special_image_mask.expand_as(inputs_embeds)
         image_features = image_features.to(inputs_embeds.dtype)
         inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
-        return inputs_embeds, attention_mask, position_ids
-
-    def get_multimodal_embeddings(
-        self,
-        input_ids,
-        pixel_values=None,
-        attention_mask=None,
-        position_ids=None,
-        input_audio_embeds=None,
-        audio_attention_mask=None,
-        **kwargs,
-    ):
-        inputs_embeds, attention_mask, position_ids = super().get_multimodal_embeddings(
-            input_ids,
-            pixel_values=pixel_values,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            **kwargs,
-        )
-        if input_audio_embeds is not None:
-            if self.audio_embeddings is None:
-                raise ValueError("Audio inputs were provided, but the audio embeddings model is not available.")
-            if audio_attention_mask is None:
-                raise ValueError("`input_features_mask` is required when audio inputs are provided.")
-
-            inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
-            audio_features = self.audio_embeddings(input_audio_embeds)
-            audio_features = (
-                torch.from_numpy(audio_features) if isinstance(audio_features, np.ndarray) else audio_features
-            )
-            audio_attention_mask = (
-                torch.from_numpy(audio_attention_mask)
-                if isinstance(audio_attention_mask, np.ndarray)
-                else audio_attention_mask
-            )
-            audio_features = audio_features[audio_attention_mask.to(dtype=torch.bool)]
-
-            special_audio_mask = (input_ids == self.config.audio_token_id).unsqueeze(-1)
-            special_audio_mask = special_audio_mask.expand_as(inputs_embeds)
-            inputs_embeds = inputs_embeds.masked_scatter(special_audio_mask, audio_features.to(inputs_embeds.dtype))
-
         return inputs_embeds, attention_mask, position_ids
 
     def prepare_inputs_for_generation(
@@ -5949,7 +5935,7 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
         return super().forward(
             input_ids=input_ids,
             pixel_values=pixel_values,
-            input_audio_embeds=input_features,
+            audio_input_features=input_features,
             audio_attention_mask=input_features_mask,
             token_type_ids=token_type_ids,
             **kwargs,
