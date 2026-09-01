@@ -99,15 +99,6 @@ class InputMode(enum.Enum):
     VISION_SPEECH = 3
 
 
-def _normalize_audio_input(audio):
-    if isinstance(audio, (list, tuple)) and len(audio) == 1:
-        audio = audio[0]
-    sampling_rate = None
-    if isinstance(audio, tuple) and len(audio) == 2:
-        audio, sampling_rate = audio
-    return audio, sampling_rate
-
-
 class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
     def __init__(
         self,
@@ -4561,7 +4552,11 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
             raise ValueError("Processor is required.")
         if video is not None:
             raise ValueError("Video input is not supported")
-        audio, sampling_rate = _normalize_audio_input(audio)
+        if isinstance(audio, (list, tuple)) and len(audio) == 1:
+            audio = audio[0]
+        sampling_rate = None
+        if isinstance(audio, tuple) and len(audio) == 2:
+            audio, sampling_rate = audio
 
         conversation = [{"role": "user", "content": [{"type": "text", "text": text}]}]
         if image is not None:
@@ -5722,13 +5717,10 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
         if video is not None:
             conversation[0]["content"].insert(0, {"type": "video"})
 
-        audio_inputs = None
-        processor_kwargs = None
+        sampling_rate = None
         if audio is not None:
-            audio, sampling_rate = _normalize_audio_input(audio)
-            audio_inputs = audio if isinstance(audio, list) else [audio]
-            conversation[0]["content"].extend({"type": "audio"} for _ in audio_inputs)
-            processor_kwargs = {"audio_kwargs": {"sampling_rate": sampling_rate}} if sampling_rate is not None else None
+            audio, sampling_rate = audio if isinstance(audio, tuple) else (audio, None)
+            conversation[0]["content"].append({"type": "audio"})
 
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
 
@@ -5737,7 +5729,15 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
         if "bos_token" in processor.tokenizer.chat_template:
             processor.tokenizer.add_bos_token = False
 
-        inputs = processor(images=image, text=text_prompt, videos=video, audios=audio_inputs, return_tensors="pt", processor_kwargs=processor_kwargs)
+        processor_kwargs = {"audio_kwargs": {"sampling_rate": sampling_rate}} if sampling_rate is not None else {}
+        inputs = processor(
+            images=image,
+            text=text_prompt,
+            videos=video,
+            audio=audio,
+            return_tensors="pt",
+            **processor_kwargs,
+        )
 
         # recover add_bos_token flag in tokenizer
         processor.tokenizer.add_bos_token = orig_add_bos_token
@@ -5967,12 +5967,8 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
     ):
         if processor is None:
             raise ValueError("Processor is required.")
-        if video is not None:
-            raise ValueError("Video input is not supported")
-        audio, sampling_rate = _normalize_audio_input(audio)
-        processor_kwargs = {"sampling_rate": sampling_rate} if sampling_rate is not None else {}
-        if audio is not None:
-            raise ValueError("Audio input is not supported")
+        audio, sampling_rate = audio if isinstance(audio, tuple) else (audio, None)
+        processor_kwargs = {"audio_kwargs": {"sampling_rate": sampling_rate}} if sampling_rate is not None else {}
 
         if getattr(tokenizer, "chat_template", None) is None:
             if image is not None:
@@ -5986,12 +5982,18 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
                 audio_token = getattr(processor, "audio_token", "<|audio|>")
                 if audio_token not in text:
                     text = f"{text}{audio_token}"
-            return processor(images=image, audio=audio, text=text, return_tensors="pt", **processor_kwargs)
             if video is not None:
                 video_token = getattr(processor, "video_token", "<|video|>")
                 if video_token not in text:
                     text = f"{video_token}{text}"
-            return processor(text=text, images=image, videos=video, return_tensors="pt")
+            return processor(
+                text=text,
+                images=image,
+                videos=video,
+                audio=audio,
+                return_tensors="pt",
+                **processor_kwargs,
+            )
 
         conversation = [
             {
@@ -6010,7 +6012,12 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
 
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
         return processor(
-            images=image, text=text_prompt, videos=video, audio=audio, return_tensors="pt", **processor_kwargs
+            images=image,
+            text=text_prompt,
+            videos=video,
+            audio=audio,
+            return_tensors="pt",
+            **processor_kwargs,
         )
 
     def _update_model_kwargs_for_generation(

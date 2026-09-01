@@ -923,11 +923,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         if model_arch in self.SUPPORT_AUDIO:
             input_audio = self._generate_random_audio_data()
             question = "Translate this audio to French"
-            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
+            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, audio=input_audio)
             compare_outputs(inputs, ov_model, transformers_model, gen_config)
 
             question = "Describe this image and translate the audio"
-            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, image=image, audio=[input_audio])
+            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, image=image, audio=input_audio)
             compare_outputs(inputs, ov_model, transformers_model, gen_config)
         del transformers_model
         del ov_model
@@ -1046,7 +1046,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         if model_arch in self.SUPPORT_AUDIO:
             input_audio = self._generate_random_audio_data()
             question = "Translate this audio to French"
-            inputs = model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
+            inputs = model.preprocess_inputs(**preprocessors, text=question, audio=input_audio)
             outputs = model.generate(**inputs, max_new_tokens=10)
             # filter out original prompt because it may contain out of tokenizer tokens e.g. in nanollava text separator = -200
             outputs = outputs[:, inputs["input_ids"].shape[1] :]
@@ -1073,7 +1073,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         if model_arch in self.SUPPORT_AUDIO_OUTPUT and model.has_talker and model_arch in self.SUPPORT_AUDIO:
             input_audio = self._generate_random_audio_data()
             question = "Repeat what you hear"
-            inputs = model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
+            inputs = model.preprocess_inputs(**preprocessors, text=question, audio=input_audio)
             text_result, audio_result = model.generate(
                 **inputs, max_new_tokens=10, return_audio=True, talker_max_new_tokens=20
             )
@@ -1153,7 +1153,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
         input_audio = self._generate_random_audio_data()
         inputs_turn2 = model.preprocess_inputs(
-            **preprocessors, text="Now listen to this audio and describe it", audio=[input_audio]
+            **preprocessors, text="Now listen to this audio and describe it", audio=input_audio
         )
         output_turn2 = model.generate(**inputs_turn2, max_new_tokens=20, do_sample=False)
 
@@ -1262,7 +1262,7 @@ class OVModelForMultimodalLMIntegrationTest(unittest.TestCase):
         model = OVModelForMultimodalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
         preprocessors = self._get_preprocessors(model_id)
         audio_data = self._generate_random_audio_data()
-        inputs = model.preprocess_inputs(text="Translate", audio=[audio_data], **preprocessors)
+        inputs = model.preprocess_inputs(text="Translate", audio=audio_data, **preprocessors)
         output = model.generate(**inputs, max_new_tokens=5)
         self.assertIsInstance(output, torch.Tensor)
         del model
