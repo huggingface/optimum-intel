@@ -471,7 +471,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "blenderbot": {"model": 70 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 72},
     "cohere2": {"model": 30},
     "gpt2": {"model": 44},
-    "granitemoehybrid": {"model": 118},
+    "granitemoehybrid": {"model": 70 if is_transformers_version(">=", "5.13") else 118},
     "wav2vec2": {"model": 34},
     "distilbert": {"model": 66},
     "t5": {
