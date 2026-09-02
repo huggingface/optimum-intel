@@ -6433,6 +6433,15 @@ class CamembertOpenVINOConfig(DistilBertOpenVINOConfig):
     pass
 
 
+@register_in_tasks_manager("modernbert", *COMMON_TEXT_TASKS)
+class ModernBertOpenVINOConfig(DistilBertOpenVINOConfig):
+    # Same input contract as DistilBert (input_ids + attention_mask, no token_type_ids --
+    # ModernBertEmbeddings never accepts one). Alternating global/local sliding-window
+    # attention and RoPE are resolved from config at trace time (not data-dependent), so no
+    # ModelPatcher is required.
+    pass
+
+
 @register_in_tasks_manager("flaubert", *COMMON_TEXT_TASKS)
 class FlaubertOpenVINOConfig(BertOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
