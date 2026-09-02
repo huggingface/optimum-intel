@@ -15,8 +15,10 @@
 import copy
 import functools
 import inspect
+import json
 import logging
 import math
+import os
 import types
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -25,6 +27,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn.functional as F
 import transformers
+from huggingface_hub import hf_hub_download
+from huggingface_hub.utils import EntryNotFoundError
+from safetensors import safe_open
 from torch import nn
 from transformers import PreTrainedModel
 from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache
@@ -10365,11 +10370,6 @@ def _load_mtp_weights(mtp_module, model):
     so these weights are never held on the loaded model and must be read directly from the
     checkpoint files. Supports both a local export directory and a Hugging Face hub repo id.
     """
-    import json
-    import os
-
-    from safetensors import safe_open
-
     model_name = getattr(model.config, "_name_or_path", None)
     if not model_name:
         raise ValueError("Cannot load MTP weights: model config has no '_name_or_path'.")
@@ -10380,9 +10380,6 @@ def _load_mtp_weights(mtp_module, model):
         if is_local:
             path = os.path.join(model_name, filename)
             return path if os.path.isfile(path) else None
-        from huggingface_hub import hf_hub_download
-        from huggingface_hub.utils import EntryNotFoundError
-
         try:
             return hf_hub_download(model_name, filename)
         except EntryNotFoundError:
