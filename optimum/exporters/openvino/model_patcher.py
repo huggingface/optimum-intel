@@ -10262,6 +10262,76 @@ class Qwen3_5VisionEmbMergerPatcher(ModelPatcher):
             block.attn.forward = block.attn._orig_forward
 
 
+def _qwen3_5_mtp_module_forward(
+    self, hidden_states, inputs_embeds, attention_mask=None, position_ids=None, past_key_values=None
+):
+    """
+    Trace-friendly forward shared by the dense and MoE Qwen3.5 MTP heads.
+
+    Everything the single MTP decoder layer needs is produced here: the input dtype is normalized,
+    the rotary position embeddings (MRoPE) and the 4D causal mask are built, and the KV cache is
+    wrapped in a minimal ``_MTPDynamicCache`` (kept instead of a transformers ``DynamicCache`` so the
+    traced graph stays free of the cache's lazy-init / ``numel`` branches). The head has one decoder
+    layer, so ``past_key_values`` is the standard optimum ``[(key, value)]`` list with a single pair.
+    """
+    dtype = self.fc.weight.dtype
+    hidden_states = hidden_states.to(dtype)
+    inputs_embeds = inputs_embeds.to(dtype)
+
+    use_cache = past_key_values is not None
+    wrapped_cache = None
+    past_key_values_length = 0
+    if use_cache:
+        past_key, past_value = past_key_values[0]
+        wrapped_cache = _MTPDynamicCache(past_key.to(dtype), past_value.to(dtype))
+        past_key_values_length = past_key.shape[2]
+
+    h_norm = self.pre_fc_norm_hidden(hidden_states)
+    e_norm = self.pre_fc_norm_embedding(inputs_embeds)
+    combined = torch.cat([e_norm, h_norm], dim=-1)
+    x = self.fc(combined)
+
+    # Compute rotary position embeddings (MRoPE: expand to 3D)
+    if position_ids.ndim == 2:
+        rope_position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)
+    else:
+        rope_position_ids = position_ids
+    position_embeddings = self.rotary_emb(x, rope_position_ids)
+
+    # Build causal 4D attention mask from 2D attention_mask
+    batch_size, seq_length = x.shape[:2]
+    total_length = seq_length + past_key_values_length
+
+    # Create causal mask using comparison (trace-friendly, no static shapes)
+    # row indices [0..seq_length-1], col indices [0..total_length-1]
+    row_idx = torch.arange(seq_length, device=x.device).unsqueeze(1) + past_key_values_length
+    col_idx = torch.arange(total_length, device=x.device).unsqueeze(0)
+    # causal: mask where col > row (future positions)
+    causal_bool = col_idx > row_idx  # [seq_length, total_length]
+    causal_mask = causal_bool.unsqueeze(0).unsqueeze(0).to(x.dtype) * torch.finfo(x.dtype).min
+
+    # Apply padding mask from attention_mask
+    if attention_mask is not None:
+        padding_mask = (1.0 - attention_mask[:, None, None, :total_length].to(x.dtype)) * torch.finfo(x.dtype).min
+        causal_mask = causal_mask + padding_mask
+
+    layer = self.layers[0]
+    x = layer(
+        x,
+        position_embeddings=position_embeddings,
+        attention_mask=causal_mask,
+        position_ids=rope_position_ids,
+        past_key_values=wrapped_cache,
+    )
+
+    x = self.norm(x)
+
+    outputs = {"last_hidden_state": x}
+    if use_cache:
+        outputs["present_key_values"] = [wrapped_cache.key_cache[0], wrapped_cache.value_cache[0]]
+    return outputs
+
+
 class Qwen3_5MTPModule(nn.Module):
     """
     Standalone PyTorch module wrapping the MTP (Multi-Token Prediction) head weights
@@ -10325,23 +10395,7 @@ class Qwen3_5MTPModule(nn.Module):
         mtp_module.config.model_type = "qwen3_5_mtp"
         return mtp_module
 
-    def forward(self, hidden_states, inputs_embeds, attention_mask=None, position_ids=None, past_key_values=None):
-        h_norm = self.pre_fc_norm_hidden(hidden_states)
-        e_norm = self.pre_fc_norm_embedding(inputs_embeds)
-        combined = torch.cat([e_norm, h_norm], dim=-1)
-        x = self.fc(combined)
-
-        layer = self.layers[0]
-        x = layer(
-            x,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_values=past_key_values,
-        )[0]
-
-        x = self.norm(x)
-
-        return x
+    forward = _qwen3_5_mtp_module_forward
 
 
 def _set_nested_attr(module, name, tensor):
@@ -10445,78 +10499,11 @@ class Qwen3_5MTPModelPatcher(ModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(config, model, model_kwargs)
-
-        def patched_forward(
-            hidden_states=None,
-            inputs_embeds=None,
-            attention_mask=None,
-            position_ids=None,
-            past_key_values=None,
-        ):
-            dtype = self._model.fc.weight.dtype
-            hidden_states = hidden_states.to(dtype)
-            inputs_embeds = inputs_embeds.to(dtype)
-
-            use_cache = past_key_values is not None
-            wrapped_cache = None
-            past_key_values_length = 0
-            if use_cache:
-                # past_key_values follows the standard optimum layout: a list of per-layer
-                # (key, value) tuples. The MTP head has a single decoder layer, so layer 0 holds
-                # the only (key, value) pair.
-                past_key, past_value = past_key_values[0]
-                wrapped_cache = _MTPDynamicCache(past_key.to(dtype), past_value.to(dtype))
-                past_key_values_length = past_key.shape[2]
-
-            h_norm = self._model.pre_fc_norm_hidden(hidden_states)
-            e_norm = self._model.pre_fc_norm_embedding(inputs_embeds)
-            combined = torch.cat([e_norm, h_norm], dim=-1)
-            x = self._model.fc(combined)
-
-            # Compute rotary position embeddings (MRoPE: expand to 3D)
-            if position_ids.ndim == 2:
-                rope_position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)
-            else:
-                rope_position_ids = position_ids
-            position_embeddings = self._model.rotary_emb(x, rope_position_ids)
-
-            # Build causal 4D attention mask from 2D attention_mask
-            batch_size, seq_length = x.shape[:2]
-            total_length = seq_length + past_key_values_length
-
-            # Create causal mask using comparison (trace-friendly, no static shapes)
-            # row indices [0..seq_length-1], col indices [0..total_length-1]
-            row_idx = torch.arange(seq_length, device=x.device).unsqueeze(1) + past_key_values_length
-            col_idx = torch.arange(total_length, device=x.device).unsqueeze(0)
-            # causal: mask where col > row (future positions)
-            causal_bool = col_idx > row_idx  # [seq_length, total_length]
-            causal_mask = causal_bool.unsqueeze(0).unsqueeze(0).to(x.dtype) * torch.finfo(x.dtype).min
-
-            # Apply padding mask from attention_mask
-            if attention_mask is not None:
-                padding_mask = (1.0 - attention_mask[:, None, None, :total_length].to(x.dtype)) * torch.finfo(
-                    x.dtype
-                ).min
-                causal_mask = causal_mask + padding_mask
-
-            layer = self._model.layers[0]
-            x = layer(
-                x,
-                position_embeddings=position_embeddings,
-                attention_mask=causal_mask,
-                position_ids=rope_position_ids,
-                past_key_values=wrapped_cache,
-            )
-
-            x = self._model.norm(x)
-
-            outputs = {"last_hidden_state": x}
-            if use_cache:
-                outputs["present_key_values"] = [wrapped_cache.key_cache[0], wrapped_cache.value_cache[0]]
-            return outputs
-
-        self.patched_forward = patched_forward
-        self.orig_forward = patched_forward
+        # The MTP forward lives on the module itself (see `_qwen3_5_mtp_module_forward`). Drive it
+        # directly and bypass the base `ModelPatcher` wrapper, whose cache pre/post-processing
+        # (legacy list -> DynamicCache) would change the traced graph.
+        self.patched_forward = self._model.forward
+        self.orig_forward = self._model.forward
 
 
 # Patched forward for MobileNetV5MultiScaleFusionAdapter (MSFA) used by the Gemma3n vision tower.
@@ -10701,23 +10688,7 @@ class Qwen3_5MoeMTPModule(nn.Module):
         mtp_module.config.model_type = "qwen3_5_mtp"
         return mtp_module
 
-    def forward(self, hidden_states, inputs_embeds, attention_mask=None, position_ids=None, past_key_values=None):
-        h_norm = self.pre_fc_norm_hidden(hidden_states)
-        e_norm = self.pre_fc_norm_embedding(inputs_embeds)
-        combined = torch.cat([e_norm, h_norm], dim=-1)
-        x = self.fc(combined)
-
-        layer = self.layers[0]
-        x = layer(
-            x,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_values=past_key_values,
-        )[0]
-
-        x = self.norm(x)
-
-        return x
+    forward = _qwen3_5_mtp_module_forward
 
 
 class Qwen3_5MoeMTPModelPatcher(Qwen3_5MTPModelPatcher):
