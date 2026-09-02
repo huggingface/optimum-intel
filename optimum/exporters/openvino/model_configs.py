@@ -39,6 +39,10 @@ from optimum.exporters.openvino.config import (
 from optimum.exporters.openvino.input_generators import (
     AquilaDummyPastKeyValuesGenerator,
     ChatGLM2DummyPastKeyValuesGenerator,
+    CohereAsrDummyAudioInputGenerator,
+    CohereAsrDummySeq2SeqDecoderTextInputGenerator,
+    CohereAsrNativeDummyAudioInputGenerator,
+    CohereAsrNativeDummySeq2SeqDecoderTextInputGenerator,
     DeciDummyPastKeyValuesGenerator,
     DummyAudioPhi4MMInputGenerator,
     DummyDeepseekOCR2VisionInputGenerator,
@@ -114,6 +118,8 @@ from optimum.exporters.openvino.model_patcher import (
     BloomModelPatcher,
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
+    CohereAsrModelPatcher,
+    CohereAsrNativeModelPatcher,
     CommonImageEmbeddingsModelPatcher,
     DBRXModelPatcher,
     DeciLMModelPatcher,
@@ -371,6 +377,15 @@ def init_model_configs():
             "transformers",
             "Qwen3OmniMoeForConditionalGeneration",
         )
+
+    TasksManager._CUSTOM_CLASSES[("pt", "cohere_asr", "automatic-speech-recognition")] = (
+        "transformers",
+        "AutoModelForSpeechSeq2Seq",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "cohere_asr", "automatic-speech-recognition-with-past")] = (
+        "transformers",
+        "AutoModelForSpeechSeq2Seq",
+    )
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
@@ -4715,6 +4730,216 @@ class FunASROpenVINOConfig(AudioToTextOpenVINOConfig):
         for i in range(self._normalized_config.decoder_num_layers):
             inputs_or_outputs[f"{name}.{i}.decoder.key"] = {0: "batch_size", 2: decoder_sequence_name}
             inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
+
+
+@register_in_tasks_manager(
+    "cohere_asr",
+    *[
+        "automatic-speech-recognition",
+        "automatic-speech-recognition-with-past",
+    ],
+    library_name="transformers",
+)
+class CohereAsrOpenVINOConfig(AudioToTextOpenVINOConfig):
+    """Picks the export config matching the Cohere ASR variant that was loaded.
+
+    The transformers native model and the Hub modeling file share the `cohere_asr` model type but
+    have nothing else in common, and only the native one carries a nested `encoder_config`."""
+
+    def __new__(cls, config: "PretrainedConfig", *args, **kwargs):
+        if cls is CohereAsrOpenVINOConfig:
+            variant = (
+                CohereAsrNativeOpenVINOConfig
+                if getattr(config, "encoder_config", None) is not None
+                else CohereAsrRemoteOpenVINOConfig
+            )
+            return super().__new__(variant)
+        return super().__new__(cls)
+
+
+class CohereAsrNativeOpenVINOConfig(CohereAsrOpenVINOConfig):
+    """Export config for the transformers native `CohereAsrForConditionalGeneration`.
+
+    The Parakeet encoder takes time major features next to a frame level mask, and returns that mask
+    subsampled because cross attention runs against the shortened states."""
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        CohereAsrNativeDummyAudioInputGenerator,
+        CohereAsrNativeDummySeq2SeqDecoderTextInputGenerator,
+        DummySeq2SeqPastKeyValuesGenerator,
+    )
+
+    _MODEL_PATCHER = CohereAsrNativeModelPatcher
+
+    NORMALIZED_CONFIG_CLASS = NormalizedSeq2SeqConfig.with_args(
+        encoder_num_layers="encoder_layers",
+        decoder_num_layers="num_hidden_layers",
+        hidden_size="hidden_size",
+        num_attention_heads="num_attention_heads",
+        decoder_num_attention_heads="num_key_value_heads",
+        feature_size="num_mel_bins",
+        # Parakeet width, kept apart from the decoder hidden size above because the encoder states
+        # are projected only once they are already inside the decoder
+        encoder_hidden_size="encoder_hidden_size",
+        allow_new=True,
+    )
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "automatic-speech-recognition",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        # The decoder settings sit on the top level config while the encoder keeps its own section,
+        # and NormalizedConfig resolves every field on the top level
+        encoder_config = config.encoder_config
+        config.encoder_layers = encoder_config.num_hidden_layers
+        config.num_mel_bins = encoder_config.num_mel_bins
+        config.encoder_hidden_size = encoder_config.hidden_size
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+            **kwargs,
+        )
+
+    def _create_dummy_input_generator_classes(self, **kwargs) -> List["DummyInputGenerator"]:
+        generators = super()._create_dummy_input_generator_classes(**kwargs)
+        if self._behavior is ConfigBehavior.DECODER:
+            # Both generators can produce an `attention_mask`, and past the encoder it has to follow
+            # the subsampled length, so the decoder side one has to be picked first
+            generators.sort(key=lambda generator: not isinstance(generator, DummySeq2SeqDecoderTextInputGenerator))
+        return generators
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {}
+        if self._behavior in {ConfigBehavior.ENCODER, ConfigBehavior.MONOLITH}:
+            # Time major, unlike the whisper style layout the shared audio config describes
+            common_inputs["input_features"] = {0: "batch_size", 1: "encoder_sequence_length", 2: "feature_size"}
+        else:
+            common_inputs["encoder_outputs"] = {0: "batch_size", 1: "encoder_sequence_length"}
+
+        common_inputs["attention_mask"] = {0: "batch_size", 1: "encoder_sequence_length"}
+
+        if self._behavior in {ConfigBehavior.DECODER, ConfigBehavior.MONOLITH}:
+            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
+            if self.use_past_in_inputs:
+                self.add_past_key_values(common_inputs, direction="inputs")
+
+        return common_inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        common_outputs = super().outputs
+        if self._behavior is ConfigBehavior.ENCODER:
+            # Subsampled by the convolutional front end, so the decoder cannot reuse the frame mask.
+            # Named apart from the encoder input of the same meaning to keep the export from
+            # disambiguating it into `attention_mask_1`
+            common_outputs["encoder_attention_mask"] = {0: "batch_size", 1: "encoder_sequence_length"}
+        return common_outputs
+
+    @property
+    def torch_to_ov_output_map(self) -> Dict[str, str]:
+        return {"attention_mask": "encoder_attention_mask"}
+
+
+class CohereAsrRemoteOpenVINOConfig(CohereAsrOpenVINOConfig):
+    """Export config for the Hub modeling file (Conformer encoder, transformer decoder).
+
+    The encoder consumes variable length features plus a `length` input, so this derives from the
+    generic audio config rather than from Whisper, whose overrides pin a static 3000 frame shape."""
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        CohereAsrDummyAudioInputGenerator,
+        CohereAsrDummySeq2SeqDecoderTextInputGenerator,
+        DummySeq2SeqPastKeyValuesGenerator,
+    )
+
+    _MODEL_PATCHER = CohereAsrModelPatcher
+
+    NORMALIZED_CONFIG_CLASS = NormalizedSeq2SeqConfig.with_args(
+        encoder_num_layers="encoder_layers",
+        decoder_num_layers="decoder_layers",
+        hidden_size="hidden_size",
+        num_attention_heads="num_attention_heads",
+        decoder_num_attention_heads="num_key_value_heads",
+        feature_size="num_mel_bins",
+        # Conformer d_model, kept apart from the decoder hidden size above because the decoder
+        # dummy inputs are sized before encoder_decoder_proj runs
+        encoder_hidden_size="d_model",
+        allow_new=True,
+    )
+
+    @staticmethod
+    def _read_field(source, field, default=None):
+        """Read `field` from a mapping or from an object, falling back to `default`"""
+        if source is None:
+            return default
+        if isinstance(source, dict):
+            return source.get(field, default)
+        return getattr(source, field, default)
+
+    @classmethod
+    def _flatten_nested_config(cls, config: "PretrainedConfig"):
+        # The checkpoint keeps encoder and decoder settings in nested NeMo style sections, while
+        # NormalizedConfig resolves every field on the top level config
+        read_field = cls._read_field
+
+        encoder_config = getattr(config, "encoder", None)
+        if encoder_config is not None:
+            config.encoder_layers = read_field(encoder_config, "n_layers")
+            config.num_mel_bins = read_field(encoder_config, "feat_in")
+            config.d_model = read_field(encoder_config, "d_model")
+
+        decoder_config = read_field(getattr(config, "transf_decoder", None), "config_dict")
+        if decoder_config is not None:
+            config.decoder_layers = read_field(decoder_config, "num_layers")
+            config.hidden_size = read_field(decoder_config, "hidden_size")
+            config.num_attention_heads = read_field(decoder_config, "num_attention_heads")
+            config.num_key_value_heads = read_field(
+                decoder_config, "num_key_value_heads", read_field(decoder_config, "num_attention_heads")
+            )
+            config.vocab_size = getattr(config, "vocab_size", None) or read_field(decoder_config, "vocab_size")
+
+        preprocessor_config = getattr(config, "preprocessor", None)
+        if getattr(config, "num_mel_bins", None) is None and preprocessor_config is not None:
+            config.num_mel_bins = read_field(preprocessor_config, "features")
+
+        if getattr(config, "decoder_start_token_id", None) is None:
+            config.decoder_start_token_id = 0
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "automatic-speech-recognition",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        self._flatten_nested_config(config)
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+            **kwargs,
+        )
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = super().inputs
+        if self._behavior in {ConfigBehavior.ENCODER, ConfigBehavior.MONOLITH}:
+            # Real frame count per sample, needed by ConvSubsampling to mask the padded tail
+            common_inputs["length"] = {0: "batch_size"}
+        return common_inputs
 
 
 @register_in_tasks_manager(

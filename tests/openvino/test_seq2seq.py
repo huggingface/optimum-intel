@@ -349,6 +349,8 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
 
 class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ("whisper",)
+    if "cohere_asr" in CONFIG_MAPPING_NAMES:
+        SUPPORTED_ARCHITECTURES += ("cohere_asr",)
     OVMODEL_CLASS = OVModelForSpeechSeq2Seq
     AUTOMODEL_CLASS = AutoModelForSpeechSeq2Seq
     TASK = "automatic-speech-recognition"
@@ -360,6 +362,18 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
         return audio_data
 
+    def test_pipeline_autodetection_registers_non_whisper_architectures(self):
+        # Without the registration the ASR pipeline falls back to its CTC branch for every non
+        # Whisper architecture and calls the model instead of generate()
+        from transformers.models.auto.modeling_auto import MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES
+
+        self.assertIn(
+            OVModelForSpeechSeq2Seq.__name__,
+            MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES.values(),
+            "OVModelForSpeechSeq2Seq must be registered so that transformers.pipeline routes "
+            "non-Whisper OpenVINO ASR architectures through generate()",
+        )
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         set_seed(SEED)
@@ -369,7 +383,11 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
             model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
         )
         ov_model_stateless = self.OVMODEL_CLASS.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, stateful=False, device=OPENVINO_DEVICE
+            model_id,
+            export=True,
+            ov_config=F32_CONFIG,
+            stateful=False,
+            device=OPENVINO_DEVICE,
         )
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
         self._check_openvino_model_attributes(ov_model_stateless, use_cache=True, stateful=False)
@@ -377,7 +395,10 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         processor = AutoProcessor.from_pretrained(model_id)
         data = self._generate_random_audio_data()
         pt_features = processor.feature_extractor(data, return_tensors="pt")
-        decoder_start_token_id = transformers_model.config.decoder_start_token_id
+        # Only describes how the batch was split for long audio, and the models take neither it nor
+        # any other argument the feature extractor is free to add
+        pt_features.pop("audio_chunk_index", None)
+        decoder_start_token_id = getattr(transformers_model.config, "decoder_start_token_id", None) or 0
         decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
 
         with torch.no_grad():
@@ -385,6 +406,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
         for input_type in ["pt", "np"]:
             features = processor.feature_extractor(data, return_tensors=input_type)
+            features.pop("audio_chunk_index", None)
 
             if input_type == "np":
                 decoder_inputs = {"decoder_input_ids": np.ones((1, 1), dtype=np.int64) * decoder_start_token_id}
