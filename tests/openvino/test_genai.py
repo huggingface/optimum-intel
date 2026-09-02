@@ -47,6 +47,7 @@ from utils_tests import (
     EAGLE3_VLM_MODELS,
     F32_CONFIG,
     MODEL_NAMES,
+    MTP_VLM_MODELS,
     OPENVINO_DEVICE,
     REMOTE_CODE_MODELS,
     TEST_IMAGE_URL,
@@ -601,6 +602,12 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
             (model_arch, model_pair, "DFlash", "2026.4", "text-generation-with-past")
             for model_arch, model_pair in DFLASH_VLM_MODELS.items()
         ]
+        + [
+            # The MTP head is exported inside the model, so the draft is the same
+            # image-text-to-text export as the target.
+            (model_arch, model_pair, "MTP", "2026.4", "image-text-to-text")
+            for model_arch, model_pair in MTP_VLM_MODELS.items()
+        ]
     )
 
     @parameterized.expand(SPECULATIVE_DECODING_MODELS)
@@ -716,11 +723,19 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         inputs = {"videos": [ov.Tensor(rng.integers(0, 256, size=(5, 32, 32, 3), dtype=np.uint8))]}
         question = "Why is this video funny?"
 
+        # Qwen3.5 is a linear-attention model; both DFlash and MTP verifier speculative decoding
+        # require prefix caching to be disabled.
         speculative_pipeline_kwargs = dict(TEST_CONFIG)
-        if speculative_decoding_type == "DFlash":
+        if speculative_decoding_type in ("DFlash", "MTP"):
             scheduler_config = SchedulerConfig()
             scheduler_config.enable_prefix_caching = False
             speculative_pipeline_kwargs["scheduler_config"] = scheduler_config
+
+        # MTP speculative decoding requires the number of tokens proposed by the draft (the
+        # Multi-Token Prediction head) to be set explicitly.
+        speculative_gen_kwargs = dict(self.GEN_KWARGS)
+        if speculative_decoding_type == "MTP":
+            speculative_gen_kwargs["num_assistant_tokens"] = 1
 
         # Phase 1: generate with speculative decoding
         ov_draft_model = draft_model(draft_model_path, "CPU")
@@ -733,7 +748,7 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         genai_speculative_output = ov_speculative_pipe.generate(
             prompt=question,
             **inputs,
-            **self.GEN_KWARGS,
+            **speculative_gen_kwargs,
         ).texts[0]
         del ov_speculative_pipe
         del ov_draft_model
@@ -741,7 +756,7 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
 
         # Phase 2: generate without speculative decoding
         baseline_pipeline_kwargs = dict(TEST_CONFIG)
-        if speculative_decoding_type == "DFlash":
+        if speculative_decoding_type in ("DFlash", "MTP"):
             scheduler_config = SchedulerConfig()
             scheduler_config.enable_prefix_caching = False
             baseline_pipeline_kwargs["scheduler_config"] = scheduler_config
