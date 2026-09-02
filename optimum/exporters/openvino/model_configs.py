@@ -225,7 +225,6 @@ from optimum.intel.utils.import_utils import (
     is_openvino_version,
     is_transformers_version,
 )
-from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
     ASTDummyAudioInputGenerator,
     BartDummyTextInputGenerator,
@@ -7237,7 +7236,9 @@ class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
     library_name="transformers",
 )
 class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
-    SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior if model_type != QwenVLConfigBehavior.MTP]
+    SUPPORTED_BEHAVIORS = [
+        model_type.value for model_type in QwenVLConfigBehavior if model_type != QwenVLConfigBehavior.MTP
+    ]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
     MIN_TRANSFORMERS_VERSION = "5.2.0"
     MAX_TRANSFORMERS_VERSION = "5.2.99"
@@ -7407,7 +7408,10 @@ class Qwen3_5MTPOpenVINOConfig(OpenVINOConfigWithPast):
         common_outputs = OrderedDict({"last_hidden_state": {0: "batch_size", 1: "sequence_length"}})
         if self.use_past:
             common_outputs["present_key_values.0.key"] = {0: "batch_size", 2: "past_sequence_length + sequence_length"}
-            common_outputs["present_key_values.0.value"] = {0: "batch_size", 2: "past_sequence_length + sequence_length"}
+            common_outputs["present_key_values.0.value"] = {
+                0: "batch_size",
+                2: "past_sequence_length + sequence_length",
+            }
         return common_outputs
 
     def overwrite_shape_and_generate_input(self, dummy_input_gen, input_name, framework, input_shapes):

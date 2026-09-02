@@ -10058,7 +10058,6 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
             self._text_model = self._model.model
             self._text_config = self._model.model.config
 
-
         class Qwen3_5DynamicCacheWrap(Qwen3_5DynamicCache):
             def __init__(self, config, conv_states, recurrent_states, key_cache, value_cache):
                 # Call parent constructor with all required arguments
@@ -10498,7 +10497,9 @@ class Qwen3_5MTPModelPatcher(ModelPatcher):
 
             # Apply padding mask from attention_mask
             if attention_mask is not None:
-                padding_mask = (1.0 - attention_mask[:, None, None, :total_length].to(x.dtype)) * torch.finfo(x.dtype).min
+                padding_mask = (1.0 - attention_mask[:, None, None, :total_length].to(x.dtype)) * torch.finfo(
+                    x.dtype
+                ).min
                 causal_mask = causal_mask + padding_mask
 
             layer = self._model.layers[0]
