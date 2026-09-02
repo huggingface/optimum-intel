@@ -3801,8 +3801,12 @@ class QwenVLConfigBehavior(str, enum.Enum):
 
 @register_in_tasks_manager("qwen2_vl", *["image-text-to-text"], library_name="transformers")
 class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
+    # `mtp` is a Qwen3.5-only behavior; exclude it here so it does not leak into qwen2_vl /
+    # qwen2_5_vl (which inherit this list) and try to export a non-existent MTP submodel.
     SUPPORTED_BEHAVIORS = [
-        model_type.value for model_type in QwenVLConfigBehavior if model_type.value != "vision_embeddings_pos"
+        model_type.value
+        for model_type in QwenVLConfigBehavior
+        if model_type.value not in ("vision_embeddings_pos", "mtp")
     ]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLVisionEmbedInputGenerator,)
@@ -3972,7 +3976,9 @@ class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
     library_name="transformers",
 )
 class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
-    SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior]
+    # `mtp` is a Qwen3.5-only behavior (Qwen3.5 re-adds it conditionally); keep it out of the
+    # generic qwen3_vl behavior list so it does not try to export a non-existent MTP submodel.
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior if model_type.value != "mtp"]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
 
     def __init__(
