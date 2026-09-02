@@ -600,6 +600,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5",
         "qwen3_5_mtp",
         "qwen3_5_moe",
+        "qwen3_5_moe_mtp",
         "qwen3_omni_moe",
         "mistral3",
         "muse_glimmer",
@@ -676,6 +677,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "qwen3_5",
             "qwen3_5_mtp",
             "qwen3_5_moe",
+            "qwen3_5_moe_mtp",
             "gemma4_unified",
             "muse_glimmer",
         ]:

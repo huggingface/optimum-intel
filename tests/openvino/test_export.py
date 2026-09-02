@@ -123,6 +123,7 @@ class ExportModelTest(unittest.TestCase):
         "qwen3_5": OVModelForVisualCausalLM,
         "qwen3_5_mtp": OVModelForVisualCausalLM,
         "qwen3_5_moe": OVModelForVisualCausalLM,
+        "qwen3_5_moe_mtp": OVModelForVisualCausalLM,
         "gemma4_unified": OVModelForVisualCausalLM,
         "gemma3n": OVModelForVisualCausalLM,
         "mistral3": OVModelForVisualCausalLM,
@@ -235,7 +236,7 @@ class ExportModelTest(unittest.TestCase):
 
                 # Models with a Multi-Token Prediction head export it as a separate submodel;
                 # make sure the openvino_mtp_model.xml file is actually produced.
-                if model_type == "qwen3_5_mtp":
+                if model_type in ("qwen3_5_mtp", "qwen3_5_moe_mtp"):
                     self.assertTrue(
                         (Path(tmpdirname) / "openvino_mtp_model.xml").is_file(),
                         "openvino_mtp_model.xml was not created during export",

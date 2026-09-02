@@ -361,6 +361,7 @@ HUB_MODEL_NAMES = {
     "qwen3_5_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-mtp",
     "qwen3_5_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-dflash",
     "qwen3_5_moe": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
+    "qwen3_5_moe_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-mtp",
     "qwen3_5_moe_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-dflash",
     "qwen3_asr": "optimum-intel-internal-testing/tiny-random-qwen3-asr",
     "qwen3_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
@@ -471,6 +472,7 @@ EAGLE3_VLM_MODELS = {
 # (openvino_mtp_model.xml), so the draft and target are the same model directory.
 MTP_VLM_MODELS = {
     "qwen3_5_mtp": ("qwen3_5_mtp", "qwen3_5_mtp"),
+    "qwen3_5_moe_mtp": ("qwen3_5_moe_mtp", "qwen3_5_moe_mtp"),
 }
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
@@ -639,6 +641,14 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 1,
         "vision_embeddings_merger_model": 10,
         "vision_embeddings_pos_model": 1,
+    },
+    "qwen3_5_moe_mtp": {
+        "lm_model": 110,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 10,
+        "vision_embeddings_pos_model": 1,
+        "mtp_model": 28,
     },
     "qwen3_omni_moe": {
         "lm_model": 34,
@@ -949,6 +959,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "qwen3_5_dflash": "qwen3",
     "qwen3_5_moe_dflash": "qwen3",
     "qwen3_5_mtp": "qwen3_5",
+    "qwen3_5_moe_mtp": "qwen3_5_moe",
     "qwen3_dflash": "qwen3",
     "qwen3_eagle3": "llama",
     "qwen3_eagle3_target": "qwen3",
