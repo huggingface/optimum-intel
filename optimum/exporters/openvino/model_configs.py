@@ -7273,7 +7273,16 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
 
         # Conditionally add MTP behavior if model has MTP layers
         text_config = getattr(config, "text_config", config)
-        if getattr(text_config, "mtp_num_hidden_layers", 0) > 0:
+        mtp_num_hidden_layers = getattr(text_config, "mtp_num_hidden_layers", 0)
+        if mtp_num_hidden_layers > 0:
+            # The MTP head is exported as a single decoder layer (see Qwen3_5MTPModule /
+            # Qwen3_5MoeMTPModule); every supported checkpoint has mtp_num_hidden_layers == 1. Fail
+            # loudly rather than silently exporting only the first layer.
+            if mtp_num_hidden_layers != 1:
+                raise NotImplementedError(
+                    "MTP export currently supports a single decoder layer, but "
+                    f"mtp_num_hidden_layers={mtp_num_hidden_layers}."
+                )
             if QwenVLConfigBehavior.MTP.value not in self.SUPPORTED_BEHAVIORS:
                 self.SUPPORTED_BEHAVIORS = self.SUPPORTED_BEHAVIORS + [QwenVLConfigBehavior.MTP.value]
 
