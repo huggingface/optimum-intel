@@ -150,6 +150,8 @@ _HEAD_TO_AUTOMODELS = {
     "ltx-video": "OVLTXPipeline",
     "ltx2": "OVLTX2Pipeline",
     "z-image": "OVZImagePipeline",
+    "text-to-video": "OVPipelineForText2Video",
+    "image-to-video": "OVPipelineForImage2Video",
     "text-to-audio": "OVModelForTextToSpeechSeq2Seq",
 }
 

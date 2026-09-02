@@ -11187,8 +11187,15 @@ def _ltx2_text_encoder_final_norm(model):
 class LTX2TextEncoderPatcher(ModelPatcher):
     """
     Export patcher for the text encoder. Forces output_hidden_states, builds an explicit
-    causal mask (the connectors consume every hidden-state layer), and returns a flat dict so
-    each `hidden_states.{i}` becomes a named export output.
+    causal mask (the connectors consume every hidden-state layer), and returns the layers already
+    packed the way the connectors want them, as a single `prompt_embeds` output.
+
+    The packing is `LTX2Pipeline._get_gemma_prompt_embeds`'s `stack(dim=-1).flatten(2, 3)`, which is
+    exactly the connectors' `text_encoder_hidden_states` contract — they undo the flatten as their
+    first step. Emitting the layers separately instead would make the plugin write one output per
+    layer only for the pipeline to interleave them again on the host: 735 MiB copied in 627 ms per
+    encode for LTX-2.3 at the default sequence length of 1024, twice per generation under CFG. Doing
+    it in the graph is the same data movement, once, inside the plugin.
 
     transformers collects `hidden_states` with forward hooks on the decoder layers, so the last
     entry is the layer output *before* the text tower's final norm; the post-norm value is
@@ -11236,10 +11243,7 @@ class LTX2TextEncoderPatcher(ModelPatcher):
             if post_norm is not None:
                 hidden_states[-1] = post_norm
 
-            result = {"last_hidden_state": hidden_states[-1]}
-            for i, hs in enumerate(hidden_states):
-                result[f"hidden_states.{i}"] = hs
-            return result
+            return {"prompt_embeds": torch.stack(hidden_states, dim=-1).flatten(2, 3)}
 
         self.patched_forward = patched_forward
 

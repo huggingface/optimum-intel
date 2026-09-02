@@ -2767,11 +2767,11 @@ class Gemma3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        outputs = {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
-        num_layers = getattr(self._normalized_config, "num_hidden_layers", 48)
-        for i in range(num_layers + 1):
-            outputs[f"hidden_states.{i}"] = {0: "batch_size", 1: "sequence_length"}
-        return outputs
+        # `LTX2TextEncoderPatcher` returns the hidden states already stacked and flattened into the
+        # connectors' `text_encoder_hidden_states` layout, so there is a single output and the layer
+        # count does not appear here. The last dimension is `(num_layers + 1) * hidden_size`, left
+        # dynamic because the export declares no static shape for it.
+        return {"prompt_embeds": {0: "batch_size", 1: "sequence_length"}}
 
 
 @register_in_tasks_manager("sana-transformer", *["semantic-segmentation"], library_name="diffusers")

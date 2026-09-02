@@ -63,6 +63,8 @@ from optimum.intel import (  # noqa
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelOpenCLIPText,
     OVModelOpenCLIPVisual,
+    OVPipelineForImage2Video,
+    OVPipelineForText2Video,
     OVSanaPipeline,
     OVSentenceTransformer,
     OVStableDiffusion3Pipeline,
@@ -1132,6 +1134,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
                 del expected_int8["decoder_with_past"]
+            if task == "text-to-video" and model_type.startswith("ltx2"):
+                # Only the LTX-2 image-to-video pipeline loads a VAE encoder, to encode the input image.
+                del expected_int8["vae_encoder"]
             check_compression_state_per_model(self, model.ov_models, expected_int8)
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)

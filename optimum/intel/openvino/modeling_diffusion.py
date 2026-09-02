@@ -1274,12 +1274,6 @@ class OVModelTextEncoder(OVPipelinePart):
         ):
             hidden_states = [torch.from_numpy(ov_outputs[out_name]) for out_name in self.hidden_states_output_names]
             model_outputs["hidden_states"] = hidden_states
-        elif (
-            output_hidden_states or getattr(self.config, "output_hidden_states", False)
-        ) and "last_hidden_state" in model_outputs:
-            # For models like LTX2 where config.output_hidden_states is True but the exported model
-            # only has last_hidden_state, provide it as hidden_states for compatibility
-            model_outputs["hidden_states"] = (model_outputs["last_hidden_state"],)
 
         if return_dict:
             return model_outputs
@@ -2267,9 +2261,6 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
             if text_encoder is not None
             else None
         )
-        # LTX2 requires text encoder to output hidden states for use in connectors
-        if self.text_encoder is not None:
-            self.text_encoder.config.output_hidden_states = True
         if not isinstance(connectors, openvino.Model):
             connectors = None
         self.connectors = (
@@ -2435,6 +2426,56 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
                         shapes[inputs][i] = -1
                 ov_model_attr.model.reshape(shapes)
         self.clear_requests()
+
+    def _get_gemma_prompt_embeds(
+        self,
+        prompt: Union[str, List[str]],
+        num_videos_per_prompt: int = 1,
+        max_sequence_length: int = 1024,
+        scale_factor: int = 8,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
+    ):
+        # Mirror `LTX2Pipeline._get_gemma_prompt_embeds`, but read the packed prompt embeddings
+        # straight from the text encoder: `LTX2TextEncoderPatcher` moves the reference
+        # implementation's `stack(dim=-1).flatten(2, 3)` into the exported graph, where it is the
+        # connectors' `text_encoder_hidden_states` layout already. On the host that copy is 735 MiB
+        # per encode for LTX-2.3 at the default sequence length, twice per generation under CFG.
+        device = device or self._execution_device
+        dtype = dtype or self.text_encoder.dtype
+
+        prompt = [prompt] if isinstance(prompt, str) else prompt
+        batch_size = len(prompt)
+
+        if getattr(self, "tokenizer", None) is not None:
+            # Gemma expects left padding for chat-style prompts
+            self.tokenizer.padding_side = "left"
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        text_inputs = self.tokenizer(
+            [p.strip() for p in prompt],
+            padding="max_length",
+            max_length=max_sequence_length,
+            truncation=True,
+            add_special_tokens=True,
+            return_tensors="pt",
+        )
+        text_input_ids = text_inputs.input_ids.to(device)
+        prompt_attention_mask = text_inputs.attention_mask.to(device)
+
+        outputs = self.text_encoder(input_ids=text_input_ids, attention_mask=prompt_attention_mask)
+        prompt_embeds = outputs.prompt_embeds.to(dtype=dtype)
+
+        # duplicate text embeddings for each generation per prompt, using mps friendly method
+        _, seq_len, _ = prompt_embeds.shape
+        prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
+        prompt_embeds = prompt_embeds.view(batch_size * num_videos_per_prompt, seq_len, -1)
+
+        prompt_attention_mask = prompt_attention_mask.view(batch_size, -1)
+        prompt_attention_mask = prompt_attention_mask.repeat(num_videos_per_prompt, 1)
+
+        return prompt_embeds, prompt_attention_mask
 
 
 class OVLTX2Pipeline(_OVLTX2Base, LTX2Pipeline):
