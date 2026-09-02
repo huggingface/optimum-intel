@@ -596,6 +596,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "gemma4",
         "gemma4_moe",
         "gemma4_unified",
+        "gemma4_unified-it",
         "gemma3n",
         "qwen3_5",
         "qwen3_5_moe",
@@ -614,8 +615,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "gemma4",
         "gemma4_moe",
         "gemma4_unified",
+        "gemma4_unified-it",
     ]
-    SUPPORT_AUDIO = ["gemma4", "gemma4_unified", "qwen3_omni_moe"]
+    SUPPORT_AUDIO = ["gemma4", "gemma4_unified-it", "qwen3_omni_moe"]
     # "llama" is registered for image-text-to-text
     # to support VLM Eagle3 draft models (tested separately in test_genai.py).
     UNSUPPORTED_ARCHITECTURES = {"phi4_multimodal", "llama"}
@@ -675,6 +677,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "qwen3_5",
             "qwen3_5_moe",
             "gemma4_unified",
+            "gemma4_unified-it",
             "muse_glimmer",
         ]:
             from transformers import AutoModelForImageTextToText
@@ -909,7 +912,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             )
             num_frames = 2
             # Gemma4 requires 32 frames for video input without providing video metadata
-            if model_arch in ["gemma4", "gemma4_moe", "gemma4_unified"]:
+            if model_arch in ["gemma4", "gemma4_moe", "gemma4_unified", "gemma4_unified-it"]:
                 num_frames = 32
             input_video, _ = load_video(video_path, num_frames=num_frames, backend="opencv")
             question = "Why is this video funny?"
@@ -1032,7 +1035,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 )
                 num_frames = 2
                 # Gemma4 requires 32 frames for video input without providing video metadata
-                if model_arch in ["gemma4", "gemma4_moe", "gemma4_unified"]:
+                if model_arch in ["gemma4", "gemma4_moe", "gemma4_unified", "gemma4_unified-it"]:
                     num_frames = 32
                 input_video, _ = load_video(video_path, num_frames=num_frames, backend="opencv")
                 question = "Why is this video funny?"
