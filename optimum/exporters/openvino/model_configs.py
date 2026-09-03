@@ -3984,7 +3984,6 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self._normalized_config.use_embed_dim = True
-        _warn_potential_accuracy_issue_ov_2026_1("qwen3_vl", min_transformers_version="5.0")
 
     @staticmethod
     def get_model_for_behavior(model, behavior: Union[str, QwenVLConfigBehavior]):
