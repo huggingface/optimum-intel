@@ -5712,10 +5712,6 @@ class MarianOpenVINOConfig(BartOpenVINOConfig):
     _MODEL_PATCHER = OVSeq2SeqModelPatcher
     MAX_TRANSFORMERS_VERSION = "4.57.6"
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _warn_potential_accuracy_issue_ov_2026_1("marian")
-
 
 class SpeechT5ConfigBehavior(str, enum.Enum):
     ENCODER = "encoder"
@@ -5903,10 +5899,6 @@ class Llama4TextOpenVINOConfig(LlamaOpenVINOConfig):
 )
 class Llama4OpenVINOConfig(GotOCR2OpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _warn_potential_accuracy_issue_ov_2026_1("llama4")
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
