@@ -1274,7 +1274,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         )
         self.assertEqual(ov_model.request.get_property("INFERENCE_PRECISION_HINT").to_string(), "f32")
         self.assertIsInstance(ov_model.config, PretrainedConfig)
-        timm_model = timm.create_model(model_id, pretrained=True)
+        timm_model = timm.create_model(f"hf-hub:{model_id}", pretrained=True)
         preprocessor = TimmImageProcessor.from_pretrained(model_id)
         url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
