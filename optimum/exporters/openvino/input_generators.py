@@ -2047,6 +2047,43 @@ class Qwen3_5MTPDummyInputGenerator(DummyTextInputGenerator):
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
+class DFlash2SelectorDummyInputGenerator(DummyInputGenerator):
+    """
+    Dummy input generator for the DFlash 2 candidate selector.
+
+    The selector scores the target lm_head's `logits` for the `block_size - 1` drafted positions
+    against the draft's `last_hidden_state`, walking forward from `anchor_ids` (the block's seed
+    token). The drafted-token axis is fixed by `dflash_config["block_size"]` rather than by the
+    generic `sequence_length` shape, because the selector's walk is unrolled at trace time.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("last_hidden_state", "logits", "anchor_ids")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        **kwargs,
+    ):
+        self.batch_size = batch_size
+        self.hidden_size = normalized_config.hidden_size
+        self.vocab_size = normalized_config.vocab_size
+        dflash_config = getattr(normalized_config.config, "dflash_config", {}) or {}
+        self.num_drafted_tokens = int(dflash_config["block_size"]) - 1
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "last_hidden_state":
+            shape = (self.batch_size, self.num_drafted_tokens, self.hidden_size)
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "logits":
+            shape = (self.batch_size, self.num_drafted_tokens, self.vocab_size)
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        return self.random_int_tensor(
+            (self.batch_size,), max_value=self.vocab_size, framework=framework, dtype=int_dtype
+        )
+
+
 class DummyKokoroInputGenerator(DummyInputGenerator):
     """Generates dummy inputs for the Kokoro TTS model."""
 

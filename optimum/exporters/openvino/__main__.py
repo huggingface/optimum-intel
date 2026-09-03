@@ -220,6 +220,7 @@ _CUSTOM_DRAFT_MODEL_MAP = {
     "LlamaForCausalLMEagle3": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
     "Eagle3LlamaForCausalLM": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
     "DFlashDraftModel": ("Qwen3DFlashDraftModel", "Qwen3DFlashForCausalLM"),
+    "DFlash2DraftModel": ("Qwen3DFlash2DraftModel", "Qwen3DFlash2ForCausalLM"),
 }
 
 

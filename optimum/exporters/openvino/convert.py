@@ -85,6 +85,9 @@ from .utils_annotations import add_hidden_states_rt_info
 
 logger = logging.getLogger(__name__)
 
+# Submodel key of the DFlash 2 candidate selector; exported as openvino_<key>.xml.
+DFLASH2_SELECTOR_NAME = "dflash2_selector_model"
+
 if is_torch_available():
     import torch.nn as nn
     from transformers.modeling_utils import PreTrainedModel
@@ -938,7 +941,9 @@ def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig") -> 
     Add DFlash metadata to DFlash draft model.
 
     Marks model as DFlash draft model and adds DFlash configuration to the model including
-    mask token id and target layer ids.
+    mask token id and target layer ids. For DFlash 2 the block geometry and the candidate
+    selector's top-k are recorded as well, since a runtime needs both to drive the separately
+    exported selector model.
     """
     try:
         model.set_rt_info("True", ["dflash_mode"])
@@ -947,6 +952,12 @@ def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig") -> 
             model.set_rt_info(str(dflash_config["mask_token_id"]), ["dflash", "mask_token_id"])
         if "target_layer_ids" in dflash_config:
             model.set_rt_info(",".join(map(str, dflash_config["target_layer_ids"])), ["dflash", "target_layer_ids"])
+        archs = getattr(hf_config, "architectures", None) or []
+        if archs and archs[0] == "DFlash2DraftModel":
+            model.set_rt_info("2", ["dflash", "version"])
+            for key in ("block_size", "selector_top_k"):
+                if key in dflash_config:
+                    model.set_rt_info(str(dflash_config[key]), ["dflash", key])
     except Exception:
         pass
 
@@ -1099,6 +1110,20 @@ def _get_submodels_and_export_configs(
     # (not in MULTI_MODAL_TEXT_GENERATION_MODELS) and task being "image-text-to-text".
     if not stateful and getattr(export_config, "eagle3_vlm", False):
         stateful_per_model = [True] * len(models_for_export)
+
+    # The DFlash 2 candidate selector runs on logits, i.e. after the target lm_head has scored the
+    # draft's hidden states, so it ships as a second (stateless) model next to the draft itself.
+    if getattr(export_config, "dflash2", False):
+        from optimum.exporters.openvino.model_configs import Qwen3DFlash2SelectorOpenVINOConfig
+        from optimum.exporters.openvino.model_patcher import Qwen3DFlash2SelectorModule
+
+        models_for_export[DFLASH2_SELECTOR_NAME] = (
+            Qwen3DFlash2SelectorModule.from_pretrained_model(model),
+            Qwen3DFlash2SelectorOpenVINOConfig(
+                model.config, task="feature-extraction", int_dtype=int_dtype, float_dtype=float_dtype
+            ),
+        )
+        stateful_per_model.append(False)
 
     return export_config, models_for_export, stateful_per_model
 

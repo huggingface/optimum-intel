@@ -8847,6 +8847,10 @@ class Qwen3DFlashDecoderLayer(nn.Module):
         self.mlp = Qwen3MLP(config)
         self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        # DFlash 2 wraps the attention and the MLP in two-tap grouped dynamic convolutions;
+        # plain DFlash leaves both unset and the layer stays a stock pre-norm block.
+        self.attention_conv = None
+        self.mlp_conv = None
 
     def forward(
         self,
@@ -8863,6 +8867,9 @@ class Qwen3DFlashDecoderLayer(nn.Module):
     ) -> torch.FloatTensor:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
+        attention_kernel = None
+        if self.attention_conv is not None:
+            hidden_states, attention_kernel = self.attention_conv.prepare(hidden_states)
         hidden_states = self.self_attn(
             hidden_states=hidden_states,
             target_hidden=target_hidden,
@@ -8875,11 +8882,18 @@ class Qwen3DFlashDecoderLayer(nn.Module):
             position_embeddings=position_embeddings,
             **kwargs,
         )[0]
+        if attention_kernel is not None:
+            hidden_states = self.attention_conv.finish(hidden_states, attention_kernel)
         hidden_states = residual + hidden_states
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
+        mlp_kernel = None
+        if self.mlp_conv is not None:
+            hidden_states, mlp_kernel = self.mlp_conv.prepare(hidden_states)
         hidden_states = self.mlp(hidden_states)
+        if mlp_kernel is not None:
+            hidden_states = self.mlp_conv.finish(hidden_states, mlp_kernel)
         hidden_states = residual + hidden_states
         return hidden_states
 
@@ -8959,6 +8973,45 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         )
 
 
+def _dflash_causal_lm_forward(
+    self,
+    inputs_embeds: torch.FloatTensor,
+    hidden_states: torch.Tensor,
+    position_ids: torch.LongTensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    past_key_values: Optional[Cache] = None,
+    use_cache: Optional[bool] = None,
+    logits_to_keep: Optional[int] = None,
+    **kwargs,
+) -> BaseModelOutputWithPast:
+    """Embeddings-in / hidden-states-out forward shared by the DFlash and DFlash 2 draft heads.
+
+    Written as a free function rather than a method so both ``*ForCausalLM`` classes can bind
+    it: they sit on different backbones, so a ``super()`` call inside a method of one of them
+    would not resolve for the other.
+    """
+    outputs = Qwen3DFlashDraftModel.forward(
+        self,
+        hidden_states=hidden_states,
+        noise_embedding=inputs_embeds,
+        position_ids=position_ids,
+        attention_mask=attention_mask,
+        past_key_values=past_key_values,
+        use_cache=use_cache,
+        **kwargs,
+    )
+    # Drop the seed position so emitted hidden states align 1:1 with the draft
+    # candidate tokens that the grafted lm_head will score.
+    if logits_to_keep is None:
+        last_hidden_state = outputs.last_hidden_state[:, 1:, :]
+    else:
+        last_hidden_state = outputs.last_hidden_state[:, -logits_to_keep:, :]
+    return BaseModelOutputWithPast(
+        last_hidden_state=last_hidden_state,
+        past_key_values=outputs.past_key_values,
+    )
+
+
 # adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L302
 class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
     """DFlash draft head exported as embeddings-in / hidden-states-out.
@@ -8969,36 +9022,148 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
     at load time, so the export bundles neither the embedding nor the projection.
     """
 
+    forward = _dflash_causal_lm_forward
+
+
+# adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L478
+def _dflash2_grouped_dynamic_convolve(
+    hidden: torch.Tensor, dynamic: torch.Tensor, base_kernel: torch.Tensor, group_size: int
+) -> torch.Tensor:
+    """Two-tap causal convolution over the draft block, per channel group.
+
+    Every tap mixes a learned kernel (``base_kernel``) with a per-token kernel predicted from
+    the hidden states (``dynamic``). The tap loop runs over ``kernel_size``, a config constant,
+    so tracing unrolls it into a fixed, input-independent chain of shifts and multiplies.
+    """
+    batch, length, hidden_size = hidden.shape
+    groups = hidden_size // group_size
+    kernel_size = base_kernel.shape[0]
+    blocks = hidden.reshape(batch, length, groups, group_size)
+    dynamic = dynamic.reshape(batch, length, kernel_size, groups, 1)
+    output = torch.zeros_like(blocks)
+    for offset in range(kernel_size):
+        # Tap `offset` reads the token `offset` steps back; the block starts from zeros, which
+        # matches the reference: no convolution state is carried across verification steps.
+        values = blocks if offset == 0 else torch.nn.functional.pad(blocks[:, :-offset], (0, 0, 0, 0, offset, 0))
+        kernel = base_kernel[offset].reshape(1, 1, groups, group_size).to(hidden.dtype)
+        output = output + kernel * values
+        output = output + dynamic[:, :, offset] * values
+    return output.reshape(batch, length, hidden_size)
+
+
+# adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L492
+class Qwen3DFlash2GroupedDynamicCausalConv(nn.Module):
+    """Dynamic convolution wrapped around a sublayer: ``prepare`` before it, ``finish`` after."""
+
+    def __init__(self, hidden_size: int, kernel_size: int, group_size: int):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.group_size = group_size
+        groups = hidden_size // group_size
+        # Index 0 of the leading axis feeds `prepare`, index 1 feeds `finish`.
+        self.base_kernel = nn.Parameter(torch.empty(2, kernel_size, hidden_size))
+        self.kernel_projection = nn.Linear(hidden_size, 2 * kernel_size * groups, bias=False)
+
+    def prepare(self, hidden: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        groups = hidden.shape[-1] // self.group_size
+        dynamic = self.kernel_projection(hidden).reshape(hidden.shape[0], hidden.shape[1], 2, self.kernel_size, groups)
+        # The second half of the projection is held back for `finish`, so the sublayer's output
+        # is convolved with kernels predicted from its input.
+        return (
+            _dflash2_grouped_dynamic_convolve(hidden, dynamic[:, :, 0], self.base_kernel[0], self.group_size),
+            dynamic[:, :, 1],
+        )
+
+    def finish(self, hidden: torch.Tensor, dynamic: torch.Tensor) -> torch.Tensor:
+        return _dflash2_grouped_dynamic_convolve(hidden, dynamic, self.base_kernel[1], self.group_size)
+
+
+# adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L515
+class Qwen3DFlash2CandidateSelector(nn.Module):
+    """Traces one coherent path through the per-position top-k candidates of a drafted block.
+
+    Scores a candidate by its own logit plus a low-rank bigram term between the token chosen at
+    the previous position and this candidate, then walks the block greedily. The codebooks are
+    plain parameters (not ``nn.Embedding``) so the checkpoint's ``candidate_selector.*_codebook``
+    keys load as-is, with no key remapping.
+    """
+
+    def __init__(self, config: "Qwen3Config"):
+        super().__init__()
+        dflash_config = getattr(config, "dflash_config", {}) or {}
+        rank = int(dflash_config["selector_rank"])
+        self.top_k = int(dflash_config["selector_top_k"])
+        self.predecessor_codebook = nn.Parameter(torch.empty(config.vocab_size, rank))
+        self.successor_codebook = nn.Parameter(torch.empty(config.vocab_size, rank))
+        self.hidden_projection = nn.Linear(config.hidden_size, rank, bias=False)
+
     def forward(
-        self,
-        inputs_embeds: torch.FloatTensor,
-        hidden_states: torch.Tensor,
-        position_ids: torch.LongTensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        past_key_values: Optional[Cache] = None,
-        use_cache: Optional[bool] = None,
-        logits_to_keep: Optional[int] = None,
-        **kwargs,
-    ) -> BaseModelOutputWithPast:
-        outputs = super().forward(
-            hidden_states=hidden_states,
-            noise_embedding=inputs_embeds,
-            position_ids=position_ids,
-            attention_mask=attention_mask,
-            past_key_values=past_key_values,
-            use_cache=use_cache,
-            **kwargs,
-        )
-        # Drop the seed position so emitted hidden states align 1:1 with the draft
-        # candidate tokens that the grafted lm_head will score.
-        if logits_to_keep is None:
-            last_hidden_state = outputs.last_hidden_state[:, 1:, :]
-        else:
-            last_hidden_state = outputs.last_hidden_state[:, -logits_to_keep:, :]
-        return BaseModelOutputWithPast(
-            last_hidden_state=last_hidden_state,
-            past_key_values=outputs.past_key_values,
-        )
+        self, last_hidden_state: torch.Tensor, logits: torch.Tensor, anchor_ids: torch.Tensor
+    ) -> Dict[str, torch.Tensor]:
+        unary, candidates = torch.topk(logits, self.top_k, dim=-1)
+        hidden = self.hidden_projection(last_hidden_state.to(self.hidden_projection.weight.dtype))
+        predecessor = anchor_ids
+        path = []
+        # The walk is sequential by construction: position p is scored against the token picked
+        # at p - 1. The block length is a config constant, so tracing unrolls the walk.
+        for position in range(last_hidden_state.shape[1]):
+            query = torch.nn.functional.embedding(predecessor, self.predecessor_codebook) * hidden[:, position]
+            keys = torch.nn.functional.embedding(candidates[:, position], self.successor_codebook)
+            scores = unary[:, position] + (query[:, None, :] * keys).sum(-1)
+            index = torch.argmax(scores, dim=-1)
+            predecessor = candidates[:, position].gather(-1, index[:, None])[:, 0]
+            path.append(predecessor)
+        return {"draft_token_ids": torch.stack(path, dim=1), "candidate_token_ids": candidates}
+
+
+# adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L630
+class Qwen3DFlash2DraftModel(Qwen3DFlashDraftModel):
+    """DFlash 2 backbone: the DFlash draft stack plus per-layer dynamic convolutions.
+
+    The candidate selector is held here so the checkpoint loads in one piece, but it is exported
+    as its own OpenVINO model (see ``Qwen3DFlash2SelectorOpenVINOConfig``): it consumes logits,
+    which only exist after the *target* lm_head has been applied to this model's output.
+    """
+
+    def __init__(self, config) -> None:
+        super().__init__(config)
+        dflash_config = getattr(config, "dflash_config", {}) or {}
+        kernel_size = int(dflash_config["conv_kernel_size"])
+        group_size = int(dflash_config["conv_group_size"])
+        for layer in self.layers:
+            layer.attention_conv = Qwen3DFlash2GroupedDynamicCausalConv(config.hidden_size, kernel_size, group_size)
+            layer.mlp_conv = Qwen3DFlash2GroupedDynamicCausalConv(config.hidden_size, kernel_size, group_size)
+        self.candidate_selector = Qwen3DFlash2CandidateSelector(config)
+        self.block_size = int(dflash_config.get("block_size", 16))
+        self.post_init()
+
+
+class Qwen3DFlash2ForCausalLM(Qwen3DFlash2DraftModel, GenerationMixin):
+    """DFlash 2 draft head exported as embeddings-in / hidden-states-out.
+
+    Same contract as ``Qwen3DFlashForCausalLM``; the DFlash 2 additions are the dynamic
+    convolutions inside the backbone and the separately exported candidate selector.
+    """
+
+    forward = _dflash_causal_lm_forward
+
+
+class Qwen3DFlash2SelectorModule(nn.Module):
+    """Standalone wrapper around the DFlash 2 candidate selector for its own OpenVINO export."""
+
+    def __init__(self, config, selector: Qwen3DFlash2CandidateSelector):
+        super().__init__()
+        self.config = config
+        self.candidate_selector = selector
+
+    @classmethod
+    def from_pretrained_model(cls, model: Qwen3DFlash2DraftModel) -> "Qwen3DFlash2SelectorModule":
+        return cls(model.config, model.candidate_selector)
+
+    def forward(
+        self, last_hidden_state: torch.Tensor, logits: torch.Tensor, anchor_ids: torch.Tensor
+    ) -> Dict[str, torch.Tensor]:
+        return self.candidate_selector(last_hidden_state, logits, anchor_ids)
 
 
 # Patched implementation of the gated delta rule in recurrent form.
