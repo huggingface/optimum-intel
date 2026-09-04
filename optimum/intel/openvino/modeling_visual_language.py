@@ -3284,9 +3284,12 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
             wpos_ids = wpos_ids.flatten()
             pos_ids.append(torch.stack([hpos_ids, wpos_ids], dim=-1).repeat(t, 1))
         pos_ids = torch.cat(pos_ids, dim=0)
-        max_grid_size = grid_thw[:, 1:].max()
-        rotary_pos_emb_full = self._rotary_pos_emb(max_grid_size)
-        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+        if is_transformers_version(">=", "5.9"):
+            rotary_pos_emb = self._rotary_pos_emb(pos_ids)
+        else:
+            max_grid_size = grid_thw[:, 1:].max()
+            rotary_pos_emb_full = self._rotary_pos_emb(max_grid_size)
+            rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
         return rotary_pos_emb
 
     def get_multimodal_embeddings(
@@ -4410,9 +4413,13 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
             )
             pos_ids.append(torch.stack([hpos_ids, wpos_ids], dim=-1).repeat(t, 1))
         pos_ids = torch.cat(pos_ids, dim=0)
-        max_grid_size = grid_thw[:, 1:].max()
-        rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
-        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+        if is_transformers_version(">=", "5.9"):
+            rotary_pos_emb = self.rotary_pos_emb(pos_ids)
+        else:
+            max_grid_size = grid_thw[:, 1:].max()
+            rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
+            rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+
         return rotary_pos_emb
 
     def get_vision_embeddings(self, pixel_values, grid_thw, **kwargs):
