@@ -77,6 +77,7 @@ from optimum.intel.openvino.modeling_text2speech import (
 from optimum.intel.openvino.modeling_visual_language import (
     MODEL_PARTS_CLS_MAPPING,
     MODEL_TYPE_TO_CLS_MAPPING,
+    _OVMiniCPMVForCausalLM,
     _OVQwen3OmniMoeForCausalLM,
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
@@ -1210,6 +1211,74 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 device=OPENVINO_DEVICE,
             )
             self.assertIsInstance(ov_restored_model, type(ov_model))
+
+    def test_minicpmv_3d_resampler_temporal_grouping(self):
+        """MiniCPM-V-4.5's 3D-Resampler compresses a temporal GROUP of frames into a single
+        ``query_num``-token vector instead of one per frame.
+
+        Exercises ``resampling()`` directly with a stub resampler so the test needs no model
+        download: it asserts (a) grouping changes the number of emitted vectors, (b) the
+        per-token inputs handed to the resampler are folded frame-major, and (c) passing
+        ``temporal_ids=None`` is bit-identical to the previous per-frame behaviour.
+        """
+        embed_dim, kv_dim, seq_len = 16, 8, 6
+
+        class _Stub:
+            resampling = _OVMiniCPMVForCausalLM.resampling
+            _temporal_pos_embed_rows = _OVMiniCPMVForCausalLM._temporal_pos_embed_rows
+
+            def __init__(self):
+                self.embed_dim = embed_dim
+                self._pos_embeds = torch.arange(8 * 8 * embed_dim, dtype=torch.float32).reshape(8, 8, embed_dim)
+                self.seen = {}
+
+            def _adjust_pos_cache(self, tgt_sizes):
+                pass
+
+            def resampler(self, image_feature, pos_embed, key_padding_mask):
+                self.seen = {
+                    "image_feature": image_feature,
+                    "pos_embed": pos_embed,
+                    "key_padding_mask": key_padding_mask,
+                }
+                # stand in for the exported IR: one vector per batch row
+                return image_feature.sum(dim=1).unsqueeze(1).expand(-1, 2, -1).numpy()
+
+        n_frames = 6
+        tgt_sizes = torch.tensor([[2, 3]] * n_frames, dtype=torch.int32)
+        x = torch.arange(n_frames * seq_len * kv_dim, dtype=torch.float32).reshape(n_frames, seq_len, kv_dim)
+
+        # (a) grouping: 6 frames, 2 groups of 3 -> 2 output vectors, not 6
+        stub = _Stub()
+        out = stub.resampling(x, tgt_sizes, temporal_ids=[[0, 1, 2], [3, 4, 5]])
+        self.assertEqual(out.shape[0], 2)
+        # (b) folded frame-major: group 0 holds frames 0..2 concatenated along the token axis
+        self.assertEqual(tuple(stub.seen["image_feature"].shape), (2, 3 * seq_len, kv_dim))
+        self.assertTrue(torch.equal(stub.seen["image_feature"][0], x[0:3].reshape(-1, kv_dim)))
+        self.assertEqual(tuple(stub.seen["pos_embed"].shape), (3 * seq_len, 2, embed_dim))
+        self.assertEqual(tuple(stub.seen["key_padding_mask"].shape), (2, 3 * seq_len))
+
+        # ragged groups (3 + 2 + 1 frames) are padded to the longest group and masked
+        stub = _Stub()
+        out = stub.resampling(x, tgt_sizes, temporal_ids=[[0, 1, 2], [3, 4], [5]])
+        self.assertEqual(out.shape[0], 3)
+        self.assertEqual(tuple(stub.seen["image_feature"].shape), (3, 3 * seq_len, kv_dim))
+        # the 1-frame group is real for its first seq_len tokens and padding thereafter
+        self.assertFalse(bool(stub.seen["key_padding_mask"][2, :seq_len].any()))
+        self.assertTrue(bool(stub.seen["key_padding_mask"][2, seq_len:].all()))
+
+        # a grouping that does not cover every frame must fail loudly, not silently
+        with self.assertRaises(ValueError):
+            _Stub().resampling(x, tgt_sizes, temporal_ids=[[0, 1, 2], [3, 4]])
+
+        # (c) no regression: temporal_ids=None must reproduce the per-frame path exactly
+        stub_a, stub_b = _Stub(), _Stub()
+        legacy = stub_a.resampling(x, tgt_sizes, temporal_ids=None)
+        self.assertEqual(legacy.shape[0], n_frames)
+        self.assertTrue(torch.equal(stub_a.seen["image_feature"], x))
+        # every frame in its own group is the degenerate case and must agree with it
+        grouped = stub_b.resampling(x, tgt_sizes, temporal_ids=[[i] for i in range(n_frames)])
+        self.assertTrue(np.array_equal(legacy, grouped))
 
 
 @pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="OVModelForMultimodalLM requires transformers >= 5.0")
