@@ -110,9 +110,12 @@ from optimum.exporters.openvino.model_patcher import (
     AquilaModelPatcher,
     ArcticModelPatcher,
     BaichuanModelPatcher,
+    BeitModelPatcher,
+    BidirectionalMaskModelPatcher,
     BigBirdPegasusModelPatcher,
     BloomModelPatcher,
     ChatGLMModelPatcher,
+    CLIPTextModelPatcher,
     CodeGenModelPatcher,
     CommonImageEmbeddingsModelPatcher,
     DBRXModelPatcher,
@@ -120,6 +123,7 @@ from optimum.exporters.openvino.model_patcher import (
     DeepseekOCR2LMPatcher,
     DeepseekOCR2VisionEmbeddingsPatcher,
     DeepseekPatcher,
+    DonutSwinModelPatcher,
     FalconModelPatcher,
     FluxTransformerModelPatcher,
     FunASRModelPatcher,
@@ -136,7 +140,7 @@ from optimum.exporters.openvino.model_patcher import (
     GptOssModelPatcher,
     GraniteMoeHybridModelPatcher,
     GraniteMoEModelPatcher,
-    IBertModelPatcher,
+    IBertBidirectionalMaskModelPatcher,
     Idefics3ImageEmbeddingsModelPatcher,
     InputEmbeddingPatcher,
     InternLM2Patcher,
@@ -202,9 +206,13 @@ from optimum.exporters.openvino.model_patcher import (
     QwenModelPatcher,
     SAMModelPatcher,
     SanaTextEncoderModelPatcher,
+    SegformerModelPatcher,
     SentenceTransformersTransformerPatcher,
+    Seq2SeqBidirectionalMaskModelPatcher,
     SpeechT5ModelPatcher,
+    SwinModelPatcher,
     VideoChatFlashQwenVisionEmbeddingModelPatcher,
+    VisionEncoderDecoderModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
     ZImageTextEncoderModelPatcher,
@@ -1674,6 +1682,8 @@ class CLIPOpenVINOConfig(TextAndVisionOpenVINOConfig):
 @register_in_tasks_manager("clip_text_model", *["feature-extraction"], library_name="transformers")
 @register_in_tasks_manager("clip-text", *["feature-extraction"], library_name="diffusers")
 class CLIPTextOpenVINOConfig(TextEncoderOpenVINOConfig):
+    _MODEL_PATCHER = CLIPTextModelPatcher
+
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         vocab_size="vocab_size",
         sequence_length="max_position_embeddings",
@@ -1760,7 +1770,7 @@ class CLIPVisionModelOpenVINOConfig(VisionOpenVINOConfig):
 )
 class IBertOpenVINOConfig(TextEncoderOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    _MODEL_PATCHER = IBertModelPatcher
+    _MODEL_PATCHER = IBertBidirectionalMaskModelPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -6024,7 +6034,7 @@ class GPT2OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 class VisionEncoderDecoderOpenVINOConfig(EncoderDecoderBaseOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedEncoderDecoderConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyVisionEncoderDecoderPastKeyValuesGenerator)
-    _MODEL_PATCHER = OVSeq2SeqModelPatcher
+    _MODEL_PATCHER = VisionEncoderDecoderModelPatcher
 
     @property
     def inputs(self) -> dict:
@@ -6197,6 +6207,7 @@ class ASTOpenVINOConfig(OpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         num_mel_bins="num_mel_bins", max_length="max_length", allow_new=True
     )
+    _MODEL_PATCHER = BidirectionalMaskModelPatcher
     DUMMY_INPUT_GENERATOR_CLASSES = (ASTDummyAudioInputGenerator,)
 
     @property
@@ -6270,7 +6281,7 @@ class Pix2StructOpenVINOConfig(OpenVINOSeq2SeqConfigWithPast):
         DummySeq2SeqPastKeyValuesGenerator,
         DummyPix2StructInputGenerator,
     )
-    _MODEL_PATCHER = OVSeq2SeqModelPatcher
+    _MODEL_PATCHER = Seq2SeqBidirectionalMaskModelPatcher
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -6377,7 +6388,7 @@ class NystromformerOpenVINOConfig(BertOpenVINOConfig):
 
 @register_in_tasks_manager("convbert", *COMMON_TEXT_TASKS)
 class ConvBertOpenVINOConfig(BertOpenVINOConfig):
-    pass
+    _MODEL_PATCHER = BidirectionalMaskModelPatcher
 
 
 @register_in_tasks_manager("electra", *COMMON_TEXT_TASKS)
@@ -6387,12 +6398,12 @@ class ElectraOpenVINOConfig(BertOpenVINOConfig):
 
 @register_in_tasks_manager("roformer", *COMMON_TEXT_TASKS)
 class RoFormerOpenVINOConfig(BertOpenVINOConfig):
-    pass
+    _MODEL_PATCHER = BidirectionalMaskModelPatcher
 
 
 @register_in_tasks_manager("squeezebert", *COMMON_TEXT_TASKS)
 class SqueezeBertOpenVINOConfig(BertOpenVINOConfig):
-    pass
+    _MODEL_PATCHER = BidirectionalMaskModelPatcher
 
 
 @register_in_tasks_manager("mobilebert", *COMMON_TEXT_TASKS)
@@ -6497,6 +6508,7 @@ class Data2VecTextOpenVINOConfig(DistilBertOpenVINOConfig):
 @register_in_tasks_manager("vit", *["feature-extraction", "image-classification", "masked-im"])
 class ViTOpenVINOConfig(VisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    _MODEL_PATCHER = BidirectionalMaskModelPatcher
 
     @property
     def inputs(self) -> dict:
@@ -6597,12 +6609,12 @@ class EsmOpenVINOConfig(TextEncoderOpenVINOConfig):
 
 @register_in_tasks_manager("mpnet", *COMMON_TEXT_TASKS)
 class MPNetOpenVINOConfig(DistilBertOpenVINOConfig):
-    pass
+    _MODEL_PATCHER = BidirectionalMaskModelPatcher
 
 
 @register_in_tasks_manager("beit", *["feature-extraction", "image-classification"])
 class BeitOpenVINOConfig(ViTOpenVINOConfig):
-    pass
+    _MODEL_PATCHER = BeitModelPatcher
 
 
 @register_in_tasks_manager("deit", *["feature-extraction", "image-classification", "masked-im"])
@@ -6641,6 +6653,8 @@ class PoolFormerOpenVINOConfig(ViTOpenVINOConfig):
     "segformer", *["feature-extraction", "image-classification", "image-segmentation", "semantic-segmentation"]
 )
 class SegformerOpenVINOConfig(ViTOpenVINOConfig):
+    _MODEL_PATCHER = SegformerModelPatcher
+
     @property
     def outputs(self) -> dict:
         outputs = super().outputs
@@ -6653,12 +6667,12 @@ class SegformerOpenVINOConfig(ViTOpenVINOConfig):
 
 @register_in_tasks_manager("swin", *["feature-extraction", "image-classification", "masked-im"])
 class SwinOpenVINOConfig(ViTOpenVINOConfig):
-    pass
+    _MODEL_PATCHER = SwinModelPatcher
 
 
 @register_in_tasks_manager("donut-swin", *["feature-extraction"])
 class DonutSwinOpenVINOConfig(ViTOpenVINOConfig):
-    pass
+    _MODEL_PATCHER = DonutSwinModelPatcher
 
 
 @register_in_tasks_manager("convnext", *["feature-extraction", "image-classification"])
@@ -6856,7 +6870,7 @@ class SentenceTransformersTransformerOpenVINOConfig(TextEncoderOpenVINOConfig):
 
 @register_in_tasks_manager("rembert", *COMMON_TEXT_TASKS)
 class RemBertOpenVINOConfig(BertOpenVINOConfig):
-    pass
+    _MODEL_PATCHER = BidirectionalMaskModelPatcher
 
 
 @register_in_tasks_manager("siglip-text-with-projection", *["feature-extraction"])

@@ -6,10 +6,12 @@ on:
     branches:
       - main
       - v*-release
+      - transformers-v5.10-support
   pull_request:
     branches:
       - main
       - v*-release
+      - transformers-v5.10-support
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -39,8 +41,12 @@ jobs:
             "*diffusion*",
             "*quantization*",
             "*transformation*",
+            "*irs*",
           ]
         transformers-version: ["4.57.6", "latest"]
+        exclude:
+          - test-pattern: "*irs*"
+            transformers-version: "4.57.6"
 
     runs-on: ubuntu-22.04
 
@@ -93,7 +99,7 @@ jobs:
 
       - name: Test with Pytest
         run: |
-          pytest tests/openvino/${{ matrix.test-pattern }} -k "not (qwen3_asr or fun_asr)" --durations=0
+          pytest tests/openvino/${{ matrix.test-pattern }} -k "not (qwen3_asr or fun_asr)" --durations=0 -rs
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Install Nightly OpenVINO
