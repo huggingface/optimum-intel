@@ -49,6 +49,29 @@ InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
 OV_XML_FILE_NAME = "openvino_model.xml"
 _MAX_UNCOMPRESSED_SIZE = 1e9
 
+# Parameter names that LTX-2 stores in fp32 in an otherwise bf16 checkpoint: the AdaLN modulation
+# tables, which are the only F32 tensors upstream ships (194 of 3510 in LTX-2.0, 290 of 4186 in
+# LTX-2.3) and the source of ~96% of the exported transformer's error against fp32 PyTorch. Used by
+# `keep_mixed_precision_parameters` to populate `_keep_in_fp32_modules`, which diffusers matches
+# against each dotted component of a parameter name, so these are leaf names rather than prefixes.
+# LTX-2.0 has only the first four; a name that is absent simply never matches.
+LTX2_FP32_PARAMETERS = (
+    "scale_shift_table",
+    "audio_scale_shift_table",
+    "video_a2v_cross_attn_scale_shift_table",
+    "audio_a2v_cross_attn_scale_shift_table",
+    "prompt_scale_shift_table",
+    "audio_prompt_scale_shift_table",
+)
+
+# Class name prefixes of models excluded from the automatic, size-based int8 weight compression that
+# `main_export` applies when no weight format is requested and nncf is installed. LTX-2's transformer
+# and text encoder are both far above `_MAX_UNCOMPRESSED_SIZE`, so they would always be compressed,
+# and int8 weights cost too much video quality for a silent default (measured on LTX-2.0: wwb
+# similarity 0.80 for int8 against the fp32 reference). Compression is still applied when asked for
+# explicitly via `--weight-format` / `--quant-mode`. Matched with `startswith`.
+NO_AUTO_COMPRESSION_MODELS = ("LTX2",)
+
 
 def is_torch_model(model: Union["PreTrainedModel", "ModelMixin"]):
     """
@@ -425,6 +448,33 @@ def save_config(config, save_dir):
         save_dir.mkdir(exist_ok=True, parents=True)
         output_config_file = Path(save_dir / "config.json")
         config.to_json_file(output_config_file, use_diff=True)
+
+
+def keep_mixed_precision_parameters():
+    """
+    Keep the fp32 parameters of a mixed-precision diffusers checkpoint out of the 16-bit load cast.
+
+    `deduce_diffusers_dtype` reads one dtype off the transformer weights and `from_pretrained`
+    applies it to every floating tensor of every submodel, so the fp32 tensors of a checkpoint that
+    is otherwise 16-bit get rounded. At export time `__make_16bit_traceable` casts everything that
+    is not an `nn.Linear` / `nn.Embedding` / `Conv1D` parameter back to fp32, so those tensors end up
+    as fp32 constants holding needlessly rounded values.
+
+    `_keep_in_fp32_modules` is the diffusers hook for this: it is honoured while the state dict is
+    loaded, before the cast, and by `ModelMixin.to()` afterwards. Setting it leaves the IR layout and
+    size untouched; only the constant values become accurate.
+
+    Only LTX-2 is handled: `LTX2VideoTransformer3DModel` is the transformer of both LTX-2.0 and
+    LTX-2.3, so the class attribute is inert for every other model and no pipeline-level check is
+    needed.
+    """
+    try:
+        from diffusers import LTX2VideoTransformer3DModel
+    except ImportError:
+        return
+
+    if LTX2VideoTransformer3DModel._keep_in_fp32_modules is None:
+        LTX2VideoTransformer3DModel._keep_in_fp32_modules = list(LTX2_FP32_PARAMETERS)
 
 
 def deduce_diffusers_dtype(model_name_or_path, **loading_kwargs):

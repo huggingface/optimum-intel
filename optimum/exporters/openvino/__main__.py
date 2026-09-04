@@ -47,8 +47,10 @@ from optimum.intel.utils.modeling_utils import (
 from .utils import (
     _MAX_UNCOMPRESSED_SIZE,
     MULTI_MODAL_TEXT_GENERATION_MODELS,
+    NO_AUTO_COMPRESSION_MODELS,
     clear_class_registry,
     deduce_diffusers_dtype,
+    keep_mixed_precision_parameters,
     load_preprocessors,
     patch_qwenvl_configs,
 )
@@ -572,6 +574,7 @@ def main_export(
         if dtype in [torch.float16, torch.bfloat16]:
             loading_kwargs["torch_dtype"] = dtype
             patch_16bit = True
+            keep_mixed_precision_parameters()
         if loading_kwargs.get("torch_dtype") == "auto":
             loading_kwargs["torch_dtype"] = dtype
 
@@ -663,6 +666,10 @@ def main_export(
         if convert_tokenizer:
             maybe_convert_tokenizers(library_name, output, model, preprocessors, task=task)
 
+        # Captured before `del model`: the size-based quantization below decides per model class, and
+        # by the time it runs the object is gone.
+        model_class_name = model.__class__.__name__
+
         clear_class_registry()
         del model
         gc.collect()
@@ -670,7 +677,7 @@ def main_export(
         # TODO: Remove GPT-OSS workaround when possible
         quantization_config = None if ov_config is None else ov_config.quantization_config
         if not quantization_config or isinstance(quantization_config, _GPTOSSQuantizationConfig):
-            _apply_model_size_based_quantization(submodel_paths, ov_config, output)
+            _apply_model_size_based_quantization(submodel_paths, ov_config, output, model_class_name)
     finally:
         # Unpatch modules after quantized model export
         if do_quant_patching:
@@ -869,10 +876,30 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
         logger.warning("Tokenizer won't be converted.")
 
 
-def _apply_model_size_based_quantization(submodel_paths: List[str], ov_config: "OVConfig", output: Union[str, Path]):
+def _apply_model_size_based_quantization(
+    submodel_paths: List[str],
+    ov_config: "OVConfig",
+    output: Union[str, Path],
+    model_class_name: Optional[str] = None,
+):
     """
     Apply weight-only quantization to int8_asym to submodels larger than 1B parameters.
+
+    Models whose class name is listed in `NO_AUTO_COMPRESSION_MODELS` are left uncompressed: they are
+    large enough to always cross the threshold, but lose too much quality at int8 for that to be a
+    silent default. An explicitly requested weight format is unaffected -- it does not reach this
+    branch.
     """
+    skip_auto_compression = ov_config is None and any(
+        (model_class_name or "").startswith(prefix) for prefix in NO_AUTO_COMPRESSION_MODELS
+    )
+    if skip_auto_compression:
+        logger.info(
+            f"Automatic int8 weight compression is skipped for {model_class_name}. Export with "
+            "`--weight-format int8` to compress the weights anyway."
+        )
+        return
+
     # TODO: Refactor the code below in the following way:
     #   1. Create a OVPipelineQuantizationConfig based on each submodel size
     #   2. Run _main_quantize() with the created quantization config

@@ -917,6 +917,8 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = (
         "hidden_states",
         "audio_hidden_states",
+        "encoder_hidden_states",
+        "encoder_attention_mask",
         "num_frames",
         "height",
         "width",
@@ -928,6 +930,8 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         "audio_encoder_attention_mask",
         "timestep",
         "audio_timestep",
+        "cross_modality_gate",
+        "stg_perturbation_mask",
     )
 
     def __init__(
@@ -951,7 +955,25 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         self.audio_scale_factor = normalized_config.config.audio_scale_factor
         self.cross_attention_dim = normalized_config.config.cross_attention_dim
         self.caption_channels = normalized_config.config.caption_channels
+        self.num_layers = normalized_config.config.num_layers
         self.encoder_seq_length = kwargs.get("sequence_length", DEFAULT_DUMMY_SHAPES["sequence_length"])
+
+        # Width of the text embeddings the transformer consumes, per modality.
+        #
+        # When `use_prompt_embeddings` is True (LTX-2.0) the transformer owns a
+        # `caption_projection` (caption_channels -> inner_dim), so it is fed the connector's
+        # raw `caption_channels` width for both modalities.
+        # When it is False (LTX-2.3) that projection does not exist: the connectors already
+        # emit per-modality widths, so the transformer is fed `cross_attention_dim` for video
+        # and `audio_cross_attention_dim` for audio.
+        if getattr(normalized_config.config, "use_prompt_embeddings", True):
+            self.text_embed_dim = self.caption_channels
+            self.audio_text_embed_dim = self.caption_channels
+        else:
+            self.text_embed_dim = self.cross_attention_dim
+            self.audio_text_embed_dim = getattr(
+                normalized_config.config, "audio_cross_attention_dim", self.cross_attention_dim
+            )
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         import torch
@@ -982,8 +1004,12 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
             audio_num_frames = max(1, self.num_frames)
             audio_mel_bins = 64 // self.audio_scale_factor
             return self.random_float_tensor([self.batch_size, 1, audio_num_frames * audio_mel_bins, 2])
+        if input_name == "encoder_hidden_states":
+            return self.random_float_tensor([self.batch_size, self.encoder_seq_length, self.text_embed_dim])
+        if input_name == "encoder_attention_mask":
+            return self.random_float_tensor([self.batch_size, self.encoder_seq_length])
         if input_name == "audio_encoder_hidden_states":
-            return self.random_float_tensor([self.batch_size, self.encoder_seq_length, self.caption_channels])
+            return self.random_float_tensor([self.batch_size, self.encoder_seq_length, self.audio_text_embed_dim])
         if input_name == "audio_encoder_attention_mask":
             return self.random_float_tensor([self.batch_size, self.encoder_seq_length])
         if input_name == "timestep":
@@ -993,6 +1019,12 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         if input_name == "audio_timestep":
             # Audio uses a scalar-per-batch [B] timestep (not per-token, unlike video).
             return self.random_float_tensor([self.batch_size], framework=framework, dtype=float_dtype)
+        if input_name == "cross_modality_gate":
+            # Guidance switches, traced at their neutral values: 1.0 keeps the audio<->video
+            # cross-attention residuals, and an all-ones mask leaves every self-attention unperturbed.
+            return torch.tensor(1.0)
+        if input_name == "stg_perturbation_mask":
+            return torch.ones(self.num_layers)
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
@@ -1008,7 +1040,16 @@ class LTX2ConnectorsDummyInputGenerator(DummyVisionInputGenerator):
         **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, **kwargs)
-        num_registers = getattr(normalized_config.config, "num_learnable_registers", 128)
+        # The learnable-register substitution in the connectors requires the sequence length to be
+        # an exact multiple of the register count, so align the dummy length to both modalities.
+        # The per-modality keys are the ones the checkpoints actually ship; `num_learnable_registers`
+        # is kept as a fallback for hand-written configs.
+        config = normalized_config.config
+        default_registers = getattr(config, "num_learnable_registers", 128)
+        num_registers = math.lcm(
+            getattr(config, "video_connector_num_learnable_registers", default_registers),
+            getattr(config, "audio_connector_num_learnable_registers", default_registers),
+        )
         self.sequence_length = max(sequence_length, num_registers)
         self.sequence_length = (self.sequence_length // num_registers) * num_registers
         self.caption_channels = normalized_config.config.caption_channels
@@ -1061,13 +1102,16 @@ class LTX2VocoderDummyInputGenerator(DummyVisionInputGenerator):
         # Small dims to speed up tracing; the exported model uses dynamic shapes at runtime.
         num_channels: int = 2,
         num_frames: int = 8,
-        mel_bins: int = 64,
+        mel_bins: Optional[int] = None,
         **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, **kwargs)
         self.out_channels = getattr(normalized_config.config, "out_channels", 2)
         self.num_frames = num_frames
-        self.mel_bins = mel_bins
+        # LTX-2.3's vocoder config names the mel bin count; LTX-2.0's does not, and 64 is what both
+        # checkpoints actually use. The axis is exported dynamic either way, so this only sets the
+        # tracing shape.
+        self.mel_bins = mel_bins or getattr(normalized_config.config, "num_mel_channels", 64)
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "hidden_states":

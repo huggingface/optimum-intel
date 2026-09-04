@@ -1274,12 +1274,6 @@ class OVModelTextEncoder(OVPipelinePart):
         ):
             hidden_states = [torch.from_numpy(ov_outputs[out_name]) for out_name in self.hidden_states_output_names]
             model_outputs["hidden_states"] = hidden_states
-        elif (
-            output_hidden_states or getattr(self.config, "output_hidden_states", False)
-        ) and "last_hidden_state" in model_outputs:
-            # For models like LTX2 where config.output_hidden_states is True but the exported model
-            # only has last_hidden_state, provide it as hidden_states for compatibility
-            model_outputs["hidden_states"] = (model_outputs["last_hidden_state"],)
 
         if return_dict:
             return model_outputs
@@ -1470,6 +1464,8 @@ class OVModelTransformerLTX2(OVPipelinePart):
         audio_encoder_hidden_states: torch.FloatTensor = None,
         timestep: torch.LongTensor = None,
         audio_timestep: torch.LongTensor = None,
+        sigma: Optional[torch.Tensor] = None,
+        audio_sigma: Optional[torch.Tensor] = None,
         encoder_attention_mask: torch.LongTensor = None,
         audio_encoder_attention_mask: torch.LongTensor = None,
         num_frames: Optional[int] = None,
@@ -1479,6 +1475,9 @@ class OVModelTransformerLTX2(OVPipelinePart):
         audio_num_frames: Optional[int] = None,
         video_coords: Optional[torch.Tensor] = None,
         audio_coords: Optional[torch.Tensor] = None,
+        isolate_modalities: bool = False,
+        spatio_temporal_guidance_blocks: Optional[List[int]] = None,
+        perturbation_mask: Optional[torch.Tensor] = None,
         attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
         **kwargs,
@@ -1488,6 +1487,18 @@ class OVModelTransformerLTX2(OVPipelinePart):
         # T2V leaves audio_timestep None; mirror the diffusers fallback before `timestep` is broadcast.
         if audio_timestep is None:
             audio_timestep = timestep if timestep is None or timestep.ndim == 1 else timestep[:, 0]
+
+        # LTX-2.3 feeds the transformer a `sigma` alongside `timestep` to modulate the prompt
+        # embeddings. The exported graph has no `sigma` input: the export patcher ties it to
+        # `audio_timestep`, the scalar-per-batch noise level that both pipelines pass as `sigma`.
+        # Anything else cannot be honoured by this IR, so say so instead of quietly ignoring it.
+        for name, value in (("sigma", sigma), ("audio_sigma", audio_sigma)):
+            if value is not None and not torch.equal(torch.as_tensor(value), torch.as_tensor(audio_timestep)):
+                raise ValueError(
+                    f"`{name}` differs from the scalar timestep, which the exported LTX-2 transformer "
+                    "cannot represent (the graph was traced with them tied together). This happens "
+                    "with `use_cross_timestep=True`, which the OpenVINO export does not support."
+                )
 
         # T2V passes a scalar timestep [B]; the IR expects [B, S]. Broadcast to match.
         if timestep is not None and timestep.ndim == 1 and self._timestep_rank == 2:
@@ -1534,6 +1545,48 @@ class OVModelTransformerLTX2(OVPipelinePart):
         if audio_coords is not None:
             model_inputs["audio_coords"] = audio_coords
 
+        # Modality isolation guidance and spatio-temporal guidance are extra transformer passes the
+        # pipeline runs alongside the CFG one, selected with Python flags. The export turns them into
+        # tensor inputs; exports predating them can only serve the plain pass, so ask for a re-export
+        # rather than silently returning an unguided prediction.
+        if "cross_modality_gate" in self._ov_input_names:
+            model_inputs["cross_modality_gate"] = torch.tensor(0.0 if isolate_modalities else 1.0)
+        elif isolate_modalities:
+            raise ValueError(
+                "`isolate_modalities=True` requires a `cross_modality_gate` input, which this exported "
+                "LTX-2 transformer does not have. Re-export the model to enable modality isolation "
+                "guidance, or pass `modality_scale=1.0` (and `audio_modality_scale=1.0`) to disable it."
+            )
+
+        stg_blocks = spatio_temporal_guidance_blocks or []
+        if "stg_perturbation_mask" in self._ov_input_names:
+            # The reference model perturbs every batch element when the pipeline leaves the mask
+            # unset; a per-element mask has no equivalent in the traced per-block weights.
+            weight = 0.0
+            if perturbation_mask is not None:
+                unique = torch.unique(torch.as_tensor(perturbation_mask))
+                if unique.numel() > 1:
+                    raise ValueError(
+                        "The exported LTX-2 transformer only supports a `perturbation_mask` that is uniform "
+                        f"across the batch, got {perturbation_mask}."
+                    )
+                weight = float(unique.item())
+            stg_mask = torch.ones(self._stg_num_blocks)
+            for block_idx in stg_blocks:
+                # The reference model matches block indices against the blocks it has, so out-of-range
+                # entries (e.g. the default `[28]` against a 1-block test checkpoint) are a no-op.
+                if 0 <= block_idx < len(stg_mask):
+                    stg_mask[block_idx] = weight
+            model_inputs["stg_perturbation_mask"] = stg_mask
+        elif stg_blocks and self.config.get("perturbed_attn", False):
+            # Without `perturbed_attn` the reference blocks ignore the mask too, so STG is a no-op
+            # there and there is nothing to refuse.
+            raise ValueError(
+                "`spatio_temporal_guidance_blocks` requires a `stg_perturbation_mask` input, which this "
+                "exported LTX-2 transformer does not have. Re-export the model to use spatio-temporal "
+                "guidance, or pass `stg_scale=0.0` (and `audio_stg_scale=0.0`) to disable it."
+            )
+
         ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
 
         model_outputs = {}
@@ -1556,6 +1609,16 @@ class OVModelTransformerLTX2(OVPipelinePart):
             if inp.get_any_name() == "timestep":
                 return len(inp.partial_shape)
         return 1
+
+    @property
+    def _stg_num_blocks(self):
+        # One weight per transformer block. `reshape` may have made the declared dimension dynamic,
+        # so fall back to the config the mask was sized from at export time.
+        for inp in self.model.inputs:
+            if inp.get_any_name() == "stg_perturbation_mask":
+                dim = inp.partial_shape[0]
+                return dim.get_length() if dim.is_static else self.config["num_layers"]
+        return 0
 
 
 class OVModelConnectors(OVPipelinePart):
@@ -2198,9 +2261,6 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
             if text_encoder is not None
             else None
         )
-        # LTX2 requires text encoder to output hidden states for use in connectors
-        if self.text_encoder is not None:
-            self.text_encoder.config.output_hidden_states = True
         if not isinstance(connectors, openvino.Model):
             connectors = None
         self.connectors = (
@@ -2212,6 +2272,13 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         self.vae = OVModelVae(decoder=self.vae_decoder, encoder=self.vae_encoder)
         self.scheduler = scheduler
         self.tokenizer = tokenizer
+        # LTX-2 has a single tokenizer and no feature extractor, but this `__init__` replaces
+        # `OVDiffusionPipeline.__init__` (which sets them to None), and `_save_pretrained` reads
+        # all four unconditionally. Without these, `save_pretrained` fails with an
+        # `AttributeError` from diffusers' `ConfigMixin.__getattr__`.
+        self.tokenizer_2 = None
+        self.tokenizer_3 = None
+        self.feature_extractor = None
 
         # Get latents_mean/std from vae_decoder config or audio_vae_decoder config
         vae_cfg = self.vae_decoder.config
@@ -2336,11 +2403,18 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         # Reshape text_encoder with batch_size only (tokenizer_max_length stays dynamic for Gemma)
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(self.text_encoder.model, batch_size, -1)
-        # Reshape connectors, audio_vae, vocoder with the full batch (accounts for guidance scale)
-        effective_batch = (
-            batch_size * num_images_per_prompt * 2 if batch_size > 0 and num_images_per_prompt > 0 else -1
-        )
-        for ov_model_attr in [self.connectors, self.audio_vae, self.vocoder]:
+        known_batch = batch_size > 0 and num_images_per_prompt > 0
+        # The connectors run on the concatenated negative+positive prompts, so they see twice the
+        # batch under classifier-free guidance. The audio VAE and the vocoder run after the
+        # denoising loop, where the guidance halves have already been merged back, so they see the
+        # plain batch.
+        guided_batch = batch_size * num_images_per_prompt * 2 if known_batch else -1
+        plain_batch = batch_size * num_images_per_prompt if known_batch else -1
+        for ov_model_attr, effective_batch in [
+            (self.connectors, guided_batch),
+            (self.audio_vae, plain_batch),
+            (self.vocoder, plain_batch),
+        ]:
             if ov_model_attr is not None:
                 shapes = {}
                 for inputs in ov_model_attr.model.inputs:
@@ -2352,6 +2426,56 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
                         shapes[inputs][i] = -1
                 ov_model_attr.model.reshape(shapes)
         self.clear_requests()
+
+    def _get_gemma_prompt_embeds(
+        self,
+        prompt: Union[str, List[str]],
+        num_videos_per_prompt: int = 1,
+        max_sequence_length: int = 1024,
+        scale_factor: int = 8,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
+    ):
+        # Mirror `LTX2Pipeline._get_gemma_prompt_embeds`, but read the packed prompt embeddings
+        # straight from the text encoder: `LTX2TextEncoderPatcher` moves the reference
+        # implementation's `stack(dim=-1).flatten(2, 3)` into the exported graph, where it is the
+        # connectors' `text_encoder_hidden_states` layout already. On the host that copy is 735 MiB
+        # per encode for LTX-2.3 at the default sequence length, twice per generation under CFG.
+        device = device or self._execution_device
+        dtype = dtype or self.text_encoder.dtype
+
+        prompt = [prompt] if isinstance(prompt, str) else prompt
+        batch_size = len(prompt)
+
+        if getattr(self, "tokenizer", None) is not None:
+            # Gemma expects left padding for chat-style prompts
+            self.tokenizer.padding_side = "left"
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        text_inputs = self.tokenizer(
+            [p.strip() for p in prompt],
+            padding="max_length",
+            max_length=max_sequence_length,
+            truncation=True,
+            add_special_tokens=True,
+            return_tensors="pt",
+        )
+        text_input_ids = text_inputs.input_ids.to(device)
+        prompt_attention_mask = text_inputs.attention_mask.to(device)
+
+        outputs = self.text_encoder(input_ids=text_input_ids, attention_mask=prompt_attention_mask)
+        prompt_embeds = outputs.prompt_embeds.to(dtype=dtype)
+
+        # duplicate text embeddings for each generation per prompt, using mps friendly method
+        _, seq_len, _ = prompt_embeds.shape
+        prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
+        prompt_embeds = prompt_embeds.view(batch_size * num_videos_per_prompt, seq_len, -1)
+
+        prompt_attention_mask = prompt_attention_mask.view(batch_size, -1)
+        prompt_attention_mask = prompt_attention_mask.repeat(num_videos_per_prompt, 1)
+
+        return prompt_embeds, prompt_attention_mask
 
 
 class OVLTX2Pipeline(_OVLTX2Base, LTX2Pipeline):

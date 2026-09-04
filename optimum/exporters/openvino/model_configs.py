@@ -2652,7 +2652,12 @@ class UNetOpenVINOConfig(VisionOpenVINOConfig):
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         dummy_inputs = super().generate_dummy_inputs(framework=framework, **kwargs)
-        dummy_inputs["encoder_hidden_states"] = dummy_inputs["encoder_hidden_states"][0]
+        # The seq2seq generators hand back a `(tensor, None, None)` tuple, so only the first element
+        # is the encoder hidden states. Generators that already return a plain
+        # `[batch, sequence, embed_dim]` tensor must be left alone -- indexing one would silently
+        # strip the batch axis and export a rank-2 input.
+        if isinstance(dummy_inputs["encoder_hidden_states"], (tuple, list)):
+            dummy_inputs["encoder_hidden_states"] = dummy_inputs["encoder_hidden_states"][0]
 
         if getattr(self._normalized_config, "addition_embed_type", None) == "text_time":
             dummy_inputs["added_cond_kwargs"] = {
@@ -2769,11 +2774,11 @@ class Gemma3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        outputs = {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
-        num_layers = getattr(self._normalized_config, "num_hidden_layers", 48)
-        for i in range(num_layers + 1):
-            outputs[f"hidden_states.{i}"] = {0: "batch_size", 1: "sequence_length"}
-        return outputs
+        # `LTX2TextEncoderPatcher` returns the hidden states already stacked and flattened into the
+        # connectors' `text_encoder_hidden_states` layout, so there is a single output and the layer
+        # count does not appear here. The last dimension is `(num_layers + 1) * hidden_size`, left
+        # dynamic because the export declares no static shape for it.
+        return {"prompt_embeds": {0: "batch_size", 1: "sequence_length"}}
 
 
 @register_in_tasks_manager("sana-transformer", *["semantic-segmentation"], library_name="diffusers")
@@ -3173,15 +3178,22 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
         vocab_size="attention_head_dim",
         allow_new=True,
     )
+    # `generate_dummy_inputs` keeps the FIRST generator that claims a given input name, so
+    # LTX2TransformerDummyInputGenerator must stay ahead of the generic ones: it is the only one
+    # that knows the per-modality text embedding widths (LTX-2.3) vs the shared
+    # `caption_channels` width (LTX-2.0). It covers every input except `timestep`.
     DUMMY_INPUT_GENERATOR_CLASSES = (
         LTX2TransformerDummyInputGenerator,
-        DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator,
         DummySanaTimestepInputGenerator,
     )
 
     @property
     def inputs(self):
-        return {
+        # `cross_modality_gate` and `stg_perturbation_mask` carry the guidance modes the pipeline
+        # otherwise selects with Python flags (`isolate_modalities`, `spatio_temporal_guidance_blocks`),
+        # which a static graph cannot branch on. STG only exists for checkpoints with perturbable
+        # blocks, so its mask is exported only then.
+        inputs = {
             "hidden_states": {0: "batch_size", 1: "video_sequence_length"},
             "audio_hidden_states": {0: "batch_size", 1: "audio_sequence_length"},
             "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
@@ -3197,7 +3209,11 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
             "audio_timestep": {0: "batch_size"},
             "video_coords": {0: "batch_size", 2: "video_sequence_length"},
             "audio_coords": {0: "batch_size", 2: "audio_sequence_length"},
+            "cross_modality_gate": {},
         }
+        if getattr(self._normalized_config.config, "perturbed_attn", False):
+            inputs["stg_perturbation_mask"] = {}
+        return inputs
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
