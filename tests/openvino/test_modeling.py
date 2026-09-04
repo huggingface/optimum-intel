@@ -782,6 +782,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         "roberta",
         "roformer",
         "squeezebert",
+        "xlm-roberta",
     )
 
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
@@ -796,6 +797,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
             model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        set_seed(SEED)
         transformers_model = AutoModelForSequenceClassification.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a sample input"
