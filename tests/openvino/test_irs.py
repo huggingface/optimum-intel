@@ -9,12 +9,14 @@ import json
 
 # Import test utilities to get model mappings
 import sys
+import time
 from pathlib import Path
 from pathlib import Path as PathlibPath
 from typing import Dict, List, Optional
 
 import pytest
 from huggingface_hub import snapshot_download
+from huggingface_hub.errors import RepositoryNotFoundError, RevisionNotFoundError
 from openvino import Core, Model
 
 from optimum.intel import (
@@ -452,6 +454,81 @@ def compare_models(model_one: Model, model_two: Model, compare_names: bool = Tru
     return result
 
 
+DOWNLOAD_ATTEMPTS = 4
+DOWNLOAD_BACKOFF = 5  # seconds, doubled after every failed attempt
+
+
+def download_reference_ir(model_id: str) -> Optional[Path]:
+    """
+    Fetch the reference IRs from a model's `ov` branch.
+
+    Returns None when the repository or its `ov` revision genuinely does not exist, which is the
+    only legitimate reason to skip a model. Everything else (429, 5xx, timeouts) is retried and
+    then raised: a flaky Hub must not silently turn this suite into a green no-op.
+    """
+    delay = DOWNLOAD_BACKOFF
+    last_error = None
+
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            return Path(snapshot_download(repo_id=model_id, revision="ov", repo_type="model"))
+        except (RepositoryNotFoundError, RevisionNotFoundError):
+            return None
+        except Exception as error:
+            last_error = error
+            if attempt < DOWNLOAD_ATTEMPTS:
+                print(
+                    f"[IR-DEBUG] {model_id}: reference download attempt {attempt}/{DOWNLOAD_ATTEMPTS} "
+                    f"failed ({type(error).__name__}: {error}), retrying in {delay}s"
+                )
+                time.sleep(delay)
+                delay *= 2
+
+    raise RuntimeError(
+        f"Failed to download reference IRs from {model_id} (ov branch) after {DOWNLOAD_ATTEMPTS} "
+        f"attempts. The revision exists, so this is a transport/rate-limit problem rather than a "
+        f"missing reference: {type(last_error).__name__}: {last_error}"
+    ) from last_error
+
+
+# Models actually compared against their reference, and models whose reference does not exist at
+# all. `enforce_ir_coverage` uses both to make sure the suite cannot pass while silently skipping.
+COMPARED_MODELS = set()
+MODELS_WITHOUT_REFERENCE = set()
+MIN_COVERAGE_RATIO = 0.9
+
+
+@pytest.fixture(scope="session", autouse=True)
+def enforce_ir_coverage(request):
+    """Fail the session if too few of the selected models were really compared."""
+    yield
+
+    selected = {
+        item.callspec.params["model_id"]
+        for item in request.session.items
+        if "test_ir_stability" in item.nodeid and hasattr(item, "callspec")
+    }
+    comparable = selected - MODELS_WITHOUT_REFERENCE
+    compared = selected & COMPARED_MODELS
+
+    if not comparable:
+        return
+
+    print(
+        f"[IR-DEBUG] coverage: compared {len(compared)}/{len(comparable)} models that have an `ov` "
+        f"reference ({len(selected & MODELS_WITHOUT_REFERENCE)} of {len(selected)} selected models "
+        f"have none)"
+    )
+
+    if len(compared) < MIN_COVERAGE_RATIO * len(comparable):
+        missing = sorted(comparable - compared)
+        raise AssertionError(
+            f"Only {len(compared)}/{len(comparable)} models with an `ov` reference were compared, "
+            f"below the {MIN_COVERAGE_RATIO:.0%} floor. IR drift in the models below went "
+            f"unchecked, so this run proves nothing:\n  " + "\n  ".join(missing)
+        )
+
+
 def load_reference_metadata(ref_dir: Path) -> Optional[Dict]:
     """Load metadata about reference IR generation."""
     metadata_path = ref_dir / "metadata.json"
@@ -489,16 +566,11 @@ class TestIRStability:
         """Test that exported IR matches reference IR."""
 
         # Download reference IRs from HuggingFace (ov branch)
-        try:
-            ref_ir_dir = Path(
-                snapshot_download(
-                    repo_id=model_id,
-                    revision="ov",
-                    repo_type="model",
-                )
-            )
-        except Exception as e:
-            pytest.skip(f"Failed to download reference IRs from {model_id} (ov branch): {e}")
+        ref_ir_dir = download_reference_ir(model_id)
+
+        if ref_ir_dir is None:
+            MODELS_WITHOUT_REFERENCE.add(model_id)
+            pytest.skip(f"No reference IRs for {model_id}: the repository has no `ov` revision")
 
         if not ref_ir_dir.exists():
             pytest.skip(f"Reference IR directory not found for {model_id}")
@@ -543,6 +615,8 @@ class TestIRStability:
                 f"  Missing components: {missing or 'none'}\n"
                 f"  Extra components: {extra or 'none'}"
             )
+
+        COMPARED_MODELS.add(model_id)
 
         # Initialize OpenVINO Core for loading models
         core = Core()
