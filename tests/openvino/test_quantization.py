@@ -1818,6 +1818,28 @@ class OVWeightCompressionTest(unittest.TestCase):
             ),
         )
 
+    def test_default_size_based_compression_skipped_for_sensitive_model_type(self):
+        # The automatic model-size-based INT8 weight compression must be skipped by default for model types listed in
+        # `_MODEL_TYPES_TO_SKIP_DEFAULT_COMPRESSION` (e.g. hunyuan_v1_dense), because that data-free compression
+        # significantly degrades accuracy for these architectures. Explicit weight-format requests are unaffected.
+        from optimum.exporters.openvino.__main__ import _apply_model_size_based_quantization
+        from optimum.exporters.openvino.utils import _MODEL_TYPES_TO_SKIP_DEFAULT_COMPRESSION
+
+        self.assertIn("hunyuan_v1_dense", _MODEL_TYPES_TO_SKIP_DEFAULT_COMPRESSION)
+
+        with TemporaryDirectory() as tmp_dir:
+            # A skipped model type returns early via the automatic (ov_config=None) path without touching any file,
+            # so a missing submodel path does not raise.
+            _apply_model_size_based_quantization(
+                ["openvino_model.xml"], ov_config=None, output=tmp_dir, model_type="hunyuan_v1_dense"
+            )
+            # A non-skipped model type still runs the automatic path and fails on the missing submodel file, proving
+            # the early return above is specific to the sensitive model type and not a no-op for everything.
+            with self.assertRaises(RuntimeError):
+                _apply_model_size_based_quantization(
+                    ["openvino_model.xml"], ov_config=None, output=tmp_dir, model_type="llama"
+                )
+
 
 class OVPipelineQuantizationTest(unittest.TestCase):
     maxDiff = None

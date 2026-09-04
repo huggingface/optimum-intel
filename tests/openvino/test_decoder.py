@@ -528,6 +528,34 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
+    def test_fp32_inference_precision_for_sensitive_model_type(self):
+        # Accuracy-sensitive decoder architectures (e.g. hunyuan_v1_dense) must default to FP32 activation
+        # precision to avoid greedy-decoding divergence caused by FP16 activations on some devices (e.g. GPU).
+        from optimum.intel.openvino.modeling_decoder import _MODEL_TYPES_REQUIRING_FP32_INFERENCE
+
+        self.assertIn("hunyuan_v1_dense", _MODEL_TYPES_REQUIRING_FP32_INFERENCE)
+
+        model_id = MODEL_NAMES["hunyuan_v1_dense"]
+        # Default load: the FP32 inference precision hint is injected automatically.
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        self.assertEqual(model.ov_config.get("INFERENCE_PRECISION_HINT"), "f32")
+        del model
+        gc.collect()
+
+        # Explicit user-provided precision must be respected and not overridden.
+        model = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, device=OPENVINO_DEVICE, ov_config={"INFERENCE_PRECISION_HINT": "f16"}
+        )
+        self.assertEqual(model.ov_config.get("INFERENCE_PRECISION_HINT"), "f16")
+        del model
+        gc.collect()
+
+        # A non-sensitive architecture is unaffected and keeps the device default (no forced hint).
+        model = OVModelForCausalLM.from_pretrained(MODEL_NAMES["gpt2"], export=True, device=OPENVINO_DEVICE)
+        self.assertIsNone(model.ov_config.get("INFERENCE_PRECISION_HINT"))
+        del model
+        gc.collect()
+
     def test_model_and_decoder_same_device(self):
         model_id = MODEL_NAMES["gpt2"]
         model = OVModelForCausalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
