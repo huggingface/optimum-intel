@@ -85,6 +85,11 @@ jobs:
         run: |
           uv pip install auto-gptq "autoawq<0.2.8"
 
+      - if: ${{ matrix.os == 'ubuntu-22.04' && (matrix.transformers-version == 'latest' || matrix.transformers-version == 'main') }}
+        name: Install compressed-tensors
+        run: |
+          uv pip install compressed-tensors
+
       - name: Login with fork PRs CI token
         if: ${{ env.HF_TOKEN == '' }}
         run: |

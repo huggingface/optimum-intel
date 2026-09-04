@@ -827,6 +827,22 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),
     ]
 
+    # Pre-quantized compressed-tensors (AWQ pack-quantized) model. It is already quantized, so
+    # it is exported without a `--weight-format`: the OpenVINO PyTorch frontend converts the
+    # packed weights directly into int4 constants. This relies on the frontend compressed-tensors
+    # patcher (OpenVINO 2026.3+) and on the `compressed_tensors` package, which CI installs for
+    # transformers 4.57.6+. Both conditions gate the config so it is only exercised where the
+    # dependency is guaranteed present -- a missing package then surfaces as a hard failure.
+    if is_openvino_version(">=", "2026.3") and is_transformers_version(">=", "4.57.6"):
+        TRANSFORMERS_4BIT_CONFIGURATIONS.append(
+            (
+                "text-generation-with-past",
+                "llama_compressed_tensors",
+                None,
+                {"model": {"int4": 14}},
+            )
+        )
+
     # filter models type depending on min max transformers version
     SUPPORTED_4BIT_CONFIGURATIONS = [
         config
@@ -1152,15 +1168,19 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_4bit(
         self, task: str, model_type: str, option: str, expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]]
     ):
+        # option=None means the model is already quantized (e.g. compressed-tensors) and is
+        # exported as-is, without an NNCF weight-compression `--weight-format`.
+        is_prequantized = option is None
         with TemporaryDirectory() as tmpdir:
+            weight_format = "" if is_prequantized else f"--weight-format {option}"
             result = subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {weight_format} {tmpdir}",
                 shell=True,
                 check=True,
                 capture_output=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-            if "--trust-remote-code" in option:
+            if not is_prequantized and "--trust-remote-code" in option:
                 model_kwargs["trust_remote_code"] = True
             model = eval(
                 _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
@@ -1168,7 +1188,21 @@ class OVCLIExportTestCase(unittest.TestCase):
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
 
-            check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
+            # Already-quantized models keep the default f16 KV cache precision, unlike models
+            # whose weights are compressed by NNCF during export.
+            check_compression_state_per_model(
+                self,
+                model.ov_models,
+                expected_num_weight_nodes_per_model,
+                check_kv_cache_precision=not is_prequantized,
+            )
+
+            if is_prequantized:
+                # Already-quantized models (e.g. compressed-tensors) are exported as-is, without
+                # going through NNCF weight compression, so none of the `--awq`/`--gptq`/
+                # `--scale-estimation`/`--lora-correction` NNCF algorithms below ever run for
+                # them; there is nothing to check.
+                return
 
             # Starting from NNCF 2.17 there is a support for data-free AWQ
             awq_str = b"Applying data-aware AWQ" if "--dataset" in option else b"Applying data-free AWQ"
