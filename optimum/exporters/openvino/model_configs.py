@@ -42,6 +42,7 @@ from optimum.exporters.openvino.input_generators import (
     AquilaDummyPastKeyValuesGenerator,
     ChatGLM2DummyPastKeyValuesGenerator,
     DeciDummyPastKeyValuesGenerator,
+    DFlash2SelectorDummyInputGenerator,
     DummyAudioPhi4MMInputGenerator,
     DummyDeepseekOCR2VisionInputGenerator,
     DummyDeepseekOCR2VisionTilesInputGenerator,
@@ -480,7 +481,11 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             preprocessors=preprocessors,
         )
         archs = getattr(config, "architectures", None)
-        self.dflash = isinstance(archs, list) and len(archs) > 0 and archs[0] == "DFlashDraftModel"
+        arch = archs[0] if isinstance(archs, list) and len(archs) > 0 else None
+        # DFlash 2 keeps the DFlash draft contract and adds dynamic convolutions plus a
+        # candidate selector, so both variants share this export path.
+        self.dflash2 = arch == "DFlash2DraftModel"
+        self.dflash = arch == "DFlashDraftModel" or self.dflash2
         if self.dflash:
             model_type = getattr(config, "model_type", "")
             if model_type != "qwen3":
@@ -488,6 +493,14 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             dflash_config = getattr(config, "dflash_config", {}) or {}
             if not dflash_config.get("target_layer_ids", []):
                 raise ValueError("DFlash export requires non-empty dflash_config['target_layer_ids'].")
+            if self.dflash2:
+                missing = [
+                    key
+                    for key in ("block_size", "conv_kernel_size", "conv_group_size", "selector_rank", "selector_top_k")
+                    if key not in dflash_config
+                ]
+                if missing:
+                    raise ValueError(f"DFlash 2 export requires dflash_config keys {missing}.")
             # DFlash draft checkpoints still advertise model_type="qwen3"; the
             # architecture and dflash_config fields identify the draft variant.
             self.DUMMY_INPUT_GENERATOR_CLASSES = (
@@ -563,6 +576,40 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
                 for axis, name in axes.items():
                     if name == "past_sequence_length + sequence_length":
                         axes[axis] = "past_sequence_length + context_length"
+
+
+class Qwen3DFlash2SelectorOpenVINOConfig(OpenVINOConfig):
+    """Export configuration for the DFlash 2 candidate selector.
+
+    The selector runs after the target lm_head has scored the draft's hidden states, so it cannot
+    live inside the draft graph and is exported as its own model. Its walk over the block is
+    sequential and unrolls at trace time, which fixes the block length: the drafted-token axis is
+    static at ``block_size - 1`` while only the batch axis stays dynamic.
+    """
+
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DFlash2SelectorDummyInputGenerator,)
+    # Carries the same `dflash` RT-info block as the draft model, so a runtime can pair the two.
+    dflash = True
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return OrderedDict(
+            {
+                "last_hidden_state": {0: "batch_size"},
+                "logits": {0: "batch_size"},
+                "anchor_ids": {0: "batch_size"},
+            }
+        )
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return OrderedDict(
+            {
+                "draft_token_ids": {0: "batch_size"},
+                "candidate_token_ids": {0: "batch_size"},
+            }
+        )
 
 
 @register_in_tasks_manager(
