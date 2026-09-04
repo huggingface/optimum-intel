@@ -677,7 +677,8 @@ def export_from_model(
         if model.config.decoder_start_token_id is None:
             model.config.decoder_start_token_id = 0
     stateful = stateful and (
-        ensure_export_task_support_stateful(task) or ensure_model_type_support_stateful(model_type)
+        ensure_export_task_support_stateful(task)
+        or ensure_model_type_support_stateful(model_type, getattr(model, "config", None))
     )
 
     if (
