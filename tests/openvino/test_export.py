@@ -266,6 +266,12 @@ class ExportModelTest(unittest.TestCase):
                     self.assertTrue(
                         ov_model.language_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
                     )
+                    if model_type == "gemma4_unified":
+                        vision_model = ov_model.vision_embeddings.model
+                        self.assertTrue(vision_model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
+                        self.assertEqual(
+                            vision_model.get_rt_info()["runtime_options"]["ACTIVATIONS_SCALE_FACTOR"], "8.0"
+                        )
 
                 if library_name == "diffusers":
                     expected_scale_factors = self.EXPECTED_DIFFUSERS_SCALE_FACTORS.get(model_type, {})
