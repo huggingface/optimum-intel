@@ -11858,3 +11858,201 @@ class ZImageTextEncoderModelPatcher(ModelPatcher):
         if hasattr(self._model, "config") and hasattr(self._model.config, "_orig_ov_attn_impl"):
             self._model.config._attn_implementation = self._model.config._orig_ov_attn_impl
             del self._model.config._orig_ov_attn_impl
+
+
+# Starting from transformers 5.6, `window_partition` / `window_reverse` swap the
+# `permute(0, 1, 3, 2, 4, 5)` call for an equivalent `transpose(2, 3)`. Both are semantically
+# identical, but they trace to different (int64 vs int32) permutation constants, which changes
+# the exported IR. Keep the original formulation so the graph stays stable across versions.
+def _patched_swin_window_partition(input_feature, window_size):
+    batch_size, height, width, num_channels = input_feature.shape
+    input_feature = input_feature.view(
+        batch_size, height // window_size, window_size, width // window_size, window_size, num_channels
+    )
+    return input_feature.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, num_channels)
+
+
+def _patched_swin_window_reverse(windows, window_size, height, width):
+    num_channels = windows.shape[-1]
+    windows = windows.view(-1, height // window_size, width // window_size, window_size, window_size, num_channels)
+    return windows.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, height, width, num_channels)
+
+
+# In transformers 5.6, Swin attention moved to the shared attention interface, whose default
+# (sdpa) fuses MatMul/Divide/Softmax/MatMul into a single ScaledDotProductAttention node. Restore
+# the explicit eager computation used before the refactoring.
+def _patched_swin_attention_forward(self, hidden_states, attention_mask=None, **kwargs):
+    batch_size, dim, _ = hidden_states.shape
+    hidden_shape = (batch_size, dim, -1, self.head_dim)
+    query_layer = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+    key_layer = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+    value_layer = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+    attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+    attention_scores = attention_scores / math.sqrt(self.head_dim)
+    attention_scores = attention_scores + self.relative_position_bias()
+
+    if attention_mask is not None:
+        mask_shape = attention_mask.shape[0]
+        attention_scores = attention_scores.view(
+            batch_size // mask_shape, mask_shape, self.num_attention_heads, dim, dim
+        )
+        attention_scores = attention_scores + attention_mask.unsqueeze(1).unsqueeze(0)
+        attention_scores = attention_scores.view(-1, self.num_attention_heads, dim, dim)
+
+    attention_probs = nn.functional.softmax(attention_scores, dim=-1)
+    context_layer = torch.matmul(attention_probs, value_layer)
+    context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
+    context_layer = context_layer.view(context_layer.size()[:-2] + (self.num_attention_heads * self.head_dim,))
+    return self.o_proj(context_layer), attention_probs
+
+
+class SwinModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "5.6"):
+            from transformers.models.swin import modeling_swin
+
+            self._original_window_partition = modeling_swin.window_partition
+            self._original_window_reverse = modeling_swin.window_reverse
+            self._original_attention_forward = modeling_swin.SwinAttention.forward
+            modeling_swin.window_partition = _patched_swin_window_partition
+            modeling_swin.window_reverse = _patched_swin_window_reverse
+            modeling_swin.SwinAttention.forward = _patched_swin_attention_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">=", "5.6"):
+            from transformers.models.swin import modeling_swin
+
+            modeling_swin.window_partition = self._original_window_partition
+            modeling_swin.window_reverse = self._original_window_reverse
+            modeling_swin.SwinAttention.forward = self._original_attention_forward
+
+
+class DonutSwinModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "5.6"):
+            from transformers.models.donut import modeling_donut_swin
+
+            self._original_window_partition = modeling_donut_swin.window_partition
+            self._original_window_reverse = modeling_donut_swin.window_reverse
+            modeling_donut_swin.window_partition = _patched_swin_window_partition
+            modeling_donut_swin.window_reverse = _patched_swin_window_reverse
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">=", "5.6"):
+            from transformers.models.donut import modeling_donut_swin
+
+            modeling_donut_swin.window_partition = self._original_window_partition
+            modeling_donut_swin.window_reverse = self._original_window_reverse
+
+
+# Same story as Swin: transformers 5.6 moved Segformer onto the shared attention interface and
+# rewrote the sequence reduction with `transpose(1, 2)` instead of `permute(0, 2, 1)`. Restore the
+# pre-refactoring implementations to keep the exported graph unchanged.
+def _patched_segformer_sequence_reduction_forward(self, hidden_states, height, width):
+    batch_size, _, num_channels = hidden_states.shape
+    hidden_states = hidden_states.permute(0, 2, 1).reshape(batch_size, num_channels, height, width)
+    hidden_states = self.sequence_reduction(hidden_states)
+    hidden_states = hidden_states.reshape(batch_size, num_channels, -1).permute(0, 2, 1)
+    return self.layer_norm(hidden_states)
+
+
+def _patched_segformer_attention_forward(self, hidden_states, height, width, attention_mask=None, **kwargs):
+    input_shape = hidden_states.shape[:-1]
+    hidden_shape = (*input_shape, -1, self.head_dim)
+    query_layer = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+    kv_hidden_states = hidden_states
+    if self.sequence_reduction_ratio > 1:
+        kv_hidden_states = self.sequence_reduction(hidden_states, height, width)
+
+    kv_shape = (*kv_hidden_states.shape[:-1], -1, self.head_dim)
+    key_layer = self.k_proj(kv_hidden_states).view(kv_shape).transpose(1, 2)
+    value_layer = self.v_proj(kv_hidden_states).view(kv_shape).transpose(1, 2)
+
+    attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+    attention_scores = attention_scores / math.sqrt(self.head_dim)
+    attention_probs = nn.functional.softmax(attention_scores, dim=-1)
+
+    context_layer = torch.matmul(attention_probs, value_layer)
+    context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
+    context_layer = context_layer.view(context_layer.size()[:-2] + (self.num_attention_heads * self.head_dim,))
+    return self.o_proj(context_layer), attention_probs
+
+
+class SegformerModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "5.6"):
+            from transformers.models.segformer import modeling_segformer
+
+            self._original_attention_forward = modeling_segformer.SegformerAttention.forward
+            self._original_sequence_reduction_forward = modeling_segformer.SegformerSequenceReduction.forward
+            modeling_segformer.SegformerAttention.forward = _patched_segformer_attention_forward
+            modeling_segformer.SegformerSequenceReduction.forward = _patched_segformer_sequence_reduction_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">=", "5.6"):
+            from transformers.models.segformer import modeling_segformer
+
+            modeling_segformer.SegformerAttention.forward = self._original_attention_forward
+            modeling_segformer.SegformerSequenceReduction.forward = self._original_sequence_reduction_forward
+
+
+class CLIPTextTransformerShim(torch.nn.Module):
+    """Reinstates the `text_model` submodule that transformers 5.6 flattened away.
+
+    `CLIPTextTransformer` was removed in https://github.com/huggingface/transformers/pull/44431 and its
+    body moved verbatim into `CLIPTextModel.forward`. The computation is unchanged, but losing the
+    submodule call means TorchScript no longer pools the scalar constants of that scope, so the traced
+    graph gains a handful of duplicated `prim::Constant` nodes. Only the module boundary is restored
+    here: the forward delegates straight back to the original (still decorated) `CLIPTextModel.forward`,
+    so output capture and everything else behaves exactly as before.
+    """
+
+    def __init__(self, model: PreTrainedModel):
+        super().__init__()
+        # Deliberately holds no submodules: re-registering the model's own children under a second
+        # name would make `capture_outputs` collect every hidden state twice.
+        self._flat_forward = model.forward
+
+    def forward(self, input_ids=None, attention_mask=None, position_ids=None, **kwargs):
+        return self._flat_forward(
+            input_ids=input_ids, attention_mask=attention_mask, position_ids=position_ids, **kwargs
+        )
+
+
+def _clip_text_model_forward(self, input_ids=None, attention_mask=None, position_ids=None, **kwargs):
+    return self.text_model(input_ids=input_ids, attention_mask=attention_mask, position_ids=position_ids, **kwargs)
+
+
+class CLIPTextModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: PreTrainedModel,
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        # The shim has to be in place before `ModelPatcher.__init__` captures the original forward.
+        # `CLIPTextModelWithProjection` still nests a `text_model`, so it is left untouched.
+        self._restore_text_model = (
+            is_transformers_version(">=", "5.6")
+            and model.__class__.__name__ == "CLIPTextModel"
+            and not hasattr(model, "text_model")
+        )
+        if self._restore_text_model:
+            model.text_model = CLIPTextTransformerShim(model)
+            model.forward = types.MethodType(_clip_text_model_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if self._restore_text_model:
+            del self._model.forward
+            del self._model.text_model

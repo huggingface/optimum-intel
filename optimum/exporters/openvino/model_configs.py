@@ -113,6 +113,7 @@ from optimum.exporters.openvino.model_patcher import (
     BigBirdPegasusModelPatcher,
     BloomModelPatcher,
     ChatGLMModelPatcher,
+    CLIPTextModelPatcher,
     CodeGenModelPatcher,
     CommonImageEmbeddingsModelPatcher,
     DBRXModelPatcher,
@@ -120,6 +121,7 @@ from optimum.exporters.openvino.model_patcher import (
     DeepseekOCR2LMPatcher,
     DeepseekOCR2VisionEmbeddingsPatcher,
     DeepseekPatcher,
+    DonutSwinModelPatcher,
     FalconModelPatcher,
     FluxTransformerModelPatcher,
     FunASRModelPatcher,
@@ -202,8 +204,10 @@ from optimum.exporters.openvino.model_patcher import (
     QwenModelPatcher,
     SAMModelPatcher,
     SanaTextEncoderModelPatcher,
+    SegformerModelPatcher,
     SentenceTransformersTransformerPatcher,
     SpeechT5ModelPatcher,
+    SwinModelPatcher,
     VideoChatFlashQwenVisionEmbeddingModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
@@ -1674,6 +1678,8 @@ class CLIPOpenVINOConfig(TextAndVisionOpenVINOConfig):
 @register_in_tasks_manager("clip_text_model", *["feature-extraction"], library_name="transformers")
 @register_in_tasks_manager("clip-text", *["feature-extraction"], library_name="diffusers")
 class CLIPTextOpenVINOConfig(TextEncoderOpenVINOConfig):
+    _MODEL_PATCHER = CLIPTextModelPatcher
+
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         vocab_size="vocab_size",
         sequence_length="max_position_embeddings",
@@ -6641,6 +6647,8 @@ class PoolFormerOpenVINOConfig(ViTOpenVINOConfig):
     "segformer", *["feature-extraction", "image-classification", "image-segmentation", "semantic-segmentation"]
 )
 class SegformerOpenVINOConfig(ViTOpenVINOConfig):
+    _MODEL_PATCHER = SegformerModelPatcher
+
     @property
     def outputs(self) -> dict:
         outputs = super().outputs
@@ -6653,12 +6661,12 @@ class SegformerOpenVINOConfig(ViTOpenVINOConfig):
 
 @register_in_tasks_manager("swin", *["feature-extraction", "image-classification", "masked-im"])
 class SwinOpenVINOConfig(ViTOpenVINOConfig):
-    pass
+    _MODEL_PATCHER = SwinModelPatcher
 
 
 @register_in_tasks_manager("donut-swin", *["feature-extraction"])
 class DonutSwinOpenVINOConfig(ViTOpenVINOConfig):
-    pass
+    _MODEL_PATCHER = DonutSwinModelPatcher
 
 
 @register_in_tasks_manager("convnext", *["feature-extraction", "image-classification"])

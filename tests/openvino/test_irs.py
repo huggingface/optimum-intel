@@ -259,6 +259,22 @@ ADDITIONAL_ARCH_MAPPINGS = {
 }
 
 
+# Extra `from_pretrained` arguments needed at export time by some models, keyed by architecture.
+# The reference IRs on the `ov` branch are generated with the exact same arguments, so any change
+# here must be mirrored by regenerating the affected references.
+_EXTRA_EXPORT_KWARGS_BY_ARCH = {
+    # SpeechT5 is a text-to-speech model whose export needs an explicit vocoder. For text-to-audio
+    # models the remaining `from_pretrained` kwargs are forwarded to `main_export` as `model_kwargs`.
+    "speecht5": {"vocoder": "fxmarty/speecht5-hifigan-tiny"},
+    # This fixture only ships weights under a non-default variant.
+    "stable-diffusion-with-custom-variant": {"variant": "custom"},
+}
+
+EXPORT_KWARGS = {
+    HUB_MODEL_NAMES[arch]: kwargs for arch, kwargs in _EXTRA_EXPORT_KWARGS_BY_ARCH.items() if arch in HUB_MODEL_NAMES
+}
+
+
 # Generate test parameters: (model_id, model_class) for all models that don't need trust_remote_code
 def _generate_test_params():
     """Generate test parameters from utils_tests mappings and test_export mappings."""
@@ -266,6 +282,17 @@ def _generate_test_params():
     for arch, model_id in HUB_MODEL_NAMES.items():
         # Skip models that need trust_remote_code
         if arch in REMOTE_CODE_MODELS:
+            continue
+
+        if arch in {  # multimodal models that also need trust_remote_code, but are not in REMOTE_CODE_MODELS
+            "internvl_chat",
+            "llava-qwen2",
+            "maira2",
+            "minicpmo",
+            "minicpmv",
+            "phi3_v",
+            "phi4mm",
+        }:
             continue
 
         if arch in {  # seq2seq models
@@ -497,7 +524,7 @@ class TestIRStability:
             pytest.skip(f"No openvino_model.xml files found in {ref_ir_dir}")
 
         # Export new IR
-        model = model_class.from_pretrained(model_id, export=True)
+        model = model_class.from_pretrained(model_id, export=True, **EXPORT_KWARGS.get(model_id, {}))
         new_ir_dir = tmp_path / "new_ir"
         model.save_pretrained(new_ir_dir)
 
