@@ -123,7 +123,12 @@ if is_transformers_version(">=", "5"):
 
 
 if is_diffusers_version(">=", "0.38.0"):
-    from diffusers.models.transformers import transformer_ltx2
+    # Imported inside `try` so transformers' remote-code `check_imports` scan does not
+    # make this a hard requirement of every Eagle3/DFlash draft-model export (see #1964).
+    try:
+        from diffusers.models.transformers import transformer_ltx2
+    except ImportError:
+        raise
 
 
 logger = logging.getLogger(__name__)
@@ -887,7 +892,12 @@ SUPPORT_SDPA = is_torch_version(">", "2.1.0")
 
 # TODO: why
 def _qwen_rotate_half(x):
-    from einops import rearrange
+    # Imported inside `try` so transformers' remote-code `check_imports` scan does not
+    # make this a hard requirement of every Eagle3/DFlash draft-model export (see #1964).
+    try:
+        from einops import rearrange
+    except ImportError as exc:
+        raise ImportError("This model patcher requires the `einops` package. Run `pip install einops`.") from exc
 
     x = rearrange(x, "... (j d) -> ... j d", j=2)
     x1, x2 = x.unbind(dim=-2)
@@ -1412,7 +1422,12 @@ def _internlm2_attention_forward(
     **kwargs,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     # from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
-    from einops import rearrange
+    # Imported inside `try` so transformers' remote-code `check_imports` scan does not
+    # make this a hard requirement of every Eagle3/DFlash draft-model export (see #1964).
+    try:
+        from einops import rearrange
+    except ImportError as exc:
+        raise ImportError("This model patcher requires the `einops` package. Run `pip install einops`.") from exc
 
     def rotate_half(x):
         """Rotates half the hidden dims of the input."""
@@ -3455,7 +3470,12 @@ class QwenImageTransformerModelPatcher(ModelPatcher):
 class QwenImageVaeModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
-        from diffusers.models.autoencoders.autoencoder_kl_qwenimage import QwenImageUpsample
+        # Imported inside `try` so transformers' remote-code `check_imports` scan does not
+        # make this a hard requirement of every Eagle3/DFlash draft-model export (see #1964).
+        try:
+            from diffusers.models.autoencoders.autoencoder_kl_qwenimage import QwenImageUpsample
+        except ImportError:
+            raise
 
         # OpenVINO has no "nearest-exact" upsampling op; "nearest" is identical for the integer
         # scale factor of 2 used here.
@@ -11241,7 +11261,12 @@ def _ltx2_connectors_top_level_forward_patched(
     if self.config.get("per_modality_projections", False):
         import math
 
-        from diffusers.pipelines.ltx2.connectors import per_token_rms_norm
+        # Imported inside `try` so transformers' remote-code `check_imports` scan does not
+        # make this a hard requirement of every Eagle3/DFlash draft-model export (see #1964).
+        try:
+            from diffusers.pipelines.ltx2.connectors import per_token_rms_norm
+        except ImportError:
+            raise
 
         norm_text_encoder_hidden_states = per_token_rms_norm(text_encoder_hidden_states)
         norm_text_encoder_hidden_states = norm_text_encoder_hidden_states.flatten(2, 3)
@@ -12084,7 +12109,12 @@ class ZImageTransformerModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        from diffusers.models.transformers.transformer_z_image import ZSingleStreamAttnProcessor as _ZAttnProc
+        # Imported inside `try` so transformers' remote-code `check_imports` scan does not
+        # make this a hard requirement of every Eagle3/DFlash draft-model export (see #1964).
+        try:
+            from diffusers.models.transformers.transformer_z_image import ZSingleStreamAttnProcessor as _ZAttnProc
+        except ImportError:
+            raise
 
         # 1. Real-valued RoPE in the attention processor (class level — see docstring)
         _ZAttnProc._orig_ov_call = _ZAttnProc.__call__
