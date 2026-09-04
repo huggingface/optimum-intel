@@ -66,6 +66,14 @@ jobs:
           uv pip install "transformers>=5.2,<5.3"
           pytest tests/openvino/${{ matrix.test-pattern }} -k "qwen3_5 or qwen3_5_moe" --durations=0
 
+      # test_genai is not matched by the matrix test-pattern glob, so run it explicitly and only
+      # once (the export job) to avoid repeating the same MTP speculative-decoding tests per matrix leg.
+      - name: Qwen3.5-MTP and Qwen3.5-Moe-MTP GenAI Validation
+        if: ${{ matrix.test-pattern == '*export*' }}
+        run: |
+          uv pip install "transformers>=5.2,<5.3"
+          pytest tests/openvino/test_genai.py -k "qwen3_5_mtp or qwen3_5_moe_mtp" --durations=0
+
       - name: Gemma 4 Unified Validation
         run: |
           uv pip install "transformers>=5.10,<5.11"

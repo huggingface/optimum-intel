@@ -485,6 +485,14 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
                 "backup_precision": "int8_sym",
                 "group_size": 64,
             },
+            # The MTP (Multi-Token Prediction) head is a full MoE decoder layer, as
+            # large as a main-model layer, so it is compressed like `lm_model`.
+            "mtp_model": {
+                "bits": 4,
+                "sym": False,
+                "backup_precision": "int8_sym",
+                "group_size": 64,
+            },
             "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
             "vision_embeddings_merger_model": {"bits": 8, "sym": True, "weight_only": True},
         },
@@ -492,6 +500,14 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     "Qwen/Qwen3.6-35B-A3B": {
         "quantization_configs": {
             "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "backup_precision": "int8_sym",
+                "group_size": 64,
+            },
+            # The MTP (Multi-Token Prediction) head is a full MoE decoder layer, as
+            # large as a main-model layer, so it is compressed like `lm_model`.
+            "mtp_model": {
                 "bits": 4,
                 "sym": False,
                 "backup_precision": "int8_sym",

@@ -12,10 +12,13 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import functools
 import inspect
+import json
 import logging
 import math
+import os
 import types
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -24,6 +27,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn.functional as F
 import transformers
+from huggingface_hub import hf_hub_download
+from huggingface_hub.utils import EntryNotFoundError
+from safetensors import safe_open
 from torch import nn
 from transformers import PreTrainedModel
 from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache
@@ -10256,6 +10262,250 @@ class Qwen3_5VisionEmbMergerPatcher(ModelPatcher):
             block.attn.forward = block.attn._orig_forward
 
 
+def _qwen3_5_mtp_module_forward(
+    self, hidden_states, inputs_embeds, attention_mask=None, position_ids=None, past_key_values=None
+):
+    """
+    Trace-friendly forward shared by the dense and MoE Qwen3.5 MTP heads.
+
+    Everything the single MTP decoder layer needs is produced here: the input dtype is normalized,
+    the rotary position embeddings (MRoPE) and the 4D causal mask are built, and the KV cache is
+    wrapped in a minimal ``_MTPDynamicCache`` (kept instead of a transformers ``DynamicCache`` so the
+    traced graph stays free of the cache's lazy-init / ``numel`` branches). The head has one decoder
+    layer, so ``past_key_values`` is the standard optimum ``[(key, value)]`` list with a single pair.
+    """
+    dtype = self.fc.weight.dtype
+    hidden_states = hidden_states.to(dtype)
+    inputs_embeds = inputs_embeds.to(dtype)
+
+    use_cache = past_key_values is not None
+    wrapped_cache = None
+    past_key_values_length = 0
+    if use_cache:
+        past_key, past_value = past_key_values[0]
+        wrapped_cache = _MTPDynamicCache(past_key.to(dtype), past_value.to(dtype))
+        past_key_values_length = past_key.shape[2]
+
+    h_norm = self.pre_fc_norm_hidden(hidden_states)
+    e_norm = self.pre_fc_norm_embedding(inputs_embeds)
+    combined = torch.cat([e_norm, h_norm], dim=-1)
+    x = self.fc(combined)
+
+    # Compute rotary position embeddings (MRoPE: expand to 3D)
+    if position_ids.ndim == 2:
+        rope_position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)
+    else:
+        rope_position_ids = position_ids
+    position_embeddings = self.rotary_emb(x, rope_position_ids)
+
+    # Build causal 4D attention mask from 2D attention_mask
+    batch_size, seq_length = x.shape[:2]
+    total_length = seq_length + past_key_values_length
+
+    # Create causal mask using comparison (trace-friendly, no static shapes)
+    # row indices [0..seq_length-1], col indices [0..total_length-1]
+    row_idx = torch.arange(seq_length, device=x.device).unsqueeze(1) + past_key_values_length
+    col_idx = torch.arange(total_length, device=x.device).unsqueeze(0)
+    # causal: mask where col > row (future positions)
+    causal_bool = col_idx > row_idx  # [seq_length, total_length]
+    causal_mask = causal_bool.unsqueeze(0).unsqueeze(0).to(x.dtype) * torch.finfo(x.dtype).min
+
+    # Apply padding mask from attention_mask
+    if attention_mask is not None:
+        padding_mask = (1.0 - attention_mask[:, None, None, :total_length].to(x.dtype)) * torch.finfo(x.dtype).min
+        causal_mask = causal_mask + padding_mask
+
+    layer = self.layers[0]
+    x = layer(
+        x,
+        position_embeddings=position_embeddings,
+        attention_mask=causal_mask,
+        position_ids=rope_position_ids,
+        past_key_values=wrapped_cache,
+    )
+
+    x = self.norm(x)
+
+    outputs = {"last_hidden_state": x}
+    if use_cache:
+        outputs["present_key_values"] = [wrapped_cache.key_cache[0], wrapped_cache.value_cache[0]]
+    return outputs
+
+
+class Qwen3_5MTPModule(nn.Module):
+    """
+    Standalone PyTorch module wrapping the MTP (Multi-Token Prediction) head weights
+    from Qwen3.5 for independent OpenVINO export.
+    """
+
+    __module__ = "transformers.models.qwen3_5"
+
+    def __init__(self, text_config):
+        super().__init__()
+        from transformers.models.qwen3_5.modeling_qwen3_5 import (
+            Qwen3_5DecoderLayer,
+            Qwen3_5RMSNorm,
+            Qwen3_5TextConfig,
+            Qwen3_5TextRotaryEmbedding,
+        )
+
+        self.config = text_config
+        hidden_size = text_config.hidden_size
+
+        # MTP-specific layers
+        self.pre_fc_norm_embedding = Qwen3_5RMSNorm(hidden_size, eps=text_config.rms_norm_eps)
+        self.pre_fc_norm_hidden = Qwen3_5RMSNorm(hidden_size, eps=text_config.rms_norm_eps)
+        self.fc = nn.Linear(hidden_size * 2, hidden_size, bias=False)
+
+        # Single decoder layer (full attention type)
+        mtp_config = Qwen3_5TextConfig(
+            vocab_size=text_config.vocab_size,
+            hidden_size=text_config.hidden_size,
+            intermediate_size=text_config.intermediate_size,
+            num_hidden_layers=1,
+            num_attention_heads=text_config.num_attention_heads,
+            num_key_value_heads=text_config.num_key_value_heads,
+            hidden_act=text_config.hidden_act,
+            max_position_embeddings=text_config.max_position_embeddings,
+            rms_norm_eps=text_config.rms_norm_eps,
+            attention_bias=text_config.attention_bias,
+            head_dim=text_config.head_dim,
+            rope_parameters=text_config.rope_parameters,
+            layer_types=["full_attention"],
+        )
+        self.layers = nn.ModuleList([Qwen3_5DecoderLayer(mtp_config, layer_idx=0)])
+        self.rotary_emb = Qwen3_5TextRotaryEmbedding(mtp_config)
+
+        # Final norm
+        self.norm = Qwen3_5RMSNorm(hidden_size, eps=text_config.rms_norm_eps)
+
+    @classmethod
+    def from_pretrained_model(cls, model):
+        """Create MTP module and load weights from the full Qwen3.5 model checkpoint."""
+        config = model.config
+        text_config = getattr(config, "text_config", config)
+        mtp_module = cls(text_config)
+
+        # Load MTP-specific weights (transformers ignores 'mtp.*' keys on load).
+        _load_mtp_weights(mtp_module, model)
+
+        # Override model_type so patch_stateful uses standard decoder path
+        # (qwen3_5_text is in SSM_MODELS which routes to hybrid_ssm stateful logic)
+        mtp_module.config = copy.deepcopy(text_config)
+        mtp_module.config.model_type = "qwen3_5_mtp"
+        return mtp_module
+
+    forward = _qwen3_5_mtp_module_forward
+
+
+def _set_nested_attr(module, name, tensor):
+    """Set a nested attribute on a module from a dot-separated name."""
+    parts = name.split(".")
+    for part in parts[:-1]:
+        if part.isdigit():
+            module = module[int(part)]
+        else:
+            module = getattr(module, part)
+    param_name = parts[-1]
+    if hasattr(module, param_name):
+        param = getattr(module, param_name)
+        if isinstance(param, nn.Parameter):
+            param.data = tensor
+        else:
+            setattr(module, param_name, nn.Parameter(tensor))
+    else:
+        setattr(module, param_name, nn.Parameter(tensor))
+
+
+def _load_mtp_weights(mtp_module, model):
+    """Populate an MTP head module with the ``mtp.*`` weights from the checkpoint.
+
+    The transformers modeling code lists ``mtp.*`` in ``_keys_to_ignore_on_load_unexpected``,
+    so these weights are never held on the loaded model and must be read directly from the
+    checkpoint files. Supports both a local export directory and a Hugging Face hub repo id.
+    """
+    model_name = getattr(model.config, "_name_or_path", None)
+    if not model_name:
+        raise ValueError("Cannot load MTP weights: model config has no '_name_or_path'.")
+
+    is_local = os.path.isdir(model_name)
+
+    def _resolve(filename):
+        if is_local:
+            path = os.path.join(model_name, filename)
+            return path if os.path.isfile(path) else None
+        try:
+            return hf_hub_download(model_name, filename)
+        except EntryNotFoundError:
+            return None
+
+    # Determine which safetensors file(s) hold the mtp weights.
+    shard_files = []
+    index_path = _resolve("model.safetensors.index.json")
+    if index_path is not None:
+        with open(index_path) as f:
+            index = json.load(f)
+        mtp_keys = [k for k in index["weight_map"] if k.startswith("mtp.")]
+        shard_files = sorted({index["weight_map"][k] for k in mtp_keys})
+    elif _resolve("model.safetensors") is not None:
+        shard_files = ["model.safetensors"]
+
+    loaded = 0
+    for shard in shard_files:
+        shard_path = _resolve(shard)
+        if shard_path is None:
+            continue
+        with safe_open(shard_path, framework="pt") as f:
+            for key in f.keys():
+                if key.startswith("mtp."):
+                    _set_nested_attr(mtp_module, key[4:], f.get_tensor(key))
+                    loaded += 1
+
+    if loaded == 0:
+        raise RuntimeError(
+            f"No MTP ('mtp.*') weights were loaded from '{model_name}'. The exported MTP head "
+            "would contain random weights, yielding a 0% speculative acceptance rate. Ensure the "
+            "checkpoint contains the MTP weights and is reachable as a local directory or hub repo."
+        )
+    return mtp_module
+
+
+class _MTPDynamicCache:
+    """Minimal cache wrapper for MTP export that avoids DynamicCache's layer-based API."""
+
+    def __init__(self, key_states, value_states):
+        self.key_cache = [key_states]
+        self.value_cache = [value_states]
+
+    def get_seq_length(self, layer_idx=0):
+        if len(self.key_cache) > layer_idx and self.key_cache[layer_idx] is not None:
+            return self.key_cache[layer_idx].shape[-2]
+        return 0
+
+    def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
+        if self.key_cache[layer_idx] is not None:
+            key_states = torch.cat([self.key_cache[layer_idx], key_states], dim=2)
+            value_states = torch.cat([self.value_cache[layer_idx], value_states], dim=2)
+        self.key_cache[layer_idx] = key_states
+        self.value_cache[layer_idx] = value_states
+        return key_states, value_states
+
+
+class Qwen3_5MTPModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+        # The MTP forward lives on the module itself (see `_qwen3_5_mtp_module_forward`). Drive it
+        # directly and bypass the base `ModelPatcher` wrapper, whose cache pre/post-processing
+        # (legacy list -> DynamicCache) would change the traced graph.
+        self.patched_forward = self._model.forward
+        self.orig_forward = self._model.forward
+
+
 # Patched forward for MobileNetV5MultiScaleFusionAdapter (MSFA) used by the Gemma3n vision tower.
 # The original MSFA forward has data-dependent control flow that branches on tensor spatial
 # dimensions to choose between F.interpolate and F.avg_pool2d for resizing to output_resolution.
@@ -10365,6 +10615,108 @@ class Qwen3_5MoeModelPatcher(Qwen3_5ModelPatcher):
 
         super().__exit__(exc_type, exc_value, traceback)
         for decoder_layer in self._text_model.layers:
+            if isinstance(decoder_layer.mlp, Qwen3_5MoeSparseMoeBlock):
+                sparse_moe_block = decoder_layer.mlp
+                sparse_moe_block.forward = sparse_moe_block._orig_forward
+
+
+class Qwen3_5MoeMTPModule(nn.Module):
+    """
+    Standalone PyTorch module wrapping the MTP head weights from Qwen3.5-MoE
+    (e.g. Qwen3.6-35B-A3B) for independent OpenVINO export.
+
+    Unlike the dense Qwen3.5 MTP, this variant uses a MoE decoder layer with
+    sparse experts in the MLP.
+    """
+
+    __module__ = "transformers.models.qwen3_5_moe"
+
+    def __init__(self, text_config):
+        super().__init__()
+        from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
+            Qwen3_5MoeDecoderLayer,
+            Qwen3_5MoeRMSNorm,
+            Qwen3_5MoeTextConfig,
+            Qwen3_5MoeTextRotaryEmbedding,
+        )
+
+        self.config = text_config
+        hidden_size = text_config.hidden_size
+
+        # MTP-specific layers
+        self.pre_fc_norm_embedding = Qwen3_5MoeRMSNorm(hidden_size, eps=text_config.rms_norm_eps)
+        self.pre_fc_norm_hidden = Qwen3_5MoeRMSNorm(hidden_size, eps=text_config.rms_norm_eps)
+        self.fc = nn.Linear(hidden_size * 2, hidden_size, bias=False)
+
+        # Single decoder layer (full attention + MoE MLP)
+        mtp_config = Qwen3_5MoeTextConfig(
+            vocab_size=text_config.vocab_size,
+            hidden_size=text_config.hidden_size,
+            moe_intermediate_size=text_config.moe_intermediate_size,
+            shared_expert_intermediate_size=text_config.shared_expert_intermediate_size,
+            num_hidden_layers=1,
+            num_attention_heads=text_config.num_attention_heads,
+            num_key_value_heads=text_config.num_key_value_heads,
+            hidden_act=text_config.hidden_act,
+            max_position_embeddings=text_config.max_position_embeddings,
+            rms_norm_eps=text_config.rms_norm_eps,
+            attention_bias=getattr(text_config, "attention_bias", False),
+            head_dim=text_config.head_dim,
+            rope_parameters=text_config.rope_parameters,
+            layer_types=["full_attention"],
+            num_experts=text_config.num_experts,
+            num_experts_per_tok=text_config.num_experts_per_tok,
+        )
+        self.layers = nn.ModuleList([Qwen3_5MoeDecoderLayer(mtp_config, layer_idx=0)])
+        self.rotary_emb = Qwen3_5MoeTextRotaryEmbedding(mtp_config)
+
+        # Final norm
+        self.norm = Qwen3_5MoeRMSNorm(hidden_size, eps=text_config.rms_norm_eps)
+
+    @classmethod
+    def from_pretrained_model(cls, model):
+        """Create MoE MTP module and load weights from the full model checkpoint."""
+        config = model.config
+        text_config = getattr(config, "text_config", config)
+        mtp_module = cls(text_config)
+
+        # Load MTP-specific weights (transformers ignores 'mtp.*' keys on load).
+        _load_mtp_weights(mtp_module, model)
+
+        # Override model_type so patch_stateful uses standard decoder path
+        mtp_module.config = copy.deepcopy(text_config)
+        mtp_module.config.model_type = "qwen3_5_mtp"
+        return mtp_module
+
+    forward = _qwen3_5_mtp_module_forward
+
+
+class Qwen3_5MoeMTPModelPatcher(Qwen3_5MTPModelPatcher):
+    """MTP model patcher for MoE variant — patches the MoE sparse block in the MTP decoder layer."""
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import Qwen3_5MoeSparseMoeBlock
+
+        super().__enter__()
+        for decoder_layer in self._model.layers:
+            if isinstance(decoder_layer.mlp, Qwen3_5MoeSparseMoeBlock):
+                sparse_moe_block = decoder_layer.mlp
+                sparse_moe_block._orig_forward = sparse_moe_block.forward
+                sparse_moe_block.forward = types.MethodType(patched_qwen3_5_moe_sparse_moe_block, sparse_moe_block)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import Qwen3_5MoeSparseMoeBlock
+
+        super().__exit__(exc_type, exc_value, traceback)
+        for decoder_layer in self._model.layers:
             if isinstance(decoder_layer.mlp, Qwen3_5MoeSparseMoeBlock):
                 sparse_moe_block = decoder_layer.mlp
                 sparse_moe_block.forward = sparse_moe_block._orig_forward
