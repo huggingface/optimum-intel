@@ -7165,7 +7165,6 @@ class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
     DUMMY_PKV_GENERATOR_CLASS = Qwen3_5DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     MIN_TRANSFORMERS_VERSION = "5.2.0"
-    MAX_TRANSFORMERS_VERSION = "5.2.99"
     _MODEL_PATCHER = Qwen3_5ModelPatcher
 
     @property
@@ -7247,7 +7246,6 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
     ]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
     MIN_TRANSFORMERS_VERSION = "5.2.0"
-    MAX_TRANSFORMERS_VERSION = "5.2.99"
 
     def __init__(
         self,
