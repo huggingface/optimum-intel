@@ -43,6 +43,7 @@ from optimum.intel import (
     OVModelForCustomTasks,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
+    OVModelForImageToImage,
     OVModelForMaskedLM,
     OVModelForMultimodalLM,
     OVModelForPix2Struct,
@@ -83,6 +84,7 @@ class ExportModelTest(unittest.TestCase):
         "distilbert": OVModelForQuestionAnswering,
         "albert": OVModelForSequenceClassification,
         "vit": OVModelForImageClassification,
+        "swin2sr": OVModelForImageToImage,
         "roberta": OVModelForTokenClassification,
         "wav2vec2": OVModelForAudioClassification,
         "whisper": OVModelForSpeechSeq2Seq,
@@ -493,3 +495,9 @@ class CustomExportModelTest(unittest.TestCase):
         ov_outputs = ov_model(**tokens)
         self.assertTrue(torch.allclose(ov_outputs.token_embeddings, model_outputs.token_embeddings, atol=1e-4))
         self.assertTrue(torch.allclose(ov_outputs.sentence_embedding, model_outputs.sentence_embedding, atol=1e-4))
+
+
+class ImageToImageSupportTest(unittest.TestCase):
+    def test_image_to_image_model_class_uses_custom_tasks_base(self):
+        self.assertTrue(issubclass(OVModelForImageToImage, OVModelForCustomTasks))
+        self.assertEqual(OVModelForImageToImage.export_feature, "image-to-image")
