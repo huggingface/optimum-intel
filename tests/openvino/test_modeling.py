@@ -1037,6 +1037,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bert",
         "distilbert",
+        "modernbert",
         "roberta",
         "sentence-transformers-bert",
         "qwen3",
@@ -1133,6 +1134,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "esm",
         "ibert",
         "mobilebert",
+        "modernbert",
         "mpnet",
         "perceiver_text",
         "rembert",
