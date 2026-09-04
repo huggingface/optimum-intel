@@ -438,11 +438,24 @@ def _resolve_cached_model_paths(model_names: dict) -> dict:
         if not os.path.exists(constants.HF_HUB_CACHE):
             return model_names
 
-        repo_id_to_local_paths = {
-            repo.repo_id: str(next(iter(repo.revisions)).snapshot_path)
-            for repo in scan_cache_dir().repos
-            if repo.revisions
-        }
+        repo_id_to_local_paths = {}
+        for repo in scan_cache_dir().repos:
+            if not repo.revisions:
+                continue
+            best = None
+            for rev in sorted(repo.revisions, key=lambda r: r.last_modified, reverse=True):
+                file_names = {f.file_name for f in rev.files}
+                if "config.json" not in file_names:
+                    continue
+                # Skip repos with custom Python code — their Hub repos can add new .py
+                # files that a stale local snapshot won't have, causing FileNotFoundError
+                if any(f.endswith(".py") for f in file_names):
+                    break
+                if all(os.path.exists(f.file_path) for f in rev.files):
+                    best = rev
+                    break
+            if best is not None:
+                repo_id_to_local_paths[repo.repo_id] = str(best.snapshot_path)
         return {k: repo_id_to_local_paths.get(v, v) for k, v in model_names.items()}
     except Exception:
         return model_names

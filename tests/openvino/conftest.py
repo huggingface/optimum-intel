@@ -1,4 +1,21 @@
+import os
+
 import pytest
+
+
+def pytest_report_header(config):
+    # Must live in conftest: pytest-xdist does not forward worker logs, so this only
+    # reaches the terminal from the controller process.
+    device = os.getenv("OPENVINO_TEST_DEVICE", "CPU")
+    header = f"OpenVINO test device: {device}"
+    if device == "NPU":
+        try:
+            import openvino as ov
+
+            header += f", NPU driver version: {ov.Core().get_property('NPU', 'NPU_DRIVER_VERSION')}"
+        except Exception as exception:
+            header += f", NPU driver version unavailable: {exception}"
+    return header
 
 
 @pytest.hookimpl(tryfirst=True)
