@@ -211,6 +211,7 @@ from optimum.exporters.openvino.model_patcher import (
     SanaTextEncoderModelPatcher,
     SentenceTransformersTransformerPatcher,
     SpeechT5ModelPatcher,
+    UnlimitedOCRPatcher,
     VideoChatFlashQwenVisionEmbeddingModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
@@ -378,6 +379,11 @@ def init_model_configs():
             "transformers",
             "Qwen3OmniMoeForConditionalGeneration",
         )
+
+    # baidu/Unlimited-OCR (``trust_remote_code=True``) only registers ``AutoModel`` in its
+    # ``auto_map`` (no ``AutoModelForCausalLM``), so the default task->AutoModel resolution must
+    # be overridden to load the bundled ``UnlimitedOCRForCausalLM`` via ``AutoModel``.
+    TasksManager._CUSTOM_CLASSES[("pt", "unlimited-ocr", "text-generation")] = ("transformers", "AutoModel")
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
@@ -4958,6 +4964,39 @@ class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
     MAX_TRANSFORMERS_VERSION = "4.53.3"
     _MODEL_PATCHER = DeepseekPatcher
+
+
+@register_in_tasks_manager(
+    "unlimited-ocr", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class UnlimitedOCROpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    """OpenVINO export config for ``baidu/Unlimited-OCR`` (model_type ``unlimited-ocr``,
+    ``trust_remote_code=True``).
+
+    Unlimited-OCR bundles a DeepSeek-V2-style MoE decoder (``modeling_deepseekv2.py``) whose
+    ``text_config``/``language_config`` fields are numerically identical to the natively-supported
+    ``deepseek_ocr2`` model (huggingface/optimum-intel#1793), fused with a custom SAM+CLIP vision
+    tower (``deepencoder.py``, class ``UnlimitedOCRModel``). Unlike ``deepseek_ocr2``'s native
+    transformers integration, the bundled vision fusion here uses hardcoded ``.cuda()`` calls, a
+    Python-level 2D-tiling/concat scheme (not the native model's query-resampler), and ships no
+    public ``AutoImageProcessor`` -- it is out of scope for this export. Only the
+    ``text-generation``/``text-generation-with-past`` language-model backbone is registered: when
+    called without ``images`` (the default for plain decoder dummy inputs), the bundled
+    ``UnlimitedOCRModel.forward`` cleanly skips its vision branch, so no vision-specific patch is
+    required to export the language model in isolation.
+    """
+
+    # The bundled ``modeling_deepseekv2.py`` imports ``transformers.modeling_attn_mask_utils.
+    # _prepare_4d_causal_attention_mask`` and ``transformers.models.llama.modeling_llama.
+    # LlamaAttention`` in a shape compatible only with older transformers releases -- same
+    # constraint already applied to the natively-supported "deepseek"/"deepseek_v2"/"deepseek_v3"
+    # sibling registrations (``DeepseekOpenVINOConfig``) that share this vintage of bundled code.
+    MIN_TRANSFORMERS_VERSION = "4.46.0"
+    MAX_TRANSFORMERS_VERSION = "4.53.3"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = UnlimitedOCRPatcher
 
 
 @register_in_tasks_manager("got_ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")
