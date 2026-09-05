@@ -4195,6 +4195,107 @@ def deepseek_moe_infer(self, x, topk_ids, topk_weight):
     return final_out
 
 
+def unlimited_ocr_attn_forward(
+    self,
+    hidden_states: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    past_key_value=None,
+    output_attentions: bool = False,
+    use_cache: bool = False,
+    **kwargs,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    """Branch-free replacement for baidu/Unlimited-OCR's bundled ``SlidingWindowLlamaAttention.forward``
+    (``modeling_deepseekv2.py``, ``trust_remote_code=True``).
+
+    The original implementation keeps Python-level ring-buffer bookkeeping on the cache object
+    (``past_key_value._prefill_length`` / ``past_key_value._ring_pos``) with data-dependent branches
+    (e.g. ``if cur_len < prefill_len + W``) and in-place slice writes that ``torch.jit.trace`` cannot
+    capture correctly. This patch always takes the model's own branch-free "growing cache" code path
+    (its ``_attn_forward`` helper), which is what every other decoder patcher in this file assumes
+    (unbounded/DynamicCache-based KV growth) and is numerically equivalent to the original for
+    sequences no longer than ``config.sliding_window_size``. The sliding-window truncation itself is
+    therefore not enforced in the exported graph -- documented follow-up for longer-context use.
+    """
+
+    def rotate_half(x):
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+
+    def apply_rotary_pos_emb(q, k, cos, sin):
+        cos = cos.unsqueeze(1)
+        sin = sin.unsqueeze(1)
+        q_embed = (q * cos) + (rotate_half(q) * sin)
+        k_embed = (k * cos) + (rotate_half(k) * sin)
+        return q_embed, k_embed
+
+    bsz, q_len, _ = hidden_states.shape
+    num_heads = self.config.num_attention_heads
+    num_kv_heads = self.config.num_key_value_heads
+    head_dim = self.head_dim
+    num_kv_groups = num_heads // num_kv_heads
+
+    query_states = self.q_proj(hidden_states).view(bsz, q_len, num_heads, head_dim).transpose(1, 2)
+    key_states = self.k_proj(hidden_states).view(bsz, q_len, num_kv_heads, head_dim).transpose(1, 2)
+    value_states = self.v_proj(hidden_states).view(bsz, q_len, num_kv_heads, head_dim).transpose(1, 2)
+
+    cos, sin = self.rotary_emb(value_states, position_ids)
+    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+    if past_key_value is not None:
+        key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx)
+
+    if num_kv_groups > 1:
+        key_states = key_states.repeat_interleave(num_kv_groups, dim=1)
+        value_states = value_states.repeat_interleave(num_kv_groups, dim=1)
+
+    attn_output = torch.nn.functional.scaled_dot_product_attention(
+        query_states,
+        key_states,
+        value_states,
+        attn_mask=attention_mask,
+        is_causal=attention_mask is None and q_len > 1,
+    )
+    attn_output = attn_output.transpose(1, 2).contiguous().reshape(bsz, q_len, -1)
+    attn_output = self.o_proj(attn_output)
+
+    return attn_output, None, past_key_value
+
+
+class UnlimitedOCRPatcher(OVDecoderModelPatcher):
+    """Decoder-only patcher for baidu/Unlimited-OCR's bundled DeepSeek-V2-style MoE language
+    backbone (``modeling_deepseekv2.py`` / ``modeling_unlimitedocr.py``, ``trust_remote_code=True``).
+
+    Only the language-model branch is exported here (the vision fusion path, driven by a custom
+    SAM+CLIP encoder with hardcoded ``.cuda()`` calls and no public ``AutoImageProcessor``, is out
+    of scope for this export -- see ``UnlimitedOCROpenVINOConfig`` docstring). Two structural
+    incompatibilities with ``torch.jit.trace`` are patched:
+      * ``SlidingWindowLlamaAttention.forward`` -> :func:`unlimited_ocr_attn_forward` (branch-free
+        growing-cache SDPA attention, see its docstring).
+      * ``DeepseekV2MoE.moe_infer`` -> the existing :func:`deepseek_moe_infer` (already used by
+        ``DeepseekPatcher`` for the natively-supported ``deepseek_v2``/``deepseek_v3``/``deepseek``
+        model types), reused as-is since the bundled ``DeepseekV2MoE`` module layout
+        (``self.experts`` / ``self.ep_rank`` / ``self.experts_per_rank``) is identical.
+    """
+
+    def __enter__(self):
+        super().__enter__()
+        for block in self._model.model.layers:
+            block.self_attn._orig_forward = block.self_attn.forward
+            block.self_attn.forward = types.MethodType(unlimited_ocr_attn_forward, block.self_attn)
+            if hasattr(block.mlp, "moe_infer"):
+                block.mlp._orig_moe_infer = block.mlp.moe_infer
+                block.mlp.moe_infer = types.MethodType(deepseek_moe_infer, block.mlp)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for block in self._model.model.layers:
+            block.self_attn.forward = block.self_attn._orig_forward
+            if hasattr(block.mlp, "_orig_moe_infer"):
+                block.mlp.moe_infer = block.mlp._orig_moe_infer
+
+
 class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
