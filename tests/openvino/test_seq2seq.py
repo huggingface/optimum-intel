@@ -598,7 +598,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "gemma4_unified",
         "gemma3n",
         "qwen3_5",
+        "qwen3_5_mtp",
         "qwen3_5_moe",
+        "qwen3_5_moe_mtp",
         "qwen3_omni_moe",
         "mistral3",
         "muse_glimmer",
@@ -611,6 +613,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_vl",
         "videochat_flash_qwen",
         "muse_glimmer",
+        "gemma4",
+        "gemma4_moe",
+        "gemma4_unified",
     ]
     SUPPORT_AUDIO = ["qwen3_omni_moe"]
     # "llama" is registered for image-text-to-text
@@ -670,7 +675,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "llama4",
             "qwen3_vl",
             "qwen3_5",
+            "qwen3_5_mtp",
             "qwen3_5_moe",
+            "qwen3_5_moe_mtp",
             "gemma4_unified",
             "muse_glimmer",
         ]:
@@ -744,6 +751,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         if model_arch == "qwen3_omni_moe":
             # Qwen3OmniMoeForConditionalGeneration has a custom generate() interface incompatible with this flow
             self.skipTest("qwen3_omni_moe comparison tested via dedicated test methods")
+
+        if model_arch == "gemma4":
+            self.skipTest("gemma4 is causing segfault CVS-193103")
 
         def compare_outputs(inputs, ov_model, transformers_model, generation_config):
             transformers_inputs = copy.deepcopy(inputs)
@@ -899,7 +909,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 repo_type="dataset",
                 user_agent=http_user_agent(),
             )
-            input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
+            num_frames = 2
+            # Gemma4 requires 32 frames for video input without providing video metadata
+            if model_arch in ["gemma4", "gemma4_moe", "gemma4_unified"]:
+                num_frames = 32
+            input_video, _ = load_video(video_path, num_frames=num_frames, backend="opencv")
             question = "Why is this video funny?"
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video)
             compare_outputs(inputs, ov_model, transformers_model, gen_config)
@@ -984,6 +998,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_generate_utils(self, model_arch):
+        if model_arch == "gemma4":
+            self.skipTest("gemma4 is causing segfault CVS-193103")
         model_id = MODEL_NAMES[model_arch]
         trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
         model = self.OVMODEL_CLASS.from_pretrained(
@@ -1016,7 +1032,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                     repo_type="dataset",
                     user_agent=http_user_agent(),
                 )
-                input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
+                num_frames = 2
+                # Gemma4 requires 32 frames for video input without providing video metadata
+                if model_arch in ["gemma4", "gemma4_moe", "gemma4_unified"]:
+                    num_frames = 32
+                input_video, _ = load_video(video_path, num_frames=num_frames, backend="opencv")
                 question = "Why is this video funny?"
                 inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
                 outputs = model.generate(**inputs, max_new_tokens=10)
