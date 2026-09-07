@@ -151,7 +151,11 @@ def _save_model(
     if getattr(config, "eagle3", False):
         model = _add_eagle3_mode_to_rt_info(model)
     if getattr(config, "dflash", False):
-        model = _add_dflash_mode_to_rt_info(model, config._config)
+        model = _add_dflash_mode_to_rt_info(
+            model,
+            config._config,
+            candidate_position_offset=config.candidate_position_offset,
+        )
     if source_model is not None and getattr(getattr(source_model, "config", None), "model_type", None) in {
         "qwen3",
         "qwen3_moe",
@@ -940,20 +944,21 @@ def _add_eagle3_mode_to_rt_info(model: Model):
     return model
 
 
-def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig") -> Model:
+def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig", candidate_position_offset: int) -> Model:
     """
     Add DFlash metadata to DFlash draft model.
 
     Marks model as DFlash draft model and adds DFlash configuration to the model including
-    mask token id and target layer ids.
+    mask token id, target layer ids, and candidate position offset.
     """
     try:
         model.set_rt_info("True", ["dflash_mode"])
-        dflash_config = getattr(hf_config, "dflash_config", {})
+        dflash_config = getattr(hf_config, "dflash_config", None) or hf_config.to_dict()
         if "mask_token_id" in dflash_config:
             model.set_rt_info(str(dflash_config["mask_token_id"]), ["dflash", "mask_token_id"])
         if "target_layer_ids" in dflash_config:
             model.set_rt_info(",".join(map(str, dflash_config["target_layer_ids"])), ["dflash", "target_layer_ids"])
+        model.set_rt_info(str(candidate_position_offset), ["dflash", "candidate_position_offset"])
     except Exception:
         pass
 

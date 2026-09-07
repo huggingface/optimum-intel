@@ -8897,7 +8897,7 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         self.layers = nn.ModuleList(
             [Qwen3DFlashDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
-        dflash_config = getattr(config, "dflash_config", {})
+        dflash_config = getattr(config, "dflash_config", None) or config.to_dict()
         self.target_layer_ids = dflash_config.get("target_layer_ids", [])
         self.norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = Qwen3RotaryEmbedding(config)
@@ -8993,6 +8993,49 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
         # candidate tokens that the grafted lm_head will score.
         if logits_to_keep is None:
             last_hidden_state = outputs.last_hidden_state[:, 1:, :]
+        else:
+            last_hidden_state = outputs.last_hidden_state[:, -logits_to_keep:, :]
+        return BaseModelOutputWithPast(
+            last_hidden_state=last_hidden_state,
+            past_key_values=outputs.past_key_values,
+        )
+
+
+class Qwen3DSparkDraftModel(Qwen3DFlashDraftModel):
+    """DeepSpec Qwen3 DSpark draft backbone."""
+
+    pass
+
+
+# adopted from https://github.com/deepseek-ai/DeepSpec/blob/main/deepspec/modeling/dspark/qwen3/modeling.py#L201
+class Qwen3DSparkForCausalLM(Qwen3DSparkDraftModel, GenerationMixin):
+    """DeepSpec Qwen3 DSpark draft head exported as embeddings-in / hidden-states-out.
+
+    Unlike z-lab DFlash, DeepSpec does not prune the first (seed) hidden state.
+    """
+
+    def forward(
+        self,
+        inputs_embeds: torch.FloatTensor,
+        hidden_states: torch.Tensor,
+        position_ids: torch.LongTensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        past_key_values: Optional[Cache] = None,
+        use_cache: Optional[bool] = None,
+        logits_to_keep: Optional[int] = None,
+        **kwargs,
+    ) -> BaseModelOutputWithPast:
+        outputs = super().forward(
+            hidden_states=hidden_states,
+            noise_embedding=inputs_embeds,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+            **kwargs,
+        )
+        if logits_to_keep is None:
+            last_hidden_state = outputs.last_hidden_state
         else:
             last_hidden_state = outputs.last_hidden_state[:, -logits_to_keep:, :]
         return BaseModelOutputWithPast(
