@@ -5332,12 +5332,6 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
 
         self.orig_forward = forward_with_precomputed_mask
 
-    def __enter__(self):
-        super().__enter__()
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-
 
 # Forward method of the language model of Gemma3n, needs to be patched to pass 'per_layer_inputs',
 # as original code fails to create per_layer_inputs without the providing of input_ids,
@@ -5420,7 +5414,7 @@ def gemma3n_language_model_forward(
     return outputs
 
 
-# Creates a dict of causal masks with bidirectional attention for vision tokens
+# Creates a dict of causal masks with bidirectional attention for vision tokens,
 # on sliding_attention layers, matching the behavior of transformers
 # create_causal_mask_mapping when use_bidirectional_attention == "vision".
 # Needs to be patched to pass proper 'sliding_mask' for prefill stage.
@@ -5472,7 +5466,9 @@ def _create_gemma4_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids,
     same_group = (query_groups.unsqueeze(2) == key_groups.unsqueeze(1)) & (key_groups.unsqueeze(1) >= 0)
     same_group = same_group.unsqueeze(1)  # [batch, 1, seq_len, total_len]
 
-    # Undo masking for same-group vision tokens in sliding mask
+    # Un-mask same-group vision tokens in both masks (bidirectional attention within an image).
+    if is_transformers_version(">=", "5.9"):
+        full_mask = full_mask.masked_fill(same_group, 0.0)
     sliding_mask = sliding_mask.masked_fill(same_group, 0.0)
 
     return {
@@ -5680,6 +5676,10 @@ def gemma4_text_attention_forward(
 ) -> tuple:
     from transformers.models.gemma4.modeling_gemma4 import apply_rotary_pos_emb as apply_rotary_pos_emb_gemma4
 
+    # since transformers >= v5.6 (PR #45788) `shared_kv_states` dict and is passed and `kv_shared_layer_index` removed
+    shared_kv_states = kwargs.pop("shared_kv_states", None)
+    legacy_shared_kv_states = hasattr(self, "kv_shared_layer_index")
+
     input_shape = hidden_states.shape[:-1]
     hidden_shape = (*input_shape, -1, self.head_dim)
 
@@ -5690,8 +5690,12 @@ def gemma4_text_attention_forward(
     query_states = apply_rotary_pos_emb_gemma4(query_states, cos, sin, unsqueeze_dim=2)
     query_states = query_states.transpose(1, 2)
 
-    if self.is_kv_shared_layer and past_key_values is not None:
-        key_states, value_states = past_key_values.shared_layers[self.kv_shared_layer_index]
+    if self.is_kv_shared_layer and (not legacy_shared_kv_states or past_key_values is not None):
+        if legacy_shared_kv_states:
+            key_states, value_states = past_key_values.shared_layers[self.kv_shared_layer_index]
+        else:
+            key_states, value_states = shared_kv_states[self.layer_type]
+
         key_states = key_states.to(query_states.device)
         value_states = value_states.to(query_states.device)
     else:
@@ -5706,18 +5710,26 @@ def gemma4_text_attention_forward(
         value_states = value_states.transpose(1, 2)
 
     if past_key_values is not None:
-        cache_kwargs = {
-            "sin": sin,
-            "cos": cos,
-            "cache_position": cache_position,
-            "sliding_window": self.sliding_window,
-        }
-        if not self.is_kv_shared_layer:
-            key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
-        if self.store_full_length_kv:
-            if not hasattr(past_key_values, "shared_layers"):
-                past_key_values.shared_layers = {}
-            past_key_values.shared_layers[self.layer_idx] = key_states, value_states
+        if legacy_shared_kv_states:
+            cache_kwargs = {
+                "sin": sin,
+                "cos": cos,
+                "cache_position": cache_position,
+                "sliding_window": self.sliding_window,
+            }
+            if not self.is_kv_shared_layer:
+                key_states, value_states = past_key_values.update(
+                    key_states, value_states, self.layer_idx, cache_kwargs
+                )
+            if self.store_full_length_kv:
+                if not hasattr(past_key_values, "shared_layers"):
+                    past_key_values.shared_layers = {}
+                past_key_values.shared_layers[self.layer_idx] = key_states, value_states
+        else:
+            if not self.is_kv_shared_layer:
+                key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx)
+            if self.store_full_length_kv and shared_kv_states is not None:
+                shared_kv_states[self.layer_type] = key_states, value_states
 
     attention_interface = gemma4_eager_attention_forward_patched
 
@@ -9484,6 +9496,26 @@ def patched_gemma4_clippable_linear_forward(self, hidden_states: torch.Tensor) -
     return hidden_states
 
 
+# transformers v5.6 replaced the one-hot @ table formulation of the vision patch position
+# embeddings with two `F.embedding` lookups. The two are mathematically identical, but they
+# trace to different graphs (OneHot + MatMul + ReduceSum vs Gather), which changes the
+# exported IR. Keep the original formulation during export so IRs stay stable across
+# transformers versions.
+def patched_gemma4_position_embeddings(
+    self, pixel_position_ids: torch.Tensor, padding_positions: torch.Tensor
+) -> torch.Tensor:
+    # Expanding and permute patch positions to (batch_size, num_patches, 2, position_embedding_size) for matmul.
+    clamped_positions = pixel_position_ids.clamp(min=0)
+    one_hot = F.one_hot(clamped_positions, num_classes=self.position_embedding_size)
+    one_hot = one_hot.permute(0, 2, 1, 3).to(self.position_embedding_table)
+    # Compute positional embeddings and sum across x and y.
+    position_embeddings = one_hot @ self.position_embedding_table
+    position_embeddings = position_embeddings.sum(dim=1)
+    # Zero out embeddings for any padding patches.
+    position_embeddings = torch.where(padding_positions.unsqueeze(-1), 0.0, position_embeddings)
+    return position_embeddings
+
+
 class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
     def __init__(self, config, model, model_kwargs):
         super().__init__(config, model, model_kwargs)
@@ -9492,6 +9524,14 @@ class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
         # Get the vision encoder - it's at model.model.vision_tower.encoder
         vision_model = model.model.vision_tower if is_transformers_version(">=", "5") else model.vision_tower
         self._vision_encoder = vision_model.encoder
+
+        # Restore the pre-v5.6 patch position embedding formulation to keep the exported IR stable.
+        self._patch_embedder = getattr(vision_model, "patch_embedder", None)
+        if self._patch_embedder is not None:
+            self._orig_position_embeddings = self._patch_embedder._position_embeddings
+            self._patch_embedder._position_embeddings = types.MethodType(
+                patched_gemma4_position_embeddings, self._patch_embedder
+            )
 
         # Patch the vision encoder forward to bypass create_bidirectional_mask,
         # which is not compatible with torch.jit.trace due to dynamic masking logic.
@@ -9545,6 +9585,8 @@ class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
         from transformers.models.gemma4.modeling_gemma4 import Gemma4ClippableLinear
 
         self._vision_encoder.forward = self._orig_encoder_forward
+        if self._patch_embedder is not None:
+            self._patch_embedder._position_embeddings = self._orig_position_embeddings
         super().__exit__(exc_type, exc_value, traceback)
 
         for layer in self._vision_encoder.layers:
