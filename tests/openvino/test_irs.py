@@ -6,6 +6,7 @@ regressions when upgrading transformers or other dependencies.
 """
 
 import json
+import os
 
 # Import test utilities to get model mappings
 import sys
@@ -16,7 +17,7 @@ from typing import Dict, List, Optional
 
 import pytest
 from huggingface_hub import snapshot_download
-from huggingface_hub.errors import RepositoryNotFoundError, RevisionNotFoundError
+from huggingface_hub.errors import HFValidationError, RepositoryNotFoundError, RevisionNotFoundError
 from openvino import Core, Model
 
 from optimum.intel import (
@@ -351,6 +352,13 @@ def _generate_test_params():
         }:
             continue
 
+        if arch in {
+            "bart",
+            "donut",
+            "kokoro",
+        }:
+            continue
+
         # Try to get model class from ARCH_TO_MODEL_CLASS first, then ADDITIONAL_ARCH_MAPPINGS
         class_name = None
         if arch in ARCH_TO_MODEL_CLASS:
@@ -462,17 +470,22 @@ def download_reference_ir(model_id: str) -> Optional[Path]:
     """
     Fetch the reference IRs from a model's `ov` branch.
 
-    Returns None when the repository or its `ov` revision genuinely does not exist, which is the
-    only legitimate reason to skip a model. Everything else (429, 5xx, timeouts) is retried and
-    then raised: a flaky Hub must not silently turn this suite into a green no-op.
+    Returns None when the model is not on the Hub at all, which is the only legitimate reason to
+    skip it. Everything else (429, 5xx, timeouts) is retried and then raised: a flaky Hub must not
+    silently turn this suite into a green no-op.
     """
+    # Some fixtures are generated on the fly into a local directory (see `_create_tiny_kokoro_model`
+    # in utils_tests.py), so their "model id" is a filesystem path with no Hub reference behind it.
+    if os.path.isdir(model_id):
+        return None
+
     delay = DOWNLOAD_BACKOFF
     last_error = None
 
     for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
         try:
             return Path(snapshot_download(repo_id=model_id, revision="ov", repo_type="model"))
-        except (RepositoryNotFoundError, RevisionNotFoundError):
+        except (RepositoryNotFoundError, RevisionNotFoundError, HFValidationError):
             return None
         except Exception as error:
             last_error = error
@@ -538,17 +551,22 @@ def load_reference_metadata(ref_dir: Path) -> Optional[Dict]:
     return None
 
 
+# Tokenizer IRs are produced by openvino-tokenizers rather than by the model export, so they are
+# not part of what this suite guards and are not present in the references.
+NON_MODEL_IR_STEMS = ("openvino_tokenizer", "openvino_detokenizer")
+
+
 def find_ir_files(directory: Path) -> List[Path]:
     """
     Find all OpenVINO IR XML files in directory and subdirectories.
-    Handles both standard naming (openvino_model.xml) and component naming
-    (openvino_language_model.xml, openvino_vision_embeddings_model.xml, etc.)
+    Handles standard naming (openvino_model.xml), component naming with a `_model` suffix
+    (openvino_language_model.xml, openvino_vision_embeddings_model.xml, ...) and component naming
+    without one (openvino_vision_encoder.xml for SAM, openvino_model_text.xml for OpenCLIP).
     Returns list of paths relative to the directory.
     """
     ir_files = []
-    # Match both openvino_model.xml and openvino_*_model.xml patterns
     for xml_file in directory.rglob("openvino*.xml"):
-        if xml_file.name.startswith("openvino") and xml_file.name.endswith("_model.xml"):
+        if xml_file.stem not in NON_MODEL_IR_STEMS:
             # Get relative path from directory
             rel_path = xml_file.relative_to(directory)
             ir_files.append(rel_path)
@@ -570,7 +588,7 @@ class TestIRStability:
 
         if ref_ir_dir is None:
             MODELS_WITHOUT_REFERENCE.add(model_id)
-            pytest.skip(f"No reference IRs for {model_id}: the repository has no `ov` revision")
+            pytest.skip(f"No reference IRs for {model_id}: not on the Hub, or no `ov` revision")
 
         if not ref_ir_dir.exists():
             pytest.skip(f"Reference IR directory not found for {model_id}")
@@ -616,6 +634,15 @@ class TestIRStability:
                 f"  Extra components: {extra or 'none'}"
             )
 
+        # The loop below reads each reference file's counterpart by name, so a renamed or dropped
+        # component has to be reported here rather than surfacing as a read_model error.
+        missing_files = sorted(str(f) for f in set(ref_ir_files) - set(new_ir_files))
+        if missing_files:
+            pytest.fail(
+                f"IR files present in the reference but missing from the new export for {model_id}:\n  "
+                + "\n  ".join(missing_files)
+            )
+
         COMPARED_MODELS.add(model_id)
 
         # Initialize OpenVINO Core for loading models
@@ -624,7 +651,9 @@ class TestIRStability:
         # Compare each component's IR using OpenVINO's compare_models
         all_differences = {}
         for ref_ir_file in ref_ir_files:
-            component_name = str(ref_ir_file.parent) if str(ref_ir_file.parent) != "." else "root"
+            # Keyed by the full relative path: models such as SAM keep several components side by
+            # side at the root, and keying by directory alone would let one overwrite the other.
+            component_name = str(ref_ir_file)
 
             ref_ir_path = ref_ir_dir / ref_ir_file
             new_ir_path = new_ir_dir / ref_ir_file

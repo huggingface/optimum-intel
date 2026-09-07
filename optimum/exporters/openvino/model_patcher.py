@@ -128,6 +128,55 @@ if is_diffusers_version(">=", "0.38.0"):
 logger = logging.getLogger(__name__)
 
 
+def _patched_sam_two_way_transformer_forward(
+    self,
+    point_embeddings: torch.Tensor,
+    image_embeddings: torch.Tensor,
+    image_positional_embeddings: torch.Tensor,
+    attention_similarity: torch.Tensor,
+    target_embedding=None,
+    **kwargs,
+):
+    """`SamTwoWayTransformer.forward` with the pre-5.6 `permute` instead of `transpose`.
+
+    The two express the same operation and produce the same OpenVINO Transpose, but `permute` emits
+    an int64 order Constant while `transpose` emits an int32 one, which is enough to make the IR
+    differ. Everything below is copied verbatim from transformers apart from those two calls.
+    """
+    if image_embeddings is None:
+        raise ValueError("You have to specify an image_embedding")
+
+    image_embeddings = image_embeddings.flatten(2).permute(0, 2, 1).unsqueeze(1)
+    image_positional_embeddings = image_positional_embeddings.flatten(2).permute(0, 2, 1).unsqueeze(1)
+
+    # Prepare queries
+    queries = point_embeddings
+    keys = image_embeddings
+
+    # Apply transformer blocks and final layernorm
+    for layer in self.layers:
+        if target_embedding is not None:
+            queries += target_embedding
+
+        queries, keys, _ = layer(
+            queries=queries,
+            keys=keys,
+            query_point_embedding=point_embeddings,
+            key_point_embedding=image_positional_embeddings,
+            attention_similarity=attention_similarity,
+            **kwargs,
+        )
+    # Apply the final attention layer from the points to the image
+    query = queries + point_embeddings
+    key = keys + image_positional_embeddings
+
+    attn_out, _ = self.final_attn_token_to_image(query=query, key=key, value=keys)
+
+    queries = queries + attn_out
+    queries = self.layer_norm_final_attn(queries)
+    return queries, keys
+
+
 class SAMModelPatcher(ModelPatcher):
     def __init__(
         self,
@@ -207,6 +256,21 @@ class SAMModelPatcher(ModelPatcher):
                         return {"iou_scores": iou_predictions, "pred_masks": low_res_masks}
 
         self.patched_forward = patched_forward
+
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "5.6"):
+            from transformers.models.sam import modeling_sam
+
+            self._original_two_way_transformer_forward = modeling_sam.SamTwoWayTransformer.forward
+            modeling_sam.SamTwoWayTransformer.forward = _patched_sam_two_way_transformer_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">=", "5.6"):
+            from transformers.models.sam import modeling_sam
+
+            modeling_sam.SamTwoWayTransformer.forward = self._original_two_way_transformer_forward
 
 
 class SentenceTransformersTransformerPatcher(ModelPatcher):
