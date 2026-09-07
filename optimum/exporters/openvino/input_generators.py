@@ -1996,6 +1996,57 @@ class Qwen3_5DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         return cache_params
 
 
+class Qwen3_5MTPDummyInputGenerator(DummyTextInputGenerator):
+    """
+    Dummy input generator for the Qwen3.5 / Qwen3.5-MoE MTP (Multi-Token Prediction) head.
+
+    The MTP head consumes the main model's last-layer `hidden_states` together with the
+    current-token `inputs_embeds`, plus the usual `attention_mask` and `position_ids`. The
+    KV cache is produced separately by a standard past-key-values generator
+    (`MistralDummyPastKeyValuesGenerator`), so it is intentionally not handled here.
+    """
+
+    SUPPORTED_INPUT_NAMES = (
+        "hidden_states",
+        "inputs_embeds",
+        "attention_mask",
+        "position_ids",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+        self.hidden_size = normalized_config.hidden_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name in ("hidden_states", "inputs_embeds"):
+            return self.random_float_tensor(
+                [self.batch_size, self.sequence_length, self.hidden_size], framework=framework, dtype=float_dtype
+            )
+        if input_name == "attention_mask":
+            # The mask spans both the cached (past) tokens and the current tokens; the dummy past
+            # length matches the current sequence length (see MistralDummyPastKeyValuesGenerator).
+            return self.constant_tensor(
+                shape=[self.batch_size, 2 * self.sequence_length],
+                value=1,
+                framework=framework,
+                dtype=DTYPE_MAPPER.pt(int_dtype),
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
 class DummyKokoroInputGenerator(DummyInputGenerator):
     """Generates dummy inputs for the Kokoro TTS model."""
 
