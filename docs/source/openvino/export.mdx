@@ -194,66 +194,6 @@ Models larger than 1 billion parameters are exported to the OpenVINO format with
 
 Besides weight-only quantization, you can also apply [full model quantization](optimization#full-quantization) including activations by setting `--quant-mode` to preferred precision. This will quantize both weights and activations of Linear, Convolutional and some other layers to selected mode. Please see example below.
 
-```bash
-optimum-cli export openvino -m openai/whisper-large-v3-turbo --quant-mode int8 --dataset librispeech --num-samples 32 --smooth-quant-alpha 0.9 ./whisper-large-v3-turbo
-```
-
-#### Default quantization configs
-
-For some models we maintain a set of default quantization configs ([link](https://github.com/huggingface/optimum-intel/blob/main/optimum/intel/openvino/configuration.py)). To apply a default 4-bit weight-only quantization one should provide `--weight-format int4` without any additional arguments. For int8 weight & activation quantization it should be `--quant-mode int8`. For example:
-
-```bash
-optimum-cli export openvino -m microsoft/Phi-4-mini-instruct --weight-format int4 ./Phi-4-mini-instruct
-```
-
-or
-
-```bash
-optimum-cli export openvino -m openai/clip-vit-base-patch16 --quant-mode int8 ./clip-vit-base-patch16
-```
-
-
-### Decoder models
-
-For models with a decoder, we enable the re-use of past keys and values by default. This allows to avoid recomputing the same intermediate activations at each generation step. To export the model without, you will need to remove the `-with-past` suffix when specifying the task.
-
-| With K-V cache                           | Without K-V cache                    |
-|------------------------------------------|--------------------------------------|
-| `text-generation-with-past`              | `text-generation`                    |
-| `text2text-generation-with-past`         | `text2text-generation`               |
-| `automatic-speech-recognition-with-past` | `automatic-speech-recognition`       |
-
-
-### Diffusion models
-
-When Stable Diffusion models are exported to the OpenVINO format, they are decomposed into different components that are later combined during inference:
-
-* Text encoder(s)
-* U-Net
-* VAE encoder
-* VAE decoder
-
-For LTX-Video checkpoints with `timestep_conditioning` enabled (for example, LTX-Video 0.9.1), export now handles the VAE decoder conditioning path automatically by adding a dynamic `timestep` input when required by the checkpoint config.
-
-To export a text-to-video checkpoint such as LTX-Video:
-
-```bash
-optimum-cli export openvino --model <ltx-video-model-id> --task text-to-video ov_ltx_video/
-```
-
-To export your Stable Diffusion XL model to the OpenVINO IR format with the CLI you can do as follows:
-
-```bash
-optimum-cli export openvino --model stabilityai/stable-diffusion-xl-base-1.0 ov_sdxl/
-```
-
-You can also apply hybrid quantization during model export. For example:
-```bash
-optimum-cli export openvino --model stabilityai/stable-diffusion-xl-base-1.0 \
-    --weight-format int8 --dataset conceptual_captions ov_sdxl/
-```
-
-For more information about hybrid quantization, take a look at this jupyter [notebook](https://github.com/huggingface/optimum-intel/blob/main/notebooks/openvino/stable_diffusion_hybrid_quantization.ipynb).
 For some models we maintain a set of [default quantization configs](https://github.com/huggingface/optimum-intel/blob/main/optimum/intel/openvino/configuration.py). To apply a default 4-bit weight-only quantization one should provide `--weight-format int4` without any additional arguments. For int8 weight & activation quantization it should be `--quant-mode int8`.
 
 ## When loading your model
