@@ -31,12 +31,6 @@ from optimum.utils import is_diffusers_available
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
 
-logger = logging.getLogger(__name__)
-
-
-InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
-
-
 if is_torch_available():
     import torch
     import torch.nn as nn
@@ -44,6 +38,12 @@ if is_torch_available():
 
 if is_diffusers_available():
     from diffusers import ModelMixin
+
+
+logger = logging.getLogger(__name__)
+
+
+InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
 
 
 OV_XML_FILE_NAME = "openvino_model.xml"
@@ -317,6 +317,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llava_next",
     "llava_next_video",
     "llava-qwen2",
+    "mistral3",
     "internvl_chat",
     "maira2",
     "minicpmv",
@@ -338,7 +339,11 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llama4",
     "minicpmo",
     "videochat_flash_qwen",
+    "deepseek_ocr2",
+    "qwen3_omni_moe",
+    "muse_glimmer",
 ]
+
 
 SSM_MODELS = [
     "mamba",
@@ -485,6 +490,7 @@ def save_preprocessors(
                 processor.save_pretrained(output)
             except Exception as ex:
                 logger.error(f"Saving {type(processor)} failed with {ex}")
+
         # phi4mm does not allow loading chat template in processor, it uses chat_template from tokenizer
         if model_type == "phi4mm" and (Path(output) / "chat_template.json").exists():
             (Path(output) / "chat_template.json").unlink()
@@ -561,6 +567,36 @@ def load_preprocessors(
     preprocessors = maybe_load_preprocessors(
         src_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
     )
+    if model_type == "fun_asr":
+        # FunASR has no root tokenizer; it lives in the bundled Qwen3 LLM subfolder. Load it so that
+        # the OpenVINO tokenizer/detokenizer IR gets exported alongside the model.
+        from transformers import AutoTokenizer, PreTrainedTokenizerBase
+
+        # Drop any spurious tokenizer picked up from the root (e.g. a default empty BertTokenizer),
+        # otherwise maybe_convert_tokenizers would export that broken tokenizer instead of the Qwen3 one.
+        preprocessors = [p for p in preprocessors if not isinstance(p, PreTrainedTokenizerBase)]
+        try:
+            preprocessors.append(
+                AutoTokenizer.from_pretrained(
+                    src_name_or_path, subfolder="Qwen3-0.6B", trust_remote_code=trust_remote_code
+                )
+            )
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to load FunASR Qwen3 tokenizer from subfolder 'Qwen3-0.6B'. "
+                "This tokenizer is required to export OpenVINO tokenizer/detokenizer IR for FunASR."
+            ) from e
+    if model_type == "mistral3" and not preprocessors and not subfolder:
+        # Checkpoints published in Mistral's own format (e.g. Mistral-Small-3.2-24B-Instruct-2506) ship only
+        # tekken.json, which transformers resolves to MistralCommonTokenizer. That class rejects the `subfolder`
+        # argument maybe_load_preprocessors always passes, and the resulting error is swallowed there, so without
+        # this retry the model would be exported without any tokenizer.
+        from transformers import AutoTokenizer
+
+        try:
+            preprocessors.append(AutoTokenizer.from_pretrained(src_name_or_path, trust_remote_code=trust_remote_code))
+        except Exception as ex:
+            logger.warning(f"Tokenizer could not be loaded from {src_name_or_path}, saving failed with {ex}")
     if model_type == "phi4mm":
         # audio feature extractor config overrides image processor config during saving, need to save it explicitly
         try:

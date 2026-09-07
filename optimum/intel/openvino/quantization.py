@@ -292,7 +292,14 @@ class OVCalibrationDatasetBuilder:
                 )
 
             if isinstance(self.model, OVModelForVisualCausalLM):
-                dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[config.dataset]
+                dataset_name = config.dataset
+                if dataset_name == "contextual":
+                    logger.warning(
+                        "The `contextual` calibration dataset is deprecated because its images are no longer "
+                        "reachable, and will be removed in a future release. Using `textvqa` instead."
+                    )
+                    dataset_name = "textvqa"
+                dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[dataset_name]
                 return self.build_from_dataset_name(
                     config,
                     dataset_metadata["id"],
@@ -840,8 +847,11 @@ class OVCalibrationDatasetBuilder:
                     break
 
                 instruction = item[dataset_metadata["inputs"]["instruction"]]
-                image_url = item[dataset_metadata["inputs"]["image_url"]]
-                image = Image.open(requests.get(image_url, stream=True).raw).convert("RGB")
+                if "image_url" in dataset_metadata["inputs"]:
+                    image_url = item[dataset_metadata["inputs"]["image_url"]]
+                    image = Image.open(requests.get(image_url, stream=True).raw).convert("RGB")
+                else:
+                    image = item[dataset_metadata["inputs"]["image"]].convert("RGB")
                 if max_image_size is not None:
                     # To avoid large images, resize them keeping the aspect ratio
                     scale_factor = max(image.size[0] / max_image_size, image.size[1] / max_image_size)
@@ -1029,7 +1039,7 @@ class OVCalibrationDatasetBuilder:
                     if isinstance(item, dict)
                     else item
                 )
-                self.model(prompt, height=height, width=width)
+                self.model(prompt=prompt, height=height, width=width)
                 pbar.update(min(num_samples, len(calibration_data)) - pbar.n)
                 if len(calibration_data) >= num_samples:
                     calibration_data = calibration_data[:num_samples]
@@ -1641,6 +1651,12 @@ class OVQuantizer(OptimumQuantizer):
                 #
                 if isinstance(self.model, OVModelForVisualCausalLM):
                     quantization_configs["lm_model"] = quantization_config
+                    # The MTP (Multi-Token Prediction) head is a full decoder layer
+                    # (for MoE variants, hundreds of experts) and is as large as the
+                    # main language model. Apply the requested precision to it as well,
+                    # instead of the int8 default used for small vision/projection parts.
+                    if "mtp_model" in self.model._ov_model_names:
+                        quantization_configs["mtp_model"] = quantization_config
                     default_config = OVWeightQuantizationConfig(bits=8, sym=True)
                 else:
                     default_config = quantization_config

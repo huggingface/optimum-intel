@@ -23,14 +23,14 @@ jobs:
       PR_CLONE_URL: ${{ github.event.pull_request.head.repo.clone_url }}
 
     steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache-dependency-path: "kit/package-lock.json"
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -38,7 +38,8 @@ jobs:
         run: |
           pip install --upgrade pip uv
           uv pip install git+https://github.com/huggingface/doc-builder
-          uv pip install .[quality] diffusers accelerate datasets
+          uv pip install . --no-deps
+          doc-builder light-install optimum.intel
 
       - name: Make documentation
         shell: bash

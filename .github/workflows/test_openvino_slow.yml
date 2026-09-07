@@ -8,6 +8,7 @@ on:
   pull_request:
     branches:
       - main
+      - v*-release
     types:
       - opened
       - labeled
@@ -36,7 +37,7 @@ jobs:
       fail-fast: false
       matrix:
         os: ["ubuntu-22.04", "windows-2022"]
-        transformers-version: ["4.45.0", "latest"]
+        transformers-version: ["4.57.6", "latest"]
         include:
           - transformers-version: "main"
             os: "ubuntu-22.04"
@@ -49,10 +50,10 @@ jobs:
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # main
 
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.10"
 
@@ -64,7 +65,7 @@ jobs:
       - name: Restore HF models cache
         id: hf-cache-restore
         if: env.HF_TOKEN == ''
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/.cache/huggingface/hub
           key: hf-models
