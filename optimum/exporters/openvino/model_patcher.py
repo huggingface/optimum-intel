@@ -5670,7 +5670,7 @@ def gemma4_text_attention_forward(
 ) -> tuple:
     from transformers.models.gemma4.modeling_gemma4 import apply_rotary_pos_emb as apply_rotary_pos_emb_gemma4
 
-    # since transformers >= v5.6 (PR #45788) `shared_kv_states` dict and is passed and `kv_shared_layer_index` removed
+    # since transformers >= v5.6 (PR #45788) `shared_kv_states` dict passed and `kv_shared_layer_index` removed
     shared_kv_states = kwargs.pop("shared_kv_states", None)
     legacy_shared_kv_states = hasattr(self, "kv_shared_layer_index")
 
