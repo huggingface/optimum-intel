@@ -117,7 +117,7 @@ if is_transformers_version(">=", "5"):
     from transformers.modeling_rope_utils import RotaryEmbeddingConfigMixin
 
 
-if is_transformers_version(">=", "5.6"):
+if is_transformers_version(">=", "5.9"):
     from transformers.masking_utils import create_bidirectional_mask
 
 
@@ -128,6 +128,8 @@ if is_diffusers_version(">=", "0.38.0"):
 logger = logging.getLogger(__name__)
 
 
+# Original code: https://github.com/huggingface/transformers/blob/v5.10.1/src/transformers/models/sam/modeling_sam.py#L365
+# Pre-refactoring code: https://github.com/huggingface/transformers/blob/v5.8.1/src/transformers/models/sam/modeling_sam.py#L365
 def _patched_sam_two_way_transformer_forward(
     self,
     point_embeddings: torch.Tensor,
@@ -137,7 +139,7 @@ def _patched_sam_two_way_transformer_forward(
     target_embedding=None,
     **kwargs,
 ):
-    """`SamTwoWayTransformer.forward` with the pre-5.6 `permute` instead of `transpose`.
+    """`SamTwoWayTransformer.forward` with the pre-5.9 `permute` instead of `transpose`.
 
     The two express the same operation and produce the same OpenVINO Transpose, but `permute` emits
     an int64 order Constant while `transpose` emits an int32 one, which is enough to make the IR
@@ -259,7 +261,7 @@ class SAMModelPatcher(ModelPatcher):
 
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "5.6"):
+        if is_transformers_version(">=", "5.9"):
             from transformers.models.sam import modeling_sam
 
             self._original_two_way_transformer_forward = modeling_sam.SamTwoWayTransformer.forward
@@ -267,7 +269,7 @@ class SAMModelPatcher(ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if is_transformers_version(">=", "5.6"):
+        if is_transformers_version(">=", "5.9"):
             from transformers.models.sam import modeling_sam
 
             modeling_sam.SamTwoWayTransformer.forward = self._original_two_way_transformer_forward
@@ -5376,9 +5378,11 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
 
         model_forward = self.orig_forward
 
-        # precompute the token_type_ids bidirectional (image) mask since transformers v5.6
-        # (https://github.com/huggingface/transformers/pull/45454) is_first_iteration removed
-        # in create_causal_mask_mapping
+        # Precompute the token_type_ids bidirectional (image) mask: transformers v5.9 dropped the
+        # module-level `create_causal_mask_mapping` helper -- which took `is_first_iteration` -- and
+        # inlined the mask construction into the model forward, where it is no longer reachable.
+        # Removed in v5.9, last present in:
+        # https://github.com/huggingface/transformers/blob/v5.8.1/src/transformers/models/gemma3/modeling_gemma3.py#L733
         @functools.wraps(model_forward)
         def forward_with_precomputed_mask(*args, **kwargs):
             bound_args = inspect.signature(model_forward).bind(*args, **kwargs)
@@ -5481,7 +5485,8 @@ def gemma3n_language_model_forward(
 # on sliding_attention layers, matching the behavior of transformers
 # create_causal_mask_mapping when use_bidirectional_attention == "vision".
 # Needs to be patched to pass proper 'sliding_mask' for prefill stage.
-# Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/gemma4/modeling_gemma4.py#L1986
+# Original code (`create_causal_mask_mapping`, removed in v5.9 and inlined into the model forward):
+# https://github.com/huggingface/transformers/blob/v5.8.1/src/transformers/models/gemma4/modeling_gemma4.py#L2101
 def _create_gemma4_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids, inputs_embeds, sliding_window):
     dtype = inputs_embeds.dtype
     device = inputs_embeds.device
@@ -5543,7 +5548,8 @@ def _create_gemma4_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids,
 # Forward method of the language model of Gemma4, needs to be patched to pass 'per_layer_inputs',
 # as original code fails to create per_layer_inputs without the providing of input_ids,
 # while OV language model expects only inputs_embeds without input_ids.
-# Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/gemma4/modeling_gemma4.py#L2152
+# Original code (`Gemma4Model.forward`):
+# https://github.com/huggingface/transformers/blob/v5.10.1/src/transformers/models/gemma4/modeling_gemma4.py#L2218
 def gemma4_language_model_forward(
     self,
     input_ids: Optional[torch.LongTensor] = None,
@@ -5618,7 +5624,8 @@ def gemma4_language_model_forward(
 
 
 # Gemma4 model forward, needs to be patched to pass 'per_layer_inputs',
-# Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/gemma4/modeling_gemma4.py#L2396
+# Original code (`Gemma4ForConditionalGeneration.forward`):
+# https://github.com/huggingface/transformers/blob/v5.10.1/src/transformers/models/gemma4/modeling_gemma4.py#L2473
 def gemma4_lm_forward(
     self,
     attention_mask: Optional[torch.Tensor] = None,
@@ -5691,7 +5698,8 @@ def gemma4_lm_forward(
 
 
 # Needs to be patched to reshape 'attention_mask' to match attention weights
-# Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/gemma4/modeling_gemma4.py#L768
+# Original code (`eager_attention_forward`):
+# https://github.com/huggingface/transformers/blob/v5.10.1/src/transformers/models/gemma4/modeling_gemma4.py#L821
 def gemma4_eager_attention_forward_patched(
     module: nn.Module,
     query: torch.Tensor,
@@ -5727,7 +5735,8 @@ def gemma4_eager_attention_forward_patched(
 
 
 # Needs to be patched to run methods 'gemma4_eager_attention_forward_patched' instead of original one
-# Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/gemma4/modeling_gemma4.py#L1179
+# Original code (`Gemma4TextAttention.forward`):
+# https://github.com/huggingface/transformers/blob/v5.10.1/src/transformers/models/gemma4/modeling_gemma4.py#L1230
 def gemma4_text_attention_forward(
     self,
     hidden_states: torch.Tensor,
@@ -5739,7 +5748,8 @@ def gemma4_text_attention_forward(
 ) -> tuple:
     from transformers.models.gemma4.modeling_gemma4 import apply_rotary_pos_emb as apply_rotary_pos_emb_gemma4
 
-    # since transformers >= v5.6 (PR #45788) `shared_kv_states` dict and is passed and `kv_shared_layer_index` removed
+    # transformers v5.6 started passing a `shared_kv_states` dict; `kv_shared_layer_index` was kept
+    # alongside it until v5.8, where it was dropped. Both spellings are handled below.
     shared_kv_states = kwargs.pop("shared_kv_states", None)
     legacy_shared_kv_states = hasattr(self, "kv_shared_layer_index")
 
@@ -9554,16 +9564,19 @@ class SelectiveSSMRecurrentCell(torch.nn.Module):
 # OpenVINO has a bug due to which Clamp(-inf, inf) doesn't work correctly: CVS-185473.
 # When min == -inf and max == inf, Clamp is equivalent to an identity operation and
 # can be removed from the model, which serves as a workaround for the issue.
+# Original code: https://github.com/huggingface/transformers/blob/v5.10.1/src/transformers/models/gemma4/modeling_gemma4.py#L181
 def patched_gemma4_clippable_linear_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
     hidden_states = self.linear(hidden_states)
     return hidden_states
 
 
-# transformers v5.6 replaced the one-hot @ table formulation of the vision patch position
+# transformers v5.10.1 replaced the one-hot @ table formulation of the vision patch position
 # embeddings with two `F.embedding` lookups. The two are mathematically identical, but they
 # trace to different graphs (OneHot + MatMul + ReduceSum vs Gather), which changes the
 # exported IR. Keep the original formulation during export so IRs stay stable across
 # transformers versions.
+# Original code: https://github.com/huggingface/transformers/blob/v5.10.0/src/transformers/models/gemma4/modeling_gemma4.py#L586
+# Replaced by: https://github.com/huggingface/transformers/blob/v5.10.1/src/transformers/models/gemma4/modeling_gemma4.py#L602
 def patched_gemma4_position_embeddings(
     self, pixel_position_ids: torch.Tensor, padding_positions: torch.Tensor
 ) -> torch.Tensor:
@@ -9588,7 +9601,7 @@ class Gemma4ImageEmbeddingsModelPatcher(CommonImageEmbeddingsModelPatcher):
         vision_model = model.model.vision_tower if is_transformers_version(">=", "5") else model.vision_tower
         self._vision_encoder = vision_model.encoder
 
-        # Restore the pre-v5.6 patch position embedding formulation to keep the exported IR stable.
+        # Restore the pre-v5.10.1 patch position embedding formulation to keep the exported IR stable.
         self._patch_embedder = getattr(vision_model, "patch_embedder", None)
         if self._patch_embedder is not None:
             self._orig_position_embeddings = self._patch_embedder._position_embeddings
@@ -11929,10 +11942,12 @@ class ZImageTextEncoderModelPatcher(ModelPatcher):
             del self._model.config._orig_ov_attn_impl
 
 
-# Starting from transformers 5.6, `window_partition` / `window_reverse` swap the
+# Starting from transformers 5.9, `window_partition` / `window_reverse` swap the
 # `permute(0, 1, 3, 2, 4, 5)` call for an equivalent `transpose(2, 3)`. Both are semantically
 # identical, but they trace to different (int64 vs int32) permutation constants, which changes
 # the exported IR. Keep the original formulation so the graph stays stable across versions.
+# Original code: https://github.com/huggingface/transformers/blob/v5.8.1/src/transformers/models/swin/modeling_swin.py#L141-L160
+# Replaced by: https://github.com/huggingface/transformers/blob/v5.10.1/src/transformers/models/swin/modeling_swin.py#L490-L509
 def _patched_swin_window_partition(input_feature, window_size):
     batch_size, height, width, num_channels = input_feature.shape
     input_feature = input_feature.view(
@@ -11947,9 +11962,11 @@ def _patched_swin_window_reverse(windows, window_size, height, width):
     return windows.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, height, width, num_channels)
 
 
-# In transformers 5.6, Swin attention moved to the shared attention interface, whose default
+# In transformers 5.9, Swin attention moved to the shared attention interface, whose default
 # (sdpa) fuses MatMul/Divide/Softmax/MatMul into a single ScaledDotProductAttention node. Restore
-# the explicit eager computation used before the refactoring.
+# the explicit eager computation used before the refactoring, keeping the 5.9 projection names.
+# Original code: https://github.com/huggingface/transformers/blob/v5.10.1/src/transformers/models/swin/modeling_swin.py#L422
+# Pre-refactoring code: https://github.com/huggingface/transformers/blob/v5.8.1/src/transformers/models/swin/modeling_swin.py#L410
 def _patched_swin_attention_forward(self, hidden_states, attention_mask=None, **kwargs):
     batch_size, dim, _ = hidden_states.shape
     hidden_shape = (batch_size, dim, -1, self.head_dim)
@@ -11979,7 +11996,7 @@ def _patched_swin_attention_forward(self, hidden_states, attention_mask=None, **
 class SwinModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "5.6"):
+        if is_transformers_version(">=", "5.9"):
             from transformers.models.swin import modeling_swin
 
             self._original_window_partition = modeling_swin.window_partition
@@ -11991,7 +12008,7 @@ class SwinModelPatcher(ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if is_transformers_version(">=", "5.6"):
+        if is_transformers_version(">=", "5.9"):
             from transformers.models.swin import modeling_swin
 
             modeling_swin.window_partition = self._original_window_partition
@@ -11999,10 +12016,13 @@ class SwinModelPatcher(ModelPatcher):
             modeling_swin.SwinAttention.forward = self._original_attention_forward
 
 
+# `window_partition` / `window_reverse` are duplicated in donut_swin and changed in the same 5.9
+# refactoring, so the Swin replacements above apply verbatim.
+# Original code: https://github.com/huggingface/transformers/blob/v5.8.1/src/transformers/models/donut/modeling_donut_swin.py#L115-L135
 class DonutSwinModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "5.6"):
+        if is_transformers_version(">=", "5.9"):
             from transformers.models.donut import modeling_donut_swin
 
             self._original_window_partition = modeling_donut_swin.window_partition
@@ -12012,16 +12032,20 @@ class DonutSwinModelPatcher(ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if is_transformers_version(">=", "5.6"):
+        if is_transformers_version(">=", "5.9"):
             from transformers.models.donut import modeling_donut_swin
 
             modeling_donut_swin.window_partition = self._original_window_partition
             modeling_donut_swin.window_reverse = self._original_window_reverse
 
 
-# Same story as Swin: transformers 5.6 moved Segformer onto the shared attention interface and
+# Same story as Swin: transformers 5.9 moved Segformer onto the shared attention interface and
 # rewrote the sequence reduction with `transpose(1, 2)` instead of `permute(0, 2, 1)`. Restore the
-# pre-refactoring implementations to keep the exported graph unchanged.
+# pre-refactoring implementations to keep the exported graph unchanged. Both bodies below live in
+# `SegformerEfficientSelfAttention.forward` before the refactoring, so the 5.9 split into
+# `SegformerSequenceReduction` / `SegformerAttention` is kept.
+# Original code: https://github.com/huggingface/transformers/blob/v5.10.1/src/transformers/models/segformer/modeling_segformer.py#L101
+# Pre-refactoring code: https://github.com/huggingface/transformers/blob/v5.8.1/src/transformers/models/segformer/modeling_segformer.py#L157-L165
 def _patched_segformer_sequence_reduction_forward(self, hidden_states, height, width):
     batch_size, _, num_channels = hidden_states.shape
     hidden_states = hidden_states.permute(0, 2, 1).reshape(batch_size, num_channels, height, width)
@@ -12030,6 +12054,8 @@ def _patched_segformer_sequence_reduction_forward(self, hidden_states, height, w
     return self.layer_norm(hidden_states)
 
 
+# Original code: https://github.com/huggingface/transformers/blob/v5.10.1/src/transformers/models/segformer/modeling_segformer.py#L164
+# Pre-refactoring code: https://github.com/huggingface/transformers/blob/v5.8.1/src/transformers/models/segformer/modeling_segformer.py#L146
 def _patched_segformer_attention_forward(self, hidden_states, height, width, attention_mask=None, **kwargs):
     input_shape = hidden_states.shape[:-1]
     hidden_shape = (*input_shape, -1, self.head_dim)
@@ -12056,7 +12082,7 @@ def _patched_segformer_attention_forward(self, hidden_states, height, width, att
 class SegformerModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "5.6"):
+        if is_transformers_version(">=", "5.9"):
             from transformers.models.segformer import modeling_segformer
 
             self._original_attention_forward = modeling_segformer.SegformerAttention.forward
@@ -12066,7 +12092,7 @@ class SegformerModelPatcher(ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if is_transformers_version(">=", "5.6"):
+        if is_transformers_version(">=", "5.9"):
             from transformers.models.segformer import modeling_segformer
 
             modeling_segformer.SegformerAttention.forward = self._original_attention_forward
@@ -12082,6 +12108,9 @@ class CLIPTextTransformerShim(torch.nn.Module):
     graph gains a handful of duplicated `prim::Constant` nodes. Only the module boundary is restored
     here: the forward delegates straight back to the original (still decorated) `CLIPTextModel.forward`,
     so output capture and everything else behaves exactly as before.
+
+    Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/clip/modeling_clip.py#L510
+    Replaced by: https://github.com/huggingface/transformers/blob/v5.10.1/src/transformers/models/clip/modeling_clip.py#L520
     """
 
     def __init__(self, model: PreTrainedModel):
@@ -12096,6 +12125,8 @@ class CLIPTextTransformerShim(torch.nn.Module):
         )
 
 
+# `CLIPTextModel.forward` as it was up to transformers 5.5: a plain delegation to `text_model`.
+# Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/clip/modeling_clip.py#L616
 def _clip_text_model_forward(self, input_ids=None, attention_mask=None, position_ids=None, **kwargs):
     return self.text_model(input_ids=input_ids, attention_mask=attention_mask, position_ids=position_ids, **kwargs)
 
@@ -12127,12 +12158,14 @@ class CLIPTextModelPatcher(ModelPatcher):
             del self._model.text_model
 
 
-# Starting from transformers 5.6 the encoder models below build their attention mask with
+# Starting from transformers 5.9 the encoder models below build their attention mask with
 # `masking_utils.create_bidirectional_mask` instead of `ModuleUtilsMixin.get_extended_attention_mask`.
 # The two are numerically equivalent, but the new one cannot take its "no padding token -> no mask at
 # all" shortcut while tracing (`_ignore_bidirectional_mask_sdpa` bails out on `is_tracing()`), so it
 # always materializes the full 4D mask as Range/GreaterEqual/Broadcast/Gather nodes. Restore the
-# pre-5.6 formulation so the exported graph stays the same.
+# pre-5.9 formulation so the exported graph stays the same.
+# Original code: https://github.com/huggingface/transformers/blob/v5.8.1/src/transformers/modeling_utils.py#L964
+# Replaced by: https://github.com/huggingface/transformers/blob/v5.10.1/src/transformers/masking_utils.py#L1018
 def _patched_create_bidirectional_mask(
     config,
     inputs_embeds,
@@ -12167,7 +12200,7 @@ def _patched_create_bidirectional_mask(
 
 
 def _patch_create_bidirectional_mask() -> List[Tuple[Any, Callable]]:
-    """Swaps `create_bidirectional_mask` for its pre-5.6 equivalent in every modeling module.
+    """Swaps `create_bidirectional_mask` for its pre-5.9 equivalent in every modeling module.
 
     Each modeling file imports the helper by value (`from ...masking_utils import
     create_bidirectional_mask`), so patching `transformers.masking_utils` alone would not be picked
@@ -12197,7 +12230,7 @@ class BidirectionalMaskModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
         self._patched_bidirectional_mask = (
-            _patch_create_bidirectional_mask() if is_transformers_version(">=", "5.6") else []
+            _patch_create_bidirectional_mask() if is_transformers_version(">=", "5.9") else []
         )
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -12213,10 +12246,12 @@ class Seq2SeqBidirectionalMaskModelPatcher(BidirectionalMaskModelPatcher, OVSeq2
     pass
 
 
-# transformers 5.6 moved Beit onto the shared attention interface, which lays the context back out
+# transformers 5.9 moved Beit onto the shared attention interface, which lays the context back out
 # with `transpose(1, 2)` where `BeitSdpaSelfAttention` used `permute(0, 2, 1, 3)`. Both become the
 # same OpenVINO Transpose, but the permutation constant is emitted as int32 instead of int64. Keep
 # the original formulation so the constant keeps its element type.
+# Original code: https://github.com/huggingface/transformers/blob/v5.10.1/src/transformers/models/beit/modeling_beit.py#L310
+# Pre-refactoring code: https://github.com/huggingface/transformers/blob/v5.8.1/src/transformers/models/beit/modeling_beit.py#L299
 def _patched_beit_attention_forward(self, hidden_states, attention_mask=None, **kwargs):
     input_shape = hidden_states.shape[:-1]
     hidden_shape = (*input_shape, -1, self.head_dim)
@@ -12243,7 +12278,7 @@ def _patched_beit_attention_forward(self, hidden_states, attention_mask=None, **
 class BeitModelPatcher(BidirectionalMaskModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "5.6"):
+        if is_transformers_version(">=", "5.9"):
             from transformers.models.beit import modeling_beit
 
             self._original_attention_forward = modeling_beit.BeitAttention.forward
@@ -12251,17 +12286,17 @@ class BeitModelPatcher(BidirectionalMaskModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if is_transformers_version(">=", "5.6"):
+        if is_transformers_version(">=", "5.9"):
             from transformers.models.beit import modeling_beit
 
             modeling_beit.BeitAttention.forward = self._original_attention_forward
 
 
 class VisionEncoderScopeShim(torch.nn.Module):
-    """Reinstates the module boundary that transformers 5.6 removed from the vision encoders.
+    """Reinstates the module boundary that transformers 5.9 removed from the vision encoders.
 
-    Up to transformers 5.5 `ViTModel`/`DeiTModel` ran their layers through a `ViTEncoder` submodule.
-    5.6 deleted that class and hoisted the layers onto the model itself. When such a model is traced
+    Up to transformers 5.8 `ViTModel`/`DeiTModel` ran their layers through a `ViTEncoder` submodule.
+    5.9 deleted that class and hoisted the layers onto the model itself. When such a model is traced
     at the root of the graph -- which is what the encoder half of an encoder-decoder export does --
     there is no enclosing scope left for TorchScript to pool the scalar attention scale into, so it
     is emitted once per layer instead of once per graph. Restoring a single module boundary is enough
@@ -12269,6 +12304,9 @@ class VisionEncoderScopeShim(torch.nn.Module):
 
     Like `CLIPTextTransformerShim`, this holds no submodules and only delegates to the already
     captured forward, so `capture_outputs` still sees each layer exactly once.
+
+    Original code: https://github.com/huggingface/transformers/blob/v5.8.1/src/transformers/models/vit/modeling_vit.py#L349
+    Replaced by: https://github.com/huggingface/transformers/blob/v5.10.1/src/transformers/models/vit/modeling_vit.py#L356
     """
 
     def __init__(self, flat_forward: Callable):
@@ -12282,7 +12320,7 @@ class VisionEncoderScopeShim(torch.nn.Module):
 class VisionEncoderDecoderModelPatcher(OVSeq2SeqModelPatcher):
     """`BidirectionalMaskModelPatcher` restricted to the encoder half of an encoder-decoder export.
 
-    Only the vision encoder used `get_extended_attention_mask` before transformers 5.6; the text
+    Only the vision encoder used `get_extended_attention_mask` before transformers 5.9; the text
     decoders (GPT-2 and friends) already went through `create_bidirectional_mask` for their
     cross-attention, so patching them would change an IR that is currently stable.
     """
@@ -12294,7 +12332,7 @@ class VisionEncoderDecoderModelPatcher(OVSeq2SeqModelPatcher):
         super().__enter__()
         is_encoder = self.real_config._behavior == "encoder"
         self._patched_bidirectional_mask = (
-            _patch_create_bidirectional_mask() if is_transformers_version(">=", "5.6") and is_encoder else []
+            _patch_create_bidirectional_mask() if is_transformers_version(">=", "5.9") and is_encoder else []
         )
 
         # `patched_forward` reads `self.orig_forward` on every call, so routing it through the shim
@@ -12302,7 +12340,7 @@ class VisionEncoderDecoderModelPatcher(OVSeq2SeqModelPatcher):
         # and the decorators transformers relies on -- untouched.
         self._scope_shim = None
         if (
-            is_transformers_version(">=", "5.6")
+            is_transformers_version(">=", "5.9")
             and is_encoder
             and hasattr(self._model, "layers")
             and not hasattr(self._model, "encoder")
