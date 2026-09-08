@@ -64,13 +64,32 @@ LTX2_FP32_PARAMETERS = (
     "audio_prompt_scale_shift_table",
 )
 
-# Class name prefixes of models excluded from the automatic, size-based int8 weight compression that
-# `main_export` applies when no weight format is requested and nncf is installed. LTX-2's transformer
-# and text encoder are both far above `_MAX_UNCOMPRESSED_SIZE`, so they would always be compressed,
-# and int8 weights cost too much video quality for a silent default (measured on LTX-2.0: wwb
-# similarity 0.80 for int8 against the fp32 reference). Compression is still applied when asked for
-# explicitly via `--weight-format` / `--quant-mode`. Matched with `startswith`.
-NO_AUTO_COMPRESSION_MODELS = ("LTX2",)
+
+def is_auto_compression_disabled(model: Any) -> bool:
+    """
+    Whether `model` is excluded from the automatic, size-based int8 weight compression that
+    `main_export` applies when no weight format is requested and nncf is installed.
+
+    LTX-2 is the only such family so far: its transformer and text encoder are both far above
+    `_MAX_UNCOMPRESSED_SIZE`, so they would always be compressed, and int8 weights cost too much
+    video quality for a silent default (measured on LTX-2.0: wwb similarity 0.80 for int8 against the
+    fp32 reference). Compression is still applied when asked for explicitly via `--weight-format` /
+    `--quant-mode`.
+
+    Both supported pipelines are listed explicitly: `LTX2ImageToVideoPipeline` does not subclass
+    `LTX2Pipeline`, and they are the only two LTX-2 classes this exporter registers (see
+    `_DIFFUSERS_TASKS_TO_MODEL_MAPPINGS` in `model_configs.py`).
+    """
+    if not is_diffusers_available():
+        return False
+
+    try:
+        from diffusers import LTX2ImageToVideoPipeline, LTX2Pipeline
+    except ImportError:
+        # LTX-2 was added in diffusers 0.38.0.
+        return False
+
+    return isinstance(model, (LTX2Pipeline, LTX2ImageToVideoPipeline))
 
 
 def is_torch_model(model: Union["PreTrainedModel", "ModelMixin"]):

@@ -1072,7 +1072,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(["ltx-video"])
     if is_diffusers_version(">=", "0.38.0"):
         SUPPORTED_ARCHITECTURES.extend(["ltx2"])
-    if is_diffusers_version(">", "0.39.0"):
+    if is_diffusers_version(">=", "0.40.0"):
         SUPPORTED_ARCHITECTURES.extend(["ltx2.3"])
 
     OVMODEL_CLASS = OVPipelineForText2Video
@@ -1148,16 +1148,20 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
         if not model_arch.startswith("ltx2") or is_diffusers_version("<", "0.40.0"):
             self.skipTest(f"{model_arch} does not expose spatio-temporal guidance")
 
-        height, width, batch_size = 64, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-        # The test checkpoints have a single transformer block, so that is the one to perturb.
-        inputs["spatio_temporal_guidance_blocks"] = [0]
+        height, width = 64, 64
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
-        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
-        diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
-        np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+        # `stg_perturbation_mask` is per-block and carries no batch dimension, so batch_size > 1
+        # checks that the perturbation still reaches every batch element.
+        for batch_size in [1, 2]:
+            inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+            # The test checkpoints have a single transformer block, so that is the one to perturb.
+            inputs["spatio_temporal_guidance_blocks"] = [0]
+
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
+            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
@@ -1251,7 +1255,7 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
     if is_diffusers_version(">=", "0.38.0"):
         SUPPORTED_ARCHITECTURES.extend(["ltx2"])
     # See the note in OVPipelineForText2VideoTest: LTX-2.3 landed in diffusers 0.40.0.dev0.
-    if is_diffusers_version(">", "0.39.0"):
+    if is_diffusers_version(">=", "0.40.0"):
         SUPPORTED_ARCHITECTURES.extend(["ltx2.3"])
 
     OVMODEL_CLASS = OVPipelineForImage2Video

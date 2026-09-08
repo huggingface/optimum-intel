@@ -18,7 +18,6 @@ import gc
 import inspect
 import logging
 import os
-import types
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
@@ -75,7 +74,6 @@ from optimum.intel.utils.import_utils import (
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 
 from ...intel.utils.modeling_utils import _infer_library_from_model_or_model_class
-from .model_patcher import _ltx2_vocoder_with_bwe_forward
 from .stateful import (
     ensure_export_task_support_stateful,
     ensure_model_type_support_stateful,
@@ -1332,7 +1330,7 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
         exporter=exporter,
         library_name="diffusers",
         task="feature-extraction",
-        model_type="gemma3-text-encoder",
+        model_type="ltx2-text-encoder",
     )
     export_config = export_config_constructor(
         text_encoder.config,
@@ -1434,27 +1432,11 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
             audio_vae_decoder.register_to_config(latents_std_data=pipeline.audio_vae.latents_std.tolist())
         models_for_export["audio_vae_decoder"] = (audio_vae_decoder, audio_vae_export_config)
 
-        # Vocoder
+        # Vocoder. `LTX2VocoderPatcher` renames the input to `hidden_states` and applies the
+        # int32-safe LTX-2.3 trim, and restores the original forward on exit, so unlike the VAEs
+        # above this needs no deep copy.
         if hasattr(pipeline, "vocoder") and pipeline.vocoder is not None:
-            # Deep-copied like the audio VAE above: `forward` is replaced below to name the input
-            # `hidden_states` and wrap the bare tensor in a dict, and that must not leak back into
-            # the caller's pipeline. The name is also what keeps the IR input stable across the
-            # LTX-2.0 (`LTX2Vocoder.forward(hidden_states, time_last)`) and LTX-2.3
-            # (`LTX2VocoderWithBWE.forward(mel_spec)`) signatures.
-            vocoder = copy.deepcopy(pipeline.vocoder)
-            orig_vocoder_forward = vocoder.forward
-
-            # LTX-2.3's vocoder trims its output to a length derived from a dynamic shape, and
-            # overflows int32 doing so, which truncates any audio longer than ~2.79 s. Swap in the
-            # corrected forward before wrapping. `input_sampling_rate` is the config entry that trim
-            # reads, so its absence identifies LTX-2.0's `LTX2Vocoder`, which has no trim to fix.
-            if "input_sampling_rate" in vocoder.config:
-                orig_vocoder_forward = types.MethodType(_ltx2_vocoder_with_bwe_forward, vocoder)
-
-            def vocoder_forward(hidden_states):
-                return {"sample": orig_vocoder_forward(hidden_states)}
-
-            vocoder.forward = vocoder_forward
+            vocoder = pipeline.vocoder
             vocoder_config_constructor = TasksManager.get_exporter_config_constructor(
                 model=vocoder,
                 exporter=exporter,

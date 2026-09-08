@@ -11182,8 +11182,8 @@ def _ltx2_connector_forward_patched(self, hidden_states, attention_mask=None, at
     length depends on mask values and cannot be traced. Rewritten with fixed-shape sort +
     gather + arange mask (valid tokens left, registers right).
 
-    Reference (diffusers==0.38.0): pipelines/ltx2/connectors.py,
-    LTX2ConnectorTransformer1d.forward L279-330 (data-dependent indexing at L304).
+    Original (`LTX2ConnectorTransformer1d.forward`, data-dependent indexing at L304):
+    https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/pipelines/ltx2/connectors.py#L279-L330
     """
     batch_size, seq_len, hidden_dim = hidden_states.shape
 
@@ -11232,8 +11232,9 @@ def _ltx2_connectors_top_level_forward_patched(
     (masked_fill/arange/amin/amax, all fixed-shape) and hardcodes padding_side="left" so the
     connectors stack traces cleanly as a single graph.
 
-    Reference (diffusers==0.38.0): pipelines/ltx2/connectors.py,
-    LTX2TextConnectors.forward L397-476 and per_layer_masked_mean_norm L14-78.
+    Originals (`LTX2TextConnectors.forward` and `per_layer_masked_mean_norm`):
+    https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/pipelines/ltx2/connectors.py#L397-L476
+    https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/pipelines/ltx2/connectors.py#L14-L78
     """
     if text_encoder_hidden_states.ndim == 3:
         text_encoder_hidden_states = text_encoder_hidden_states.unflatten(2, (self.config.caption_channels, -1))
@@ -11359,8 +11360,8 @@ def _ltx2_apply_split_rotary_emb(x, freqs):
     (first_out/second_out), which produces an incorrect/unstable trace. Rewritten with pure
     out-of-place ops.
 
-    Reference (diffusers==0.38.0): models/transformers/transformer_ltx2.py,
-    apply_split_rotary_emb L46-84 (in-place addcmul_ on views at L75-76).
+    Original (in-place `addcmul_` on views at L75-76):
+    https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/models/transformers/transformer_ltx2.py#L46-L84
     """
     cos, sin = freqs
     x_dtype = x.dtype
@@ -11400,8 +11401,8 @@ class _LTX2TraceSafeAttnProcessor:
     (data-dependent branches) and SDPA with a fixed-shape mask reshape + manual attention,
     and uses the out-of-place RoPE above instead of the in-place `addcmul_` original.
 
-    Reference (diffusers==0.38.0): models/transformers/transformer_ltx2.py,
-    LTX2AudioVideoAttnProcessor.__call__ L161-228 (prepare_attention_mask at L175).
+    Original (`LTX2AudioVideoAttnProcessor.__call__`, `prepare_attention_mask` at L175):
+    https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/models/transformers/transformer_ltx2.py#L161-L228
 
     Self-attentions of perturbable blocks are given a `guidance_state` and their block index, so
     spatio-temporal guidance is driven by the traced `stg_perturbation_mask` input rather than by
@@ -11432,9 +11433,11 @@ class _LTX2TraceSafeAttnProcessor:
         # `perturbation_mask` / `all_perturbed` are passed by LTX2PerturbedAttnProcessor blocks
         # (perturbed_attn=True, e.g. LTX-2.3). The export ignores them and reads the per-block
         # perturbation weight off `guidance_state` instead, so STG can be switched on at runtime.
-        # Mirror the upstream dispatch on `attn.rope_type` (transformer_ltx2, L192-200). Only the
-        # "split" variant needs a trace-safe rewrite — its original does an in-place addcmul_ on
-        # views; `apply_interleaved_rotary_emb` is already out-of-place, so it is used unchanged.
+        # Mirror the upstream dispatch on `attn.rope_type`:
+        # https://github.com/huggingface/diffusers/blob/v0.40.0/src/diffusers/models/transformers/transformer_ltx2.py#L192-L200
+        # Only the "split" variant needs a trace-safe rewrite — its original does an in-place
+        # addcmul_ on views; `apply_interleaved_rotary_emb` is already out-of-place, so it is used
+        # unchanged.
         # Both released LTX-2 checkpoints configure "split", which is also the fallback for
         # diffusers versions predating `rope_type`. Referencing the interleaved helper only inside
         # the branch keeps this import-safe on those older versions.
@@ -11519,6 +11522,9 @@ def _ltx2_text_encoder_final_norm(model):
     """
     Locate the text tower's final norm (`Gemma3TextModel.norm`), whose output is the real
     `last_hidden_state`. Returns None if the layout is unfamiliar, so the caller can fall back.
+
+    Declared in transformers here:
+    https://github.com/huggingface/transformers/blob/f62dc9bf2c90353b442a56e74391fbb8c689b55e/src/transformers/models/gemma3/modeling_gemma3.py#L501
     """
     for path in (
         ("model", "language_model", "norm"),
@@ -11550,8 +11556,10 @@ class LTX2TextEncoderPatcher(ModelPatcher):
     it in the graph is the same data movement, once, inside the plugin.
 
     transformers collects `hidden_states` with forward hooks on the decoder layers, so the last
-    entry is the layer output *before* the text tower's final norm; the post-norm value is
-    substituted afterwards only when the returned output object exposes `last_hidden_state`.
+    entry is the layer output *before* the text tower's final norm, applied here:
+    https://github.com/huggingface/transformers/blob/f62dc9bf2c90353b442a56e74391fbb8c689b55e/src/transformers/models/gemma3/modeling_gemma3.py#L573
+    The post-norm value is substituted afterwards only when the returned output object exposes
+    `last_hidden_state`.
     `Gemma3ForConditionalGeneration` returns `Gemma3CausalLMOutputWithPast`, which does not, and
     the exported graph ended up with the pre-norm tensor for both `last_hidden_state` and
     `hidden_states.{num_layers}` (off by the final RMSNorm: |max| 6.6e5 instead of 1.6e2). The
@@ -11610,7 +11618,6 @@ def _ltx2_cross_modality_gated_forward(orig_forward, guidance_state):
     attention output by 0 is therefore exactly equivalent, and unlike the Python flag it survives
     tracing as a runtime input.
     """
-    import functools
 
     @functools.wraps(orig_forward)
     def forward(*args, **kwargs):
@@ -11673,9 +11680,6 @@ class LTX2TransformerPatcher(ModelPatcher):
 
         # Wrap forward to return dict (needed for output naming) and force return_dict=False internally
         self._orig_model_forward = self._model.forward
-
-        import functools
-        import inspect
 
         # `sigma`/`audio_sigma` only exist on the transformer forward from the LTX-2.3 PR onwards.
         # On older diffusers (LTX-2.0 era) they are absent, so only forward them when supported —
@@ -11778,6 +11782,9 @@ def _ltx2_vocoder_with_bwe_forward(self, mel_spec: "torch.Tensor"):
     """
     Mirror of `LTX2VocoderWithBWE.forward` that computes the final trim length without
     overflowing int32.
+
+    Original:
+    https://github.com/huggingface/diffusers/blob/v0.40.0/src/diffusers/pipelines/ltx2/vocoder.py#L574-L597
     """
     # 1. Run stage 1 vocoder to get low sampling rate waveform
     x = self.vocoder(mel_spec)
@@ -11803,6 +11810,47 @@ def _ltx2_vocoder_with_bwe_forward(self, mel_spec: "torch.Tensor"):
     upsample_ratio = self.config.output_sampling_rate // self.config.input_sampling_rate
     waveform = waveform[..., : num_samples * upsample_ratio]
     return waveform
+
+
+class LTX2VocoderPatcher(ModelPatcher):
+    """
+    Export patcher for the LTX-2 vocoder.
+
+    Renames the input to `hidden_states` and wraps the returned tensor in the dict the exporter
+    expects. The rename is what keeps the IR input stable across the LTX-2.0
+    (`LTX2Vocoder.forward(hidden_states, time_last)`) and LTX-2.3
+    (`LTX2VocoderWithBWE.forward(mel_spec)`) signatures — `ordered_inputs` matches the export
+    config's input names against the forward signature, so the parameter name is the contract.
+
+    For LTX-2.3 it also swaps in `_ltx2_vocoder_with_bwe_forward`, whose trim length does not
+    overflow int32; upstream's does, which truncates any audio longer than ~2.79 s.
+    `input_sampling_rate` is the config entry that trim reads, so its absence identifies LTX-2.0's
+    `LTX2Vocoder`, which has no trim to fix.
+    """
+
+    def __init__(self, config, model, model_kwargs=None):
+        super().__init__(config, model, model_kwargs)
+
+        vocoder_forward = self.orig_forward
+        if "input_sampling_rate" in model.config:
+            vocoder_forward = types.MethodType(_ltx2_vocoder_with_bwe_forward, model)
+
+        def renamed_forward(hidden_states):
+            return vocoder_forward(hidden_states)
+
+        def patched_forward(hidden_states):
+            return {"sample": vocoder_forward(hidden_states)}
+
+        # `export_pytorch` binds the traced positional arguments by the parameter names of
+        # `orig_forward`, so the rename has to reach it and not only `patched_forward`: LTX-2.3 calls
+        # its input `mel_spec`, which matches neither the export config nor the dummy inputs.
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = renamed_forward
+        self.patched_forward = patched_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
 
 
 # ------------------------------------------------------------------------------

@@ -158,6 +158,7 @@ from optimum.exporters.openvino.model_patcher import (
     LTX2ConnectorsPatcher,
     LTX2TextEncoderPatcher,
     LTX2TransformerPatcher,
+    LTX2VocoderPatcher,
     MairaImageEmbeddingModelPatcher,
     MambaPatcher,
     MiniCPM3Patcher,
@@ -2763,7 +2764,6 @@ class Gemma3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
         sequence_length="text_config.max_position_embeddings",
         num_layers="text_config.num_hidden_layers",
     )
-    _MODEL_PATCHER = LTX2TextEncoderPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -2771,6 +2771,33 @@ class Gemma3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
             "input_ids": {0: "batch_size", 1: "sequence_length"},
             "attention_mask": {0: "batch_size", 1: "sequence_length"},
         }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        outputs = {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
+        num_layers = getattr(self._normalized_config, "num_hidden_layers", 48)
+        for i in range(num_layers + 1):
+            outputs[f"hidden_states.{i}"] = {0: "batch_size", 1: "sequence_length"}
+        return outputs
+
+    @property
+    def values_override(self) -> Optional[Dict[str, Any]]:
+        # The per-layer outputs above only exist if the model is asked for them, same as
+        # `Qwen3TextEncoderOpenVINOConfig`.
+        values = super().values_override or {}
+        values.update({"output_hidden_states": True, "return_dict": True, "use_cache": False})
+        return values
+
+
+@register_in_tasks_manager("ltx2-text-encoder", *["feature-extraction"], library_name="diffusers")
+class LTX2TextEncoderOpenVINOConfig(Gemma3TextEncoderOpenVINOConfig):
+    """
+    LTX-2's use of the Gemma-3 text encoder, which differs from the generic one above only in how the
+    hidden states leave the graph. Kept separate so that the packed layout, which nothing but the
+    LTX-2 connectors can consume, does not become the contract for every Gemma-3 text encoder export.
+    """
+
+    _MODEL_PATCHER = LTX2TextEncoderPatcher
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
@@ -3243,6 +3270,7 @@ class LTX2AudioVaeDecoderOpenVINOConfig(VaeDecoderOpenVINOConfig):
 @register_in_tasks_manager("ltx2-vocoder", *["semantic-segmentation"], library_name="diffusers")
 class LTX2VocoderOpenVINOConfig(VaeDecoderOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (LTX2VocoderDummyInputGenerator,)
+    _MODEL_PATCHER = LTX2VocoderPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
