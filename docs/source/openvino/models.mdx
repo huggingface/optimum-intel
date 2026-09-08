@@ -231,6 +231,11 @@ Here is the list of the supported architectures :
 - Qwen3.6-*-DFlash
 - Qwen3-Coder-30B-A3B-DFlash
 - gemma-4-31B-it-DFlash
+- Qwen3.8-27B-DFlash2
+
+DFlash v1 export produces `openvino_model.xml` for the draft backbone.
+Dflash v2 export produces in addition `openvino_selector_model.xml` for the candidate selector,
+supplied to OpenVINO GenAI for selector-guided decoding; the backbone remains usable in isolation from selector.
 
 ## [DeepSpec DFlash](https://github.com/deepseek-ai/DeepSpec)
 - dflash_qwen3_*

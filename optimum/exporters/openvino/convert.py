@@ -30,6 +30,11 @@ from transformers.utils import is_torch_available
 from openvino import Model, save_model
 from openvino.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
+from optimum.exporters.openvino.dflash_utils import (
+    DFLASH2_RECOMMENDED_ACTIVATIONS_SCALE_FACTOR,
+    DFLASH_ARCHITECTURES,
+    parse_and_validate_dflash_config,
+)
 from optimum.exporters.openvino.utils import (
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     ONNX_SUPPORTED_ARCHITECTURES,
@@ -144,7 +149,11 @@ def _save_model(
     config: "OpenVINOConfig" = None,
     source_model=None,
 ):
-    compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
+    compress_to_fp16 = (
+        ov_config is not None
+        and ov_config.dtype == "fp16"
+        and not getattr(config, "PRESERVE_CHECKPOINT_PRECISION", False)
+    )
     model = _add_version_info_to_model(model, library_name)
 
     runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}
@@ -152,21 +161,31 @@ def _save_model(
 
     if getattr(config, "eagle3", False):
         model = _add_eagle3_mode_to_rt_info(model)
-    if getattr(config, "dflash", False):
+    is_dflash = getattr(config, "dflash", False)
+    is_dflash_selector = getattr(config, "dflash2_selector", False)
+    if is_dflash:
         model = _add_dflash_mode_to_rt_info(
             model,
             config._config,
             candidate_position_offset=getattr(config, "candidate_position_offset", 1),
         )
-    if source_model is not None and getattr(getattr(source_model, "config", None), "model_type", None) in {
-        "qwen3",
-        "qwen3_moe",
-        "qwen3_5",
-        "qwen3_5_moe",
-        "qwen3_5_text",
-        "qwen3_5_moe_text",
-        "gemma4",
-    }:
+    elif is_dflash_selector:
+        model = _add_dflash_selector_mode_to_rt_info(model, config._config)
+    if (
+        source_model is not None
+        and not is_dflash
+        and not is_dflash_selector
+        and getattr(getattr(source_model, "config", None), "model_type", None)
+        in {
+            "qwen3",
+            "qwen3_moe",
+            "qwen3_5",
+            "qwen3_5_moe",
+            "qwen3_5_text",
+            "qwen3_5_moe_text",
+            "gemma4",
+        }
+    ):
         add_hidden_states_rt_info(source_model, model, config)
 
     save_model(model, path, compress_to_fp16)
@@ -482,31 +501,43 @@ def export_models(
         list of input_names and output_names from OpenVINO configuration
     """
 
-    outputs = []
+    outputs = [None] * len(models_and_export_configs)
 
     if output_names is not None and len(output_names) != len(models_and_export_configs):
         raise ValueError(
             f"Provided custom names {output_names} for the export of {len(models_and_export_configs)} models. Please provide the same number of names as models to export."
         )
 
-    for i, model_name in enumerate(models_and_export_configs.keys()):
+    model_names = list(models_and_export_configs)
+    # The 16-bit traceability patch mutates shared PyTorch modules. Export
+    # opt-out components first so a later component cannot change their
+    # checkpoint precision before conversion.
+    export_order = sorted(
+        model_names,
+        key=lambda name: not getattr(
+            models_and_export_configs[name][1],
+            "PRESERVE_CHECKPOINT_PRECISION",
+            False,
+        ),
+    )
+    for model_name in export_order:
+        i = model_names.index(model_name)
         submodel, sub_export_config = models_and_export_configs[model_name]
         output_name = output_names[i] if output_names is not None else Path(model_name + ".xml")
         output_path = output_dir / output_name
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        outputs.append(
-            export(
-                model=submodel,
-                config=sub_export_config,
-                output=output_path,
-                device=device,
-                input_shapes=input_shapes,
-                model_kwargs=model_kwargs,
-                ov_config=ov_config,
-                stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
-                patch_16bit_model=patch_16bit_model,
-                library_name=library_name,
-            )
+        outputs[i] = export(
+            model=submodel,
+            config=sub_export_config,
+            output=output_path,
+            device=device,
+            input_shapes=input_shapes,
+            model_kwargs=model_kwargs,
+            ov_config=ov_config,
+            stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
+            patch_16bit_model=patch_16bit_model
+            and not getattr(sub_export_config, "PRESERVE_CHECKPOINT_PRECISION", False),
+            library_name=library_name,
         )
 
     outputs = list(map(list, zip(*outputs)))
@@ -1034,6 +1065,24 @@ def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig", can
     Marks model as DFlash draft model and adds DFlash configuration to the model including
     mask token id, target layer ids, and candidate position offset.
     """
+    architectures = getattr(hf_config, "architectures", None)
+    architecture = architectures[0] if isinstance(architectures, list) and architectures else None
+    if architecture in DFLASH_ARCHITECTURES:
+        dflash = parse_and_validate_dflash_config(hf_config)
+        dflash_config = dflash.values
+        model.set_rt_info("True", ["dflash_mode"])
+        model.set_rt_info(str(dflash_config["mask_token_id"]), ["dflash", "mask_token_id"])
+        model.set_rt_info(",".join(map(str, dflash_config["target_layer_ids"])), ["dflash", "target_layer_ids"])
+        model.set_rt_info(str(candidate_position_offset), ["dflash", "candidate_position_offset"])
+        if dflash.version == 2:
+            model.set_rt_info("2", ["dflash", "version"])
+            for name in ("input_embedding_scale", "output_multiplier", "final_logit_softcapping"):
+                value = dflash_config.get(name)
+                if value is not None:
+                    model.set_rt_info(str(value), ["dflash", name])
+        return model
+
+    # DeepSpec's Qwen3 DSpark draft uses the legacy DFlash metadata subset.
     try:
         model.set_rt_info("True", ["dflash_mode"])
         dflash_config = getattr(hf_config, "dflash_config", None) or hf_config.to_dict()
@@ -1044,6 +1093,19 @@ def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig", can
         model.set_rt_info(str(candidate_position_offset), ["dflash", "candidate_position_offset"])
     except Exception:
         pass
+
+    return model
+
+
+def _add_dflash_selector_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig") -> Model:
+    """Add DFlash-2 selector contract and structural metadata."""
+    dflash_config = parse_and_validate_dflash_config(hf_config, expected_version=2).values
+    model.set_rt_info("True", ["dflash_selector_mode"])
+    model.set_rt_info("2", ["dflash_selector", "dflash_version"])
+    model.set_rt_info("unary_inclusive", ["dflash_selector", "score_semantics"])
+    model.set_rt_info(str(hf_config.hidden_size), ["dflash_selector", "hidden_size"])
+    model.set_rt_info(str(hf_config.vocab_size), ["dflash_selector", "vocab_size"])
+    model.set_rt_info(str(dflash_config["selector_top_k"]), ["dflash_selector", "top_k"])
 
     return model
 
@@ -1189,6 +1251,24 @@ def _get_submodels_and_export_configs(
         exporter,
     )
     stateful_per_model = [stateful] * len(models_for_export)
+
+    architectures = getattr(model.config, "architectures", None)
+    architecture = architectures[0] if isinstance(architectures, list) and architectures else None
+    is_dflash = architecture in DFLASH_ARCHITECTURES
+    if is_dflash and parse_and_validate_dflash_config(model.config).version == 2:
+        from optimum.exporters.openvino.model_configs import DFlash2SelectorOpenVINOConfig
+        from optimum.exporters.openvino.model_patcher import Qwen3DFlash2SelectorForExport
+
+        selector_model = Qwen3DFlash2SelectorForExport(model.candidate_selector, model.config)
+        selector_config = DFlash2SelectorOpenVINOConfig(
+            model.config,
+            task="feature-extraction",
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        models_for_export["selector_model"] = (selector_model, selector_config)
+        stateful_per_model.append(False)
 
     # VLM Eagle3 models need stateful KV cache despite model_type being "llama"
     # (not in MULTI_MODAL_TEXT_GENERATION_MODELS) and task being "image-text-to-text".
