@@ -127,6 +127,13 @@ if is_diffusers_version(">=", "0.33.0"):
 else:
     SanaSprintPipeline = object
 
+if is_diffusers_version(">=", "0.37.0"):
+    from diffusers import ZImageImg2ImgPipeline, ZImageInpaintPipeline, ZImagePipeline
+else:
+    ZImagePipeline = object
+    ZImageImg2ImgPipeline = object
+    ZImageInpaintPipeline = object
+
 
 if is_diffusers_version(">=", "0.35.0"):
     from diffusers import QwenImagePipeline
@@ -793,13 +800,18 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         num_frames: int = -1,
     ):
         is_qwen_image = self.__class__.__name__.startswith("OVQwenImage")
+        is_zimage = self.__class__.__name__.startswith("OVZImage")
         if batch_size == -1 or num_images_per_prompt == -1:
             batch_size = -1
         else:
             # The factor of 2 comes from the guidance scale > 1
             batch_size *= num_images_per_prompt
-            # QwenImage runs the conditional and unconditional passes as separate calls (no batch doubling)
-            if not is_qwen_image and "img_ids" not in {inputs.get_any_name() for inputs in model.inputs}:
+            # QwenImage runs the conditional and unconditional passes as separate calls (no batch doubling).
+            # The img_ids check targets Flux, which folds guidance into an embedding instead of doubling the
+            # batch; Z-Image also has img_ids but does double, so it is excluded from that check.
+            if not is_qwen_image and (
+                is_zimage or "img_ids" not in {inputs.get_any_name() for inputs in model.inputs}
+            ):
                 batch_size *= 2
 
         is_ltx = getattr(self, "_is_ltx_pipeline", False)
@@ -843,17 +855,25 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             elif inputs.get_any_name() == "pooled_projections":
                 shapes[inputs] = [batch_size, self.transformer.config["pooled_projection_dim"]]
             elif inputs.get_any_name() == "img_ids":
-                shapes[inputs] = (
-                    [batch_size, packed_height_width, 3]
-                    if is_diffusers_version("<", "0.31.0")
-                    else [packed_height_width, 3]
-                )
-                if is_flux2:
-                    shapes[inputs] = [batch_size, packed_height_width, 4]
+                if is_zimage:
+                    # Unlike Flux, Z-Image's ids are per batch item and its image tokens are
+                    # padded up to SEQ_MULTI_OF, so the sequence length is not packed_h*packed_w.
+                    shapes[inputs] = [batch_size, -1, 3]
+                else:
+                    shapes[inputs] = (
+                        [batch_size, packed_height_width, 3]
+                        if is_diffusers_version("<", "0.31.0")
+                        else [packed_height_width, 3]
+                    )
+                    if is_flux2:
+                        shapes[inputs] = [batch_size, packed_height_width, 4]
             elif inputs.get_any_name() == "txt_ids":
-                shapes[inputs] = [batch_size, -1, 3] if is_diffusers_version("<", "0.31.0") else [-1, 3]
-                if is_flux2:
-                    shapes[inputs] = [batch_size, -1, 4]
+                if is_zimage:
+                    shapes[inputs] = [batch_size, -1, 3]
+                else:
+                    shapes[inputs] = [batch_size, -1, 3] if is_diffusers_version("<", "0.31.0") else [-1, 3]
+                    if is_flux2:
+                        shapes[inputs] = [batch_size, -1, 4]
             elif inputs.get_any_name() in ["height", "width", "num_frames", "rope_interpolation_scale"]:
                 shapes[inputs] = inputs.get_partial_shape()
             else:
@@ -985,8 +1005,9 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(
-                # GemmaTokenizer uses inf as model_max_length; LTX and QwenImage text encoders do not
-                # pad their input to model_max_length, so their sequence dimension must stay dynamic
+                # GemmaTokenizer uses inf as model_max_length; LTX, QwenImage and Z-Image text
+                # encoders do not pad their input to model_max_length (Z-Image pads to its own
+                # max_sequence_length), so their sequence dimension must stay dynamic
                 self.text_encoder.model,
                 batch_size,
                 (
@@ -994,6 +1015,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     if "Gemma" not in self.tokenizer.__class__.__name__
                     and not self.__class__.__name__.startswith("OVLTX")
                     and not self.__class__.__name__.startswith("OVQwenImage")
+                    and not self.__class__.__name__.startswith("OVZImage")
                     and not getattr(self, "_is_ltx_pipeline", False)
                     else -1
                 ),
@@ -2398,6 +2420,233 @@ class OVQwenImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, Qw
         return prompt_embeds, encoder_attention_mask
 
 
+class _OVZImageTransformerAdapter:
+    """Adapter that converts ZImagePipeline's transformer calling convention to OV model inputs.
+
+    ZImagePipeline calls the transformer as:
+        transformer(x_list, t, cap_feats_list, return_dict=False)
+    where x_list is a list of [C,1,H,W] tensors (with frame dim) and cap_feats_list is a list
+    of variable-length [seq_len, dim] tensors — ``_encode_prompt`` strips the tokenizer's
+    padding, so prompts of different lengths arrive as a ragged list.
+
+    The exported OV model takes rectangular tensors plus the pieces the graph cannot derive
+    from a ragged batch:
+        hidden_states [B,C,H,W], timestep [B], encoder_hidden_states [B,M,dim],
+        encoder_attention_mask [B,M] (eager additive), txt_ids [B,M,3], img_ids [B,N,3]
+    and returns sample [B,C,H,W]. One infer request serves the whole batch, whatever the
+    prompt lengths.
+
+    This class reproduces on the host what ZImageTransformer2DModel._pad_with_ids does
+    per item: round each caption up to SEQ_MULTI_OF, number its positions from 1, and offset
+    the image grid past it. That offset is why the position ids have to be computed here —
+    it depends on each item's own caption length, so a ragged batch has different image
+    position ids per item.
+    """
+
+    SEQ_MULTI_OF = 32
+    PATCH_SIZE = 2
+
+    def __init__(self, ov_transformer):
+        self._ov_transformer = ov_transformer
+
+    @classmethod
+    def _rounded(cls, length: int) -> int:
+        return length + (-length) % cls.SEQ_MULTI_OF
+
+    def __call__(self, x, t, cap_feats, return_dict=True, **kwargs):
+        batch_size = len(x)
+        if not isinstance(t, torch.Tensor):
+            t = torch.tensor([t])
+        timestep = t.reshape(-1)
+        if timestep.numel() == 1 and batch_size > 1:
+            timestep = timestep.expand(batch_size)
+
+        # x: list of [C, 1, H, W] → [B, C, H, W]
+        hidden_states = torch.stack([x_item.squeeze(1) for x_item in x], dim=0)
+
+        # Image token grid — same for every item, only its offset differs.
+        height_tokens = hidden_states.shape[2] // self.PATCH_SIZE
+        width_tokens = hidden_states.shape[3] // self.PATCH_SIZE
+        num_img_tokens = height_tokens * width_tokens
+        padded_img_tokens = self._rounded(num_img_tokens)
+        img_grid = torch.stack(
+            torch.meshgrid(
+                torch.arange(1, dtype=torch.int32),
+                torch.arange(height_tokens, dtype=torch.int32),
+                torch.arange(width_tokens, dtype=torch.int32),
+                indexing="ij",
+            ),
+            dim=-1,
+        ).reshape(-1, 3)
+
+        real_lengths = [cf.shape[0] for cf in cap_feats]
+        rounded_lengths = [self._rounded(length) for length in real_lengths]
+        max_cap_len = max(rounded_lengths)
+        cap_dim = cap_feats[0].shape[-1]
+
+        encoder_hidden_states = torch.zeros(batch_size, max_cap_len, cap_dim, dtype=cap_feats[0].dtype)
+        # Eager additive mask: 0 on a real token, finfo.min elsewhere.
+        mask_dtype = cap_feats[0].dtype
+        encoder_attention_mask = torch.full((batch_size, max_cap_len), torch.finfo(mask_dtype).min, dtype=mask_dtype)
+        txt_ids = torch.zeros(batch_size, max_cap_len, 3, dtype=torch.int32)
+        img_ids = torch.zeros(batch_size, padded_img_tokens, 3, dtype=torch.int32)
+
+        for i, (cap, real_len, rounded_len) in enumerate(zip(cap_feats, real_lengths, rounded_lengths)):
+            encoder_hidden_states[i, :real_len] = cap
+            # Only real tokens; the graph fills the rest with the learned cap_pad_token.
+            encoder_attention_mask[i, :real_len] = 0.0
+            # Caption positions are 1-based up to the rounded length; the batch-padded tail
+            # keeps position 0, which is what marks it as masked out.
+            txt_ids[i, :rounded_len, 0] = torch.arange(1, rounded_len + 1, dtype=torch.int32)
+            # Image tokens sit immediately after this item's caption.
+            img_ids[i, :num_img_tokens] = img_grid
+            img_ids[i, :num_img_tokens, 0] += rounded_len + 1
+
+        ov_out = self._ov_transformer(
+            hidden_states=hidden_states,
+            timestep=timestep,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_attention_mask,
+            txt_ids=txt_ids,
+            img_ids=img_ids,
+            return_dict=False,
+        )
+
+        if isinstance(ov_out, (tuple, list)):
+            sample = ov_out[0]
+        elif hasattr(ov_out, "sample"):
+            sample = ov_out.sample
+        else:
+            sample = list(ov_out.values())[0] if hasattr(ov_out, "values") else ov_out
+
+        if not isinstance(sample, torch.Tensor):
+            sample = torch.from_numpy(sample)
+
+        # [B, C, H, W] → list of [C, 1, H, W], the convention ZImagePipeline expects back
+        return ([s.unsqueeze(1) for s in sample.unbind(0)],)
+
+    def __getattr__(self, name):
+        return getattr(self._ov_transformer, name)
+
+
+class _OVZImagePipelineMixin:
+    """Behaviour shared by the OpenVINO Z-Image pipelines.
+
+    The text-to-image and image-to-image pipelines drive the transformer with the same
+    list-based convention and build prompt embeddings the same way, so the adapter
+    wrapping and the ``_encode_prompt`` override live here rather than in each class.
+
+    Listed first among the bases so these two methods win over the diffusers pipeline
+    they are mixed into.
+    """
+
+    def __call__(self, *args, **kwargs):
+        """Wrap transformer with ZImage-to-OV adapter before calling the pipeline.
+
+        Delegates to OVDiffusionPipeline.__call__ rather than straight to
+        auto_model_class.__call__: that is where numpy random states are converted to
+        torch generators and where a statically reshaped pipeline overrides the requested
+        height/width.
+        """
+        orig_transformer = self.transformer
+        if not isinstance(orig_transformer, _OVZImageTransformerAdapter):
+            self.transformer = _OVZImageTransformerAdapter(orig_transformer)
+        try:
+            return OVDiffusionPipeline.__call__(self, *args, **kwargs)
+        finally:
+            self.transformer = orig_transformer
+
+    def _encode_prompt(self, prompt, device=None, prompt_embeds=None, max_sequence_length=512):
+        """Override to use last_hidden_state from the OV text encoder.
+
+        The OV text encoder exports hidden_states[-2] as last_hidden_state
+        (see ZImageTextEncoderModelPatcher), so we read that directly instead
+        of calling with output_hidden_states=True.
+        """
+        if prompt_embeds is not None:
+            return prompt_embeds
+
+        if isinstance(prompt, str):
+            prompt = [prompt]
+
+        # Build a new list rather than assigning back into the caller's: reusing the same
+        # prompt list for a second call would otherwise wrap it in the chat template twice.
+        templated_prompt = [
+            self.tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt_item}],
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=True,
+            )
+            for prompt_item in prompt
+        ]
+
+        text_inputs = self.tokenizer(
+            templated_prompt,
+            padding="max_length",
+            max_length=max_sequence_length,
+            truncation=True,
+            return_tensors="pt",
+        )
+
+        text_input_ids = text_inputs.input_ids
+        prompt_masks = text_inputs.attention_mask.bool()
+
+        # OV text encoder returns last_hidden_state which is already hidden_states[-2]
+        encoder_out = self.text_encoder(input_ids=text_input_ids, attention_mask=prompt_masks)
+        prompt_embeds = encoder_out.last_hidden_state
+        if not isinstance(prompt_embeds, torch.Tensor):
+            prompt_embeds = torch.from_numpy(prompt_embeds)
+
+        embeddings_list = []
+        for i in range(len(prompt_embeds)):
+            embeddings_list.append(prompt_embeds[i][prompt_masks[i]])
+
+        return embeddings_list
+
+
+class OVZImagePipeline(_OVZImagePipelineMixin, OVDiffusionPipeline, OVTextualInversionLoaderMixin, ZImagePipeline):
+    """
+    OpenVINO-powered pipeline corresponding to [diffusers.ZImagePipeline](https://huggingface.co/docs/diffusers/api/pipelines/z_image).
+    """
+
+    main_input_name = "prompt"
+    export_feature = "text-to-image"
+    auto_model_class = ZImagePipeline
+
+
+class OVZImageImg2ImgPipeline(
+    _OVZImagePipelineMixin, OVDiffusionPipeline, OVTextualInversionLoaderMixin, ZImageImg2ImgPipeline
+):
+    """
+    OpenVINO-powered pipeline corresponding to [diffusers.ZImageImg2ImgPipeline](https://huggingface.co/docs/diffusers/api/pipelines/z_image).
+
+    Reuses the text-to-image export unchanged: image-to-image only changes how the
+    initial latents are built (encode the input image with the VAE, then add noise at the
+    timestep selected by ``strength``) and runs the same denoising loop afterwards.
+    """
+
+    main_input_name = "image"
+    export_feature = "image-to-image"
+    auto_model_class = ZImageImg2ImgPipeline
+
+
+class OVZImageInpaintPipeline(
+    _OVZImagePipelineMixin, OVDiffusionPipeline, OVTextualInversionLoaderMixin, ZImageInpaintPipeline
+):
+    """
+    OpenVINO-powered pipeline corresponding to [diffusers.ZImageInpaintPipeline](https://huggingface.co/docs/diffusers/api/pipelines/z_image).
+
+    Reuses the text-to-image export unchanged, like the image-to-image pipeline: only the
+    latent preparation differs, blending the VAE-encoded original back into the unmasked
+    region at every denoising step.
+    """
+
+    main_input_name = "image"
+    export_feature = "inpainting"
+    auto_model_class = ZImageInpaintPipeline
+
+
 SUPPORTED_OV_PIPELINES = [
     OVStableDiffusionPipeline,
     OVStableDiffusionImg2ImgPipeline,
@@ -2500,6 +2749,14 @@ if is_diffusers_version(">=", "0.37.0"):
     SUPPORTED_OV_PIPELINES.append(OVFlux2KleinPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["flux2-klein"] = OVFlux2KleinPipeline
     OV_IMAGE2IMAGE_PIPELINES_MAPPING["flux2-klein"] = OVFlux2KleinPipeline
+
+if is_diffusers_version(">=", "0.37.0"):
+    SUPPORTED_OV_PIPELINES.append(OVZImagePipeline)
+    SUPPORTED_OV_PIPELINES.append(OVZImageImg2ImgPipeline)
+    SUPPORTED_OV_PIPELINES.append(OVZImageInpaintPipeline)
+    OV_TEXT2IMAGE_PIPELINES_MAPPING["z-image"] = OVZImagePipeline
+    OV_IMAGE2IMAGE_PIPELINES_MAPPING["z-image"] = OVZImageImg2ImgPipeline
+    OV_INPAINT_PIPELINES_MAPPING["z-image"] = OVZImageInpaintPipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,
