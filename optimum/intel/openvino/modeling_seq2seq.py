@@ -24,8 +24,6 @@ from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import CompiledModel, Core
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
-from torch import nn
-from torch.nn import functional as F
 from transformers import (
     AutoConfig,
     AutoModelForImageTextToText,
@@ -47,13 +45,20 @@ from .. import OVConfig
 from ..utils import is_transformers_version
 from .configuration import OVQuantizationConfigBase, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
+from .modeling_visual_language import (
+    OVModelWithEmbedForCausalLM,
+    OVQwen3AudioEncoder,
+)
 from .utils import (
     ONNX_DECODER_NAME,
     ONNX_DECODER_WITH_PAST_NAME,
     ONNX_ENCODER_NAME,
+    OV_AUDIO_ENCODER_MODEL_NAME,
     OV_DECODER_NAME,
     OV_DECODER_WITH_PAST_NAME,
     OV_ENCODER_NAME,
+    OV_LANGUAGE_MODEL_NAME,
+    OV_TEXT_EMBEDDINGS_MODEL_NAME,
     TemporaryDirectory,
     classproperty,
 )
@@ -884,28 +889,6 @@ class OVEncoder(OVModelPart):
         super().__init__(model, parent_model, ov_config, model_name)
         self.main_input_name = self.parent_model.main_input_name or "input_ids"
 
-    # Adapted from https://github.com/QwenLM/Qwen3-ASR/blob/c17a131fe028b2e428b6e80a33d30bb4fa57b8df/qwen_asr/core/transformers_backend/modeling_qwen3_asr.py#L669
-    def chunked_forward(self, input_features, n_window):
-        feature_lens = input_features.shape[-1]
-        chunk_num = torch.ceil(torch.tensor([feature_lens]) / (n_window * 2)).long()
-
-        chunk_lengths = torch.tensor(
-            [n_window * 2] * chunk_num.sum(),
-            dtype=torch.long,
-        )
-
-        tail_chunk_index = F.pad(chunk_num, (1, 0), value=-1).cumsum(0)[1:]
-        chunk_lengths[tail_chunk_index] = feature_lens % (n_window * 2)
-        chunk_lengths[chunk_lengths == 0] = n_window * 2
-
-        chunk_list = input_features.T.split(chunk_lengths.tolist(), dim=0)
-        padded_feature = nn.utils.rnn.pad_sequence(chunk_list, batch_first=True).transpose(1, 2)
-        inputs = {}
-        inputs["input_features"] = padded_feature
-        last_hidden_state = torch.from_numpy(self.request(inputs)["last_hidden_state"]).to(self.device)
-
-        return last_hidden_state.view(1, -1, last_hidden_state.shape[-1])
-
     @add_start_docstrings_to_model_forward(ENCODER_INPUTS_DOCSTRING)
     def forward(
         self,
@@ -923,16 +906,6 @@ class OVEncoder(OVModelPart):
             if attention_mask is None:
                 attention_mask = torch.ones_like(inputs[self.main_input_name])
             inputs["attention_mask"] = attention_mask
-
-        # Qwen3-ASR requires input_features chunking before passing to encoder for processing of long audios.
-        if getattr(self.config, "model_type", None) == "qwen3_asr":
-            input_features = inputs["input_features"]
-            audio_features = []
-            for idx, input_feature in enumerate(input_features):
-                audio_feature = self.chunked_forward(input_feature, self.config.n_window)
-                audio_features.append(audio_feature)
-            audio_features = torch.cat(audio_features, dim=0)
-            return BaseModelOutput(last_hidden_state=audio_features)
 
         # Run inference
         last_hidden_state = torch.from_numpy(
@@ -1338,34 +1311,6 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
 
         return super().from_pretrained(model_id, export=export, config=config, **kwargs)
 
-    def _prepare_decoder_input_ids_for_generation(
-        self, batch_size, model_input_name, model_kwargs, decoder_start_token_id, device=None
-    ):
-        """
-        For qwen3_asr: skip prepending decoder_start_token_id since the full prompt
-        (including chat template tokens) is already provided as decoder_input_ids.
-        This matches the PyTorch model behavior where input_ids is used as-is.
-        """
-        if getattr(self.config, "model_type", None) == "qwen3_asr":
-            if model_kwargs is not None and "decoder_input_ids" in model_kwargs:
-                decoder_input_ids = model_kwargs.pop("decoder_input_ids")
-            elif "input_ids" in model_kwargs and model_input_name != "input_ids":
-                decoder_input_ids = model_kwargs.pop("input_ids")
-            else:
-                decoder_input_ids = None
-
-            if decoder_input_ids is None:
-                # Fallback to default behavior if no decoder_input_ids provided
-                return super()._prepare_decoder_input_ids_for_generation(
-                    batch_size, model_input_name, model_kwargs, decoder_start_token_id, device
-                )
-            # Return decoder_input_ids as-is without prepending decoder_start_token_id
-            return decoder_input_ids, model_kwargs
-
-        return super()._prepare_decoder_input_ids_for_generation(
-            batch_size, model_input_name, model_kwargs, decoder_start_token_id, device
-        )
-
     def prepare_inputs_for_generation(
         self,
         decoder_input_ids,
@@ -1416,35 +1361,6 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
         cache_position: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> Seq2SeqLMOutput:
-        # For qwen3_asr: adjust decoder_input_ids to match encoder output audio feature count
-        if (
-            getattr(self.config, "model_type", None) == "qwen3_asr"
-            and decoder_input_ids is not None
-            and past_key_values is None
-        ):
-            # Get encoder outputs (may already be computed by generate())
-            if encoder_outputs is None and input_features is not None:
-                encoder_outputs = self.encoder(input_ids=input_features, attention_mask=attention_mask)
-
-            if encoder_outputs is not None:
-                audio_token_id = getattr(self.config, "audio_token_id", None)
-                if audio_token_id is None:
-                    audio_token_id = getattr(getattr(self.config, "thinker_config", None), "audio_token_id", None)
-                if audio_token_id is not None:
-                    enc_hidden = (
-                        encoder_outputs.last_hidden_state
-                        if hasattr(encoder_outputs, "last_hidden_state")
-                        else encoder_outputs[0]
-                    )
-                    num_encoder_features = enc_hidden.shape[1]
-                    current_audio_count = (decoder_input_ids == audio_token_id).sum(dim=-1).max().item()
-                    if current_audio_count > 0 and current_audio_count != num_encoder_features:
-                        decoder_input_ids = self._adjust_audio_tokens(
-                            decoder_input_ids, audio_token_id, num_encoder_features
-                        )
-                        if decoder_attention_mask is not None:
-                            decoder_attention_mask = torch.ones_like(decoder_input_ids)
-
         return super().forward(
             input_ids=input_features,
             attention_mask=attention_mask,
@@ -1455,44 +1371,6 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
             cache_position=cache_position,
             **kwargs,
         )
-
-    @staticmethod
-    def _adjust_audio_tokens(decoder_input_ids, audio_token_id, target_count):
-        """Adjust the number of audio_pad tokens in decoder_input_ids to match encoder output count."""
-        result_ids = []
-        for batch_idx in range(decoder_input_ids.shape[0]):
-            ids = decoder_input_ids[batch_idx]
-            # Find audio token positions
-            audio_mask = ids == audio_token_id
-            current_count = audio_mask.sum().item()
-            if current_count == target_count:
-                result_ids.append(ids)
-            else:
-                # Split into: before audio tokens, audio tokens, after audio tokens
-                non_audio_before = []
-                non_audio_after = []
-                in_audio = False
-                past_audio = False
-                for tok in ids.tolist():
-                    if tok == audio_token_id:
-                        in_audio = True
-                    else:
-                        if in_audio:
-                            past_audio = True
-                            in_audio = False
-                        if past_audio:
-                            non_audio_after.append(tok)
-                        else:
-                            non_audio_before.append(tok)
-                # Reconstruct with target_count audio tokens
-                new_ids = non_audio_before + [audio_token_id] * target_count + non_audio_after
-                result_ids.append(torch.tensor(new_ids, dtype=ids.dtype, device=ids.device))
-        # Pad to same length
-        max_len = max(t.shape[0] for t in result_ids)
-        padded = torch.zeros(len(result_ids), max_len, dtype=decoder_input_ids.dtype, device=decoder_input_ids.device)
-        for i, t in enumerate(result_ids):
-            padded[i, : t.shape[0]] = t
-        return padded
 
     @classmethod
     def _from_pretrained(
@@ -1509,8 +1387,384 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
             config.is_encoder_decoder = True
             return _OVModelForFunAsr._from_pretrained(model_id, config, **kwargs)
         if getattr(config, "model_type", None) == "qwen3_asr":
-            config.is_encoder_decoder = True
+            split_paths = _OVModelForQwen3ASR._resolve_split_paths(model_id, **kwargs)
+            return _OVModelForQwen3ASR._from_pretrained(
+                model_id,
+                config,
+                split_paths=split_paths,
+                **kwargs,
+            )
         return super()._from_pretrained(model_id, config, **kwargs)
+
+
+class _OVModelForQwen3ASR(OVModelForSpeechSeq2Seq):
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        return {
+            "audio_encoder": OV_AUDIO_ENCODER_MODEL_NAME,
+            "text_embeddings": OV_TEXT_EMBEDDINGS_MODEL_NAME,
+            "language_model": OV_LANGUAGE_MODEL_NAME,
+        }
+
+    def __init__(
+        self,
+        audio_encoder: openvino.Model,
+        text_embeddings: openvino.Model,
+        language_model: openvino.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        if kwargs.get("stateful") is False or kwargs.get("use_cache") is False or not model_has_state(language_model):
+            raise ValueError(
+                "The Qwen3-ASR runtime requires a stateful language model and `use_cache=True`. "
+                "Re-export with `stateful=True` and load with `use_cache=True`. "
+                "Stateless language graphs must be used with an external-cache runtime."
+            )
+        config.is_encoder_decoder = False
+        self.config = config
+        self.name_or_path = getattr(config, "name_or_path", None)
+        self.model_save_dir = model_save_dir
+        self._compile_only = kwargs.get("compile_only", False)
+        self._device = device.upper()
+        self.is_dynamic = dynamic_shapes
+        self.ov_config = {} if ov_config is None else {**ov_config}
+        self.preprocessors = kwargs.get("preprocessors", [])
+        self.generation_config = kwargs.get("generation_config") or GenerationConfig.from_model_config(config)
+        self._openvino_config = None
+        if quantization_config:
+            self._openvino_config = OVConfig(quantization_config=quantization_config)
+        self._set_ov_config_parameters()
+
+        enable_compilation = kwargs.get("compile", True)
+        if self._compile_only and not enable_compilation:
+            raise ValueError("`compile_only=True` requires `compile=True`.")
+
+        self.audio_encoder = OVQwen3AudioEncoder(
+            audio_encoder,
+            self,
+            ov_config=self.ov_config,
+            model_name="audio_encoder",
+        )
+        self.language_model = OVModelWithEmbedForCausalLM(
+            language_model,
+            text_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=self.ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            compile=self._compile_only,
+            compile_only=self._compile_only,
+        )
+        self.encoder = self.audio_encoder
+        self.decoder = self.language_model
+        self.decoder_with_past = None
+        self.use_cache = True
+        self.main_input_name = "input_ids"
+
+        if enable_compilation and not self._compile_only:
+            self.compile()
+
+    @property
+    def _component_names(self) -> List[str]:
+        return ["audio_encoder", "language_model"]
+
+    @property
+    def _ov_model_names(self) -> List[str]:
+        return ["audio_encoder", "text_embeddings", "language_model"]
+
+    @property
+    def ov_models(self) -> Dict[str, Union[openvino.Model, CompiledModel]]:
+        return {
+            "audio_encoder": self.audio_encoder.model,
+            "text_embeddings": self.language_model.text_emb_model,
+            "language_model": self.language_model.model,
+        }
+
+    @property
+    def dtype(self) -> Optional[torch.dtype]:
+        return self.audio_encoder.dtype or self.language_model.dtype
+
+    def to(self, device):
+        self.language_model.to(device)
+        return super().to(device)
+
+    def reshape(self, batch_size: int, sequence_length: int):
+        if self._compile_only:
+            raise ValueError(
+                "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
+            )
+        if batch_size != -1 or sequence_length != -1:
+            raise ValueError(
+                "Qwen3-ASR split models only support dynamic shapes (`batch_size=-1`, `sequence_length=-1`)."
+            )
+        return self
+
+    def _process_audio_inputs(self, input_features, feature_attention_mask):
+        return self.audio_encoder.encode(input_features, feature_attention_mask)
+
+    @staticmethod
+    def _get_prefill_positions(attention_mask):
+        position_ids = attention_mask.long().cumsum(-1) - 1
+        position_ids.masked_fill_(attention_mask == 0, 1)
+        position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+        max_position_ids = position_ids.max(0).values.max(-1, keepdim=True).values
+        rope_deltas = max_position_ids + 1 - attention_mask.shape[-1]
+        return position_ids, rope_deltas
+
+    def _merge_audio_embeddings(self, input_ids, text_embeddings, audio_features, audio_feature_lens):
+        audio_token_id = getattr(getattr(self.config, "thinker_config", self.config), "audio_token_id", None)
+        if audio_token_id is None:
+            audio_token_id = getattr(self.config, "audio_token_id", None)
+        if audio_token_id is None:
+            raise ValueError("Qwen3-ASR config does not define `audio_token_id`.")
+
+        merged = text_embeddings.clone()
+        audio_features = torch.as_tensor(audio_features, dtype=merged.dtype, device=merged.device)
+        feature_offset = 0
+        for batch_idx, feature_len in enumerate(audio_feature_lens.tolist()):
+            placeholder_mask = input_ids[batch_idx] == audio_token_id
+            placeholder_count = int(placeholder_mask.sum().item())
+            if placeholder_count != feature_len:
+                raise ValueError(
+                    f"Qwen3-ASR sample {batch_idx} has {placeholder_count} audio placeholders but "
+                    f"the encoder produced {feature_len} valid features."
+                )
+            merged[batch_idx, placeholder_mask] = audio_features[feature_offset : feature_offset + feature_len]
+            feature_offset += feature_len
+        if feature_offset != audio_features.shape[0]:
+            raise ValueError(
+                f"Qwen3-ASR consumed {feature_offset} audio features but the encoder returned {audio_features.shape[0]}."
+            )
+        return merged
+
+    def generate(
+        self,
+        input_features=None,
+        attention_mask=None,
+        decoder_input_ids=None,
+        decoder_attention_mask=None,
+        input_ids=None,
+        feature_attention_mask=None,
+        **kwargs,
+    ):
+        input_ids = decoder_input_ids if decoder_input_ids is not None else input_ids
+        if input_ids is None:
+            raise ValueError("Qwen3-ASR generation requires `decoder_input_ids` or `input_ids`.")
+        if decoder_attention_mask is None and (feature_attention_mask is not None or input_features is None):
+            decoder_attention_mask = attention_mask
+        feature_attention_mask = feature_attention_mask if feature_attention_mask is not None else attention_mask
+        if decoder_attention_mask is None:
+            decoder_attention_mask = torch.ones_like(input_ids)
+
+        inputs_embeds = torch.as_tensor(self.language_model.embed_tokens(input_ids))
+        if input_features is not None:
+            if feature_attention_mask is None:
+                raise ValueError("`attention_mask` or `feature_attention_mask` is required with `input_features`.")
+            audio_features, audio_feature_lens = self._process_audio_inputs(input_features, feature_attention_mask)
+            inputs_embeds = self._merge_audio_embeddings(input_ids, inputs_embeds, audio_features, audio_feature_lens)
+
+        _, rope_deltas = self._get_prefill_positions(decoder_attention_mask)
+        return GenerationMixin.generate(
+            self,
+            input_ids=input_ids,
+            attention_mask=decoder_attention_mask,
+            inputs_embeds=inputs_embeds,
+            rope_deltas=rope_deltas,
+            **kwargs,
+        )
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        past_key_values=None,
+        position_ids=None,
+        inputs_embeds=None,
+        cache_position=None,
+        **kwargs,
+    ):
+        """Run the decoder with token IDs or prepared text/audio embeddings."""
+        return self.language_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            cache_position=cache_position,
+            **kwargs,
+        )
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        cache_position=None,
+        position_ids=None,
+        rope_deltas=None,
+        use_cache=True,
+        **kwargs,
+    ):
+        if past_key_values is None:
+            if position_ids is None:
+                position_ids, computed_rope_deltas = self._get_prefill_positions(attention_mask)
+                rope_deltas = computed_rope_deltas if rope_deltas is None else rope_deltas
+            return {
+                "input_ids": None if inputs_embeds is not None else input_ids,
+                "inputs_embeds": inputs_embeds,
+                "attention_mask": attention_mask,
+                "position_ids": position_ids,
+                "past_key_values": past_key_values,
+                "cache_position": cache_position,
+                "rope_deltas": rope_deltas,
+                "use_cache": use_cache,
+            }
+
+        if rope_deltas is None:
+            raise ValueError("Qwen3-ASR cached decoding requires `rope_deltas` from the prefill step.")
+        if cache_position is not None:
+            input_ids = input_ids[:, -cache_position.shape[0] :]
+            position_start = cache_position[0]
+        else:
+            input_ids = input_ids[:, -1:]
+            position_start = attention_mask.shape[-1] - input_ids.shape[-1]
+        batch_size, sequence_length = input_ids.shape
+        delta = position_start + rope_deltas.to(input_ids.device)
+        position_ids = torch.arange(sequence_length, device=input_ids.device).view(1, -1).expand(batch_size, -1)
+        position_ids = position_ids.add(delta).unsqueeze(0).expand(3, -1, -1)
+        return {
+            "input_ids": input_ids,
+            "inputs_embeds": None,
+            "attention_mask": attention_mask,
+            "position_ids": position_ids,
+            "past_key_values": past_key_values,
+            "cache_position": cache_position,
+            "rope_deltas": rope_deltas,
+            "use_cache": use_cache,
+        }
+
+    @classmethod
+    def _resolve_split_paths(
+        cls,
+        model_id: Union[str, Path],
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        subfolder: str = "",
+        local_files_only: bool = False,
+        **kwargs,
+    ) -> Dict[str, Path]:
+        paths = {}
+        for component, file_name in cls._all_ov_model_paths.items():
+            try:
+                path = cls._cached_file(
+                    model_path=model_id,
+                    token=token,
+                    revision=revision,
+                    force_download=force_download,
+                    cache_dir=cache_dir,
+                    file_name=file_name,
+                    subfolder=subfolder,
+                    local_files_only=local_files_only,
+                )
+            except OSError:
+                continue
+            if Path(path).is_file():
+                paths[component] = Path(path)
+
+        if not paths:
+            raise FileNotFoundError(
+                "Qwen3-ASR legacy exports are no longer supported. Re-export the model to create the required "
+                "audio encoder, text embeddings, and language model components."
+            )
+        missing = [file_name for component, file_name in cls._all_ov_model_paths.items() if component not in paths]
+        if missing:
+            raise FileNotFoundError(
+                "Incomplete Qwen3-ASR split export. Missing component files: " + ", ".join(missing)
+            )
+        return paths
+
+    @classmethod
+    def _from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        config: PretrainedConfig,
+        split_paths: Optional[Dict[str, Path]] = None,
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        subfolder: str = "",
+        local_files_only: bool = False,
+        load_in_8bit: bool = False,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        trust_remote_code: bool = False,
+        **kwargs,
+    ):
+        split_paths = split_paths or cls._resolve_split_paths(
+            model_id,
+            token=token,
+            revision=revision,
+            force_download=force_download,
+            cache_dir=cache_dir,
+            subfolder=subfolder,
+            local_files_only=local_files_only,
+        )
+        compile_only = kwargs.get("compile_only", False)
+        device = kwargs.get("device", "CPU")
+        ov_config = kwargs.get("ov_config")
+        model_save_dir = split_paths["language_model"].parent
+        if compile_only:
+            components = {
+                name: cls._compile_model(path, device, ov_config, model_save_dir) for name, path in split_paths.items()
+            }
+        else:
+            components = {name: cls.load_model(path) for name, path in split_paths.items()}
+
+        generation_config = kwargs.pop("generation_config", None)
+        if generation_config is None:
+            try:
+                generation_config = GenerationConfig.from_pretrained(
+                    model_id,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                    token=token,
+                    revision=revision,
+                    subfolder=subfolder,
+                )
+                generation_config.cache_implementation = None
+            except OSError:
+                logger.info(
+                    "Generation config file not found, using a generation config created from the model config."
+                )
+
+        quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
+        compile_model = kwargs.pop("compile", True)
+        model = cls(
+            audio_encoder=components["audio_encoder"],
+            text_embeddings=components["text_embeddings"],
+            language_model=components["language_model"],
+            config=config,
+            generation_config=generation_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            compile=compile_model and not quantization_config,
+            **kwargs,
+        )
+        if quantization_config:
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
+            model._apply_quantization(quantization_config, compile_only, compile_model, model_id, trust_remote_code)
+        return model
 
 
 class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneration):
