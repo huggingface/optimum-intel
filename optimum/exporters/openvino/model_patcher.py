@@ -5684,7 +5684,7 @@ def gemma4_text_attention_forward(
     query_states = apply_rotary_pos_emb_gemma4(query_states, cos, sin, unsqueeze_dim=2)
     query_states = query_states.transpose(1, 2)
 
-    if self.is_kv_shared_layer and (not legacy_shared_kv_states or past_key_values is not None):
+    if self.is_kv_shared_layer and (past_key_values is not None or shared_kv_states is not None):
         if legacy_shared_kv_states:
             key_states, value_states = past_key_values.shared_layers[self.kv_shared_layer_index]
         else:
