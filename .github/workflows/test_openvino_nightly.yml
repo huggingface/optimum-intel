@@ -122,6 +122,11 @@ jobs:
         run: |
           uv pip install auto-gptq "autoawq<0.2.8" --extra-index-url https://download.pytorch.org/whl/cpu
 
+      - if: ${{ contains(matrix.test-pattern, 'export') || contains(matrix.test-pattern, 'decoder') }}
+        name: Install compressed-tensors
+        run: |
+          uv pip install compressed-tensors
+
       - name: Login with fork PRs CI token
         if: ${{ env.HF_TOKEN == '' }}
         run: |
