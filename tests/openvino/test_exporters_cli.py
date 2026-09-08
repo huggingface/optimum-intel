@@ -865,6 +865,27 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
         )
 
+    # Same as above, but for a Qwen3.5 (VLM) checkpoint, mirroring the ignore pattern of the
+    # real-world cyankiwi/Qwen3.5-4B-AWQ-4bit checkpoint that motivated this feature: only the
+    # language-model linears are pack-quantized, the vision tower is untouched. Qwen3.5 is only
+    # registered for transformers 5.2.0-5.2.99 (see Qwen3_5OpenVINOConfig), so this config is only
+    # exercised by the `preview_models` workflow, which pins that narrow transformers range.
+    if is_openvino_version(">=", "2026.3"):
+        TRANSFORMERS_4BIT_CONFIGURATIONS.append(
+            (
+                "image-text-to-text",
+                "qwen3_5_compressed_tensors",
+                None,
+                {
+                    "lm_model": {"int4": 25},
+                    "text_embeddings_model": {},
+                    "vision_embeddings_model": {},
+                    "vision_embeddings_merger_model": {},
+                    "vision_embeddings_pos_model": {},
+                },
+            )
+        )
+
     # filter models type depending on min max transformers version
     SUPPORTED_4BIT_CONFIGURATIONS = [
         config
@@ -939,6 +960,14 @@ class OVCLIExportTestCase(unittest.TestCase):
         }
         if is_transformers_version(">=", "5"):
             expected.update({"videochat_flash_qwen", "llama4", "llava_next_video", "minicpmv", "internvl_chat"})
+
+        # qwen3_5_compressed_tensors is only added to TRANSFORMERS_4BIT_CONFIGURATIONS when
+        # OpenVINO >= 2026.3, and Qwen3_5OpenVINOConfig only supports transformers 5.2.0-5.2.99,
+        # so outside that narrow window it is present but filtered out of SUPPORTED.
+        if is_openvino_version(">=", "2026.3") and not (
+            is_transformers_version(">=", "5.2.0") and is_transformers_version("<=", "5.2.99")
+        ):
+            expected.add("qwen3_5_compressed_tensors")
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.SUPPORTED_4BIT_CONFIGURATIONS}
