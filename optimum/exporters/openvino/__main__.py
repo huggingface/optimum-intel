@@ -29,6 +29,7 @@ from transformers.utils import is_torch_available
 
 from openvino import Core, Type, save_model
 from optimum.exporters.openvino.base import OpenVINOConfig
+from optimum.exporters.openvino.dflash_utils import DFLASH_ARCHITECTURES, parse_and_validate_dflash_config
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     DIFFUSERS_IMPORT_ERROR,
@@ -220,6 +221,7 @@ _CUSTOM_DRAFT_MODEL_MAP = {
     "LlamaForCausalLMEagle3": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
     "Eagle3LlamaForCausalLM": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
     "DFlashDraftModel": ("Qwen3DFlashDraftModel", "Qwen3DFlashForCausalLM"),
+    "DFlash2DraftModel": ("Qwen3DFlash2DraftModel", "Qwen3DFlash2ForCausalLM"),
 }
 
 
@@ -402,6 +404,8 @@ def main_export(
 
         # update config to load custom draft models (eagle3 text-only/VLM variants, dflash)
         archs = getattr(config, "architectures", None)
+        if isinstance(archs, list) and archs and archs[0] in DFLASH_ARCHITECTURES:
+            parse_and_validate_dflash_config(config)
         if isinstance(archs, list) and archs:
             draft_classes = _CUSTOM_DRAFT_MODEL_MAP.get(archs[0])
             if draft_classes is not None:

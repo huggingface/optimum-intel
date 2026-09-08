@@ -82,3 +82,4 @@ jobs:
         run: |
           uv pip install transformers==5.2.0
           pytest tests/openvino/test_dflash.py --durations=0
+          pytest tests/openvino/test_exporters_cli.py -k dflash2 --durations=0
