@@ -581,17 +581,20 @@ def main_export(
                 # convert them to u4 constants during tracing.
                 CompressedTensorsHfQuantizer._process_model_after_weight_loading = lambda self, model, **kwargs: model
 
-                # In compressed-tensors >= 0.17, compress_model() installs a forward
+                # In compressed-tensors >= 0.15, compress_model() installs a forward
                 # pre-hook (ct_decompress_hook) that lazily decompresses weights on
                 # the first forward pass.  We must suppress it so that weight_packed
-                # buffers stay intact for the OV traced graph.
+                # buffers stay intact for the OV traced graph. Older versions do not
+                # define the method, so nothing needs to be patched there.
+                orig_add_decompress_hook = None
                 try:
                     from compressed_tensors import ModelCompressor
 
-                    orig_add_decompress_hook = ModelCompressor.add_decompress_hook
-                    ModelCompressor.add_decompress_hook = lambda self, model: None
+                    if hasattr(ModelCompressor, "add_decompress_hook"):
+                        orig_add_decompress_hook = ModelCompressor.add_decompress_hook
+                        ModelCompressor.add_decompress_hook = lambda self, model: None
                 except ImportError:
-                    orig_add_decompress_hook = None
+                    pass
     elif library_name == "diffusers":
         _loading_kwargs = {} if variant is None else {"variant": variant}
         if dtype == "auto" or dtype is None:

@@ -86,7 +86,7 @@ jobs:
         run: |
           uv pip install auto-gptq "autoawq<0.2.8"
 
-      - if: ${{ (matrix.transformers-version == '4.57.6' || matrix.transformers-version == 'latest') && matrix.test-pattern == '*export*' }}
+      - if: ${{ (matrix.transformers-version == '4.57.6' || matrix.transformers-version == 'latest') && (matrix.test-pattern == '*export*' || matrix.test-pattern == '*decoder*') }}
         name: Install compressed-tensors
         run: |
           uv pip install compressed-tensors

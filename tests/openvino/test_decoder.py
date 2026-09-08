@@ -143,6 +143,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         arch for arch in SUPPORTED_ARCHITECTURES if arch in get_supported_model_for_library("transformers")
     )
 
+    # Pre-quantized compressed-tensors (pack-quantized) checkpoint. Its packed weights are turned
+    # into int4 constants by the OpenVINO PyTorch frontend compressed-tensors patcher, which is
+    # only available since OpenVINO 2026.3. Requires the `compressed_tensors` package, installed
+    # by CI for the relevant jobs.
+    if is_openvino_version(">=", "2026.3") and is_transformers_version(">=", "4.57.6"):
+        SUPPORTED_ARCHITECTURES += ("llama_compressed_tensors",)
+
     GENERATION_LENGTH = 100
 
     EXPECTED_NUM_SDPA = {
@@ -215,6 +222,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "deepseek": 2,
         "opt_gptq": 12,
         "mixtral_awq": 2,
+        "llama_compressed_tensors": 2,
         "gemma3_text": 2,
         "gemma3n_text": 2,
         "glm4": 2,
@@ -332,8 +340,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch == "gemma2":
             model_kwargs["attn_implementation"] = "sdpa"
 
+        ov_config = F32_CONFIG
+        # For an already 4-bit checkpoint the reference dequantizes the weights to fp32, while OV
+        # keeps int4 constants. CPU dynamic quantization of the activations then makes the logits
+        # differ by ~1%, so disable it to compare both paths at the same precision.
+        if model_arch == "llama_compressed_tensors":
+            ov_config = {**F32_CONFIG, "DYNAMIC_QUANTIZATION_GROUP_SIZE": "0"}
+
         ov_model = OVModelForCausalLM.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, **model_kwargs
+            model_id, export=True, ov_config=ov_config, device=OPENVINO_DEVICE, **model_kwargs
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
@@ -739,13 +754,20 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             # currently broken in transformers == 4.57.*
             gen_configs.extend([group_beam_search_gen_config, constrained_beam_search_gen_config])
 
+        ov_kwargs = {}
+        # For an already 4-bit checkpoint the reference dequantizes the weights to fp32, while OV
+        # keeps int4 constants. CPU dynamic quantization of the activations then perturbs the logits
+        # enough to pick different tokens, so disable it to compare both paths at the same precision.
+        if model_arch == "llama_compressed_tensors":
+            ov_kwargs["ov_config"] = {"DYNAMIC_QUANTIZATION_GROUP_SIZE": "0"}
+
         set_seed(SEED)
         ov_model_stateful = OVModelForCausalLM.from_pretrained(
-            model_id, export=True, use_cache=True, stateful=True, device=OPENVINO_DEVICE, **model_kwargs
+            model_id, export=True, use_cache=True, stateful=True, device=OPENVINO_DEVICE, **ov_kwargs, **model_kwargs
         )
         set_seed(SEED)
         ov_model_stateless = OVModelForCausalLM.from_pretrained(
-            model_id, export=True, use_cache=True, stateful=False, device=OPENVINO_DEVICE, **model_kwargs
+            model_id, export=True, use_cache=True, stateful=False, device=OPENVINO_DEVICE, **ov_kwargs, **model_kwargs
         )
         if "awq" in model_arch or "gptq" in model_arch:
             # infer in FP32
