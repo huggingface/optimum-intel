@@ -1651,6 +1651,12 @@ class OVQuantizer(OptimumQuantizer):
                 #
                 if isinstance(self.model, OVModelForVisualCausalLM):
                     quantization_configs["lm_model"] = quantization_config
+                    # The MTP (Multi-Token Prediction) head is a full decoder layer
+                    # (for MoE variants, hundreds of experts) and is as large as the
+                    # main language model. Apply the requested precision to it as well,
+                    # instead of the int8 default used for small vision/projection parts.
+                    if "mtp_model" in self.model._ov_model_names:
+                        quantization_configs["mtp_model"] = quantization_config
                     default_config = OVWeightQuantizationConfig(bits=8, sym=True)
                 else:
                     default_config = quantization_config

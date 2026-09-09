@@ -121,7 +121,9 @@ class ExportModelTest(unittest.TestCase):
         "gemma4": OVModelForVisualCausalLM,
         "gemma4_moe": OVModelForVisualCausalLM,
         "qwen3_5": OVModelForVisualCausalLM,
+        "qwen3_5_mtp": OVModelForVisualCausalLM,
         "qwen3_5_moe": OVModelForVisualCausalLM,
+        "qwen3_5_moe_mtp": OVModelForVisualCausalLM,
         "gemma4_unified": OVModelForVisualCausalLM,
         "gemma3n": OVModelForVisualCausalLM,
         "mistral3": OVModelForVisualCausalLM,
@@ -232,6 +234,14 @@ class ExportModelTest(unittest.TestCase):
                     model_kwargs=model_kwargs,
                 )
 
+                # Models with a Multi-Token Prediction head export it as a separate submodel;
+                # make sure the openvino_mtp_model.xml file is actually produced.
+                if model_type in ("qwen3_5_mtp", "qwen3_5_moe_mtp"):
+                    self.assertTrue(
+                        (Path(tmpdirname) / "openvino_mtp_model.xml").is_file(),
+                        "openvino_mtp_model.xml was not created during export",
+                    )
+
                 use_cache = supported_task.endswith("-with-past")
                 ov_model = auto_model.from_pretrained(
                     tmpdirname, use_cache=use_cache, trust_remote_code=model_type in REMOTE_CODE_MODELS
@@ -256,6 +266,12 @@ class ExportModelTest(unittest.TestCase):
                     self.assertTrue(
                         ov_model.language_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
                     )
+                    if model_type == "gemma4_unified":
+                        vision_model = ov_model.vision_embeddings.model
+                        self.assertTrue(vision_model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
+                        self.assertEqual(
+                            vision_model.get_rt_info()["runtime_options"]["ACTIVATIONS_SCALE_FACTOR"], "8.0"
+                        )
 
                 if library_name == "diffusers":
                     expected_scale_factors = self.EXPECTED_DIFFUSERS_SCALE_FACTORS.get(model_type, {})
