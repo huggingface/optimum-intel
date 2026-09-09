@@ -943,6 +943,14 @@ _CODE_PREDICTOR_EMBEDDINGS_OV_IR_NAME = "openvino_code_predictor_embeddings.xml"
 # the keys is enough to move sampled codes away from what PyTorch produces.
 _DECODER_STACK_OV_CONFIG = {"KV_CACHE_PRECISION": "f32"}
 
+# The code predictor is additionally pinned to f32 arithmetic. It runs `num_code_groups - 1`
+# steps inside every talker frame off a cache that is reset each frame, and in f16 - the GPU
+# plugin's default inference precision - its logits go non-finite within the first few frames,
+# which surfaces as `probability tensor contains either inf, nan or element < 0` out of the
+# multinomial sampling in `code_predictor.generate`. The talker stack is unaffected and keeps
+# the device default, so the bulk of the compute (28 layers vs 5) still runs in f16 on GPU.
+_CODE_PREDICTOR_OV_CONFIG = {**_DECODER_STACK_OV_CONFIG, "INFERENCE_PRECISION_HINT": "f32"}
+
 # Every IR a Qwen3-TTS export can contain.
 _QWEN3_TTS_OV_IR_NAMES = (
     _TALKER_OV_IR_NAME,
@@ -1501,6 +1509,10 @@ class _OVModelForQwen3TTS:
             config = pipeline.model.config
 
         instance = cls(pipeline=pipeline, config=config, model_save_dir=model_id)
+        # Every component IR is compiled for this device by ``_install_ov_components`` below,
+        # so the target has to be set before it runs. Hints a device does not advertise are
+        # dropped in ``_supported``, which keeps non-CPU targets from falling back to PyTorch.
+        instance._device = str(kwargs.pop("device", None) or "CPU").upper()
         instance._ir_dir = _resolve_ir_dir(model_id, cache_dir)
         instance._codec_weights_present = codec_weights_present
         instance._weights_present = weights_present
@@ -1654,7 +1666,7 @@ class _OVModelForQwen3TTS:
             code_predictor_model.eval()
 
             compiled = self._compile_ov_component(
-                _CODE_PREDICTOR_OV_IR_NAME, "code predictor", _DECODER_STACK_OV_CONFIG
+                _CODE_PREDICTOR_OV_IR_NAME, "code predictor", _CODE_PREDICTOR_OV_CONFIG
             )
 
             # The code predictor's graph owns its rotary embeddings and its key/value cache.
