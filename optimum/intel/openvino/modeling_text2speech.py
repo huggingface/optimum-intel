@@ -1788,11 +1788,12 @@ class _OVModelForQwen3TTS:
     def _install_ov_codec_encoder(self) -> None:
         """Offload the codec encoder (reference waveform -> residual codes) to OpenVINO.
 
-        The graph is length-agnostic only for waveforms that are a whole number of codec
-        frames, so the waveform is zero-padded up to the next frame boundary here. That
-        matches what the causal convolutions pad internally, and produces the same
-        ``ceil(samples / 1920)`` frames the PyTorch path returns; the caller then trims the
-        code stream back with its own padding mask.
+        The waveform is handed over as it comes. The exported convolutions derive their own right
+        padding from the traced shape (see ``_traceable_extra_padding_for_conv1d`` in the exporter),
+        so the graph returns the same ``ceil(samples / 1920)`` frames as PyTorch for any length, with
+        the same values; the caller then trims the code stream back with its own padding mask.
+        Padding the waveform up to a frame boundary here instead would change the last frame's codes,
+        because the stock convs pad per layer rather than once at the input.
         """
         try:
             from transformers.models.mimi.modeling_mimi import MimiEncoderOutput
@@ -1800,15 +1801,11 @@ class _OVModelForQwen3TTS:
             codec_model = self.model.speech_tokenizer.model
             codec_encoder = codec_model.encoder
             codec_encoder.eval()
-            downsample_rate = int(codec_model.encode_downsample_rate)
 
             compiled = self._compile_ov_component(_CODEC_ENCODER_OV_IR_NAME, "codec encoder")
 
             def ov_encode(input_values, padding_mask=None, return_dict=True, **kw):
                 waveform = _as_float32_numpy(input_values)
-                remainder = waveform.shape[-1] % downsample_rate
-                if remainder:
-                    waveform = np.pad(waveform, [(0, 0)] * (waveform.ndim - 1) + [(0, downsample_rate - remainder)])
                 audio_codes = torch.from_numpy(compiled(waveform)[0]).clone().to(torch.int64)
                 if not return_dict:
                     return (audio_codes, None, None)

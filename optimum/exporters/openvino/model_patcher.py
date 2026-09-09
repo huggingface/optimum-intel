@@ -11872,6 +11872,29 @@ class Qwen3TTSSpeakerEncoderPatcher(ModelPatcher):
         self._patched_convs = []
 
 
+def _traceable_extra_padding_for_conv1d(module, hidden_states):
+    """Length-agnostic replacement for ``_get_extra_padding_for_conv1d`` on the codec's causal convs.
+
+    The stock implementations spell this as ``ceil((length - kernel_size + padding_total) / stride)``
+    over ``hidden_states.shape[-1]``. The division and the ``ceil`` run on a Python int (or, on
+    ``MimiConv1d``, on int64 buffers with the length folded in), so tracing bakes the result in as a
+    constant and the traced conv pads correctly only at the length it was traced with.
+
+    That quantity is just the covered length rounded up to a whole number of strides, which integer
+    arithmetic expresses without a ``ceil``. Written this way the tracer records ``aten::size`` and
+    the arithmetic on it as real ops, so the padding follows the input length in the exported graph.
+    Verified identical to both stock implementations across their kernel/stride/length ranges.
+    """
+    # ``MimiConv1d`` registers stride/kernel_size/padding_total as int64 buffers and
+    # ``Qwen3TTSTokenizerV2CausalConvNet`` keeps plain ints under the name ``padding``; either way
+    # they are constants, and only the length may vary between calls.
+    stride = int(module.stride)
+    kernel_size = int(module.kernel_size)
+    padding_total = int(module.padding_total if hasattr(module, "padding_total") else module.padding)
+    covered = hidden_states.shape[-1] - kernel_size + padding_total
+    return (stride - covered % stride) % stride
+
+
 class _Qwen3TTSCodecPatcherMixin:
     """Shared tracing fixes for the Qwen3-TTS neural codec (``speech_tokenizer``).
 
@@ -11879,25 +11902,35 @@ class _Qwen3TTSCodecPatcherMixin:
     with ``ceil`` over a Python-int length, and from small sliding-window transformers whose
     masks are built with ``vmap``. Neither traces into a length-agnostic graph, so:
 
-    * ``_get_extra_padding_for_conv1d`` is forced to 0. This is exact as long as the waveform
-      length is a multiple of the codec's total stride (1920 samples = one 12.5 Hz frame),
-      which both call sites guarantee: the decoder only ever sees whole frames, and the
-      runtime pads the encoder's waveform up to a frame boundary. Same rationale as
-      :class:`Qwen3OmniMoeCode2WavPatcher`.
+    * ``_get_extra_padding_for_conv1d`` is swapped for :func:`_traceable_extra_padding_for_conv1d`,
+      which computes the same padding from the traced shape. Each conv therefore pads its own input
+      the way PyTorch does, at every scale of the stack, so the graph is exact for any waveform
+      length rather than only for whole 1920-sample frames. Forcing the padding to 0 instead - the
+      approach :class:`Qwen3OmniMoeCode2WavPatcher` takes - would leave the caller to pad the
+      waveform up to a frame boundary, which is not the same computation: the stock convs pad per
+      layer, at the downsampled scales and with per-layer pad modes, so a single pad at the input
+      moves the last frame's codes.
     * the vmap-free mask builders are registered for the codec transformers, mirroring
       :class:`OVDecoderModelPatcher`.
     """
 
     def _causal_conv_class(self):
-        """Return the causal-convolution class whose extra padding must be neutralized."""
+        """Return the causal-convolution class whose extra padding must be made traceable."""
         raise NotImplementedError
 
     def _enter_codec_patches(self):
         conv_cls = self._causal_conv_class()
         self._orig_get_extra_padding = conv_cls._get_extra_padding_for_conv1d
-        conv_cls._get_extra_padding_for_conv1d = lambda self, hidden_state: 0
+        conv_cls._get_extra_padding_for_conv1d = _traceable_extra_padding_for_conv1d
         self._patched_conv_cls = conv_cls
 
+        # Both codec transformers reach their mask through ``ALL_MASK_ATTENTION_FUNCTIONS``: the encoder's
+        # ``encoder_transformer`` (a stock ``MimiTransformerModel``) via ``create_causal_mask``, the decoder's
+        # via that plus ``create_sliding_window_causal_mask`` for its sliding layers. The registry's stock
+        # entries build the mask under ``torch.vmap``, which tracing cannot capture at all - functorch raises
+        # ``RuntimeError: unordered_map::at`` mid-trace - so this is a hard export failure rather than a
+        # silently wrong mask. The vmap-free builder computes the same mask with plain tensor ops, and traces
+        # to a subgraph that stays correct at any length.
         ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
         ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
 
