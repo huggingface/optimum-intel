@@ -14,6 +14,7 @@
 import logging
 import os
 import warnings
+from copy import deepcopy
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -24,6 +25,8 @@ from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import CompiledModel, Core
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
+from torch import nn
+from torch.nn import functional as F
 from transformers import (
     AutoConfig,
     AutoModelForImageTextToText,
@@ -38,6 +41,7 @@ from transformers.file_utils import add_start_docstrings, add_start_docstrings_t
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 from transformers.utils import http_user_agent
+from transformers.utils.hub import cached_file
 
 from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
@@ -889,6 +893,28 @@ class OVEncoder(OVModelPart):
         super().__init__(model, parent_model, ov_config, model_name)
         self.main_input_name = self.parent_model.main_input_name or "input_ids"
 
+    # Adapted from https://github.com/QwenLM/Qwen3-ASR/blob/c17a131fe028b2e428b6e80a33d30bb4fa57b8df/qwen_asr/core/transformers_backend/modeling_qwen3_asr.py#L669
+    def chunked_forward(self, input_features, n_window):
+        feature_lens = input_features.shape[-1]
+        chunk_num = torch.ceil(torch.tensor([feature_lens]) / (n_window * 2)).long()
+
+        chunk_lengths = torch.tensor(
+            [n_window * 2] * chunk_num.sum(),
+            dtype=torch.long,
+        )
+
+        tail_chunk_index = F.pad(chunk_num, (1, 0), value=-1).cumsum(0)[1:]
+        chunk_lengths[tail_chunk_index] = feature_lens % (n_window * 2)
+        chunk_lengths[chunk_lengths == 0] = n_window * 2
+
+        chunk_list = input_features.T.split(chunk_lengths.tolist(), dim=0)
+        padded_feature = nn.utils.rnn.pad_sequence(chunk_list, batch_first=True).transpose(1, 2)
+        inputs = {}
+        inputs["input_features"] = padded_feature
+        last_hidden_state = torch.from_numpy(self.request(inputs)["last_hidden_state"]).to(self.device)
+
+        return last_hidden_state.view(1, -1, last_hidden_state.shape[-1])
+
     @add_start_docstrings_to_model_forward(ENCODER_INPUTS_DOCSTRING)
     def forward(
         self,
@@ -906,6 +932,16 @@ class OVEncoder(OVModelPart):
             if attention_mask is None:
                 attention_mask = torch.ones_like(inputs[self.main_input_name])
             inputs["attention_mask"] = attention_mask
+
+        # Qwen3-ASR requires input_features chunking before passing to encoder for processing of long audios.
+        if getattr(self.config, "model_type", None) == "qwen3_asr":
+            input_features = inputs["input_features"]
+            audio_features = []
+            for idx, input_feature in enumerate(input_features):
+                audio_feature = self.chunked_forward(input_feature, self.config.n_window)
+                audio_features.append(audio_feature)
+            audio_features = torch.cat(audio_features, dim=0)
+            return BaseModelOutput(last_hidden_state=audio_features)
 
         # Run inference
         last_hidden_state = torch.from_numpy(
@@ -1311,6 +1347,34 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
 
         return super().from_pretrained(model_id, export=export, config=config, **kwargs)
 
+    def _prepare_decoder_input_ids_for_generation(
+        self, batch_size, model_input_name, model_kwargs, decoder_start_token_id, device=None
+    ):
+        """
+        For qwen3_asr: skip prepending decoder_start_token_id since the full prompt
+        (including chat template tokens) is already provided as decoder_input_ids.
+        This matches the PyTorch model behavior where input_ids is used as-is.
+        """
+        if getattr(self.config, "model_type", None) == "qwen3_asr":
+            if model_kwargs is not None and "decoder_input_ids" in model_kwargs:
+                decoder_input_ids = model_kwargs.pop("decoder_input_ids")
+            elif "input_ids" in model_kwargs and model_input_name != "input_ids":
+                decoder_input_ids = model_kwargs.pop("input_ids")
+            else:
+                decoder_input_ids = None
+
+            if decoder_input_ids is None:
+                # Fallback to default behavior if no decoder_input_ids provided
+                return super()._prepare_decoder_input_ids_for_generation(
+                    batch_size, model_input_name, model_kwargs, decoder_start_token_id, device
+                )
+            # Return decoder_input_ids as-is without prepending decoder_start_token_id
+            return decoder_input_ids, model_kwargs
+
+        return super()._prepare_decoder_input_ids_for_generation(
+            batch_size, model_input_name, model_kwargs, decoder_start_token_id, device
+        )
+
     def prepare_inputs_for_generation(
         self,
         decoder_input_ids,
@@ -1361,6 +1425,35 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
         cache_position: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> Seq2SeqLMOutput:
+        # For qwen3_asr: adjust decoder_input_ids to match encoder output audio feature count
+        if (
+            getattr(self.config, "model_type", None) == "qwen3_asr"
+            and decoder_input_ids is not None
+            and past_key_values is None
+        ):
+            # Get encoder outputs (may already be computed by generate())
+            if encoder_outputs is None and input_features is not None:
+                encoder_outputs = self.encoder(input_ids=input_features, attention_mask=attention_mask)
+
+            if encoder_outputs is not None:
+                audio_token_id = getattr(self.config, "audio_token_id", None)
+                if audio_token_id is None:
+                    audio_token_id = getattr(getattr(self.config, "thinker_config", None), "audio_token_id", None)
+                if audio_token_id is not None:
+                    enc_hidden = (
+                        encoder_outputs.last_hidden_state
+                        if hasattr(encoder_outputs, "last_hidden_state")
+                        else encoder_outputs[0]
+                    )
+                    num_encoder_features = enc_hidden.shape[1]
+                    current_audio_count = (decoder_input_ids == audio_token_id).sum(dim=-1).max().item()
+                    if current_audio_count > 0 and current_audio_count != num_encoder_features:
+                        decoder_input_ids = self._adjust_audio_tokens(
+                            decoder_input_ids, audio_token_id, num_encoder_features
+                        )
+                        if decoder_attention_mask is not None:
+                            decoder_attention_mask = torch.ones_like(decoder_input_ids)
+
         return super().forward(
             input_ids=input_features,
             attention_mask=attention_mask,
@@ -1371,6 +1464,44 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
             cache_position=cache_position,
             **kwargs,
         )
+
+    @staticmethod
+    def _adjust_audio_tokens(decoder_input_ids, audio_token_id, target_count):
+        """Adjust the number of audio_pad tokens in decoder_input_ids to match encoder output count."""
+        result_ids = []
+        for batch_idx in range(decoder_input_ids.shape[0]):
+            ids = decoder_input_ids[batch_idx]
+            # Find audio token positions
+            audio_mask = ids == audio_token_id
+            current_count = audio_mask.sum().item()
+            if current_count == target_count:
+                result_ids.append(ids)
+            else:
+                # Split into: before audio tokens, audio tokens, after audio tokens
+                non_audio_before = []
+                non_audio_after = []
+                in_audio = False
+                past_audio = False
+                for tok in ids.tolist():
+                    if tok == audio_token_id:
+                        in_audio = True
+                    else:
+                        if in_audio:
+                            past_audio = True
+                            in_audio = False
+                        if past_audio:
+                            non_audio_after.append(tok)
+                        else:
+                            non_audio_before.append(tok)
+                # Reconstruct with target_count audio tokens
+                new_ids = non_audio_before + [audio_token_id] * target_count + non_audio_after
+                result_ids.append(torch.tensor(new_ids, dtype=ids.dtype, device=ids.device))
+        # Pad to same length
+        max_len = max(t.shape[0] for t in result_ids)
+        padded = torch.zeros(len(result_ids), max_len, dtype=decoder_input_ids.dtype, device=decoder_input_ids.device)
+        for i, t in enumerate(result_ids):
+            padded[i, : t.shape[0]] = t
+        return padded
 
     @classmethod
     def _from_pretrained(
@@ -1387,7 +1518,9 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
             config.is_encoder_decoder = True
             return _OVModelForFunAsr._from_pretrained(model_id, config, **kwargs)
         if getattr(config, "model_type", None) == "qwen3_asr":
-            split_paths = _OVModelForQwen3ASR._resolve_split_paths(model_id, **kwargs)
+            split_paths = _OVModelForQwen3ASR._resolve_split_paths(model_id, allow_missing=True, **kwargs)
+            if not split_paths:
+                return _OVModelForQwen3ASREncoderDecoder._from_pretrained(model_id, config, **kwargs)
             return _OVModelForQwen3ASR._from_pretrained(
                 model_id,
                 config,
@@ -1395,6 +1528,111 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
                 **kwargs,
             )
         return super()._from_pretrained(model_id, config, **kwargs)
+
+
+class _OVModelForQwen3ASREncoderDecoder(OVModelForSpeechSeq2Seq):
+    def __init__(self, encoder, decoder, decoder_with_past=None, config=None, **kwargs):
+        if kwargs.get("compile_only"):
+            raise ValueError("Qwen3-ASR encoder-decoder models require `compile_only=False`.")
+        if kwargs.get("stateful") is False or kwargs.get("use_cache") is False or not model_has_state(decoder):
+            raise ValueError("Qwen3-ASR encoder-decoder inference requires a stateful decoder and `use_cache=True`.")
+        config.is_encoder_decoder = True
+        if not hasattr(config, "n_window"):
+            config.n_window = config.thinker_config.audio_config.n_window
+        super().__init__(encoder, decoder, decoder_with_past, config, **kwargs)
+        logger.warning(
+            "Loading a Qwen3-ASR encoder-decoder export. Only single-recording generation is supported. "
+            "Re-export for split-component inference and PagedAttention compatibility."
+        )
+
+    @classmethod
+    def _from_pretrained(cls, model_id, config, **kwargs):
+        if kwargs.get("compile_only"):
+            raise ValueError("Qwen3-ASR encoder-decoder models require `compile_only=False`.")
+        if kwargs.get("use_cache") is False:
+            raise ValueError("Qwen3-ASR encoder-decoder inference requires `use_cache=True`.")
+        if kwargs.get("from_onnx"):
+            raise ValueError("Qwen3-ASR encoder-decoder compatibility supports OpenVINO IR exports only.")
+        subfolder = kwargs.get("subfolder", "")
+        for argument, default in (
+            ("encoder_file_name", OV_ENCODER_NAME),
+            ("decoder_file_name", OV_DECODER_NAME),
+        ):
+            filename = kwargs.get(argument) or default
+            path = cls._cached_file(
+                model_path=model_id,
+                file_name=filename,
+                subfolder=subfolder,
+                **{
+                    key: kwargs[key]
+                    for key in ("token", "revision", "force_download", "cache_dir", "local_files_only")
+                    if key in kwargs
+                },
+            )
+            for required in (Path(path), Path(path).with_suffix(".bin")):
+                if not required.is_file():
+                    raise FileNotFoundError(f"Incomplete Qwen3-ASR encoder-decoder export: missing {required}.")
+            kwargs[argument] = str(Path(subfolder) / filename)
+        return super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(model_id, config, **kwargs)
+
+    def generate(
+        self,
+        input_features=None,
+        attention_mask=None,
+        decoder_input_ids=None,
+        decoder_attention_mask=None,
+        input_ids=None,
+        feature_attention_mask=None,
+        **kwargs,
+    ):
+        prompt = decoder_input_ids if decoder_input_ids is not None else input_ids
+        if prompt is None or prompt.ndim != 2 or prompt.shape[0] != 1:
+            raise ValueError("Qwen3-ASR encoder-decoder models require a prompt for exactly one recording.")
+        generation_config = kwargs.get("generation_config") or self.generation_config
+        if not kwargs.get("use_cache", generation_config.use_cache):
+            raise ValueError("Qwen3-ASR encoder-decoder inference requires `use_cache=True`.")
+        if (
+            kwargs.get("num_beams", generation_config.num_beams) != 1
+            or kwargs.get("num_return_sequences", generation_config.num_return_sequences) != 1
+        ):
+            raise ValueError("Qwen3-ASR encoder-decoder inference supports one beam and one returned sequence.")
+        if decoder_attention_mask is None and feature_attention_mask is not None:
+            decoder_attention_mask = attention_mask
+        if decoder_attention_mask is not None and not torch.all(decoder_attention_mask == 1):
+            raise ValueError("Qwen3-ASR encoder-decoder inference requires an unpadded text prompt.")
+        encoder_outputs = kwargs.pop("encoder_outputs", None)
+        if encoder_outputs is None:
+            encoder_outputs = self.encoder(input_ids=input_features)
+        if encoder_outputs.last_hidden_state.shape[0] != 1:
+            raise ValueError("Qwen3-ASR encoder-decoder models require exactly one recording per request.")
+        audio_token_id = getattr(self.config, "audio_token_id", None)
+        if audio_token_id is None:
+            audio_token_id = self.config.thinker_config.audio_token_id
+        adjusted_prompt = self._adjust_audio_tokens(prompt, audio_token_id, encoder_outputs.last_hidden_state.shape[1])
+        generation_config = deepcopy(generation_config)
+        prompt_delta = adjusted_prompt.shape[1] - prompt.shape[1]
+        for name in ("max_length", "min_length"):
+            value = kwargs.pop(name, getattr(generation_config, name))
+            if value is not None and value > 0:
+                setattr(generation_config, name, value + prompt_delta)
+        kwargs.pop("generation_config", None)
+        output = GenerationMixin.generate(
+            self,
+            encoder_outputs=encoder_outputs,
+            decoder_input_ids=adjusted_prompt,
+            attention_mask=torch.ones(
+                encoder_outputs.last_hidden_state.shape[:2], dtype=torch.long, device=prompt.device
+            ),
+            decoder_attention_mask=torch.ones_like(adjusted_prompt),
+            generation_config=generation_config,
+            **kwargs,
+        )
+        sequences = output.sequences if hasattr(output, "sequences") else output
+        sequences = torch.cat((prompt.to(sequences.device), sequences[:, adjusted_prompt.shape[1] :]), dim=1)
+        if hasattr(output, "sequences"):
+            output.sequences = sequences
+            return output
+        return sequences
 
 
 class _OVModelForQwen3ASR(OVModelForSpeechSeq2Seq):
@@ -1661,29 +1899,30 @@ class _OVModelForQwen3ASR(OVModelForSpeechSeq2Seq):
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
         subfolder: str = "",
         local_files_only: bool = False,
+        allow_missing: bool = False,
         **kwargs,
     ) -> Dict[str, Path]:
         paths = {}
         for component, file_name in cls._all_ov_model_paths.items():
-            try:
-                path = cls._cached_file(
-                    model_path=model_id,
-                    token=token,
-                    revision=revision,
-                    force_download=force_download,
-                    cache_dir=cache_dir,
-                    file_name=file_name,
-                    subfolder=subfolder,
-                    local_files_only=local_files_only,
-                )
-            except OSError:
-                continue
-            if Path(path).is_file():
+            path = cached_file(
+                path_or_repo_id=model_id,
+                token=token,
+                revision=revision,
+                force_download=force_download,
+                cache_dir=cache_dir,
+                filename=file_name,
+                subfolder=subfolder,
+                local_files_only=local_files_only,
+                _raise_exceptions_for_missing_entries=False,
+            )
+            if path is not None and Path(path).is_file():
                 paths[component] = Path(path)
 
+        if not paths and allow_missing:
+            return paths
         if not paths:
             raise FileNotFoundError(
-                "Qwen3-ASR legacy exports are no longer supported. Re-export the model to create the required "
+                "Qwen3-ASR split export not found. Re-export the model to create the required "
                 "audio encoder, text embeddings, and language model components."
             )
         missing = [file_name for component, file_name in cls._all_ov_model_paths.items() if component not in paths]
@@ -1691,6 +1930,21 @@ class _OVModelForQwen3ASR(OVModelForSpeechSeq2Seq):
             raise FileNotFoundError(
                 "Incomplete Qwen3-ASR split export. Missing component files: " + ", ".join(missing)
             )
+        for component, file_name in cls._all_ov_model_paths.items():
+            path = cls._cached_file(
+                model_path=model_id,
+                file_name=file_name,
+                token=token,
+                revision=revision,
+                force_download=force_download,
+                cache_dir=cache_dir,
+                subfolder=subfolder,
+                local_files_only=local_files_only,
+            )
+            if not Path(path).with_suffix(".bin").is_file():
+                raise FileNotFoundError(
+                    f"Incomplete Qwen3-ASR split export: missing {Path(path).with_suffix('.bin')}."
+                )
         return paths
 
     @classmethod

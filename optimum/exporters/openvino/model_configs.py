@@ -193,6 +193,7 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3_5MTPModule,
     Qwen3_5VisionEmbMergerPatcher,
     Qwen3ASRLanguageModelPatcher,
+    Qwen3ASRModelPatcher,
     Qwen3MoeModelPatcher,
     Qwen3NextModelPatcher,
     Qwen3OmniMoeAudioEncoderPatcher,
@@ -4593,6 +4594,86 @@ class WhisperOpenVINOConfig(AudioToTextOpenVINOConfig):
                 output_name = "last_hidden_state"
             common_outputs[output_name] = {0: "batch_size"}  # Remove unnecessary dynamic axis.
         return common_outputs
+
+
+class Qwen3ASREncoderDecoderOpenVINOConfig(AudioToTextOpenVINOConfig):
+    """OpenVINO export config for Qwen3-ASR model."""
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummyAudioInputGenerator,
+        DummySeq2SeqDecoderTextInputGenerator,
+        Qwen3ASRDummySeq2SeqPastKeyValuesGenerator,
+    )
+
+    NORMALIZED_CONFIG_CLASS = NormalizedSeq2SeqConfig.with_args(
+        encoder_num_layers="encoder_layers",
+        decoder_num_layers="num_hidden_layers",
+        num_attention_heads="num_attention_heads",
+        # Use num_key_value_heads for KV cache shape generation (GQA)
+        decoder_num_attention_heads="num_key_value_heads",
+        feature_size="num_mel_bins",
+        allow_new=True,
+    )
+    MIN_TRANSFORMERS_VERSION = "4.57.6"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
+    _MODEL_PATCHER = Qwen3ASRModelPatcher
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "automatic-speech-recognition",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        # Flatten nested config for NormalizedSeq2SeqConfig
+        thinker = getattr(config, "thinker_config", config)
+        audio_config = getattr(thinker, "audio_config", None)
+        text_config = getattr(thinker, "text_config", None)
+
+        if audio_config is not None:
+            config.encoder_layers = audio_config.encoder_layers
+            config.num_mel_bins = audio_config.num_mel_bins
+            # Use output_dim (post-projection) as d_model since that's the actual encoder output size
+            config.d_model = getattr(audio_config, "output_dim", audio_config.d_model)
+            config.n_window = getattr(audio_config, "n_window", None)
+
+        if text_config is not None:
+            config.num_hidden_layers = text_config.num_hidden_layers
+            config.hidden_size = text_config.hidden_size
+            config.num_attention_heads = text_config.num_attention_heads
+            config.num_key_value_heads = getattr(text_config, "num_key_value_heads", text_config.num_attention_heads)
+            config.head_dim = getattr(
+                text_config, "head_dim", text_config.hidden_size // text_config.num_attention_heads
+            )
+            config.decoder_start_token_id = getattr(text_config, "bos_token_id", None) or 0
+            config.vocab_size = text_config.vocab_size
+
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+            **kwargs,
+        )
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        """Override to exclude encoder KV cache since Qwen3-ASR has no cross-attention."""
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_decoder_sequence_length"
+            name = "past_key_values"
+        else:
+            decoder_sequence_name = "past_decoder_sequence_length + decoder_sequence_length"
+            name = "present"
+
+        for i in range(self._normalized_config.decoder_num_layers):
+            inputs_or_outputs[f"{name}.{i}.decoder.key"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
 
 
 class Qwen3ASRConfigBehavior(str, enum.Enum):

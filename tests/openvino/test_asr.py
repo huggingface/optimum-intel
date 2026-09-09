@@ -14,6 +14,9 @@
 
 import gc
 import unittest
+from copy import deepcopy
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 import pytest
@@ -22,6 +25,8 @@ from parameterized import parameterized
 from transformers import AutoProcessor, set_seed
 from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED
 
+from optimum.exporters.openvino.convert import export_models
+from optimum.exporters.openvino.model_configs import Qwen3ASREncoderDecoderOpenVINOConfig
 from optimum.intel import OVModelForSpeechSeq2Seq
 from optimum.intel.utils.import_utils import is_transformers_version
 
@@ -42,20 +47,47 @@ class OVASRTest(unittest.TestCase):
         audio_data = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
         return audio_data, sample_rate
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand([("qwen3_asr", "split"), ("qwen3_asr", "encoder_decoder"), ("fun_asr", "default")])
     @pytest.mark.skipif(
         is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
         reason="Currently, we support Qwen3-ASR and FunASR only for transformers==4.57 since they are trust-remote-code models.",
     )
-    def test_compare_to_transformers(self, model_arch):
+    def test_compare_to_transformers(self, model_arch, export_format):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
 
         ref = self._get_pt_reference(model_arch)
 
-        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
-            model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
-        )
+        if export_format == "encoder_decoder":
+            directory = TemporaryDirectory()
+            self.addCleanup(directory.cleanup)
+            output_dir = Path(directory.name)
+            source = ref["pt_model"]
+            config = deepcopy(source.config)
+            config.is_encoder_decoder = True
+            export_config = Qwen3ASREncoderDecoderOpenVINOConfig(config)
+            export_models(
+                models_and_export_configs={
+                    "encoder": (source.thinker.audio_tower, export_config.with_behavior("encoder")),
+                    "decoder": (
+                        source,
+                        export_config.with_behavior("decoder", use_past=True, use_past_in_inputs=True),
+                    ),
+                },
+                output_dir=output_dir,
+                output_names=["openvino_encoder_model.xml", "openvino_decoder_model.xml"],
+                stateful=[False, True],
+            )
+            config.save_pretrained(output_dir)
+            ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+                directory.name, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            )
+            self.assertEqual(ov_model._ov_model_names, ["encoder", "decoder"])
+            self.assertIn("encoder_hidden_states", ov_model.decoder.input_names)
+        else:
+            ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+                model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            )
 
         # For models with standalone preprocess_input, verify it reproduces the reference inputs.
         if ref.get("preprocess_check") is not None:
