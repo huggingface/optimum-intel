@@ -236,8 +236,13 @@ class Eagle3DummyGenerator(DummyInputGenerator):
         self.batch_size = batch_size
         self.sequence_length = sequence_length
         self.hidden_size = normalized_config.hidden_size
+        # Draft checkpoints keep `target_layer_ids` either nested under `dflash_config`
+        # (Qwen3-based DFlash) or flat on the config (native muse_glimmer_assistant).
         dflash_config = getattr(normalized_config.config, "dflash_config", {}) or {}
-        self.num_hidden_state_layers = len(dflash_config.get("target_layer_ids", [])) or 3
+        target_layer_ids = dflash_config.get("target_layer_ids") or getattr(
+            normalized_config.config, "target_layer_ids", None
+        )
+        self.num_hidden_state_layers = len(target_layer_ids or []) or 3
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         # hidden_states is provided as a concatenation of hidden-layer outputs from the main model

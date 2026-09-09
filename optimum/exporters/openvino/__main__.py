@@ -222,6 +222,20 @@ _CUSTOM_DRAFT_MODEL_MAP = {
     "DFlashDraftModel": ("Qwen3DFlashDraftModel", "Qwen3DFlashForCausalLM"),
 }
 
+# Maps config.architectures[0] to a loader for draft models whose architecture is native to
+# transformers. Unlike `_CUSTOM_DRAFT_MODEL_MAP` these need no remote-code re-implementation
+# (and so no `auto_map` indirection); only their KV-cache handling is restructured for export.
+_NATIVE_DRAFT_MODEL_LOADERS = {
+    "MuseGlimmerAssistantModel": "load_muse_glimmer_assistant_draft_model",
+}
+
+
+def load_native_draft_model(architecture: str, model_name_or_path: str, **kwargs):
+    from optimum.exporters.openvino import model_patcher
+
+    loader = getattr(model_patcher, _NATIVE_DRAFT_MODEL_LOADERS[architecture])
+    return loader(model_name_or_path, **kwargs)
+
 
 def update_config_for_custom_draft_model(config, auto_model, auto_model_for_causal_lm):
     moduler_name = "optimum.exporters.openvino.model_patcher"
@@ -584,6 +598,21 @@ def main_export(
             from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
 
             model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+        elif (
+            library_name == "transformers"
+            and (getattr(config, "architectures", None) or [None])[0] in _NATIVE_DRAFT_MODEL_LOADERS
+        ):
+            model = load_native_draft_model(
+                config.architectures[0],
+                model_name_or_path,
+                subfolder=subfolder,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
+                local_files_only=local_files_only,
+                force_download=force_download,
+                **loading_kwargs,
+            )
         else:
             # remote code models like phi3_v internvl2, minicpmv, internvl2, nanollava, maira2 should be loaded using AutoModelForCausalLM and not AutoModelForImageTextToText
             # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)

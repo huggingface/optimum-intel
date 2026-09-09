@@ -48,6 +48,7 @@ from optimum.exporters.openvino.utils import save_config
 from optimum.intel.openvino.configuration import OVConfig, OVQuantizationConfigBase, OVWeightQuantizationConfig
 from optimum.intel.openvino.modeling_base import OVBaseModel, OVModelPart
 from optimum.intel.openvino.modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
+from optimum.intel.openvino.modeling_dflash import OVDFlashTargetMixin, OVStatefulCacheProxy
 from optimum.intel.openvino.utils import (
     OV_LANGUAGE_MODEL_NAME,
     OV_TEXT_EMBEDDINGS_MODEL_NAME,
@@ -301,6 +302,17 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         past_key_values = ((),)
         self._past_length += inputs["inputs_embeds"].shape[1]
 
+        # DFlash speculative decoding needs two things a plain forward does not provide:
+        # the target's hidden states at the drafter's `target_layer_ids`, and a cache the
+        # verifier can roll back after a rejected block.
+        dflash_hidden_states = None
+        if getattr(self, "_dflash_hidden_state_names", None):
+            dflash_hidden_states = {
+                layer_id: torch.from_numpy(self.request.get_tensor(name).data).clone().to(self.device)
+                for layer_id, name in zip(self._dflash_layer_ids, self._dflash_hidden_state_names)
+            }
+            past_key_values = OVStatefulCacheProxy(self)
+
         collecting = getattr(self, "_collecting_hidden_states", False)
         hidden_states_out = None
         if collecting and "hidden_states" in self.output_names:
@@ -314,6 +326,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         result = CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
         result.last_hidden_state = hidden_states_out
         result.intermediate_hidden_state = intermediate_hidden
+        result.dflash_hidden_states = dflash_hidden_states
         return result
 
 
@@ -767,7 +780,7 @@ MODEL_PARTS_CLS_MAPPING = {
 }
 
 
-class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
+class OVModelForVisualCausalLM(OVBaseModel, OVDFlashTargetMixin, GenerationMixin):
     export_feature = "image-text-to-text"
     additional_parts = []
     auto_model_class = AutoModelForImageTextToText
@@ -7809,7 +7822,10 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
     ):
         inputs_embeds = self.get_text_embeddings(input_ids)
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
-        is_prefill = input_ids is not None and input_ids.shape[1] != 1
+        # An empty KV cache identifies the prefill. The token count does not: under
+        # speculative decoding a continuation step verifies a whole block at once.
+        past_key_values = kwargs.get("past_key_values")
+        is_prefill = past_key_values is None or self.language_model._get_past_length(past_key_values) == 0
         # Images and videos share the same vision graph (video_grid_thw plays the role
         # of image_grid_thw); each modality is scattered into its own placeholder token.
         if is_prefill and pixel_values is not None:
