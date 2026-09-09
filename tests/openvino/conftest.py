@@ -6,12 +6,13 @@ import pytest
 def pytest_report_header(config):
     # Must live in conftest: pytest-xdist does not forward worker logs, so this only
     # reaches the terminal from the controller process.
+    import openvino as ov
+    import transformers
+
     device = os.getenv("OPENVINO_TEST_DEVICE", "CPU")
-    header = f"OpenVINO test device: {device}"
+    header = f"OpenVINO {ov.__version__} Transformers {transformers.__version__} Device: {device}"
     if device == "NPU":
         try:
-            import openvino as ov
-
             header += f", NPU driver version: {ov.Core().get_property('NPU', 'NPU_DRIVER_VERSION')}"
         except Exception as exception:
             header += f", NPU driver version unavailable: {exception}"

@@ -377,8 +377,6 @@ class VLMPipelineTestCase(unittest.TestCase):
         if TEST_NAME_TO_MODEL_TYPE.get(arch, arch) in get_supported_model_for_library("transformers")
     )
 
-    REMOTE_CODE_MODELS = _test_seq2seq.OVModelForVisualCausalLMIntegrationTest.REMOTE_CODE_MODELS
-
     GEN_KWARGS = {
         "max_new_tokens": 10,
         "min_new_tokens": 10,
@@ -420,7 +418,7 @@ class VLMPipelineTestCase(unittest.TestCase):
             from transformers import Qwen2VLForConditionalGeneration
 
             return Qwen2VLForConditionalGeneration
-        elif model_arch in self.REMOTE_CODE_MODELS:
+        elif model_arch in REMOTE_CODE_MODELS:
             from transformers import AutoModel
 
             return AutoModel
@@ -431,7 +429,7 @@ class VLMPipelineTestCase(unittest.TestCase):
     def test_compare_outputs(self, model_arch):
         logger.info("Testing %s on device=%s", model_arch, OPENVINO_DEVICE)
         model_id = MODEL_NAMES[model_arch]
-        trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
+        trust_remote_code = model_arch in REMOTE_CODE_MODELS
 
         set_seed(42)
         transformers_class = self._get_model_class(model_arch)

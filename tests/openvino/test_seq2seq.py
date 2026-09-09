@@ -49,6 +49,7 @@ from utils_tests import (
     F32_CONFIG,
     MODEL_NAMES,
     OPENVINO_DEVICE,
+    REMOTE_CODE_MODELS,
     SEED,
     TEST_IMAGE_URL,
     TEST_NAME_TO_MODEL_TYPE,
@@ -635,17 +636,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         if TEST_NAME_TO_MODEL_TYPE.get(arch, arch) in get_supported_model_for_library("transformers")
     ]
 
-    REMOTE_CODE_MODELS = [
-        "internvl_chat",
-        "minicpmv",
-        "minicpmo",
-        "llava-qwen2",
-        "phi3_v",
-        "maira2",
-        "phi4mm",
-        "videochat_flash_qwen",
-        "gemma3n",
-    ]
     IMAGE = Image.open(
         requests.get(
             TEST_IMAGE_URL,
@@ -764,7 +754,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         set_seed(SEED)
         loading_kwargs = {}
 
-        trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
+        trust_remote_code = model_arch in REMOTE_CODE_MODELS
         if "llama4" in model_arch:
             loading_kwargs = {"_attn_implementation": "sdpa"}
         if model_arch == "muse_glimmer":
@@ -870,9 +860,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         with torch.no_grad():
             if model_arch in ["minicpmo"]:
                 # `generate` method for minicpmo requires tokenizer
-                tokenizer = AutoTokenizer.from_pretrained(
-                    model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
-                )
+                tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
                 additional_inputs["tokenizer"] = tokenizer
             transformers_outputs = transformers_model.generate(
                 **transformers_inputs, generation_config=gen_config, **additional_inputs
@@ -931,13 +919,13 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     def test_llava_with_new_preprocessing(self, model_arch):
         prompt = "<image>\n What is shown in this image?"
         model_id = MODEL_NAMES[model_arch]
-        trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
+        trust_remote_code = model_arch in REMOTE_CODE_MODELS
         config = AutoConfig.from_pretrained(model_id, trust_remote_code=trust_remote_code)
         processor = AutoProcessor.from_pretrained(
             model_id,
             patch_size=config.vision_config.patch_size,
             vision_feature_select_strategy=config.vision_feature_select_strategy,
-            trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
+            trust_remote_code=model_arch in REMOTE_CODE_MODELS,
             num_additional_image_tokens=1,
         )
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id)
@@ -988,7 +976,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         if model_arch == "gemma4":
             self.skipTest("gemma4 is causing segfault CVS-193103")
         model_id = MODEL_NAMES[model_arch]
-        trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
+        trust_remote_code = model_arch in REMOTE_CODE_MODELS
         model = self.OVMODEL_CLASS.from_pretrained(
             model_id, export=True, trust_remote_code=trust_remote_code, device=OPENVINO_DEVICE
         )
@@ -1156,25 +1144,19 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     def get_preprocessors(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
 
         if model_arch == "llava-qwen2":
             processor = AutoProcessor.from_pretrained(
-                config.mm_vision_tower, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+                config.mm_vision_tower, trust_remote_code=model_arch in REMOTE_CODE_MODELS
             )
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
-            )
+            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
             preprocessors = {"processor": processor, "tokenizer": tokenizer, "config": config}
         elif model_arch in ["internvl_chat", "videochat_flash_qwen"]:
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
-            )
+            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
             preprocessors = {"processor": None, "tokenizer": tokenizer, "config": config}
         else:
-            processor = AutoProcessor.from_pretrained(
-                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
-            )
+            processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
             preprocessors = {"processor": processor, "tokenizer": None, "config": config}
 
         return preprocessors
@@ -1186,14 +1168,14 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             ov_model = self.OVMODEL_CLASS.from_pretrained(
                 model_id,
                 compile=False,
-                trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
+                trust_remote_code=model_arch in REMOTE_CODE_MODELS,
                 device=OPENVINO_DEVICE,
             )
             ov_model.save_pretrained(save_dir)
             ov_restored_model = self.OVMODEL_CLASS.from_pretrained(
                 save_dir,
                 compile=False,
-                trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
+                trust_remote_code=model_arch in REMOTE_CODE_MODELS,
                 device=OPENVINO_DEVICE,
             )
             self.assertIsInstance(ov_restored_model, type(ov_model))

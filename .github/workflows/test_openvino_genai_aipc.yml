@@ -55,7 +55,7 @@ jobs:
       - name: Install dependencies
         shell: cmd
         run: |
-          %RUNNER_TEMP%\venv\Scripts\python -m uv pip install "optimum-intel[tests] @ git+https://github.com/huggingface/optimum-intel.git" "transformers==${{ matrix.transformers-version }}"
+          %RUNNER_TEMP%\venv\Scripts\python -m uv pip install ".[tests]" "transformers==${{ matrix.transformers-version }}"
           %RUNNER_TEMP%\venv\Scripts\python -m uv pip install pytest-xdist
 
       # Workaround for internlm tokenizer issue with sentencepiece>=0.3
@@ -76,7 +76,7 @@ jobs:
         if: inputs.openvino_version == '2026.4-release-candidate'
         shell: cmd
         run: |
-          %RUNNER_TEMP%\venv\Scripts\python -m uv pip install --pre --upgrade "openvino-genai>=2026.4.0.0,<2026.5.0.0" --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+          %RUNNER_TEMP%\venv\Scripts\python -m uv pip install --pre --upgrade "openvino-genai>=2026.4.0.0rc1,<2026.5.0.0" --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
       - name: Pip freeze
         shell: cmd
@@ -94,7 +94,7 @@ jobs:
       # pytest-xdist with -n 1 runs the tests serially in a worker process: a native crash (access violation) is
       # reported as a single test failure and the remaining tests continue in a fresh worker.
       # The restart budget is deliberately low so a systematically crashing environment aborts
-      # the run instead of restarting its way through the whole suite. This is useful or Windows.
+      # the run instead of restarting its way through the whole suite. This is useful on Windows.
       - name: Test with Pytest
         shell: cmd
         env:

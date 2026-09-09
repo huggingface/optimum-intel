@@ -792,6 +792,14 @@ REMOTE_CODE_MODELS = (
     "qwen3_asr",
     "fun_asr",
     "videochat_flash_qwen",
+    "internvl_chat",
+    "minicpmv",
+    "minicpmo",
+    "llava-qwen2",
+    "phi3_v",
+    "maira2",
+    "phi4mm",
+    "gemma3n",
 )
 
 if is_transformers_version("<", "5"):
