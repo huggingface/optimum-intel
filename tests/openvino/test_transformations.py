@@ -289,19 +289,7 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
-}
-
-if is_transformers_version(">=", "5.0.0"):
-    ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["convert"].extend(
-        [
-            "TransposeMatMul",
-            "ReshapeAMatMul",
-        ]
-    )
-
-
-if is_transformers_version(">=", "5.11"):
-    ARCH_TO_EXPECTED_TRANSFORMATIONS["deepseek_ocr2"] = {
+    "deepseek_ocr2": {
         "model_class": "OVModelForVisualCausalLM",
         "convert": [
             "SDPAFusion",
@@ -323,7 +311,16 @@ if is_transformers_version(">=", "5.11"):
             "ConvertToPowerStatic",
             "ConvertToSwishCPU",
         ],
-    }
+    },
+}
+
+if is_transformers_version(">=", "5.0.0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_moe"]["convert"].extend(
+        [
+            "TransposeMatMul",
+            "ReshapeAMatMul",
+        ]
+    )
 
 
 # filter architectures depending on min/max transformers supported versions
@@ -346,6 +343,67 @@ if is_diffusers_version(">=", "0.35.0"):
         "compile": [
             "RoPEFusionGPTNEOX",
             "RoPEFusion",
+        ],
+    }
+
+
+if is_diffusers_version(">=", "0.38.0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["ltx2"] = {
+        "model_class": "OVLTX2Pipeline",
+        "convert": [
+            "SDPAFusion",
+            "PackMultiHeadAttention",
+            "CommonFusions",
+            "TransposeConvert",
+            "TransposeFuse",
+            "ReverseInputChannelsFusion",
+            "BroadcastTransition",
+        ],
+        "compile": [
+            "CausalMaskPreprocessFusion",
+            "CommonDecompositions",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "DecompressionHandling",
+            "LinOpSequenceFusion",
+            "MultiplyFusions",
+            "RoPEFusion",
+            "RoPEFusionGPTNEOX",
+            "SDPASubgraphFusion",
+            "Snippets",
+            "Tokenization",
+        ],
+    }
+
+
+if is_diffusers_version(">=", "0.37.0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["z-image"] = {
+        "model_class": "OVZImagePipeline",
+        "convert": [
+            "CommonFusions",
+            "SDPAFusion",
+            "TransposeFuse",
+        ],
+        "compile": [
+            "CausalMaskPreprocessFusion",
+            "CommonDecompositions",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "DecompressionHandling",
+            "MultiplyFusions",
+            "RoPEFusion",
+            "RoPEFusionGPTNEOX",
+            "SDPASubgraphFusion",
+            "Snippets",
+            "Tokenization",
         ],
     }
 
