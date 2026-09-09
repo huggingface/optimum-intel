@@ -14,7 +14,6 @@
 import logging
 import os
 import warnings
-from copy import deepcopy
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -1520,7 +1519,8 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
         if getattr(config, "model_type", None) == "qwen3_asr":
             split_paths = _OVModelForQwen3ASR._resolve_split_paths(model_id, allow_missing=True, **kwargs)
             if not split_paths:
-                return _OVModelForQwen3ASREncoderDecoder._from_pretrained(model_id, config, **kwargs)
+                config.is_encoder_decoder = True
+                return super()._from_pretrained(model_id, config, **kwargs)
             return _OVModelForQwen3ASR._from_pretrained(
                 model_id,
                 config,
@@ -1528,111 +1528,6 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
                 **kwargs,
             )
         return super()._from_pretrained(model_id, config, **kwargs)
-
-
-class _OVModelForQwen3ASREncoderDecoder(OVModelForSpeechSeq2Seq):
-    def __init__(self, encoder, decoder, decoder_with_past=None, config=None, **kwargs):
-        if kwargs.get("compile_only"):
-            raise ValueError("Qwen3-ASR encoder-decoder models require `compile_only=False`.")
-        if kwargs.get("stateful") is False or kwargs.get("use_cache") is False or not model_has_state(decoder):
-            raise ValueError("Qwen3-ASR encoder-decoder inference requires a stateful decoder and `use_cache=True`.")
-        config.is_encoder_decoder = True
-        if not hasattr(config, "n_window"):
-            config.n_window = config.thinker_config.audio_config.n_window
-        super().__init__(encoder, decoder, decoder_with_past, config, **kwargs)
-        logger.warning(
-            "Loading a Qwen3-ASR encoder-decoder export. Only single-recording generation is supported. "
-            "Re-export for split-component inference and PagedAttention compatibility."
-        )
-
-    @classmethod
-    def _from_pretrained(cls, model_id, config, **kwargs):
-        if kwargs.get("compile_only"):
-            raise ValueError("Qwen3-ASR encoder-decoder models require `compile_only=False`.")
-        if kwargs.get("use_cache") is False:
-            raise ValueError("Qwen3-ASR encoder-decoder inference requires `use_cache=True`.")
-        if kwargs.get("from_onnx"):
-            raise ValueError("Qwen3-ASR encoder-decoder compatibility supports OpenVINO IR exports only.")
-        subfolder = kwargs.get("subfolder", "")
-        for argument, default in (
-            ("encoder_file_name", OV_ENCODER_NAME),
-            ("decoder_file_name", OV_DECODER_NAME),
-        ):
-            filename = kwargs.get(argument) or default
-            path = cls._cached_file(
-                model_path=model_id,
-                file_name=filename,
-                subfolder=subfolder,
-                **{
-                    key: kwargs[key]
-                    for key in ("token", "revision", "force_download", "cache_dir", "local_files_only")
-                    if key in kwargs
-                },
-            )
-            for required in (Path(path), Path(path).with_suffix(".bin")):
-                if not required.is_file():
-                    raise FileNotFoundError(f"Incomplete Qwen3-ASR encoder-decoder export: missing {required}.")
-            kwargs[argument] = str(Path(subfolder) / filename)
-        return super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(model_id, config, **kwargs)
-
-    def generate(
-        self,
-        input_features=None,
-        attention_mask=None,
-        decoder_input_ids=None,
-        decoder_attention_mask=None,
-        input_ids=None,
-        feature_attention_mask=None,
-        **kwargs,
-    ):
-        prompt = decoder_input_ids if decoder_input_ids is not None else input_ids
-        if prompt is None or prompt.ndim != 2 or prompt.shape[0] != 1:
-            raise ValueError("Qwen3-ASR encoder-decoder models require a prompt for exactly one recording.")
-        generation_config = kwargs.get("generation_config") or self.generation_config
-        if not kwargs.get("use_cache", generation_config.use_cache):
-            raise ValueError("Qwen3-ASR encoder-decoder inference requires `use_cache=True`.")
-        if (
-            kwargs.get("num_beams", generation_config.num_beams) != 1
-            or kwargs.get("num_return_sequences", generation_config.num_return_sequences) != 1
-        ):
-            raise ValueError("Qwen3-ASR encoder-decoder inference supports one beam and one returned sequence.")
-        if decoder_attention_mask is None and feature_attention_mask is not None:
-            decoder_attention_mask = attention_mask
-        if decoder_attention_mask is not None and not torch.all(decoder_attention_mask == 1):
-            raise ValueError("Qwen3-ASR encoder-decoder inference requires an unpadded text prompt.")
-        encoder_outputs = kwargs.pop("encoder_outputs", None)
-        if encoder_outputs is None:
-            encoder_outputs = self.encoder(input_ids=input_features)
-        if encoder_outputs.last_hidden_state.shape[0] != 1:
-            raise ValueError("Qwen3-ASR encoder-decoder models require exactly one recording per request.")
-        audio_token_id = getattr(self.config, "audio_token_id", None)
-        if audio_token_id is None:
-            audio_token_id = self.config.thinker_config.audio_token_id
-        adjusted_prompt = self._adjust_audio_tokens(prompt, audio_token_id, encoder_outputs.last_hidden_state.shape[1])
-        generation_config = deepcopy(generation_config)
-        prompt_delta = adjusted_prompt.shape[1] - prompt.shape[1]
-        for name in ("max_length", "min_length"):
-            value = kwargs.pop(name, getattr(generation_config, name))
-            if value is not None and value > 0:
-                setattr(generation_config, name, value + prompt_delta)
-        kwargs.pop("generation_config", None)
-        output = GenerationMixin.generate(
-            self,
-            encoder_outputs=encoder_outputs,
-            decoder_input_ids=adjusted_prompt,
-            attention_mask=torch.ones(
-                encoder_outputs.last_hidden_state.shape[:2], dtype=torch.long, device=prompt.device
-            ),
-            decoder_attention_mask=torch.ones_like(adjusted_prompt),
-            generation_config=generation_config,
-            **kwargs,
-        )
-        sequences = output.sequences if hasattr(output, "sequences") else output
-        sequences = torch.cat((prompt.to(sequences.device), sequences[:, adjusted_prompt.shape[1] :]), dim=1)
-        if hasattr(output, "sequences"):
-            output.sequences = sequences
-            return output
-        return sequences
 
 
 class _OVModelForQwen3ASR(OVModelForSpeechSeq2Seq):
