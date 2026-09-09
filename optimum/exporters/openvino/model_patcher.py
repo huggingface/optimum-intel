@@ -11720,11 +11720,17 @@ class Qwen3TTSSteppedEmbeddingPatcher(ModelPatcher):
     def __init__(self, config, model, model_kwargs=None):
         super().__init__(config, model, model_kwargs)
         stacked = torch.stack([embedding.weight for embedding in self._model.embeddings])
+        vocab_size = stacked.shape[1]
+        flat_stacked = stacked.reshape(-1, stacked.shape[-1])
         output_name = list(config.outputs.keys())[0]
 
         def patched_forward(input_ids, step):
-            weight = torch.index_select(stacked.to(torch.float32), 0, step.reshape(1)).squeeze(0)
-            return {output_name: torch.nn.functional.embedding(input_ids, weight)}
+            # Avoid selecting a full [vocab, hidden] table per step. Instead gather
+            # only the requested token rows from a flattened [num_steps*vocab, hidden]
+            # table, using ids offset by step*vocab.
+            step_idx = step.reshape(()).to(dtype=input_ids.dtype)
+            flat_ids = input_ids + step_idx * vocab_size
+            return {output_name: torch.nn.functional.embedding(flat_ids, flat_stacked.to(torch.float32))}
 
         self.patched_forward = patched_forward
 
