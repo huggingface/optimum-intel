@@ -9963,6 +9963,7 @@ def qwen3_5_gated_delta_net_forward(
     cache_params=None,
     cache_position: Optional[torch.LongTensor] = None,
     attention_mask: Optional[torch.Tensor] = None,
+    **kwargs,
 ):
     def apply_mask_to_padding_states(hidden_states, attention_mask):
         """
@@ -10058,8 +10059,6 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DynamicCache
-
         from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
 
         from ._ov_ops import convert_recurrent_attention_cell
@@ -10075,15 +10074,20 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
             self._text_model = self._model.model
             self._text_config = self._model.model.config
 
-        class Qwen3_5DynamicCacheWrap(Qwen3_5DynamicCache):
+        # NOTE: Since transformers v5, the per-model ``Qwen3_5DynamicCache`` class has been removed in favor of the
+        # unified ``DynamicCache`` whose state lives in per-layer objects (``cache.layers[idx]``). The exported graph,
+        # however, works with flat lists of decoupled conv/recurrent/key/value tensors. This standalone wrapper exposes
+        # exactly the flat interface used by the patched linear-attention forward together with the cache methods
+        # (``update``/``get_seq_length``/``get_mask_sizes``/``has_previous_state``) that the transformers language-model
+        # forward and mask-creation utilities invoke. Being standalone keeps it compatible across the declared
+        # transformers range without importing a version-specific cache class.
+        class Qwen3_5DynamicCacheWrap:
             def __init__(self, config, conv_states, recurrent_states, key_cache, value_cache):
-                # Call parent constructor with all required arguments
-                super().__init__(config=config)
-
                 self.conv_states = conv_states
                 self.recurrent_states = recurrent_states
                 self.key_cache = key_cache
                 self.value_cache = value_cache
+                self.layer_types = config.layer_types
                 self.full_attn_mapping = {}
                 self.linear_attn_mapping = {}
                 full_attn_layer_idx = 0
@@ -10115,19 +10119,20 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
                 return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
             def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
-                """Returns the sequence length of the cached states. A layer index can be optionally passed."""
-                # take any layer that contains cache and not empty tensor
-                layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
-                layer_idx = self.full_attn_mapping[layer_idx]
-                if len(self.key_cache) <= layer_idx or self.key_cache[layer_idx] is None:
+                """Returns the sequence length of the cached full-attention states."""
+                if len(self.key_cache) == 0 or self.key_cache[0] is None:
                     return 0
-                return self.key_cache[layer_idx].shape[-2]
+                return self.key_cache[0].shape[-2]
 
-            @property
-            def has_previous_state(self):
-                """We have a previous state if the last linear (conv) layer was already updated."""
-                layer_idx = self.linear_attn_mapping[self.last_linear_layer]
-                return self.conv_states[layer_idx] is not None
+            def get_mask_sizes(self, query_length: int, layer_idx: int) -> tuple[int, int]:
+                """Returns (kv_length, kv_offset) used by the mask-creation utilities."""
+                kv_offset = 0
+                kv_length = self.get_seq_length() + query_length
+                return kv_length, kv_offset
+
+            def has_previous_state(self, layer_idx: Optional[int] = None) -> bool:
+                """We have a previous state if a linear (conv) layer was already updated."""
+                return len(self.conv_states) > 0 and self.conv_states[-1] is not None
 
         # the patch is needed to include KV-cache, Conv, and SSM states in the inputs and outputs.
         def patched_forward(
