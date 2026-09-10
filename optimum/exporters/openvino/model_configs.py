@@ -607,12 +607,7 @@ class Qwen3OmniMoeTextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
 class Qwen3ASRTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLLMInputGenerator, Qwen3ASRDummySeq2SeqPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Qwen3ASRDummySeq2SeqPastKeyValuesGenerator
-    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
-        decoder_num_layers="num_hidden_layers",
-        decoder_num_attention_heads="num_key_value_heads",
-        decoder_hidden_size="hidden_size",
-        allow_new=True,
-    )
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     MIN_TRANSFORMERS_VERSION = "4.57.6"
     MAX_TRANSFORMERS_VERSION = "4.57.6"
     _MODEL_PATCHER = OVDecoderModelPatcher
@@ -4695,7 +4690,7 @@ class Qwen3ASROpenVINOConfig(BaseVLMOpenVINOConfig):
 
     SUPPORTED_BEHAVIORS = [behavior.value for behavior in Qwen3ASRConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3OmniMoeAudioInputGenerator,)
-    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig
     MIN_TRANSFORMERS_VERSION = "4.57.6"
     MAX_TRANSFORMERS_VERSION = "4.57.6"
 
