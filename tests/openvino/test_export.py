@@ -16,6 +16,7 @@
 import unittest
 from pathlib import Path
 
+import openvino as ov
 import torch
 from parameterized import parameterized
 from sentence_transformers import SentenceTransformer, models
@@ -30,7 +31,12 @@ from utils_tests import (
 )
 
 from optimum.exporters.openvino import export_from_model, main_export
-from optimum.exporters.openvino.model_configs import BertOpenVINOConfig, Qwen3OmniMoeConfigBehavior
+from optimum.exporters.openvino.model_configs import (
+    BertOpenVINOConfig,
+    LTX2TextEncoderOpenVINOConfig,
+    Qwen3OmniMoeConfigBehavior,
+)
+from optimum.exporters.openvino.model_patcher import LTX2PackedTextEncoderPatcher, LTX2TextEncoderPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVFlux2KleinPipeline,
@@ -65,9 +71,10 @@ from optimum.intel import (
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version
+from optimum.intel.utils.import_utils import _transformers_version, is_diffusers_version, is_transformers_version
 from optimum.utils import logging
 from optimum.utils.save_utils import maybe_load_preprocessors
+from optimum.utils.testing_utils import require_diffusers
 
 
 logger = logging.get_logger()
@@ -435,6 +442,65 @@ class ExportModelTest(unittest.TestCase):
             only_onnx = onnx_architectures - openvino_architectures
             if len(only_onnx) > 0:
                 logger.warning(f"The following architectures export {only_onnx} is supported by ONNX but not OpenVINO")
+
+
+class LTX2ExportContractTest(unittest.TestCase):
+    """
+    LTX-2.0 and LTX-2.3 export different graphs from the same set of components. Pin both contracts,
+    so a change meant for one version cannot silently alter the other's IRs.
+    """
+
+    SUPPORTED_ARCHITECTURES = []
+    if is_diffusers_version(">=", "0.38.0"):
+        SUPPORTED_ARCHITECTURES.append("ltx2")
+    if is_diffusers_version(">=", "0.40.0"):
+        SUPPORTED_ARCHITECTURES.append("ltx2.3")
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_version_specific_export_contract(self, model_arch: str):
+        is_ltx2_3 = model_arch == "ltx2.3"
+        pipeline = OVLTX2Pipeline.from_pretrained(
+            MODEL_NAMES[model_arch], export=True, compile=False, device=OPENVINO_DEVICE
+        )
+
+        text_encoder_outputs = {name for output in pipeline.text_encoder.model.outputs for name in output.names}
+        if is_ltx2_3:
+            self.assertEqual(text_encoder_outputs, {"prompt_embeds"})
+        else:
+            self.assertNotIn("prompt_embeds", text_encoder_outputs)
+            self.assertIn("hidden_states.0", text_encoder_outputs)
+
+        # Read the transformer back from disk instead of taking it off the pipeline: LTX-2.0 has a
+        # `cross_modality_gate` spliced into the loaded graph, and what has to stay pinned here is
+        # what the export writes.
+        transformer = ov.Core().read_model(pipeline.transformer.model_save_dir / "openvino_model.xml")
+        transformer_inputs = {name: inp for inp in transformer.inputs for name in inp.names}
+        self.assertEqual("cross_modality_gate" in transformer_inputs, is_ltx2_3)
+        self.assertEqual(
+            transformer_inputs["encoder_attention_mask"].get_element_type(),
+            ov.Type.f32 if is_ltx2_3 else ov.Type.i64,
+        )
+
+    def test_text_encoder_pack_hidden_states(self):
+        # The 2.0 and 2.3 text encoder configs are identical, so this flag is the only thing keeping
+        # the two contracts apart. Its default has to stay the LTX-2.0 one.
+        from transformers import Gemma3Config
+
+        config = Gemma3Config()
+
+        for export_config in [
+            LTX2TextEncoderOpenVINOConfig(config),
+            LTX2TextEncoderOpenVINOConfig(config, pack_hidden_states=False),
+        ]:
+            self.assertFalse(export_config.pack_hidden_states)
+            self.assertNotIn("prompt_embeds", export_config.outputs)
+            self.assertIn("hidden_states.0", export_config.outputs)
+            self.assertIs(export_config._select_text_encoder_patcher(), LTX2TextEncoderPatcher)
+
+        export_config = LTX2TextEncoderOpenVINOConfig(config, pack_hidden_states=True)
+        self.assertEqual(set(export_config.outputs), {"prompt_embeds"})
+        self.assertIs(export_config._select_text_encoder_patcher(), LTX2PackedTextEncoderPatcher)
 
 
 class CustomExportModelTest(unittest.TestCase):

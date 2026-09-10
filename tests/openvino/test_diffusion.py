@@ -27,6 +27,7 @@ from diffusers import (
 )
 from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.utils import load_image
+from openvino import Core
 from parameterized import parameterized
 from utils_tests import HUB_MODEL_NAMES, MODEL_NAMES, OPENVINO_DEVICE, SEED
 
@@ -1162,6 +1163,30 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
             np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_modality_isolation_gate_added_on_load(self, model_arch: str):
+        # LTX-2.0 is exported without a `cross_modality_gate` so its published IRs stay reproducible,
+        # and gets one spliced in on load instead. Check the IR on disk really lacks it, that loading
+        # adds it, and that it does something: isolation is what diffusers>=0.40.0 asks for by
+        # default, so `test_compare_to_diffusers_pipeline` only exercises it through this path.
+        if model_arch != "ltx2" or is_diffusers_version("<", "0.40.0"):
+            self.skipTest(f"{model_arch} exports a cross_modality_gate")
+
+        height, width = 64, 64
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+        exported = Core().read_model(pipeline.transformer.model_save_dir / "openvino_model.xml")
+        self.assertNotIn("cross_modality_gate", {inp.get_any_name() for inp in exported.inputs})
+        self.assertIn("cross_modality_gate", pipeline.transformer._ov_input_names)
+
+        inputs = self.generate_inputs(height=height, width=width)
+        isolated = pipeline(**inputs, generator=get_generator("pt", SEED)).frames
+        plain = pipeline(
+            **inputs, modality_scale=1.0, audio_modality_scale=1.0, generator=get_generator("pt", SEED)
+        ).frames
+        self.assertEqual(isolated.shape, (1, 1, height, width, 3))
+        self.assertFalse(np.allclose(isolated, plain, atol=1e-3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers

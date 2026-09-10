@@ -16,7 +16,7 @@ import copy
 import enum
 import logging
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Type, Union
 
 import torch
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
@@ -156,6 +156,7 @@ from optimum.exporters.openvino.model_patcher import (
     LlavaNextVideoImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
     LTX2ConnectorsPatcher,
+    LTX2PackedTextEncoderPatcher,
     LTX2TextEncoderPatcher,
     LTX2TransformerPatcher,
     LTX2VocoderPatcher,
@@ -219,6 +220,7 @@ from optimum.exporters.openvino.model_patcher import (
     ZImageTransformerModelPatcher,
     _get_model_attribute,
 )
+from optimum.exporters.openvino.utils import is_ltx2_3_transformer_config
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_diffusers_available,
@@ -2795,17 +2797,46 @@ class LTX2TextEncoderOpenVINOConfig(Gemma3TextEncoderOpenVINOConfig):
     LTX-2's use of the Gemma-3 text encoder, which differs from the generic one above only in how the
     hidden states leave the graph. Kept separate so that the packed layout, which nothing but the
     LTX-2 connectors can consume, does not become the contract for every Gemma-3 text encoder export.
+
+    Two contracts, selected by `pack_hidden_states`:
+
+    - `False` (LTX-2.0): one output per layer, packed by the pipeline on the host. Also keeps the
+      unpatched final norm, so already-published LTX-2.0 IRs stay reproducible.
+    - `True` (LTX-2.3): a single `prompt_embeds` output, packed and norm-fixed in the graph.
+
+    The default is the LTX-2.0 contract, so an omitted argument can never change its IRs; LTX-2.3
+    would instead fail loudly at the connectors' input width.
     """
 
-    _MODEL_PATCHER = LTX2TextEncoderPatcher
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        preprocessors: Optional[List[Any]] = None,
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        pack_hidden_states: bool = False,
+    ):
+        super().__init__(config, task=task, preprocessors=preprocessors, int_dtype=int_dtype, float_dtype=float_dtype)
+        self.pack_hidden_states = pack_hidden_states
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        # `LTX2TextEncoderPatcher` returns the hidden states already stacked and flattened into the
-        # connectors' `text_encoder_hidden_states` layout, so there is a single output and the layer
-        # count does not appear here. The last dimension is `(num_layers + 1) * hidden_size`, left
-        # dynamic because the export declares no static shape for it.
+        if not self.pack_hidden_states:
+            return super().outputs
+        # The patcher returns the hidden states already stacked and flattened into the connectors'
+        # `text_encoder_hidden_states` layout, so there is a single output and the layer count does
+        # not appear here. The last dimension is `(num_layers + 1) * hidden_size`, left dynamic
+        # because the export declares no static shape for it.
         return {"prompt_embeds": {0: "batch_size", 1: "sequence_length"}}
+
+    def _select_text_encoder_patcher(self) -> Type[ModelPatcher]:
+        return LTX2PackedTextEncoderPatcher if self.pack_hidden_states else LTX2TextEncoderPatcher
+
+    def patch_model_for_export(
+        self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        return self._select_text_encoder_patcher()(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("sana-transformer", *["semantic-segmentation"], library_name="diffusers")
@@ -3219,7 +3250,8 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
         # `cross_modality_gate` and `stg_perturbation_mask` carry the guidance modes the pipeline
         # otherwise selects with Python flags (`isolate_modalities`, `spatio_temporal_guidance_blocks`),
         # which a static graph cannot branch on. STG only exists for checkpoints with perturbable
-        # blocks, so its mask is exported only then.
+        # blocks, so its mask is exported only then. The gate is exported only for LTX-2.3, to keep
+        # LTX-2.0's published IRs unchanged -- 2.0 can isolate modalities too, it just cannot here.
         inputs = {
             "hidden_states": {0: "batch_size", 1: "video_sequence_length"},
             "audio_hidden_states": {0: "batch_size", 1: "audio_sequence_length"},
@@ -3236,8 +3268,9 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
             "audio_timestep": {0: "batch_size"},
             "video_coords": {0: "batch_size", 2: "video_sequence_length"},
             "audio_coords": {0: "batch_size", 2: "audio_sequence_length"},
-            "cross_modality_gate": {},
         }
+        if is_ltx2_3_transformer_config(self._normalized_config.config):
+            inputs["cross_modality_gate"] = {}
         if getattr(self._normalized_config.config, "perturbed_attn", False):
             inputs["stg_perturbation_mask"] = {}
         return inputs

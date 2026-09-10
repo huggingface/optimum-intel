@@ -17,6 +17,7 @@ from typing import Optional, Tuple
 
 import torch
 
+from optimum.exporters.openvino.utils import is_ltx2_3_transformer_config
 from optimum.intel.utils.import_utils import is_diffusers_version
 from optimum.utils import (
     DEFAULT_DUMMY_SHAPES,
@@ -975,6 +976,8 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
                 normalized_config.config, "audio_cross_attention_dim", self.cross_attention_dim
             )
 
+        self.is_ltx2_3 = is_ltx2_3_transformer_config(normalized_config.config)
+
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         import torch
 
@@ -1007,6 +1010,12 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         if input_name == "encoder_hidden_states":
             return self.random_float_tensor([self.batch_size, self.encoder_seq_length, self.text_embed_dim])
         if input_name == "encoder_attention_mask":
+            # LTX-2.0 exported this as i64, from the generic seq2seq generator this one replaced.
+            # Keeping the dtype avoids changing its IRs; the mask is only ever used arithmetically.
+            if not self.is_ltx2_3:
+                return self.random_mask_tensor(
+                    [self.batch_size, self.encoder_seq_length], framework=framework, dtype=int_dtype
+                )
             return self.random_float_tensor([self.batch_size, self.encoder_seq_length])
         if input_name == "audio_encoder_hidden_states":
             return self.random_float_tensor([self.batch_size, self.encoder_seq_length, self.audio_text_embed_dim])

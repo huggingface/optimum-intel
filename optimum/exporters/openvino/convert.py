@@ -41,6 +41,7 @@ from optimum.exporters.openvino.utils import (
     _normalize_dummy_inputs,
     allow_skip_tracing_check,
     clear_class_registry,
+    is_ltx2_3_transformer_config,
     remove_none_from_dummy_inputs,
     save_config,
     save_preprocessors,
@@ -1332,10 +1333,13 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
         task="feature-extraction",
         model_type="ltx2-text-encoder",
     )
+    # The 2.0 and 2.3 text encoder configs are identical, so the packing decision comes from the
+    # transformer. LTX-2.0 keeps one output per layer, as its published IRs already have.
     export_config = export_config_constructor(
         text_encoder.config,
         int_dtype=int_dtype,
         float_dtype=float_dtype,
+        pack_hidden_states=is_ltx2_3_transformer_config(pipeline.transformer.config),
     )
     export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["text_encoder"] = (text_encoder, export_config)

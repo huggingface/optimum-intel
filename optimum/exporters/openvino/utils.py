@@ -92,6 +92,18 @@ def is_auto_compression_disabled(model: Any) -> bool:
     return isinstance(model, (LTX2Pipeline, LTX2ImageToVideoPipeline))
 
 
+def is_ltx2_3_transformer_config(config: Any) -> bool:
+    """
+    Whether `config` is an LTX-2.3 transformer config rather than an LTX-2.0 one, keyed on the two
+    config values 2.3 introduced. Absent means LTX-2.0, via the diffusers defaults.
+
+    Used to keep the IRs LTX-2.0 already exports byte-identical, not to gate a capability: both
+    architectures support modality isolation. STG is the one real capability gate and checks
+    `perturbed_attn` on its own.
+    """
+    return getattr(config, "perturbed_attn", False) or not getattr(config, "use_prompt_embeddings", True)
+
+
 def is_torch_model(model: Union["PreTrainedModel", "ModelMixin"]):
     """
     Checks whether the model is a torch model.

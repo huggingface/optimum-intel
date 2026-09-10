@@ -62,6 +62,7 @@ from optimum.exporters.openvino.patching_utils import (
     postprocess_past_key_values,
     preprocess_past_key_values,
 )
+from optimum.exporters.openvino.utils import is_ltx2_3_transformer_config
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
     is_openvino_version,
@@ -11542,56 +11543,88 @@ def _ltx2_text_encoder_final_norm(model):
     return None
 
 
+def _ltx2_text_encoder_causal_mask(attention_mask):
+    """
+    Build the explicit causal mask the text tower is traced with, per attention type. Returns
+    `attention_mask` unchanged when it is not the expected 2D padding mask.
+    """
+    if attention_mask is None or attention_mask.dim() != 2:
+        return attention_mask
+
+    bsz, seq_len = attention_mask.shape
+    causal_mask = attention_mask[:, None, None, :].to(dtype=torch.float32)
+    causal_mask = causal_mask.expand(bsz, 1, seq_len, seq_len).clone()
+    causal_positions = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.float32, device=attention_mask.device))
+    causal_mask = causal_mask * causal_positions[None, None, :, :]
+    causal_mask = (1.0 - causal_mask) * torch.finfo(torch.float32).min
+    return {"full_attention": causal_mask, "sliding_attention": causal_mask}
+
+
 class LTX2TextEncoderPatcher(ModelPatcher):
     """
     Export patcher for the text encoder. Forces output_hidden_states, builds an explicit
-    causal mask (the connectors consume every hidden-state layer), and returns the layers already
-    packed the way the connectors want them, as a single `prompt_embeds` output.
+    causal mask (the connectors consume every hidden-state layer), and returns a flat dict so
+    each `hidden_states.{i}` becomes a named export output.
 
-    The packing is `LTX2Pipeline._get_gemma_prompt_embeds`'s `stack(dim=-1).flatten(2, 3)`, which is
-    exactly the connectors' `text_encoder_hidden_states` contract — they undo the flatten as their
-    first step. Emitting the layers separately instead would make the plugin write one output per
-    layer only for the pipeline to interleave them again on the host: 735 MiB copied in 627 ms per
-    encode for LTX-2.3 at the default sequence length of 1024, twice per generation under CFG. Doing
-    it in the graph is the same data movement, once, inside the plugin.
-
-    transformers collects `hidden_states` with forward hooks on the decoder layers, so the last
-    entry is the layer output *before* the text tower's final norm, applied here:
-    https://github.com/huggingface/transformers/blob/f62dc9bf2c90353b442a56e74391fbb8c689b55e/src/transformers/models/gemma3/modeling_gemma3.py#L573
-    The post-norm value is substituted afterwards only when the returned output object exposes
-    `last_hidden_state`.
-    `Gemma3ForConditionalGeneration` returns `Gemma3CausalLMOutputWithPast`, which does not, and
-    the exported graph ended up with the pre-norm tensor for both `last_hidden_state` and
-    `hidden_states.{num_layers}` (off by the final RMSNorm: |max| 6.6e5 instead of 1.6e2). The
-    connectors consume all layers stacked, so that one slot corrupted the text conditioning.
-    Capture the final norm's output directly instead of relying on that substitution.
+    This is the LTX-2.0 contract; LTX-2.3 uses `LTX2PackedTextEncoderPatcher` instead.
     """
 
     def __init__(self, config, model, model_kwargs=None):
         model.config.output_hidden_states = True
         super().__init__(config, model, model_kwargs)
+        self.patched_forward = self._build_patched_forward(model)
 
+    def _build_patched_forward(self, model):
+        orig_forward = self.orig_forward
+
+        def patched_forward(input_ids, attention_mask=None, **kwargs):
+            outputs = orig_forward(
+                input_ids=input_ids,
+                attention_mask=_ltx2_text_encoder_causal_mask(attention_mask),
+                output_hidden_states=True,
+            )
+            result = {"last_hidden_state": outputs.hidden_states[-1]}
+            for i, hs in enumerate(outputs.hidden_states):
+                result[f"hidden_states.{i}"] = hs
+            return result
+
+        return patched_forward
+
+
+class LTX2PackedTextEncoderPatcher(LTX2TextEncoderPatcher):
+    """
+    LTX-2.3 variant: emits the layers already packed the way the connectors want them, as a single
+    `prompt_embeds` output, and fixes the last layer's missing final norm.
+
+    The packing is `LTX2Pipeline._get_gemma_prompt_embeds`'s `stack(dim=-1).flatten(2, 3)`, which is
+    exactly the connectors' `text_encoder_hidden_states` contract — they undo the flatten as their
+    first step. Emitting the layers separately makes the plugin write one output per layer only for
+    the pipeline to interleave them again on the host: 735 MiB copied in 627 ms per encode at the
+    default sequence length of 1024, twice per generation under CFG.
+
+    transformers collects `hidden_states` with forward hooks on the decoder layers, so the last entry
+    is the layer output *before* the text tower's final norm, and the exported graph ended up with
+    that pre-norm tensor (|max| 6.6e5 instead of 1.6e2). Since the connectors consume all layers
+    stacked, that one slot corrupted the whole text conditioning. Capture the norm's output directly.
+
+    LTX-2.0 keeps the un-fixed base patcher so its already-published IRs stay reproducible.
+    """
+
+    def _build_patched_forward(self, model):
         orig_forward = self.orig_forward
         final_norm = _ltx2_text_encoder_final_norm(model)
 
         def patched_forward(input_ids, attention_mask=None, **kwargs):
-            if attention_mask is not None and attention_mask.dim() == 2:
-                bsz, seq_len = attention_mask.shape
-                causal_mask = attention_mask[:, None, None, :].to(dtype=torch.float32)
-                causal_mask = causal_mask.expand(bsz, 1, seq_len, seq_len).clone()
-                causal_positions = torch.tril(
-                    torch.ones(seq_len, seq_len, dtype=torch.float32, device=attention_mask.device)
-                )
-                causal_mask = causal_mask * causal_positions[None, None, :, :]
-                causal_mask = (1.0 - causal_mask) * torch.finfo(torch.float32).min
-                attention_mask = {"full_attention": causal_mask, "sliding_attention": causal_mask}
-
             captured = {}
             handle = None
             if final_norm is not None:
                 handle = final_norm.register_forward_hook(lambda module, args, output: captured.update(out=output))
             try:
-                outputs = orig_forward(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
+                outputs = orig_forward(
+                    input_ids=input_ids,
+                    attention_mask=_ltx2_text_encoder_causal_mask(attention_mask),
+                    output_hidden_states=True,
+                )
             finally:
                 if handle is not None:
                     handle.remove()
@@ -11605,7 +11638,7 @@ class LTX2TextEncoderPatcher(ModelPatcher):
 
             return {"prompt_embeds": torch.stack(hidden_states, dim=-1).flatten(2, 3)}
 
-        self.patched_forward = patched_forward
+        return patched_forward
 
 
 def _ltx2_cross_modality_gated_forward(orig_forward, guidance_state):
@@ -11669,14 +11702,17 @@ class LTX2TransformerPatcher(ModelPatcher):
                     _LTX2TraceSafeAttnProcessor(self._guidance_state, perturbable_attns.get(id(module)))
                 )
 
+        # Only LTX-2.3 exports the gate, so leave LTX-2.0's graph untouched. Modality isolation is
+        # architecturally available there too, but adding the input would change its published IRs.
         self._orig_cross_modality_forwards = []
-        for block in transformer_blocks:
-            for attn_name in ("audio_to_video_attn", "video_to_audio_attn"):
-                attn = getattr(block, attn_name, None)
-                if attn is None:
-                    continue
-                self._orig_cross_modality_forwards.append((attn, attn.forward))
-                attn.forward = _ltx2_cross_modality_gated_forward(attn.forward, self._guidance_state)
+        if is_ltx2_3_transformer_config(self._model.config):
+            for block in transformer_blocks:
+                for attn_name in ("audio_to_video_attn", "video_to_audio_attn"):
+                    attn = getattr(block, attn_name, None)
+                    if attn is None:
+                        continue
+                    self._orig_cross_modality_forwards.append((attn, attn.forward))
+                    attn.forward = _ltx2_cross_modality_gated_forward(attn.forward, self._guidance_state)
 
         # Wrap forward to return dict (needed for output naming) and force return_dict=False internally
         self._orig_model_forward = self._model.forward
@@ -11687,6 +11723,10 @@ class LTX2TransformerPatcher(ModelPatcher):
         _fwd_params = inspect.signature(self._orig_model_forward).parameters
         _supports_sigma = "sigma" in _fwd_params
 
+        # `sigma`/`audio_sigma` sit here, rather than after `audio_coords`, to keep the parameter
+        # order of the wrapped forward. OpenVINO traces the model directly when the dummy inputs are
+        # a prefix of this signature and wraps it in a `ModelWrapper` otherwise, and the two produce
+        # different scope names, so the order is part of the exported IR.
         @functools.wraps(self._orig_model_forward)
         def patched_forward(
             hidden_states,
@@ -11695,6 +11735,8 @@ class LTX2TransformerPatcher(ModelPatcher):
             audio_encoder_hidden_states,
             timestep,
             audio_timestep=None,
+            sigma=None,
+            audio_sigma=None,
             encoder_attention_mask=None,
             audio_encoder_attention_mask=None,
             num_frames=None,
@@ -11704,8 +11746,6 @@ class LTX2TransformerPatcher(ModelPatcher):
             audio_num_frames=None,
             video_coords=None,
             audio_coords=None,
-            sigma=None,
-            audio_sigma=None,
             cross_modality_gate=None,
             stg_perturbation_mask=None,
             **kwargs,
