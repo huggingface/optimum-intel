@@ -92,7 +92,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     ]
 
     if is_diffusers_version(">=", "0.37.0"):
-        SUPPORTED_ARCHITECTURES.extend(["flux.2-klein"])
+        SUPPORTED_ARCHITECTURES.extend(["flux.2-klein", "z-image"])
 
     if is_diffusers_version(">=", "0.33.0"):
         SUPPORTED_ARCHITECTURES.extend(["sana-sprint"])
@@ -252,10 +252,12 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
                     channels = pipeline.transformer.config.in_channels
                     self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
                 else:
+                    # Some transformer configs (Z-Image) only declare in_channels and derive
+                    # out_channels at runtime, so fall through to the VAE latent channels.
                     out_channels = (
                         pipeline.unet.config.out_channels
                         if pipeline.unet is not None
-                        else pipeline.transformer.config.out_channels
+                        else getattr(pipeline.transformer.config, "out_channels", None)
                     )
                     if out_channels is None:
                         out_channels = pipeline.vae.config.latent_channels
@@ -436,7 +438,13 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             and "timestep_cond" not in {inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs}
         ) or (
             ov_pipeline.transformer is not None
-            and "txt_ids" not in {inputs.get_any_name() for inputs in ov_pipeline.transformer.model.inputs}
+            # The txt_ids check targets Flux, which folds guidance into an embedding rather
+            # than doubling the batch. Z-Image also exports txt_ids but does double the batch
+            # for CFG, so it is excluded from that check.
+            and (
+                "txt_ids" not in {inputs.get_any_name() for inputs in ov_pipeline.transformer.model.inputs}
+                or model_arch == "z-image"
+            )
         ):
             if model_arch != "qwenimage":
                 expected_batch *= 2
