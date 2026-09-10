@@ -189,10 +189,8 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
         # Qwen3-TTS is a multi-component autoregressive TTS model with a fully custom
         # generation orchestration, so it is handled by a dedicated runtime class.
         if _is_qwen3_tts_config(kwargs.get("config")):
-            # ``export`` is honoured by the dedicated runtime (it converts the checkpoint
-            # first); ``compile`` has no meaning there, as each component compiles when it is
-            # installed.
-            kwargs.pop("compile", None)
+            # ``export`` and ``compile`` are both honoured by the dedicated runtime: it converts
+            # the checkpoint first, and defers installing its components when ``compile=False``.
             return _OVModelForQwen3TTS.from_pretrained(model_id, **kwargs)
 
         return super().from_pretrained(model_id, **kwargs)
@@ -1549,7 +1547,12 @@ class _OVModelForQwen3TTS:
         instance._ir_dir = _resolve_ir_dir(model_id, cache_dir)
         instance._codec_weights_present = codec_weights_present
         instance._weights_present = weights_present
-        instance._install_ov_components()
+        # Installing a component compiles it, and a compiled component keeps its .bin mapped for
+        # as long as it lives. ``compile=False`` is how a caller that only rewrites the IRs - as
+        # ``_main_quantize`` does before ``compress_qwen3_tts_irs`` - asks for that not to happen;
+        # on Windows a mapped .bin cannot be replaced at all ([WinError 5]).
+        if kwargs.pop("compile", True):
+            instance._install_ov_components()
         return instance
 
     @property
@@ -1562,6 +1565,11 @@ class _OVModelForQwen3TTS:
 
     def can_generate(self) -> bool:
         return True
+
+    def compile(self) -> None:
+        """Install the components if ``compile=False`` deferred them, as ``OVBaseModel.compile`` does."""
+        if not self._ov_ir_paths:
+            self._install_ov_components()
 
     def _compile_ov_component(
         self,
@@ -2050,6 +2058,7 @@ class _OVModelForQwen3TTS:
         if ref_audio is None:
             raise ValueError("`ref_audio` must be provided for Qwen3-TTS voice cloning.")
 
+        self.compile()  # the speaker encoder and the codec encoder run inside this call
         voice_clone_prompt = self._pipeline.create_voice_clone_prompt(
             ref_audio=ref_audio,
             ref_text=ref_text,
@@ -2087,6 +2096,7 @@ class _OVModelForQwen3TTS:
         Returns a single waveform tensor (batch size 1) or a list of tensors for
         batched inputs.
         """
+        self.compile()
         if self._is_custom_voice:
             wavs, sr = self._pipeline.generate_custom_voice(
                 text=text,
