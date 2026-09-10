@@ -951,6 +951,13 @@ _DECODER_STACK_OV_CONFIG = {"KV_CACHE_PRECISION": "f32"}
 # the device default, so the bulk of the compute (28 layers vs 5) still runs in f16 on GPU.
 _CODE_PREDICTOR_OV_CONFIG = {**_DECODER_STACK_OV_CONFIG, "INFERENCE_PRECISION_HINT": "f32"}
 
+# The ports ``_make_ov_stateful_decoder_stack_forward`` addresses by name, checked when a stack
+# is installed so that an IR from an older exporter is rejected up front rather than at the first
+# generated frame. ``beam_idx`` is deliberately absent: the shim detects it and drives both the
+# plain stateful graph and the beam-reordered one.
+_DECODER_STACK_OV_INPUTS = ("inputs_embeds", "attention_mask", "position_ids")
+_DECODER_STACK_OV_OUTPUTS = ("last_hidden_state", "logits")
+
 # Every IR a Qwen3-TTS export can contain.
 _QWEN3_TTS_OV_IR_NAMES = (
     _TALKER_OV_IR_NAME,
@@ -961,6 +968,13 @@ _QWEN3_TTS_OV_IR_NAMES = (
     _SPEAKER_ENCODER_OV_IR_NAME,
     _CODEC_ENCODER_OV_IR_NAME,
     _CODEC_DECODER_OV_IR_NAME,
+)
+
+# The IRs every Qwen3-TTS export carries, whatever the variant, and so the ones a directory has
+# to hold before a previous conversion may be reused instead of repeated. The speaker encoder is
+# left out because only the voice-clone (``base``) checkpoints have one.
+_QWEN3_TTS_MANDATORY_OV_IR_NAMES = tuple(
+    ir_name for ir_name in _QWEN3_TTS_OV_IR_NAMES if ir_name != _SPEAKER_ENCODER_OV_IR_NAME
 )
 
 # Weight-only compression is applied to the language-model side of the pipeline and kept away
@@ -1127,6 +1141,23 @@ def _qwen3_tts_weight_compression_config(load_in_8bit, quantization_config):
     return None
 
 
+def _is_complete_qwen3_tts_export(directory) -> bool:
+    """Whether ``directory`` holds an export that can be loaded as one.
+
+    Guards the two places :func:`_export_qwen3_tts` skips a conversion because one appears to be
+    there already. A directory holding only some of the graphs must not qualify: it would be
+    returned as the export, and - having no checkpoint in it - then be read as a weightless one,
+    where the structural build fails on a config that is not there
+    (``'Qwen3TTSTalkerConfig' object has no attribute 'text_vocab_size'``). Interrupted
+    conversions and directories written by a version that exported only the talker both land in
+    that state, and both are indistinguishable from a finished export by the talker IR alone.
+    """
+    directory = Path(directory)
+    if not (directory / "config.json").is_file():
+        return False
+    return all((directory / ir_name).is_file() for ir_name in _QWEN3_TTS_MANDATORY_OV_IR_NAMES)
+
+
 def _export_qwen3_tts(model_id, cache_dir, weight_compression=None):
     """Convert a Qwen3-TTS checkpoint to OpenVINO and return the directory holding the IRs.
 
@@ -1137,7 +1168,7 @@ def _export_qwen3_tts(model_id, cache_dir, weight_compression=None):
     from optimum.exporters.openvino import main_export
 
     source = Path(str(model_id))
-    if source.is_dir() and (source / _TALKER_OV_IR_NAME).is_file():
+    if source.is_dir() and _is_complete_qwen3_tts_export(source):
         return source  # already an exported directory
 
     # Never convert into the source directory: it may be a read-only Hub snapshot, and mixing
@@ -1149,9 +1180,11 @@ def _export_qwen3_tts(model_id, cache_dir, weight_compression=None):
         sanitized += f"--{getattr(weight_compression, 'bits', 8)}bit"
     base = Path(cache_dir) if cache_dir else Path(HUGGINGFACE_HUB_CACHE)
     output_dir = base / "openvino_qwen3_tts" / sanitized
-    if (output_dir / _TALKER_OV_IR_NAME).is_file():
+    if _is_complete_qwen3_tts_export(output_dir):
         logger.info(f"Qwen3-TTS: reusing the OpenVINO export at {output_dir}.")
         return output_dir
+    if output_dir.is_dir() and any(output_dir.iterdir()):
+        logger.info(f"Qwen3-TTS: the export at {output_dir} is incomplete; converting again.")
 
     logger.info(f"Qwen3-TTS: exporting {model_id} to OpenVINO in {output_dir}.")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1530,8 +1563,27 @@ class _OVModelForQwen3TTS:
     def can_generate(self) -> bool:
         return True
 
-    def _compile_ov_component(self, ir_name: str, label: str, ov_config: Optional[Dict[str, Any]] = None):
-        """Read and compile one exported component IR, or raise when it is not on disk."""
+    def _compile_ov_component(
+        self,
+        ir_name: str,
+        label: str,
+        ov_config: Optional[Dict[str, Any]] = None,
+        expected_inputs: Tuple[str, ...] = (),
+        expected_outputs: Tuple[str, ...] = (),
+    ):
+        """Read and compile one exported component IR, or raise when it is not on disk.
+
+        ``expected_inputs`` / ``expected_outputs`` name the ports the shim that drives this
+        component addresses by name. They are checked here because the IR directory is resolved
+        by model id (see :func:`_resolve_ir_dir`), so it can hold an export written by an older
+        version of the exporter, whose graph this runtime cannot drive - an early talker, say,
+        taking ``cos``/``sin``/``past_k``/``past_v`` instead of ``position_ids`` and OpenVINO
+        state. Such an IR loads and compiles perfectly well, and would otherwise fail on the
+        first generated frame, deep inside ``start_async``, with a bare
+        ``Port for tensor name position_ids was not found``. Raising here instead lets the
+        component fall back to PyTorch like any other failed install - and, for an export that
+        ships no PyTorch weights, surfaces as the "re-export the model" error.
+        """
         ir_dir = Path(getattr(self, "_ir_dir", None) or _resolve_ir_dir(self.model_save_dir, None))
         ir_xml = ir_dir / ir_name
         if not ir_xml.is_file():
@@ -1539,6 +1591,22 @@ class _OVModelForQwen3TTS:
         core = openvino.Core()
         logger.info(f"Qwen3-TTS: loading {label} OpenVINO IR from {ir_xml}.")
         compiled = core.compile_model(core.read_model(ir_xml), self._device, self._supported(core, ov_config))
+
+        available_inputs = {name for port in compiled.inputs for name in port.get_names()}
+        available_outputs = {name for port in compiled.outputs for name in port.get_names()}
+        missing = [name for name in expected_inputs if name not in available_inputs]
+        missing += [name for name in expected_outputs if name not in available_outputs]
+        if missing:
+            # A stale graph can carry a port per layer, so the names it does have are only
+            # sampled here - enough to recognize the vintage, not enough to bury the message.
+            named = sorted(name for name in available_inputs if not name.isdigit())
+            sample = ", ".join(named[:6]) + (f", ... ({len(available_inputs)} inputs in total)" if named else "")
+            raise RuntimeError(
+                f"the {label} OpenVINO IR at {ir_xml} is not the graph this runtime drives: it has no "
+                f"{', '.join(missing)} (its named inputs are {sample}). The IR predates the current "
+                "exporter; re-export the model with `optimum-cli export openvino`."
+            )
+
         self._ov_ir_paths[label] = str(ir_xml)
         return compiled
 
@@ -1559,6 +1627,19 @@ class _OVModelForQwen3TTS:
         if dropped:
             logger.info(f"Qwen3-TTS: {self._device} does not support {dropped}; compiling without.")
         return {name: value for name, value in ov_config.items() if name in supported}
+
+    def _log_offload_disabled(self, label: str, exc: Exception) -> None:
+        """Record a component that stayed on PyTorch, at debug level.
+
+        Every way a component can fail to install leaves the model correct and the other
+        components alone - an export holding only some of the graphs, a variant with no speaker
+        encoder, an IR from an older exporter that this runtime cannot drive, a device that will
+        not compile one - so none of them interrupts a run. What it costs is speed, and the reason
+        is one ``logging`` level away when a run is slower than it should be. Where the export
+        ships no PyTorch weights there is nothing to fall back to, and ``_install_ov_components``
+        raises for the components it could not load regardless of this.
+        """
+        logger.debug(f"Qwen3-TTS: OpenVINO {label} offload disabled ({exc}); using PyTorch.")
 
     def _install_ov_components(self) -> None:
         """Offload every exported Qwen3-TTS component to OpenVINO.
@@ -1613,7 +1694,13 @@ class _OVModelForQwen3TTS:
             talker_model = talker.model
             talker_model.eval()
 
-            compiled = self._compile_ov_component(_TALKER_OV_IR_NAME, "talker", _DECODER_STACK_OV_CONFIG)
+            compiled = self._compile_ov_component(
+                _TALKER_OV_IR_NAME,
+                "talker",
+                _DECODER_STACK_OV_CONFIG,
+                expected_inputs=_DECODER_STACK_OV_INPUTS,
+                expected_outputs=_DECODER_STACK_OV_OUTPUTS,
+            )
 
             def mrope_positions(position_ids, cache_position, batch_size):
                 # The graph expects [3, batch, sequence]: one row per m-RoPE stream.
@@ -1645,7 +1732,7 @@ class _OVModelForQwen3TTS:
             self._ov_talker = compiled
             logger.info("Qwen3-TTS: talker decoder stack offloaded to OpenVINO (IR-backed).")
         except Exception as exc:  # pragma: no cover - fall back to pure PyTorch
-            logger.warning(f"Qwen3-TTS: OpenVINO talker offload disabled ({exc}); using PyTorch.")
+            self._log_offload_disabled("talker", exc)
 
     def _install_ov_code_predictor(self) -> None:
         """Offload the code-predictor decoder stack (5 layers) to OpenVINO.
@@ -1666,7 +1753,12 @@ class _OVModelForQwen3TTS:
             code_predictor_model.eval()
 
             compiled = self._compile_ov_component(
-                _CODE_PREDICTOR_OV_IR_NAME, "code predictor", _CODE_PREDICTOR_OV_CONFIG
+                _CODE_PREDICTOR_OV_IR_NAME,
+                "code predictor",
+                _CODE_PREDICTOR_OV_CONFIG,
+                # The code predictor's graph additionally picks a depth with ``step``.
+                expected_inputs=_DECODER_STACK_OV_INPUTS + ("step",),
+                expected_outputs=_DECODER_STACK_OV_OUTPUTS,
             )
 
             # The code predictor's graph owns its rotary embeddings and its key/value cache.
@@ -1724,7 +1816,7 @@ class _OVModelForQwen3TTS:
             self._ov_code_predictor = compiled
             logger.info("Qwen3-TTS: code predictor offloaded to OpenVINO (IR-backed).")
         except Exception as exc:  # pragma: no cover - fall back to pure PyTorch
-            logger.warning(f"Qwen3-TTS: OpenVINO code predictor offload disabled ({exc}); using PyTorch.")
+            self._log_offload_disabled("code predictor", exc)
 
     def _install_ov_embeddings(self) -> None:
         """Point the model's embedding tables at their exported IRs.
@@ -1759,7 +1851,7 @@ class _OVModelForQwen3TTS:
             self._ov_embeddings = (text_embeddings, talker_embeddings, code_predictor_embeddings)
             logger.info("Qwen3-TTS: embedding tables offloaded to OpenVINO (IR-backed).")
         except Exception as exc:  # pragma: no cover - fall back to pure PyTorch
-            logger.warning(f"Qwen3-TTS: OpenVINO embeddings offload disabled ({exc}); using PyTorch.")
+            self._log_offload_disabled("embeddings", exc)
 
     def _install_ov_speaker_encoder(self) -> None:
         """Offload the ECAPA-TDNN speaker encoder (mel spectrogram -> x-vector) to OpenVINO."""
@@ -1783,7 +1875,7 @@ class _OVModelForQwen3TTS:
             self._ov_speaker_encoder = compiled
             logger.info("Qwen3-TTS: speaker encoder offloaded to OpenVINO (IR-backed).")
         except Exception as exc:  # pragma: no cover - fall back to pure PyTorch
-            logger.warning(f"Qwen3-TTS: OpenVINO speaker encoder offload disabled ({exc}); using PyTorch.")
+            self._log_offload_disabled("speaker encoder", exc)
 
     def _install_ov_codec_encoder(self) -> None:
         """Offload the codec encoder (reference waveform -> residual codes) to OpenVINO.
@@ -1815,7 +1907,7 @@ class _OVModelForQwen3TTS:
             self._ov_codec_encoder = compiled
             logger.info("Qwen3-TTS: codec encoder offloaded to OpenVINO (IR-backed).")
         except Exception as exc:  # pragma: no cover - fall back to pure PyTorch
-            logger.warning(f"Qwen3-TTS: OpenVINO codec encoder offload disabled ({exc}); using PyTorch.")
+            self._log_offload_disabled("codec encoder", exc)
 
     def _install_ov_codec_decoder(self) -> None:
         """Offload the codec decoder (codes -> 24 kHz waveform) to OpenVINO.
@@ -1837,7 +1929,7 @@ class _OVModelForQwen3TTS:
             self._ov_codec_decoder = compiled
             logger.info("Qwen3-TTS: codec decoder offloaded to OpenVINO (IR-backed).")
         except Exception as exc:  # pragma: no cover - fall back to pure PyTorch
-            logger.warning(f"Qwen3-TTS: OpenVINO codec decoder offload disabled ({exc}); using PyTorch.")
+            self._log_offload_disabled("codec decoder", exc)
 
     @property
     def ov_models(self) -> Dict[str, openvino.Model]:
