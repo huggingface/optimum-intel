@@ -191,9 +191,6 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
-        if model_arch in ("marian") and is_openvino_version(">=", "2026.1.0"):
-            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
-
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = self.OVMODEL_CLASS.from_pretrained(
@@ -599,7 +596,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "gemma4_unified-it",
         "gemma3n",
         "qwen3_5",
+        "qwen3_5_mtp",
         "qwen3_5_moe",
+        "qwen3_5_moe_mtp",
         "qwen3_omni_moe",
         "mistral3",
         "muse_glimmer",
@@ -675,7 +674,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "llama4",
             "qwen3_vl",
             "qwen3_5",
+            "qwen3_5_mtp",
             "qwen3_5_moe",
+            "qwen3_5_moe_mtp",
             "gemma4_unified",
             "gemma4_unified-it",
             "muse_glimmer",
@@ -737,16 +738,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
-        if model_arch in ("llama4", "minicpmv", "minicpmo") and is_openvino_version(">=", "2026.1.0"):
-            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
-
-        if (
-            model_arch in ("qwen3_vl", "llava", "llava_next", "llava_next_mistral")
-            and is_openvino_version(">=", "2026.1.0")
-            and is_transformers_version(">=", "5.0")
-        ):
-            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
-
         if model_arch == "qwen3_omni_moe":
             # Qwen3OmniMoeForConditionalGeneration has a custom generate() interface incompatible with this flow
             self.skipTest("qwen3_omni_moe comparison tested via dedicated test methods")
@@ -809,9 +800,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
         image = self.IMAGE.resize((600, 600))
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=image)
-        if model_arch in ["gemma3", "gemma3n"]:
+        if model_arch in ["gemma3", "gemma3n", "mistral3"]:
             # validate that preprocessed input ids contain exactly one bos token
-            bos_token = preprocessors["processor"].tokenizer.vocab["<bos>"]
+            bos_token = preprocessors["processor"].tokenizer.bos_token_id
             input_ids = inputs["input_ids"]
             bos_token_counts = (input_ids == bos_token).sum(dim=1)
             self.assertTrue(

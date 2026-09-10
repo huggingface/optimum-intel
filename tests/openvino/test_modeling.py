@@ -64,6 +64,7 @@ from utils_tests import (
     SEED,
     TENSOR_ALIAS_TO_TYPE,
     TEST_IMAGE_URL,
+    is_model_type_transformers_compatible,
 )
 
 from optimum.intel import (
@@ -1041,7 +1042,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         "sentence-transformers-bert",
         "qwen3",
     )
-    if is_transformers_version("<", "5.4") or is_transformers_version(">=", "5.6"):
+    if is_model_type_transformers_compatible("qwen3_vl"):
         SUPPORTED_ARCHITECTURES += ("qwen3_vl_embedding",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -1274,7 +1275,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         )
         self.assertEqual(ov_model.request.get_property("INFERENCE_PRECISION_HINT").to_string(), "f32")
         self.assertIsInstance(ov_model.config, PretrainedConfig)
-        timm_model = timm.create_model(model_id, pretrained=True)
+        timm_model = timm.create_model(f"hf-hub:{model_id}", pretrained=True)
         preprocessor = TimmImageProcessor.from_pretrained(model_id)
         url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)

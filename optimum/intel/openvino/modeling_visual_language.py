@@ -392,6 +392,23 @@ class OVMultiModalProjector(OVVisionProjection):
     _model_name = "multi_modal_projector"
 
 
+class OVMTPModel(OVModelPart):
+    """
+    Wrapper for the stateful MTP (Multi-Token Prediction) head submodel.
+
+    Registering the MTP head as a model part makes it visible to `_ov_model_names`,
+    so it is loaded, saved and — importantly — weight-compressed together with the
+    other submodels (e.g. by `optimum-cli export openvino --weight-format int4`).
+    """
+
+    _model_name = "mtp"
+
+    def forward(self, **kwargs):
+        self.compile()
+        inputs = {name: kwargs[name] for name in self.input_names if name in kwargs}
+        return self.request(inputs)
+
+
 class OVAudioEmbeddings(OVModelPart):
     _model_name = "audio_embeddings"
 
@@ -749,6 +766,7 @@ MODEL_PARTS_CLS_MAPPING = {
     "talker_projections": OVTalkerProjections,
     "code_predictor": OVCodePredictorDecoder,
     "code2wav": OVCode2Wav,
+    "mtp": OVMTPModel,
 }
 
 
@@ -2227,8 +2245,18 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
         if image is not None:
             conversation[0]["content"].insert(0, {"type": "image"})
 
-        prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+        prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+
+        # switch off add_bos_token if chat template already includes it
+        orig_add_bos_token = processor.tokenizer.add_bos_token
+        if "bos_token" in processor.tokenizer.chat_template:
+            processor.tokenizer.add_bos_token = False
+
         inputs = processor(images=image, text=prompt, return_tensors="pt")
+
+        # recover add_bos_token flag in tokenizer
+        processor.tokenizer.add_bos_token = orig_add_bos_token
+
         return inputs
 
 
@@ -3270,9 +3298,12 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
             wpos_ids = wpos_ids.flatten()
             pos_ids.append(torch.stack([hpos_ids, wpos_ids], dim=-1).repeat(t, 1))
         pos_ids = torch.cat(pos_ids, dim=0)
-        max_grid_size = grid_thw[:, 1:].max()
-        rotary_pos_emb_full = self._rotary_pos_emb(max_grid_size)
-        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+        if is_transformers_version(">=", "5.9"):
+            rotary_pos_emb = self._rotary_pos_emb(pos_ids)
+        else:
+            max_grid_size = grid_thw[:, 1:].max()
+            rotary_pos_emb_full = self._rotary_pos_emb(max_grid_size)
+            rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
         return rotary_pos_emb
 
     def get_multimodal_embeddings(
@@ -4396,9 +4427,13 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
             )
             pos_ids.append(torch.stack([hpos_ids, wpos_ids], dim=-1).repeat(t, 1))
         pos_ids = torch.cat(pos_ids, dim=0)
-        max_grid_size = grid_thw[:, 1:].max()
-        rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
-        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+        if is_transformers_version(">=", "5.9"):
+            rotary_pos_emb = self.rotary_pos_emb(pos_ids)
+        else:
+            max_grid_size = grid_thw[:, 1:].max()
+            rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
+            rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+
         return rotary_pos_emb
 
     def get_vision_embeddings(self, pixel_values, grid_thw, **kwargs):
@@ -7481,7 +7516,10 @@ class _OVVideoChatFlashQwenForCausalLM(OVModelForVisualCausalLM):
 
 
 class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
-    additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
+    # `mtp` is optional: only present for checkpoints exported with an MTP head
+    # (e.g. Qwen3.6-35B-A3B). It is loaded/saved/compressed like any other part; if
+    # the openvino_mtp_model.xml file is absent it is skipped gracefully.
+    additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos", "mtp"]
 
     def __init__(
         self,

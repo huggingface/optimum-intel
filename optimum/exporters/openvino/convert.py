@@ -125,6 +125,13 @@ def _set_runtime_options(
             or getattr(sub_export_config, "stateful", False)
         ):
             sub_export_config.runtime_options["KV_CACHE_PRECISION"] = "f16"
+        # The gemma4_unified vision embedder produces activations large enough to overflow in
+        # fp16, so scale them down at runtime the same way the language model does.
+        if (
+            model_name == "vision_embeddings_model"
+            and getattr(getattr(sub_export_config, "_orig_config", None), "model_type", None) == "gemma4_unified"
+        ):
+            sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
 
 
 def _save_model(
@@ -152,6 +159,7 @@ def _save_model(
         "qwen3_5_moe",
         "qwen3_5_text",
         "qwen3_5_moe_text",
+        "gemma4",
     }:
         add_hidden_states_rt_info(source_model, model, config)
 
@@ -1520,7 +1528,9 @@ def get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     text_encoder = getattr(pipeline, "text_encoder", None)
     if text_encoder is not None:
         text_encoder.config.output_hidden_states = True
-        text_encoder.text_model.config.output_hidden_states = True
+        # `CLIPTextTransformer` removed since transformers v5.6
+        if hasattr(text_encoder, "text_model"):
+            text_encoder.text_model.config.output_hidden_states = True
         text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
             model=text_encoder,
             exporter=exporter,
@@ -1582,7 +1592,9 @@ def get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     text_encoder_2 = getattr(pipeline, "text_encoder_2", None)
     if text_encoder_2 is not None:
         text_encoder_2.config.output_hidden_states = True
-        text_encoder_2.text_model.config.output_hidden_states = True
+        # `CLIPTextTransformer` removed since transformers v5.6
+        if hasattr(text_encoder_2, "text_model"):
+            text_encoder_2.text_model.config.output_hidden_states = True
         export_config_constructor = TasksManager.get_exporter_config_constructor(
             model=text_encoder_2,
             exporter=exporter,
