@@ -394,6 +394,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "chatglm4",
             "gpt_oss_mxfp4",
             "llama",
+            # This is the separately loaded Transformers reference model. The
+            # OpenVINO export above has already completed, so casting it cannot
+            # unpack or otherwise affect the packed compressed-tensors source.
+            "llama_compressed_tensors",
             "lfm2",
             "gemma3_text",
             "llama4",
