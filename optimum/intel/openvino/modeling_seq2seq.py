@@ -1623,15 +1623,9 @@ class _OVModelForQwen3ASR(OVModelForSpeechSeq2Seq):
         return super().to(device)
 
     def reshape(self, batch_size: int, sequence_length: int):
-        if self._compile_only:
-            raise ValueError(
-                "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
-            )
-        if batch_size != -1 or sequence_length != -1:
-            raise ValueError(
-                "Qwen3-ASR split models only support dynamic shapes (`batch_size=-1`, `sequence_length=-1`)."
-            )
-        return self
+        raise ValueError(
+            "Qwen3-ASR models only support dynamic shapes (`batch_size=-1`, `sequence_length=-1`)."
+        )
 
     def _process_audio_inputs(self, input_features, feature_attention_mask):
         return self.audio_encoder.encode(input_features, feature_attention_mask)

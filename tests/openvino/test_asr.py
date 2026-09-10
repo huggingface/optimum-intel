@@ -37,7 +37,7 @@ class OVASRTest(unittest.TestCase):
     Compares OpenVINO model output to original PyTorch model output.
     """
 
-    SUPPORTED_ARCHITECTURES = ("qwen3_asr", "fun_asr")
+    SUPPORTED_ARCHITECTURES = [("qwen3_asr", "default"), ("qwen3_asr", "encoder_decoder"), ("fun_asr", "default")]
 
     def _generate_audio_data(self):
         np.random.seed(SEED)
@@ -47,7 +47,7 @@ class OVASRTest(unittest.TestCase):
         audio_data = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
         return audio_data, sample_rate
 
-    @parameterized.expand([("qwen3_asr", "split"), ("qwen3_asr", "encoder_decoder"), ("fun_asr", "default")])
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.skipif(
         is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
         reason="Currently, we support Qwen3-ASR and FunASR only for transformers==4.57 since they are trust-remote-code models.",
