@@ -72,6 +72,11 @@ jobs:
           uv pip install transformers==${{ matrix.transformers-version }}
 
       - if: ${{ matrix.transformers-version == '4.57.6' }}
+        name: Pin diffusers (diffusers>=0.40 requires huggingface-hub>=1.23, incompatible with transformers==4.57.6's huggingface-hub<1.0)
+        run: |
+          uv pip install "diffusers<0.40"
+
+      - if: ${{ matrix.transformers-version == '4.57.6' }}
         name: Install qwen-asr package
         run: |
           uv pip install qwen-asr
