@@ -29,13 +29,14 @@ except Exception as error:
 INSTALL_REQUIRE = [
     "torch>=2.1",
     "optimum~=2.3.0",
-    "transformers>=4.51,<5.6",
+    "transformers>=4.51,<5.11",
     "setuptools",
     "huggingface-hub>=0.23.2,<2.0",
     "nncf>=3.3.0",
     "openvino>=2026.0",
     "openvino-tokenizers>=2026.0",
     "requests>=2.33,<3.0",
+    "torchvision",
 ]
 
 TESTS_REQUIRE = [

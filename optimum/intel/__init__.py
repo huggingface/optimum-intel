@@ -134,6 +134,7 @@ except OptionalDependencyNotAvailable:
             "OVLTXImageToVideoPipeline",
             "OVLTXPipeline",
             "OVLTX2Pipeline",
+            "OVLTX2ImageToVideoPipeline",
             "OVFluxPipeline",
             "OVFlux2KleinPipeline",
             "OVFluxImg2ImgPipeline",
@@ -141,6 +142,9 @@ except OptionalDependencyNotAvailable:
             "OVFluxFillPipeline",
             "OVSanaPipeline",
             "OVQwenImagePipeline",
+            "OVZImagePipeline",
+            "OVZImageImg2ImgPipeline",
+            "OVZImageInpaintPipeline",
             "OVPipelineForImage2Image",
             "OVPipelineForImage2Video",
             "OVPipelineForText2Image",
@@ -166,6 +170,7 @@ else:
             "OVLTXImageToVideoPipeline",
             "OVLTXPipeline",
             "OVLTX2Pipeline",
+            "OVLTX2ImageToVideoPipeline",
             "OVFluxPipeline",
             "OVFlux2KleinPipeline",
             "OVFluxImg2ImgPipeline",
@@ -173,6 +178,9 @@ else:
             "OVFluxFillPipeline",
             "OVSanaPipeline",
             "OVQwenImagePipeline",
+            "OVZImagePipeline",
+            "OVZImageImg2ImgPipeline",
+            "OVZImageInpaintPipeline",
             "OVPipelineForImage2Image",
             "OVPipelineForImage2Video",
             "OVPipelineForText2Image",
@@ -252,6 +260,7 @@ if TYPE_CHECKING:
             OVFluxPipeline,
             OVLatentConsistencyModelImg2ImgPipeline,
             OVLatentConsistencyModelPipeline,
+            OVLTX2ImageToVideoPipeline,
             OVLTXImageToVideoPipeline,
             OVPipelineForImage2Image,
             OVPipelineForImage2Video,
@@ -269,6 +278,9 @@ if TYPE_CHECKING:
             OVStableDiffusionXLImg2ImgPipeline,
             OVStableDiffusionXLInpaintPipeline,
             OVStableDiffusionXLPipeline,
+            OVZImageImg2ImgPipeline,
+            OVZImageInpaintPipeline,
+            OVZImagePipeline,
         )
     else:
         from .openvino import (
@@ -276,6 +288,7 @@ if TYPE_CHECKING:
             OVFluxPipeline,
             OVLatentConsistencyModelImg2ImgPipeline,
             OVLatentConsistencyModelPipeline,
+            OVLTX2ImageToVideoPipeline,
             OVLTXImageToVideoPipeline,
             OVPipelineForImage2Image,
             OVPipelineForImage2Video,
@@ -293,6 +306,9 @@ if TYPE_CHECKING:
             OVStableDiffusionXLImg2ImgPipeline,
             OVStableDiffusionXLInpaintPipeline,
             OVStableDiffusionXLPipeline,
+            OVZImageImg2ImgPipeline,
+            OVZImageInpaintPipeline,
+            OVZImagePipeline,
         )
 
     try:

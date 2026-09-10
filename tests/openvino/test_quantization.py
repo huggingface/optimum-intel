@@ -1171,15 +1171,20 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForFeatureExtraction, "qwen3_vl_embedding", False),
         (OVModelForVisualCausalLM, "qwen3_omni_moe", False),
         (OVModelForCausalLM, "exaone4", True),
+        (OVModelForCausalLM, "ouro", True),
         (OVModelForVisualCausalLM, "llava_next_video", False),
         (OVModelForVisualCausalLM, "minicpmv", True),
         (OVModelForSpeechSeq2Seq, "qwen3_asr", True),
         (OVModelForSpeechSeq2Seq, "fun_asr", True),
         (OVModelForVisualCausalLM, "videochat_flash_qwen", True),
         (OVModelForVisualCausalLM, "qwen3_5", False),
+        (OVModelForVisualCausalLM, "qwen3_5_mtp", False),
         (OVModelForVisualCausalLM, "qwen3_5_moe", False),
+        (OVModelForVisualCausalLM, "qwen3_5_moe_mtp", False),
         (OVModelForVisualCausalLM, "gemma4", False),
         (OVModelForVisualCausalLM, "gemma4_moe", False),
+        (OVModelForVisualCausalLM, "deepseek_ocr2", False),
+        (OVModelForVisualCausalLM, "mistral3", False),
     ]
 
     # gemma3n openvino>=2026.2.0 because it needs erfinv operation,
@@ -1296,7 +1301,11 @@ class OVWeightCompressionTest(unittest.TestCase):
             {
                 "unet": {"names": ["__module.time_embedding.linear_1/aten::linear/MatMul"]},
                 "text_encoder": {
-                    "names": ["__module.text_model.encoder.layers.0.self_attn.q_proj/aten::linear/MatMul"]
+                    "names": [
+                        "__module.text_model.encoder.layers.0.self_attn.q_proj/aten::linear/MatMul"
+                        if is_transformers_version("<", "5.6")
+                        else "__module.encoder.layers.0.self_attn.q_proj/aten::linear/MatMul"
+                    ]
                 },
             },
         ),

@@ -191,9 +191,6 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
-        if model_arch in ("marian") and is_openvino_version(">=", "2026.1.0"):
-            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
-
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = self.OVMODEL_CLASS.from_pretrained(
@@ -598,10 +595,25 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "gemma4_unified",
         "gemma3n",
         "qwen3_5",
+        "qwen3_5_mtp",
         "qwen3_5_moe",
+        "qwen3_5_moe_mtp",
         "qwen3_omni_moe",
+        "mistral3",
+        "muse_glimmer",
+        "deepseek_ocr2",
     ]
-    SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl", "qwen2_5_vl", "qwen3_vl", "videochat_flash_qwen"]
+    SUPPORT_VIDEO = [
+        "llava_next_video",
+        "qwen2_vl",
+        "qwen2_5_vl",
+        "qwen3_vl",
+        "videochat_flash_qwen",
+        "muse_glimmer",
+        "gemma4",
+        "gemma4_moe",
+        "gemma4_unified",
+    ]
     SUPPORT_AUDIO = ["qwen3_omni_moe"]
     # "llama" is registered for image-text-to-text
     # to support VLM Eagle3 draft models (tested separately in test_genai.py).
@@ -650,6 +662,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "llava",
             "llava_next",
             "llava_next_mistral",
+            "mistral3",
             "qwen2_vl",
             "qwen2_5_vl",
             "got_ocr2",
@@ -659,8 +672,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "llama4",
             "qwen3_vl",
             "qwen3_5",
+            "qwen3_5_mtp",
             "qwen3_5_moe",
+            "qwen3_5_moe_mtp",
             "gemma4_unified",
+            "muse_glimmer",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -685,6 +701,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             from transformers import AutoModel
 
             return AutoModel
+        if model_arch == "deepseek_ocr2":
+            from transformers import AutoModelForImageTextToText
+
+            return AutoModelForImageTextToText
         return AutoModelForCausalLM
 
     def _check_device_and_request(self, ov_model, expected_device, has_request):
@@ -715,19 +735,12 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
-        if model_arch in ("llama4", "minicpmv", "minicpmo") and is_openvino_version(">=", "2026.1.0"):
-            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
-
-        if (
-            model_arch in ("qwen3_vl", "llava", "llava_next", "llava_next_mistral")
-            and is_openvino_version(">=", "2026.1.0")
-            and is_transformers_version(">=", "5.0")
-        ):
-            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
-
         if model_arch == "qwen3_omni_moe":
             # Qwen3OmniMoeForConditionalGeneration has a custom generate() interface incompatible with this flow
             self.skipTest("qwen3_omni_moe comparison tested via dedicated test methods")
+
+        if model_arch == "gemma4":
+            self.skipTest("gemma4 is causing segfault CVS-193103")
 
         def compare_outputs(inputs, ov_model, transformers_model, generation_config):
             transformers_inputs = copy.deepcopy(inputs)
@@ -754,9 +767,13 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
         if "llama4" in model_arch:
             loading_kwargs = {"_attn_implementation": "sdpa"}
+        if model_arch == "muse_glimmer":
+            # the tiny reference checkpoint is stored in bfloat16, force fp32 to match the OpenVINO model
+            loading_kwargs = {"dtype": torch.float32}
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(
             model_id, trust_remote_code=trust_remote_code, **loading_kwargs
         )
+
         transformers_model.eval()
         if "internvl_chat" in model_arch:
             tokenizer = AutoTokenizer.from_pretrained(model_id, trast_remote_code=trust_remote_code)
@@ -778,9 +795,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
         image = self.IMAGE.resize((600, 600))
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=image)
-        if model_arch in ["gemma3", "gemma3n"]:
+        if model_arch in ["gemma3", "gemma3n", "mistral3"]:
             # validate that preprocessed input ids contain exactly one bos token
-            bos_token = preprocessors["processor"].tokenizer.vocab["<bos>"]
+            bos_token = preprocessors["processor"].tokenizer.bos_token_id
             input_ids = inputs["input_ids"]
             bos_token_counts = (input_ids == bos_token).sum(dim=1)
             self.assertTrue(
@@ -879,7 +896,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 repo_type="dataset",
                 user_agent=http_user_agent(),
             )
-            input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
+            num_frames = 2
+            # Gemma4 requires 32 frames for video input without providing video metadata
+            if model_arch in ["gemma4", "gemma4_moe", "gemma4_unified"]:
+                num_frames = 32
+            input_video, _ = load_video(video_path, num_frames=num_frames, backend="opencv")
             question = "Why is this video funny?"
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video)
             compare_outputs(inputs, ov_model, transformers_model, gen_config)
@@ -964,6 +985,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_generate_utils(self, model_arch):
+        if model_arch == "gemma4":
+            self.skipTest("gemma4 is causing segfault CVS-193103")
         model_id = MODEL_NAMES[model_arch]
         trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
         model = self.OVMODEL_CLASS.from_pretrained(
@@ -978,8 +1001,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         outputs = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
         self.assertIsInstance(outputs[0], str)
 
-        # GOT-OCR2 does not support text-only input
-        if model_arch != "got_ocr2":
+        # GOT-OCR2 and DeepSeek-OCR-2 are OCR models that do not support text-only input
+        if model_arch not in ("got_ocr2", "deepseek_ocr2"):
             # No input image case
             question = "Hi, how are you?"
             inputs = model.preprocess_inputs(**preprocessors, text=question, image=None)
@@ -996,7 +1019,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                     repo_type="dataset",
                     user_agent=http_user_agent(),
                 )
-                input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
+                num_frames = 2
+                # Gemma4 requires 32 frames for video input without providing video metadata
+                if model_arch in ["gemma4", "gemma4_moe", "gemma4_unified"]:
+                    num_frames = 32
+                input_video, _ = load_video(video_path, num_frames=num_frames, backend="opencv")
                 question = "Why is this video funny?"
                 inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
                 outputs = model.generate(**inputs, max_new_tokens=10)
