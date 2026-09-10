@@ -1517,16 +1517,10 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
             config.is_encoder_decoder = True
             return _OVModelForFunAsr._from_pretrained(model_id, config, **kwargs)
         if getattr(config, "model_type", None) == "qwen3_asr":
-            split_paths = _OVModelForQwen3ASR._resolve_split_paths(model_id, allow_missing=True, **kwargs)
-            if not split_paths:
+            if not _OVModelForQwen3ASR._is_split_export(model_id, **kwargs):
                 config.is_encoder_decoder = True
                 return super()._from_pretrained(model_id, config, **kwargs)
-            return _OVModelForQwen3ASR._from_pretrained(
-                model_id,
-                config,
-                split_paths=split_paths,
-                **kwargs,
-            )
+            return _OVModelForQwen3ASR._from_pretrained(model_id, config, **kwargs)
         return super()._from_pretrained(model_id, config, **kwargs)
 
 
@@ -1785,7 +1779,7 @@ class _OVModelForQwen3ASR(OVModelForSpeechSeq2Seq):
         }
 
     @classmethod
-    def _resolve_split_paths(
+    def _is_split_export(
         cls,
         model_id: Union[str, Path],
         token: Optional[Union[bool, str]] = None,
@@ -1794,60 +1788,30 @@ class _OVModelForQwen3ASR(OVModelForSpeechSeq2Seq):
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
         subfolder: str = "",
         local_files_only: bool = False,
-        allow_missing: bool = False,
         **kwargs,
-    ) -> Dict[str, Path]:
-        paths = {}
-        for component, file_name in cls._all_ov_model_paths.items():
-            path = cached_file(
-                path_or_repo_id=model_id,
-                token=token,
-                revision=revision,
-                force_download=force_download,
-                cache_dir=cache_dir,
-                filename=file_name,
-                subfolder=subfolder,
-                local_files_only=local_files_only,
-                _raise_exceptions_for_missing_entries=False,
-            )
-            if path is not None and Path(path).is_file():
-                paths[component] = Path(path)
-
-        if not paths and allow_missing:
-            return paths
-        if not paths:
-            raise FileNotFoundError(
-                "Qwen3-ASR split export not found. Re-export the model to create the required "
-                "audio encoder, text embeddings, and language model components."
-            )
-        missing = [file_name for component, file_name in cls._all_ov_model_paths.items() if component not in paths]
-        if missing:
-            raise FileNotFoundError(
-                "Incomplete Qwen3-ASR split export. Missing component files: " + ", ".join(missing)
-            )
-        for component, file_name in cls._all_ov_model_paths.items():
-            path = cls._cached_file(
-                model_path=model_id,
-                file_name=file_name,
-                token=token,
-                revision=revision,
-                force_download=force_download,
-                cache_dir=cache_dir,
-                subfolder=subfolder,
-                local_files_only=local_files_only,
-            )
-            if not Path(path).with_suffix(".bin").is_file():
-                raise FileNotFoundError(
-                    f"Incomplete Qwen3-ASR split export: missing {Path(path).with_suffix('.bin')}."
-                )
-        return paths
+    ) -> bool:
+        """
+        Check if separate language model file exist.
+        That means model was exported with a separate audio_encoder + text_embeddings + language model.
+        """
+        language_model_path = cached_file(
+            path_or_repo_id=model_id,
+            token=token,
+            revision=revision,
+            force_download=force_download,
+            cache_dir=cache_dir,
+            filename=cls._all_ov_model_paths["language_model"],
+            subfolder=subfolder,
+            local_files_only=local_files_only,
+            _raise_exceptions_for_missing_entries=False,
+        )
+        return language_model_path is not None and Path(language_model_path).is_file()
 
     @classmethod
     def _from_pretrained(
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
-        split_paths: Optional[Dict[str, Path]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -1859,25 +1823,42 @@ class _OVModelForQwen3ASR(OVModelForSpeechSeq2Seq):
         trust_remote_code: bool = False,
         **kwargs,
     ):
-        split_paths = split_paths or cls._resolve_split_paths(
-            model_id,
-            token=token,
-            revision=revision,
-            force_download=force_download,
-            cache_dir=cache_dir,
-            subfolder=subfolder,
-            local_files_only=local_files_only,
-        )
+        model_file_names = cls._all_ov_model_paths
+        if os.path.isdir(model_id):
+            model_save_dir = Path(model_id) / subfolder
+        else:
+            component_files = {
+                str(Path(subfolder) / component_file)
+                for model_file_name in model_file_names.values()
+                for component_file in (model_file_name, model_file_name.replace(".xml", ".bin"))
+            }
+            model_save_dir = (
+                Path(
+                    snapshot_download(
+                        model_id,
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        local_files_only=local_files_only,
+                        revision=revision,
+                        token=token,
+                        user_agent=http_user_agent,
+                        allow_patterns=component_files,
+                    )
+                )
+                / subfolder
+            )
+
+        file_names = {name: model_save_dir / file_name for name, file_name in model_file_names.items()}
+
         compile_only = kwargs.get("compile_only", False)
         device = kwargs.get("device", "CPU")
         ov_config = kwargs.get("ov_config")
-        model_save_dir = split_paths["language_model"].parent
         if compile_only:
             components = {
-                name: cls._compile_model(path, device, ov_config, model_save_dir) for name, path in split_paths.items()
+                name: cls._compile_model(path, device, ov_config, model_save_dir) for name, path in file_names.items()
             }
         else:
-            components = {name: cls.load_model(path) for name, path in split_paths.items()}
+            components = {name: cls.load_model(path) for name, path in file_names.items()}
 
         generation_config = kwargs.pop("generation_config", None)
         if generation_config is None:
