@@ -1,0 +1,143 @@
+name: OpenVINO GenAI - CPU, GPU, NPU (Self-Hosted)
+
+on:
+  workflow_dispatch:
+    inputs:
+      openvino_version:
+        description: "OpenVINO version to test"
+        required: true
+        default: "release"
+        type: choice
+        options:
+          - release
+          - nightly
+          # The latest Release Candidate cannot easily be resolved dynamically; pin the 2026.4 line for now.
+          - 2026.4-release-candidate
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  UV_TORCH_BACKEND: cpu
+  TRANSFORMERS_IS_CI: true
+  PYTHONUNBUFFERED: "1"
+  HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        transformers-version: ["4.57.6", "5.0.0", "5.5.*"]
+        device: ["GPU", "NPU", "CPU"]
+        runner: ["MTL", "LNL"]
+    runs-on: [self-hosted, "${{ matrix.runner }}"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Create virtual environment
+        shell: cmd
+        run: |
+          python -m venv %RUNNER_TEMP%\venv
+          %RUNNER_TEMP%\venv\Scripts\python -m pip install --upgrade pip uv
+
+      - name: Install dependencies
+        shell: cmd
+        run: |
+          %RUNNER_TEMP%\venv\Scripts\python -m uv pip install ".[tests]" "transformers==${{ matrix.transformers-version }}"
+          %RUNNER_TEMP%\venv\Scripts\python -m uv pip install pytest-xdist
+
+      # Workaround for internlm tokenizer issue with sentencepiece>=0.3
+      - name: Pin sentencepiece for transformers 4.57.6
+        if: matrix.transformers-version == '4.57.6'
+        shell: cmd
+        run: |
+          %RUNNER_TEMP%\venv\Scripts\python -m uv pip install "sentencepiece==0.2.1"
+
+      - name: Install OpenVINO GenAI nightly
+        if: inputs.openvino_version == 'nightly'
+        shell: cmd
+        run: |
+          %RUNNER_TEMP%\venv\Scripts\python -m uv pip install --pre --upgrade openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+
+      - name: Install OpenVINO GenAI Release Candidate
+        # Install the latest OpenVINO release between version limits. If there is a Release Candidate matching the lower bound version, it will be installed.
+        if: inputs.openvino_version == '2026.4-release-candidate'
+        shell: cmd
+        run: |
+          %RUNNER_TEMP%\venv\Scripts\python -m uv pip install --pre --upgrade "openvino-genai>=2026.4.0.0rc1,<2026.5.0.0" --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+
+      - name: Pip freeze
+        shell: cmd
+        run: |
+          %RUNNER_TEMP%\venv\Scripts\python -m uv pip freeze
+
+      - name: Verify imports
+        shell: cmd
+        run: |
+          %RUNNER_TEMP%\venv\Scripts\python -c "import openvino_genai; print('openvino_genai', openvino_genai.__version__)"
+          %RUNNER_TEMP%\venv\Scripts\python -c "import openvino; print('openvino', openvino.__version__)"
+          %RUNNER_TEMP%\venv\Scripts\python -c "import transformers; print('transformers', transformers.__version__)"
+          %RUNNER_TEMP%\venv\Scripts\python -c "import torch; print('torch', torch.__version__)"
+
+      # pytest-xdist with -n 1 runs the tests serially in a worker process: a native crash (access violation) is
+      # reported as a single test failure and the remaining tests continue in a fresh worker.
+      # The restart budget is deliberately low so a systematically crashing environment aborts
+      # the run instead of restarting its way through the whole suite. This is useful on Windows.
+      - name: Test with Pytest
+        shell: cmd
+        env:
+          OPENVINO_TEST_DEVICE: ${{ matrix.device }}
+        run: |
+          echo Running tests on device: %OPENVINO_TEST_DEVICE%
+          %RUNNER_TEMP%\venv\Scripts\python -m pytest tests/openvino/test_genai.py -rpFs --durations=0 --log-cli-level info -n 1 --max-worker-restart 10
+
+  report:
+    if: always()
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install requests openpyxl
+
+      - name: Generate report
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python .github/workflows/generate_genai_report.py \
+            --run-id ${{ github.run_id }} \
+            --html \
+            --xlsx \
+            --output optimum-genai-test-report.md
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimum-genai-test-report
+          path: |
+            optimum-genai-test-report.md
+            optimum-genai-test-report.html
+            optimum-genai-test-report.xlsx
