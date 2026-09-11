@@ -49,6 +49,12 @@ InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
 OV_XML_FILE_NAME = "openvino_model.xml"
 _MAX_UNCOMPRESSED_SIZE = 1e9
 
+# Model types for which the automatic model-size-based INT8 weight compression is skipped by default. For these
+# architectures the default data-free INT8 weight compression significantly degrades accuracy and there is no
+# data-free weight-compression recipe that recovers it, so the model is exported keeping the original (FP16)
+# precision unless the user explicitly requests a weight compression format (e.g. via `--weight-format`).
+_MODEL_TYPES_TO_SKIP_DEFAULT_COMPRESSION = {"hunyuan_v1_dense"}
+
 
 def is_torch_model(model: Union["PreTrainedModel", "ModelMixin"]):
     """
