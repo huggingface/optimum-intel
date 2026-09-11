@@ -45,6 +45,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyAudioPhi4MMInputGenerator,
     DummyDeepseekOCR2VisionInputGenerator,
     DummyDeepseekOCR2VisionTilesInputGenerator,
+    DummyUnlimitedOCRVisionTilesInputGenerator,
     DummyFluxTextInputGenerator,
     DummyFluxTransformerInputGenerator,
     DummyGemma4UnifiedVisionInputGenerator,
@@ -123,6 +124,8 @@ from optimum.exporters.openvino.model_patcher import (
     DeepseekOCR2LMPatcher,
     DeepseekOCR2VisionEmbeddingsPatcher,
     DeepseekPatcher,
+    UnlimitedOCRLMPatcher,
+    UnlimitedOCRVisionEmbeddingsPatcher,
     FalconModelPatcher,
     FluxTransformerModelPatcher,
     FunASRModelPatcher,
@@ -5089,6 +5092,97 @@ class DeepseekOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
             DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS_TILES,
         ):
             return DeepseekOCR2VisionEmbeddingsPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+
+@register_in_tasks_manager("unlimited-ocr", *["image-text-to-text"], library_name="transformers")
+class UnlimitedOCROpenVINOConfig(DeepseekOCR2OpenVINOConfig):
+    """OpenVINO export config for baidu/Unlimited-OCR (``model_type == "unlimited-ocr"``).
+
+    Reuses the DeepSeek-OCR2 VLM export contract (identical ``SUPPORTED_BEHAVIORS``, vision-embeddings
+    ``inputs``/``outputs``, and TEXT_EMBEDDINGS/LANGUAGE/VISION behavior split). Only the following
+    genuinely differs, so just those hooks are overridden instead of re-implementing the config:
+
+    * the language config is flat at the top level -- ``UnlimitedOCRConfig`` inherits
+      ``DeepseekV2Config`` -- rather than nested under ``config.text_config``;
+    * local crop tiles use image_size 640 (``DummyUnlimitedOCRVisionTilesInputGenerator``);
+    * the language and vision patchers handle the remote ``SlidingWindowLlamaAttention`` ring buffer
+      and the SAM+CLIP DeepEncoder graph;
+    * the remote code imports ``transformers.utils.is_torch_fx_available`` (removed in transformers
+      5.0), so it only loads on the 4.5x line (config declares transformers 4.46.3).
+    """
+
+    # baidu/Unlimited-OCR ships trust-remote-code modeling built on DeepSeek-V2/DeepSeek-OCR; its
+    # remote code imports ``transformers.utils.is_torch_fx_available`` which was removed in
+    # transformers 5.0, so it only loads on the 4.5x line (config declares transformers 4.46.3).
+    MIN_TRANSFORMERS_VERSION = "4.51"
+    MAX_TRANSFORMERS_VERSION = "4.57.99"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: DeepseekOCR2ConfigBehavior = DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            behavior=behavior,
+            preprocessors=preprocessors,
+            **kwargs,
+        )
+        # Only delta from the DeepSeek-OCR2 tiles path: Unlimited-OCR crops local tiles to 640.
+        if self._behavior == DeepseekOCR2ConfigBehavior.VISION_EMBEDDINGS_TILES and hasattr(config, "vision_config"):
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyUnlimitedOCRVisionTilesInputGenerator,)
+
+    def get_model_for_behavior(self, model, behavior: Union[str, DeepseekOCR2ConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, DeepseekOCR2ConfigBehavior):
+            behavior = DeepseekOCR2ConfigBehavior(behavior)
+        if behavior == DeepseekOCR2ConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            # Flat top-level config (UnlimitedOCRConfig inherits DeepseekV2Config; no text_config).
+            text_embedding.config = model.config
+            return text_embedding
+        return super().get_model_for_behavior(model, behavior)
+
+    def with_behavior(self, behavior: Union[str, DeepseekOCR2ConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, DeepseekOCR2ConfigBehavior):
+            behavior = DeepseekOCR2ConfigBehavior(behavior)
+
+        if behavior == DeepseekOCR2ConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "llama",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
+
+        if behavior == DeepseekOCR2ConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "llama",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=UnlimitedOCRLMPatcher,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
+
+        # VISION_EMBEDDINGS[_TILES] reuse the base implementation (returns ``self.__class__(...)``).
+        return super().with_behavior(behavior)
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior in self._VISION_EMBEDDINGS_BEHAVIORS:
+            return UnlimitedOCRVisionEmbeddingsPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
 
 

@@ -1041,6 +1041,11 @@ def _get_multi_modal_submodels_and_export_configs(
     if model_type == "deepseek_ocr2" and hasattr(model, "model") and hasattr(model.model, "view_separator"):
         model.config.view_separator = model.model.view_separator.tolist()
 
+    # baidu/Unlimited-OCR uses the same rebuild contract but spells the learnable separator
+    # ``view_seperator`` (and always keeps ``image_newline``); persist both for the OV runtime.
+    if model_type == "unlimited-ocr" and hasattr(model, "model") and hasattr(model.model, "view_seperator"):
+        model.config.view_separator = model.model.view_seperator.tolist()
+
     main_config_cls = TasksManager.get_exporter_config_constructor(
         model=model, task=task, exporter="openvino", library_name=library_name
     )

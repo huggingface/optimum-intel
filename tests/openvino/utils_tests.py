@@ -13,6 +13,7 @@
 #  limitations under the License.
 import json
 import os
+import shutil
 import tempfile
 import time
 import unittest
@@ -194,6 +195,163 @@ def _create_tiny_mistral3_model():
     return str(output_dir)
 
 
+def _create_tiny_unlimited_ocr_model():
+    """Build a tiny, architecture-faithful random baidu/Unlimited-OCR fixture.
+
+    ``unlimited-ocr`` is a trust-remote-code VLM (SAM ViT-B + CLIP-L deepencoder -> linear
+    projector -> DeepSeek-V2 MoE). The remote code only imports on the transformers 4.5x line, so
+    this helper returns a placeholder path when the current environment cannot build/load it (the
+    architecture is version-filtered out of the test matrices in that case). The construction mirrors
+    ``UnlimitedOCRForCausalLM`` identity: model_type/architectures/auto_map, the SAM+CLIP+projector
+    pipeline, the image-token merge contract and MoE topology, only reducing scale parameters.
+    """
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_unlimited_ocr"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+    cache_marker = "tiny_unlimited_ocr_v3"
+
+    def _cache_valid():
+        if not (config_file.exists() and weights_file.exists()):
+            return False
+        try:
+            c = json.loads(config_file.read_text())
+        except Exception:
+            return False
+        return c.get("_tiny_marker") == cache_marker and c.get("model_type") == "unlimited-ocr"
+
+    if _cache_valid():
+        return str(output_dir)
+
+    try:
+        from huggingface_hub import snapshot_download
+        from transformers import AutoConfig, AutoModel
+
+        hidden_size = 64
+        snap = snapshot_download(
+            "baidu/Unlimited-OCR",
+            allow_patterns=[
+                "*.py",
+                "config.json",
+                "processor_config.json",
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "special_tokens_map.json",
+            ],
+        )
+
+        def _patch(text, old, new):
+            if old not in text:
+                raise RuntimeError("tiny unlimited-ocr patch anchor not found")
+            return text.replace(old, new, 1)
+
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+        output_dir.mkdir(parents=True)
+
+        for fn in (
+            "modeling_unlimitedocr.py",
+            "modeling_deepseekv2.py",
+            "configuration_deepseek_v2.py",
+            "deepencoder.py",
+            "conversation.py",
+        ):
+            shutil.copy(os.path.join(snap, fn), output_dir / fn)
+
+        dep_path = output_dir / "deepencoder.py"
+        dep = dep_path.read_text()
+        dep = _patch(
+            dep,
+            "vit_model_cfg = adict(\n    num_layers=24,\n    hidden_size=1024,\n    num_heads = 16,\n    num_attention_heads=16,\n    ffn_hidden_size=4096,",
+            "vit_model_cfg = adict(\n    num_layers=2,\n    hidden_size=32,\n    num_heads = 2,\n    num_attention_heads=2,\n    ffn_hidden_size=64,",
+        )
+        dep = _patch(
+            dep,
+            "    return _build_sam(\n        encoder_embed_dim=768,\n        encoder_depth=12,\n        encoder_num_heads=12,\n        encoder_global_attn_indexes=[2, 5, 8, 11],\n        checkpoint=checkpoint,\n    )",
+            "    return _build_sam(\n        encoder_embed_dim=32,\n        encoder_depth=2,\n        encoder_num_heads=2,\n        encoder_global_attn_indexes=[0, 1],\n        checkpoint=checkpoint,\n    )",
+        )
+        dep = _patch(dep, "    prompt_embed_dim = 256\n", "    prompt_embed_dim = 32\n")
+        dep = _patch(
+            dep,
+            "        self.net_2 = nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1, bias=False)\n        self.net_3 = nn.Conv2d(512, 1024, kernel_size=3, stride=2, padding=1, bias=False)",
+            "        self.net_2 = nn.Conv2d(out_chans, out_chans, kernel_size=3, stride=2, padding=1, bias=False)\n        self.net_3 = nn.Conv2d(out_chans, out_chans, kernel_size=3, stride=2, padding=1, bias=False)",
+        )
+        dep_path.write_text(dep)
+
+        mp = output_dir / "modeling_unlimitedocr.py"
+        m = mp.read_text()
+        m = _patch(
+            m,
+            '        n_embed = 1280\n        self.projector =  MlpProjector(Dict(projector_type="linear", input_dim=2048, n_embed=n_embed))',
+            "        proj_cfg = getattr(config, 'projector_config', None) or {}\n"
+            "        if not isinstance(proj_cfg, dict):\n"
+            "            proj_cfg = dict(proj_cfg)\n"
+            "        n_embed = config.hidden_size\n"
+            "        input_dim = proj_cfg.get('input_dim', 2048)\n"
+            '        self.projector =  MlpProjector(Dict(projector_type="linear", input_dim=input_dim, n_embed=n_embed))',
+        )
+        m = _patch(
+            m,
+            "inputs_embeds[idx].masked_scatter_(images_seq_mask[idx].unsqueeze(-1).cuda(), images_in_this_batch)",
+            "inputs_embeds[idx].masked_scatter_(images_seq_mask[idx].unsqueeze(-1).to(inputs_embeds.device), images_in_this_batch)",
+        )
+        mp.write_text(m)
+
+        orig = json.loads((Path(snap) / "config.json").read_text())
+        tiny_fields = {
+            "hidden_size": hidden_size,
+            "intermediate_size": 128,
+            "moe_intermediate_size": 64,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 2,
+            "n_routed_experts": 8,
+            "n_shared_experts": 2,
+            "num_experts_per_tok": 6,
+            "torch_dtype": "float32",
+        }
+        cfg = dict(orig)
+        cfg.update(tiny_fields)
+        lang = dict(cfg.get("language_config", {}))
+        lang.update(tiny_fields)
+        cfg["language_config"] = lang
+        cfg["projector_config"] = {
+            "input_dim": 64,
+            "model_type": "mlp_projector",
+            "n_embed": hidden_size,
+            "projector_type": "linear",
+        }
+        cfg["_tiny_marker"] = cache_marker
+
+        def _write_config():
+            (output_dir / "config.json").write_text(json.dumps(cfg, indent=2))
+
+        _write_config()
+        for fn in (
+            "processor_config.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "special_tokens_map.json",
+        ):
+            src = os.path.join(snap, fn)
+            if os.path.exists(src):
+                shutil.copy(src, output_dir / fn)
+
+        torch.manual_seed(SEED)
+        config = AutoConfig.from_pretrained(output_dir, trust_remote_code=True)
+        config.torch_dtype = torch.float32
+        model = AutoModel.from_config(config, trust_remote_code=True).to(torch.float32).eval()
+        model.save_pretrained(output_dir, safe_serialization=True)
+        _write_config()
+        return str(output_dir)
+    except Exception as exc:  # pragma: no cover - environment/version dependent
+        # The remote code requires transformers 4.5x; on incompatible environments the architecture
+        # is filtered out of the test matrices, so return a placeholder that is simply never used.
+        import warnings
+
+        warnings.warn(f"[unlimited-ocr fixture] skipped tiny model build: {exc}")
+        return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -240,6 +398,10 @@ HUB_MODEL_NAMES = {
     "decilm": "optimum-intel-internal-testing/tiny-random-decilm",
     "deepseek": "optimum-intel-internal-testing/tiny-random-deepseek-v3",
     "deepseek_ocr2": "optimum-intel-internal-testing/tiny-random-deepseek-ocr-2",
+    "unlimited_ocr": _create_tiny_unlimited_ocr_model(),
+    # Alias under the registered (hyphenated) model_type for test_transformations, which keys
+    # architectures by model_type rather than the underscore test-name convention.
+    "unlimited-ocr": _create_tiny_unlimited_ocr_model(),
     "deit": "optimum-intel-internal-testing/tiny-random-DeiTModel",
     "convnext": "optimum-intel-internal-testing/tiny-random-convnext",
     "convnextv2": "optimum-intel-internal-testing/tiny-random-ConvNextV2Model",
@@ -600,6 +762,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 32,
         "vision_embeddings_tiles_model": 32,
     },
+    "unlimited_ocr": {
+        "lm_model": 80,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 24,
+        "vision_embeddings_tiles_model": 26,
+    },
     "qwen3_vl": {
         "lm_model": 30,
         "text_embeddings_model": 1,
@@ -783,6 +951,10 @@ REMOTE_CODE_MODELS = (
 
 if is_transformers_version("<", "5"):
     REMOTE_CODE_MODELS += ("afmoe", "ouro")
+    # "unlimited-ocr" (hyphen) is the registered model_type, used by test_transformations which keys
+    # architectures by model_type; "unlimited_ocr" (underscore) is the test-name convention used by
+    # the other suites. Both alias the same trust-remote-code fixture.
+    REMOTE_CODE_MODELS += ("afmoe", "ouro", "unlimited_ocr", "unlimited-ocr")
 
 
 ARCH_TO_MODEL_CLASS = {
@@ -967,6 +1139,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "qwen3_vl_eagle3_target": "qwen3_vl",
     "qwen3_vl_embedding": "qwen3_vl",
     "swin-window": "swin",
+    "unlimited_ocr": "unlimited-ocr",
     "vit-with-attentions": "vit",
     "vit-with-hidden-states": "vit",
     "wav2vec2-hf": "wav2vec2",

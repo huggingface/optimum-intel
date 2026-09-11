@@ -5039,6 +5039,178 @@ class DeepseekOCR2VisionEmbeddingsPatcher(ModelPatcher):
         self.patched_forward = patched_forward
 
 
+def unlimited_ocr_attn_forward(self, *args, **kwargs):
+    """Traceable attention for baidu/Unlimited-OCR (``unlimited-ocr``).
+
+    The remote ``SlidingWindowLlamaAttention`` runs a **full-causal prefill** and, during decode,
+    a *full-causal* attention over the growing KV cache until more than ``sliding_window_size``
+    (``W == 128``) tokens have been generated; only past that point does its data-dependent ring
+    buffer start dropping the oldest *decode* keys (prefill keys are always retained). That ring
+    buffer cannot be traced to a stateful OpenVINO model. Because the ring only engages after ``W``
+    decode steps and never evicts prefill, plain causal attention over the growing cache reproduces
+    the reference exactly for outputs up to ``W`` new tokens and is a faithful full-attention
+    superset (never evicting context) beyond that. This mirrors the remote ``_attn_forward`` helper:
+    it consumes the 4-D additive causal ``attention_mask`` supplied by the decoder path instead of
+    the ring buffer, so no model-specific window state is required.
+    """
+
+    def _arg(name, idx, default=None):
+        if name in kwargs:
+            return kwargs[name]
+        if len(args) > idx:
+            return args[idx]
+        return default
+
+    hidden_states = _arg("hidden_states", 0)
+    attention_mask = _arg("attention_mask", 1)
+    position_ids = _arg("position_ids", 2)
+    past_key_value = _arg("past_key_value", 3)
+    if past_key_value is None:
+        past_key_value = kwargs.get("past_key_values", None)
+
+    config = self.config
+    num_heads = config.num_attention_heads
+    num_kv_heads = config.num_key_value_heads
+    head_dim = self.head_dim
+    num_kv_groups = self.num_key_value_groups
+    bsz, q_len, _ = hidden_states.size()
+
+    query_states = self.q_proj(hidden_states).view(bsz, q_len, num_heads, head_dim).transpose(1, 2)
+    key_states = self.k_proj(hidden_states).view(bsz, q_len, num_kv_heads, head_dim).transpose(1, 2)
+    value_states = self.v_proj(hidden_states).view(bsz, q_len, num_kv_heads, head_dim).transpose(1, 2)
+
+    cos, sin = self.rotary_emb(value_states, position_ids)
+    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+    if past_key_value is not None:
+        key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx)
+
+    kv_len = key_states.shape[-2]
+    key = repeat_kv(key_states, num_kv_groups)
+    value = repeat_kv(value_states, num_kv_groups)
+
+    attn_weights = torch.matmul(query_states, key.transpose(2, 3)) / math.sqrt(head_dim)
+
+    if attention_mask is not None:
+        attn_weights = attn_weights + attention_mask[:, :, :, :kv_len]
+
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+    attn_output = torch.matmul(attn_weights, value)
+    attn_output = attn_output.transpose(1, 2).contiguous().reshape(bsz, q_len, -1)
+    attn_output = self.o_proj(attn_output)
+    return attn_output, None, past_key_value
+
+
+class UnlimitedOCRLMPatcher(OVDecoderModelPatcher):
+    """Language-model patcher for baidu/Unlimited-OCR (model_type ``unlimited-ocr``).
+
+    The exported ``UnlimitedOCRForCausalLM`` extends the (remote-code) ``DeepseekV2ForCausalLM``.
+    Its ``forward`` runs the SAM+CLIP vision branch and merges image features; for the
+    text-generation part we drive only the underlying ``DeepseekV2Model`` decoder
+    (``model.model``) from ``inputs_embeds`` and apply ``lm_head``, bypassing the vision code.
+    The DeepSeek-V2 MoE expert dispatch (``DeepseekV2MoE.moe_infer``) is replaced by the shared
+    ``deepseek_moe_infer`` implementation so the router traces to OpenVINO.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        def lm_forward(
+            self,
+            attention_mask,
+            position_ids=None,
+            past_key_values=None,
+            inputs_embeds=None,
+            input_ids=None,
+            use_cache=True,
+        ):
+            pkv = DynamicCache(past_key_values)
+            outputs = self.model(
+                input_ids=None,
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=pkv,
+                use_cache=use_cache,
+            )
+            hidden_states = outputs[0]
+            logits = self.lm_head(hidden_states)
+            return (logits, postprocess_past_key_values(outputs.past_key_values))
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(lm_forward, model)
+        # The remote-code ``SlidingWindowLlamaAttention`` implements a sliding window via a
+        # data-dependent ring buffer keyed on ``config._ring_window``; disable that path so the
+        # attention is driven purely from the passed inputs. The ring only starts evicting the
+        # oldest *decode* keys after more than ``sliding_window_size`` new tokens (prefill keys are
+        # never evicted), so the traceable full-causal ``unlimited_ocr_attn_forward`` applied in
+        # ``__enter__`` reproduces the reference exactly for the common case.
+        if hasattr(model.config, "_ring_window"):
+            model.config._ring_window = None
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+        for block in self._model.model.layers:
+            if hasattr(block.mlp, "moe_infer"):
+                block.mlp._org_moe_infer = block.mlp.moe_infer
+                block.mlp.moe_infer = types.MethodType(deepseek_moe_infer, block.mlp)
+            attn = block.self_attn
+            attn._org_forward = attn.forward
+            attn.forward = types.MethodType(unlimited_ocr_attn_forward, attn)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        for block in self._model.model.layers:
+            if hasattr(block.mlp, "_org_moe_infer"):
+                block.mlp.moe_infer = block.mlp._org_moe_infer
+            attn = block.self_attn
+            if hasattr(attn, "_org_forward"):
+                attn.forward = attn._org_forward
+
+
+class UnlimitedOCRVisionEmbeddingsPatcher(ModelPatcher):
+    """Vision-encoder patcher for baidu/Unlimited-OCR (model_type ``unlimited-ocr``).
+
+    Exposes the ``projector(cat(clip_tower(x, sam)[:, 1:], sam(x)))`` DeepEncoder pipeline (SAM
+    ViT-B fused into CLIP-L) as the traced forward, returning ``{"last_hidden_state": embeds}``.
+    Two streams share this graph at different static sizes: the 1024x1024 global view and the
+    640x640 crop tiles. The per-row ``image_newline`` / ``view_seperator`` assembly stays in the
+    OpenVINO runtime (rebuilt from the config), matching ``UnlimitedOCRModel.forward``.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        super().__init__(config, model, model_kwargs)
+        vision_root = model.model if hasattr(model, "model") else model
+        output_name = list(config.outputs.keys())[0]
+
+        def patched_forward(pixel_values):
+            sam_features = vision_root.sam_model(pixel_values)
+            clip_features = vision_root.vision_model(pixel_values, sam_features)
+            features = torch.cat(
+                (clip_features[:, 1:], sam_features.flatten(2).permute(0, 2, 1)), dim=-1
+            )
+            embeds = vision_root.projector(features)
+            return {output_name: embeds}
+
+        # The remote-code ``UnlimitedOCRForCausalLM.forward`` uses ``images``/``input_ids`` argument
+        # names, so the exporter's positional-argument mapping (which inspects ``orig_forward``)
+        # cannot line up the ``pixel_values`` dummy input. Point ``orig_forward`` at the vision
+        # ``patched_forward`` so its signature matches the exported input name.
+        self.orig_forward = patched_forward
+        self.patched_forward = patched_forward
+
+
 class Qwen3OmniMoeCode2WavPatcher(ModelPatcher):
     def __init__(
         self,

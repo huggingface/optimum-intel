@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
-from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
+from transformers import AutoConfig, AutoModel, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 from transformers.utils import is_torch_available
 
 from openvino import Core, Type, save_model
@@ -588,26 +588,46 @@ def main_export(
             # remote code models like phi3_v internvl2, minicpmv, internvl2, nanollava, maira2 should be loaded using AutoModelForCausalLM and not AutoModelForImageTextToText
             # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)
             task_model_loading = task
+            load_with_automodel = False
             if library_name == "transformers":
                 has_remote_code = hasattr(config, "auto_map")
                 if has_remote_code and trust_remote_code and task == "image-text-to-text":
                     task_model_loading = "text-generation"
+                    # Some remote-code VLMs (e.g. baidu/Unlimited-OCR) register their causal-LM
+                    # class only under the ``AutoModel`` auto_map key. text-generation loading uses
+                    # ``AutoModelForCausalLM``; load such models directly with ``AutoModel`` instead.
+                    auto_map = getattr(config, "auto_map", None) or {}
+                    if "AutoModelForCausalLM" not in auto_map and "AutoModel" in auto_map:
+                        load_with_automodel = True
 
-            model = TasksManager.get_model_from_task(
-                task_model_loading,
-                model_name_or_path,
-                subfolder=subfolder,
-                revision=revision,
-                cache_dir=cache_dir,
-                token=token,
-                local_files_only=local_files_only,
-                force_download=force_download,
-                trust_remote_code=trust_remote_code,
-                framework=framework,
-                device=device,
-                library_name=library_name,
-                **loading_kwargs,
-            )
+            if load_with_automodel:
+                model = AutoModel.from_pretrained(
+                    model_name_or_path,
+                    subfolder=subfolder,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    token=token,
+                    local_files_only=local_files_only,
+                    force_download=force_download,
+                    trust_remote_code=trust_remote_code,
+                    **loading_kwargs,
+                )
+            else:
+                model = TasksManager.get_model_from_task(
+                    task_model_loading,
+                    model_name_or_path,
+                    subfolder=subfolder,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    token=token,
+                    local_files_only=local_files_only,
+                    force_download=force_download,
+                    trust_remote_code=trust_remote_code,
+                    framework=framework,
+                    device=device,
+                    library_name=library_name,
+                    **loading_kwargs,
+                )
 
         if getattr(model, "dtype", None) in [torch.float16, torch.bfloat16]:
             patch_16bit = True

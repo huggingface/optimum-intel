@@ -2345,6 +2345,15 @@ class DummyDeepseekOCR2VisionTilesInputGenerator(DummyVisionInputGenerator):
         )
 
 
+class DummyUnlimitedOCRVisionTilesInputGenerator(DummyVisionInputGenerator):
+    # baidu/Unlimited-OCR crops local tiles to image_size=640 (vs the 1024 global view handled by the
+    # reused DummyDeepseekOCR2VisionInputGenerator). Only the static tile resolution differs.
+    def __init__(self, task, normalized_config, batch_size=1, num_channels=3, **kwargs):
+        super().__init__(
+            task, normalized_config, batch_size=batch_size, num_channels=num_channels, width=640, height=640
+        )
+
+
 class DummyZImageTransformerVisionInputGenerator(DummyUnetVisionInputGenerator):
     """Generates dummy latent inputs for ZImageTransformer2DModel export.
 
