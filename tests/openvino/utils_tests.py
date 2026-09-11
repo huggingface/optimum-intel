@@ -324,6 +324,7 @@ HUB_MODEL_NAMES = {
     "mobilenet_v1": "optimum-intel-internal-testing/mobilenet_v1_0.75_192",
     "mobilenet_v2": "optimum-intel-internal-testing/tiny-random-MobileNetV2Model",
     "mobilevit": "optimum-intel-internal-testing/tiny-random-mobilevit",
+    "modernbert": "hf-tiny-v2/tiny-random-ModernBertModel",
     "mpt": "optimum-intel-internal-testing/tiny-random-MptForCausalLM",
     "mpnet": "optimum-intel-internal-testing/tiny-random-MPNetModel",
     "muse_glimmer": "optimum-intel-internal-testing/tiny-random-muse-glimmer",
