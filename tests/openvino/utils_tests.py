@@ -736,9 +736,9 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     },
     "ouro": {"model": 34},
     "qwen3_asr": {
-        "encoder": 36,
-        "decoder": 30,
-        "decoder_with_past": 30,
+        "audio_encoder": 36,
+        "text_embeddings": 2,
+        "language_model": 30,
     },
     "fun_asr": {
         "encoder": 46,

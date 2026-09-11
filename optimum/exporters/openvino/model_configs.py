@@ -192,6 +192,7 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3_5MTPModelPatcher,
     Qwen3_5MTPModule,
     Qwen3_5VisionEmbMergerPatcher,
+    Qwen3ASRLanguageModelPatcher,
     Qwen3ASRModelPatcher,
     Qwen3MoeModelPatcher,
     Qwen3NextModelPatcher,
@@ -254,7 +255,6 @@ from optimum.utils.normalized_config import (
     NormalizedTextConfig,
     NormalizedVisionConfig,
 )
-
 
 COMMON_TEXT_TASKS = [
     "feature-extraction",
@@ -587,6 +587,20 @@ class Qwen3OmniMoeTextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
     # Qwen3-Omni-MoE support requires Transformers 5.0+ (the fused-experts / router API);
     # override the Qwen3VL parent's 4.57.0 floor so 4.x fails fast with a clear message.
     MIN_TRANSFORMERS_VERSION = "5.0"
+
+
+@register_in_tasks_manager(
+    "qwen3_asr_text",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class Qwen3ASRTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLLMInputGenerator, Qwen3ASRDummySeq2SeqPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Qwen3ASRDummySeq2SeqPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    MIN_TRANSFORMERS_VERSION = "4.57.6"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager(
@@ -4557,15 +4571,7 @@ class WhisperOpenVINOConfig(AudioToTextOpenVINOConfig):
         return common_outputs
 
 
-@register_in_tasks_manager(
-    "qwen3_asr",
-    *[
-        "automatic-speech-recognition",
-        "automatic-speech-recognition-with-past",
-    ],
-    library_name="transformers",
-)
-class Qwen3ASROpenVINOConfig(AudioToTextOpenVINOConfig):
+class Qwen3ASREncoderDecoderOpenVINOConfig(AudioToTextOpenVINOConfig):
     """OpenVINO export config for Qwen3-ASR model."""
 
     DUMMY_INPUT_GENERATOR_CLASSES = (
@@ -4643,6 +4649,134 @@ class Qwen3ASROpenVINOConfig(AudioToTextOpenVINOConfig):
         for i in range(self._normalized_config.decoder_num_layers):
             inputs_or_outputs[f"{name}.{i}.decoder.key"] = {0: "batch_size", 2: decoder_sequence_name}
             inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
+
+
+class Qwen3ASRConfigBehavior(str, enum.Enum):
+    AUDIO_ENCODER = "audio_encoder"
+    TEXT_EMBEDDINGS = "text_embeddings"
+    LANGUAGE = "language"
+
+
+@register_in_tasks_manager(
+    "qwen3_asr",
+    *[
+        "automatic-speech-recognition",
+        "automatic-speech-recognition-with-past",
+    ],
+    library_name="transformers",
+)
+class Qwen3ASROpenVINOConfig(BaseVLMOpenVINOConfig):
+    """OpenVINO export config for Qwen3-ASR model."""
+
+    SUPPORTED_BEHAVIORS = [behavior.value for behavior in Qwen3ASRConfigBehavior]
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3OmniMoeAudioInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig
+    MIN_TRANSFORMERS_VERSION = "4.57.6"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
+
+    @staticmethod
+    def prepare_generation_config_for_export(generation_config):
+        generation_config = copy.deepcopy(generation_config)
+        # https://huggingface.co/Qwen/Qwen3-ASR-0.6B/discussions/13
+        # original generation config has do_sample=False and temperature=1e-6, which is invalid. save_pretrained fails:
+        # ValueError: GenerationConfig is invalid:
+        # - `temperature`: `do_sample` is not set to `True`. However, `temperature` is set to `1e-06` --
+        # this flag is only used in sample-based generation modes. You should set `do_sample=True` or
+        # unset `temperature`.
+        if not generation_config.do_sample:
+            generation_config.temperature = None
+        return generation_config
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "automatic-speech-recognition",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: Qwen3ASRConfigBehavior = Qwen3ASRConfigBehavior.AUDIO_ENCODER,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        thinker_config = getattr(config, "thinker_config", config)
+        audio_config = getattr(thinker_config, "audio_config", None)
+        if behavior == Qwen3ASRConfigBehavior.AUDIO_ENCODER and audio_config is not None:
+            self._config = audio_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(audio_config)
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, Qwen3ASRConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Qwen3ASRConfigBehavior):
+            behavior = Qwen3ASRConfigBehavior(behavior)
+
+        if behavior == Qwen3ASRConfigBehavior.LANGUAGE:
+            return model
+        if behavior == Qwen3ASRConfigBehavior.TEXT_EMBEDDINGS:
+            text_embeddings = model.thinker.model.get_input_embeddings()
+            text_embeddings.config = model.thinker.config.text_config
+            return text_embeddings
+        if behavior == Qwen3ASRConfigBehavior.AUDIO_ENCODER:
+            audio_encoder = model.thinker.audio_tower
+            audio_encoder.config = model.thinker.config.audio_config
+            return audio_encoder
+        raise ValueError(f"Unsupported Qwen3-ASR behavior: {behavior}")
+
+    def with_behavior(self, behavior: Union[str, Qwen3ASRConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Qwen3ASRConfigBehavior):
+            behavior = Qwen3ASRConfigBehavior(behavior)
+
+        thinker_config = getattr(self._orig_config, "thinker_config", self._orig_config)
+        if behavior == Qwen3ASRConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "qwen3_asr_text", thinker_config.text_config, self.int_dtype, self.float_dtype
+            )
+        if behavior == Qwen3ASRConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "qwen3_asr_text",
+                thinker_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Qwen3ASRLanguageModelPatcher,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+            )
+        return self.__class__(
+            self._orig_config,
+            task=self.task,
+            int_dtype=self.int_dtype,
+            float_dtype=self.float_dtype,
+            behavior=behavior,
+            preprocessors=self._preprocessors,
+        )
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        if self._behavior == Qwen3ASRConfigBehavior.AUDIO_ENCODER:
+            return Qwen3OmniMoeAudioEncoderPatcher(self, model, model_kwargs or {})
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Qwen3ASRConfigBehavior.AUDIO_ENCODER:
+            return {
+                "padded_feature": {0: "num_chunks", 2: "audio_sequence_length"},
+                "padded_mask_after_cnn": {0: "num_chunks", 1: "aftercnn_sequence_length"},
+                "aftercnn_lens": {0: "batch_size"},
+                "cu_seqlens": {0: "num_windows + 1"},
+            }
+        raise ValueError(f"Inputs are defined by the config for Qwen3-ASR behavior {self._behavior}")
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Qwen3ASRConfigBehavior.AUDIO_ENCODER:
+            return {"audio_features": {0: "num_chunks", 1: "aftercnn_sequence_length"}}
+        raise ValueError(f"Outputs are defined by the config for Qwen3-ASR behavior {self._behavior}")
 
 
 @register_in_tasks_manager(

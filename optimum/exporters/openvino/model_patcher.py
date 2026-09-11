@@ -69,7 +69,6 @@ from optimum.intel.utils.import_utils import (
     is_transformers_version,
 )
 
-
 if is_transformers_version(">=", "4.53"):
     from transformers.masking_utils import (
         ALL_MASK_ATTENTION_FUNCTIONS,
@@ -10732,6 +10731,51 @@ class Qwen3_5MoeMTPModelPatcher(Qwen3_5MTPModelPatcher):
             if isinstance(decoder_layer.mlp, Qwen3_5MoeSparseMoeBlock):
                 sparse_moe_block = decoder_layer.mlp
                 sparse_moe_block.forward = sparse_moe_block._orig_forward
+
+
+class Qwen3ASRLanguageModelPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        def language_forward(
+            self,
+            attention_mask,
+            position_ids,
+            past_key_values,
+            inputs_embeds,
+            use_cache=True,
+            cache_position=None,
+        ):
+            if isinstance(past_key_values, (list, tuple)):
+                cache = DynamicCache()
+                for layer_idx, layer_past in enumerate(past_key_values):
+                    cache.update(layer_past[0], layer_past[1], layer_idx)
+                past_key_values = cache
+            elif past_key_values is None:
+                past_key_values = DynamicCache()
+
+            outputs = self.thinker.model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                cache_position=cache_position,
+            )
+            logits = self.thinker.lm_head(outputs[0])
+            return logits, postprocess_past_key_values(outputs.past_key_values)
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(language_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        del self._model.__orig_forward
 
 
 class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):

@@ -82,7 +82,6 @@ from .stateful import (
 )
 from .utils_annotations import add_hidden_states_rt_info
 
-
 logger = logging.getLogger(__name__)
 
 if is_torch_available():
@@ -667,15 +666,6 @@ def export_from_model(
 
     is_encoder_decoder = getattr(getattr(model, "config", {}), "is_encoder_decoder", False)
 
-    # Qwen3-ASR is structurally encoder-decoder (audio_tower + text LM) but config says is_encoder_decoder=False
-    if model_type == "qwen3_asr" and not is_encoder_decoder:
-        is_encoder_decoder = True
-        model.config.is_encoder_decoder = True
-        if not hasattr(model, "get_encoder"):
-            model.get_encoder = lambda: model.thinker.audio_tower
-        # Set decoder_start_token_id so the saved config enables encoder-decoder generation
-        if model.config.decoder_start_token_id is None:
-            model.config.decoder_start_token_id = 0
     stateful = stateful and (
         ensure_export_task_support_stateful(task) or ensure_model_type_support_stateful(model_type)
     )
@@ -789,6 +779,8 @@ def export_from_model(
         save_config(model.config, output)
         generation_config = getattr(model, "generation_config", None)
         if generation_config is not None:
+            if hasattr(export_config, "prepare_generation_config_for_export"):
+                generation_config = export_config.prepare_generation_config_for_export(generation_config)
             try:
                 generation_config.save_pretrained(output)
             except Exception as exception:

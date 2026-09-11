@@ -35,13 +35,13 @@ from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreT
 
 from optimum.intel.utils.import_utils import is_torch_version
 
-
 logger = logging.getLogger(__name__)
 
 OV_XML_FILE_NAME = "openvino_model.xml"
 OV_ENCODER_NAME = "openvino_encoder_model.xml"
 OV_DECODER_NAME = "openvino_decoder_model.xml"
 OV_DECODER_WITH_PAST_NAME = "openvino_decoder_with_past_model.xml"
+OV_AUDIO_ENCODER_MODEL_NAME = "openvino_audio_encoder_model.xml"
 OV_TEXT_EMBEDDINGS_MODEL_NAME = "openvino_text_embeddings_model.xml"
 OV_LANGUAGE_MODEL_NAME = "openvino_language_model.xml"
 OV_VISION_EMBEDDINGS_MODEL_NAME = "openvino_vision_embeddings_model.xml"
