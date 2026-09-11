@@ -470,14 +470,26 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             preprocessors=preprocessors,
         )
         archs = getattr(config, "architectures", None)
-        self.dflash = isinstance(archs, list) and len(archs) > 0 and archs[0] == "DFlashDraftModel"
+        self.dflash = False
+        if isinstance(archs, list) and len(archs) > 0:
+            if "dflash" in archs[0].lower():
+                self.dflash = True
+                self.candidate_position_offset = 1
+            elif archs[0] == "Qwen3DSparkModel":
+                if getattr(config, "markov_rank", 0) != 0:
+                    raise ValueError(
+                        "Exporting Qwen3DSparkModel is only supported for DFlash mode (markov_rank == 0). "
+                        "DSpark export is not supported yet (got markov_rank != 0)."
+                    )
+                self.dflash = True
+                self.candidate_position_offset = 0
         if self.dflash:
             model_type = getattr(config, "model_type", "")
             if model_type != "qwen3":
                 raise ValueError(f"DFlash export supports only Qwen3-based draft models, got model_type={model_type}.")
-            dflash_config = getattr(config, "dflash_config", {}) or {}
+            dflash_config = getattr(config, "dflash_config", None) or config.to_dict()
             if not dflash_config.get("target_layer_ids", []):
-                raise ValueError("DFlash export requires non-empty dflash_config['target_layer_ids'].")
+                raise ValueError("DFlash export requires non-empty target_layer_ids in dflash_config or config.")
             # DFlash draft checkpoints still advertise model_type="qwen3"; the
             # architecture and dflash_config fields identify the draft variant.
             self.DUMMY_INPUT_GENERATOR_CLASSES = (
