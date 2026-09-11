@@ -1044,6 +1044,12 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
 
         return None
 
+    def get_experts_implementation(self):
+        return {}
+
+    def set_experts_implementation(self, experts_implementation):
+        return
+
 
 class OVModelPart(OVModelHostMixin):
     def __init__(
