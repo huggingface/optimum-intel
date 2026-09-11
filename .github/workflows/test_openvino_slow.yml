@@ -60,7 +60,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip uv
-          uv pip install .[tests] librosa diffusers
+          uv pip install .[tests,diffusers] librosa
 
       - name: Restore HF models cache
         id: hf-cache-restore
@@ -74,6 +74,11 @@ jobs:
         name: Install specific dependencies and versions required for older transformers
         run: |
           uv pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.32.* transformers_stream_generator
+
+      - if: ${{ matrix.transformers-version == '4.57.6' }}
+        name: Pin diffusers (diffusers>=0.40 requires huggingface-hub>=1.23, incompatible with transformers==4.57.6's huggingface-hub<1.0)
+        run: |
+          uv pip install "diffusers<0.40"
 
       - if: ${{ matrix.transformers-version == 'main' }}
         name: Install transformers from repository

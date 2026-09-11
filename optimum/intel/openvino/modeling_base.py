@@ -617,6 +617,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             _maybe_register_remote_code_model(model_id, revision=revision, token=token, cache_dir=cache_dir)
 
         _export = export
+        model_dir = model_id
         try:
             if local_files_only:
                 object_id = model_id.replace("/", "--")
@@ -625,8 +626,6 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
                 with open(refs_file) as f:
                     revision = f.read()
                 model_dir = os.path.join(cached_model_dir, "snapshots", revision)
-            else:
-                model_dir = model_id
 
             ov_files = _find_files_matching_pattern(
                 model_dir,
@@ -654,7 +653,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             )
 
         return super().from_pretrained(
-            model_id,
+            model_dir,
             export=_export,
             force_download=force_download,
             token=token,
