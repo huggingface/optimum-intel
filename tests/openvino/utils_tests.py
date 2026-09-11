@@ -194,6 +194,43 @@ def _create_tiny_mistral3_model():
     return str(output_dir)
 
 
+def _create_tiny_qwen3_guard_model():
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_qwen3_guard"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+
+    if config_file.exists() and weights_file.exists():
+        return str(output_dir)
+
+    from transformers import AutoConfig, AutoModel, AutoTokenizer
+
+    model_id = "Qwen/Qwen3Guard-Stream-0.6B"
+
+    torch.manual_seed(SEED)
+
+    config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+    config.num_hidden_layers = 2
+    config.hidden_size = 32
+    config.intermediate_size = 64
+    config.num_attention_heads = 4
+    config.num_key_value_heads = 2
+    config.head_dim = 8
+    config.guard_inner_size = 16
+    config.max_position_embeddings = 512
+    config.dtype = config.torch_dtype = "float32"
+
+    model = AutoModel.from_config(config, trust_remote_code=True).float().eval()
+    model.__class__.register_for_auto_class("AutoModel")
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    model.save_pretrained(output_dir, safe_serialization=True)
+    tokenizer.save_pretrained(output_dir)
+
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -365,6 +402,7 @@ HUB_MODEL_NAMES = {
     "qwen3_5_moe_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-dflash",
     "qwen3_asr": "optimum-intel-internal-testing/tiny-random-qwen3-asr",
     "qwen3_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
+    "qwen3_guard": _create_tiny_qwen3_guard_model(),
     "fun_asr": "optimum-intel-internal-testing/tiny-random-fun-asr",
     "rembert": "optimum-intel-internal-testing/tiny-random-rembert",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",
@@ -708,6 +746,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "hunyuan_v1_dense": {"model": 32},
     "qwen3_eagle3": {"model": 20},
     "qwen3_dflash": {"model": 30},
+    "qwen3_guard": {"model": 42},
     "qwen3_vl_eagle3": {"model": 18},
     "qwen3_next": {"model": 100},
     "gemma3n": {
@@ -771,6 +810,7 @@ REMOTE_CODE_MODELS = (
     "minicpm3",
     "deepseek",
     "qwen3_dflash",
+    "qwen3_guard",
     "qwen3_5_dflash",
     "qwen3_5_moe_dflash",
     "gemma4_dflash",
@@ -961,6 +1001,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "qwen3_5_mtp": "qwen3_5",
     "qwen3_5_moe_mtp": "qwen3_5_moe",
     "qwen3_dflash": "qwen3",
+    "qwen3_guard": "qwen3",
     "qwen3_eagle3": "llama",
     "qwen3_eagle3_target": "qwen3",
     "qwen3_vl_eagle3": "llama",

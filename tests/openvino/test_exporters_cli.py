@@ -128,6 +128,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "qwen3_vl_embedding"),
         ("text-generation-with-past", "qwen3_eagle3"),
         ("text-generation-with-past", "qwen3_dflash"),
+        ("feature-extraction", "qwen3_guard"),
+        ("feature-extraction-with-past", "qwen3_guard"),
         ("text-generation-with-past", "zamba2"),
         ("text-generation-with-past", "exaone4"),
         ("text-generation-with-past", "ouro"),
@@ -202,6 +204,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "ouro": 2,
         "qwen3_vl_eagle3": 0,
         "qwen3_vl_embedding": 2,
+        "qwen3_guard": 2,
         "muse_glimmer": 2,
     }
 

@@ -13,7 +13,7 @@
 #  limitations under the License.
 
 import logging as log
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 from transformers import PretrainedConfig
@@ -200,8 +200,12 @@ def ensure_export_task_support_stateful(task: str):
     return is_stateful
 
 
-def ensure_model_type_support_stateful(model_type: str):
-    return model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
+def ensure_model_type_support_stateful(model_type: str, config: Optional[PretrainedConfig] = None):
+    if model_type in MULTI_MODAL_TEXT_GENERATION_MODELS:
+        return True
+    # Qwen3Guard-Stream keeps model_type="qwen3" but replaces the LM head with classification heads
+    archs = getattr(config, "architectures", None)
+    return isinstance(archs, list) and len(archs) > 0 and archs[0] == "Qwen3ForGuardModel"
 
 
 def remove_parameters_by_names(model: ov.Model, names: list):
