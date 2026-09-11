@@ -114,6 +114,7 @@ class ExportModelTest(unittest.TestCase):
         "qwen3_next": OVModelForCausalLM,
         "videochat_flash_qwen": OVModelForVisualCausalLM,
         "lfm2_moe": OVModelForCausalLM,
+        "lfm2_vl": OVModelForVisualCausalLM,
         "qwen3_asr": OVModelForSpeechSeq2Seq,
         "fun_asr": OVModelForSpeechSeq2Seq,
         "mamba": OVModelForCausalLM,
