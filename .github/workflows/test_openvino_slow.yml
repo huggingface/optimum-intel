@@ -60,7 +60,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip uv
-          uv pip install .[tests] librosa diffusers
+          uv pip install .[tests,diffusers] librosa
 
       - name: Restore HF models cache
         id: hf-cache-restore

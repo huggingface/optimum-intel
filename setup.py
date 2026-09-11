@@ -77,7 +77,7 @@ QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 EXTRAS_REQUIRE = {
     "nncf": ["nncf>=2.19.0"],
     "openvino": ["nncf>=2.19.0", "openvino>=2026.0", "openvino-tokenizers>=2026.0"],
-    "diffusers": ["diffusers"],
+    "diffusers": ["diffusers>=0.32,<0.40"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
 }
