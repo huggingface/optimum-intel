@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import sys
 import unittest
 from pathlib import Path
 
@@ -493,3 +494,45 @@ class CustomExportModelTest(unittest.TestCase):
         ov_outputs = ov_model(**tokens)
         self.assertTrue(torch.allclose(ov_outputs.token_embeddings, model_outputs.token_embeddings, atol=1e-4))
         self.assertTrue(torch.allclose(ov_outputs.sentence_embedding, model_outputs.sentence_embedding, atol=1e-4))
+
+
+class DraftModelAutoMapImportScanTest(unittest.TestCase):
+    """Guards the import surface of the module reached through ``config.auto_map``.
+
+    Exporting an Eagle3 / DFlash draft model points ``config.auto_map`` at
+    ``optimum/exporters/openvino/model_patcher.py``. transformers treats that as a remote-code
+    modeling file and runs ``check_imports`` over it, so every top-level package imported anywhere
+    in it becomes a requirement of the export -- including imports belonging to unrelated model
+    families. ``get_imports`` skips ``try`` bodies, so optional dependencies must be imported
+    inside one.
+
+    Standard-library imports are filtered out rather than listed, so adding one does not fail this
+    test. Third-party imports are allowlisted rather than denylisted, so a new optional dependency
+    fails here instead of quietly becoming a requirement of every draft-model export.
+    """
+
+    # Third-party packages `pip install "optimum-intel[openvino]"` already guarantees, plus torch.
+    ALLOWED_THIRD_PARTY = {
+        "huggingface_hub",
+        "openvino",
+        "optimum",
+        "safetensors",
+        "torch",
+        "transformers",
+    }
+
+    def test_model_patcher_scan_requires_only_guaranteed_dependencies(self):
+        from transformers.dynamic_module_utils import get_imports
+
+        from optimum.exporters.openvino import model_patcher
+
+        required = set(get_imports(model_patcher.__file__))
+        third_party = {name for name in required if name not in sys.stdlib_module_names}
+        unexpected = third_party - self.ALLOWED_THIRD_PARTY
+        self.assertEqual(
+            unexpected,
+            set(),
+            f"{sorted(unexpected)} would become a requirement of every Eagle3/DFlash draft-model "
+            "export. If it is a guaranteed dependency, add it to ALLOWED_THIRD_PARTY; if it is "
+            "optional, import it inside a `try` block so transformers' check_imports scan skips it.",
+        )
