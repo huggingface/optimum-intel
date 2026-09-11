@@ -22,6 +22,7 @@ from functools import reduce
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
+from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
@@ -660,6 +661,18 @@ def main_export(
             **kwargs_shapes,
         )
 
+        maybe_copy_sentence_transformers_pooling(
+            model_name_or_path=model_name_or_path,
+            output=output,
+            library_name=library_name,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+            local_files_only=local_files_only,
+            force_download=force_download,
+        )
+
         if convert_tokenizer:
             maybe_convert_tokenizers(library_name, output, model, preprocessors, task=task)
 
@@ -867,6 +880,72 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
                     export_tokenizer(tokenizer, output / tokenizer_name, task=task)
     else:
         logger.warning("Tokenizer won't be converted.")
+
+
+def maybe_copy_sentence_transformers_pooling(
+    model_name_or_path: str,
+    output: Union[str, Path],
+    library_name: Optional[str],
+    subfolder: str = "",
+    revision: str = "main",
+    cache_dir: str = HUGGINGFACE_HUB_CACHE,
+    token: Optional[Union[bool, str]] = None,
+    local_files_only: bool = False,
+    force_download: bool = False,
+):
+    """Copy sentence-transformers 1_Pooling metadata to the exported model directory if available."""
+    if library_name != "sentence_transformers":
+        return
+
+    output = Path(output)
+    source_rel = Path(subfolder) / "1_Pooling" if subfolder else Path("1_Pooling")
+    source_pooling_dir: Optional[Path] = None
+
+    # Local source model case.
+    model_path = Path(model_name_or_path)
+    if model_path.exists():
+        candidate = model_path / source_rel
+        if candidate.is_dir():
+            source_pooling_dir = candidate
+    else:
+        # Hugging Face Hub source model case.
+        try:
+            snapshot_path = snapshot_download(
+                repo_id=model_name_or_path,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
+                local_files_only=local_files_only,
+                force_download=force_download,
+                allow_patterns=[str(source_rel / "*")],
+            )
+            candidate = Path(snapshot_path) / source_rel
+            if candidate.is_dir():
+                source_pooling_dir = candidate
+        except Exception as exception:
+            logger.warning(
+                "Could not fetch sentence-transformers pooling metadata from %s. "
+                "Export will continue without 1_Pooling. Exception: %s",
+                model_name_or_path,
+                exception,
+            )
+            return
+
+    if source_pooling_dir is None:
+        logger.info("No sentence-transformers pooling metadata found at %s; skipping copy.", source_rel)
+        return
+
+    destination_pooling_dir = output / "1_Pooling"
+    try:
+        shutil.copytree(source_pooling_dir, destination_pooling_dir, dirs_exist_ok=True)
+        logger.info("Copied sentence-transformers pooling metadata to %s", destination_pooling_dir)
+    except Exception as exception:
+        logger.warning(
+            "Failed to copy sentence-transformers pooling metadata from %s to %s. Exception: %s",
+            source_pooling_dir,
+            destination_pooling_dir,
+            exception,
+        )
 
 
 def _apply_model_size_based_quantization(submodel_paths: List[str], ov_config: "OVConfig", output: Union[str, Path]):
