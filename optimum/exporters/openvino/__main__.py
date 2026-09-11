@@ -500,6 +500,14 @@ def main_export(
             elif config.torch_dtype == torch.bfloat16:
                 dtype = torch.bfloat16
 
+        # Loading granitemoehybrid in bf16 crashes OpenVINO's constant-folding
+        # (`ov::op::v0::Convert::evaluate` inside `MOCTransformations`) during
+        # conversion, segfaulting for weight-compressed (int8/int4) exports. fp16
+        # produces an equivalent graph without the crash and keeps at least the
+        # same mantissa precision as bf16 for the model weights.
+        if dtype == torch.bfloat16 and getattr(config, "model_type", "") == "granitemoehybrid":
+            dtype = torch.float16
+
         if dtype is not None:
             if dtype in [torch.float16, torch.bfloat16]:
                 patch_16bit = True

@@ -158,6 +158,28 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "MulAddToFMA",
         ],
     },
+    "granitemoehybrid": {
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "TransposeMatMul",
+            "CommonFusions",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "TSShapeOfForward",
+            "CommonDecompositions",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
+            "ConvertBroadcast3",
+            "ConvertTiledMoeBlockToGatherMatmuls",
+            "ConvertMatMulToFC",
+            "ConvertToSwishCPU",
+        ],
+    },
     "qwen3_5_moe": {
         "convert": [
             "SDPAFusion",

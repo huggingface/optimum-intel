@@ -795,6 +795,7 @@ ARCH_TO_MODEL_CLASS = {
     "lfm2": "OVModelForCausalLM",
     "lfm2_moe": "OVModelForCausalLM",
     "qwen3_moe": "OVModelForCausalLM",
+    "granitemoehybrid": "OVModelForCausalLM",
     "llama4": "OVModelForCausalLM",
     "llava": "OVModelForVisualCausalLM",
     "qwen3_5_moe": "OVModelForVisualCausalLM",
