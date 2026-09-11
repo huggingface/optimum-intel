@@ -463,6 +463,50 @@ def patch_cos_sin_cached_fp32(model):
                 )
 
 
+def _rotary_emb_cos_sin_cached_forward(self, x, position_ids):
+    # Gather precomputed cos/sin instead of recomputing ``cos(position_ids * inv_freq)`` in the
+    # graph. See :func:`patch_rotary_emb_cos_sin_cached` for the numerical motivation.
+    cos = self._ov_cos_cached[position_ids]
+    sin = self._ov_sin_cached[position_ids]
+    return cos.to(x.dtype), sin.to(x.dtype)
+
+
+# transformers >= 5 rotary embeddings recompute ``freqs = inv_freq @ position_ids`` inside the
+# traced graph. When the exported model is compressed to fp16, the ``inv_freq`` constant is stored
+# in fp16, and because it is multiplied by (large) absolute position ids the resulting phase error
+# grows with sequence length (e.g. for YaRN-scaled DeepSeek-V3 the cos/sin error reaches ~0.5 at
+# position 7000), corrupting long-context generation. Precomputing the cos/sin table over all
+# positions keeps the only fp16-compressed constant bounded to [-1, 1] * attention_scaling, so the
+# rounding error stays position-independent (~2e-4). This mirrors the older cached-rotary handling
+# in ``patch_cos_sin_cached_fp32`` for the transformers < 5 modeling.
+def patch_rotary_emb_cos_sin_cached(rotary_emb, max_positions):
+    if rotary_emb is None or getattr(rotary_emb, "_ov_orig_forward", None) is not None:
+        return
+    if not hasattr(rotary_emb, "inv_freq"):
+        return
+    device = rotary_emb.inv_freq.device
+    position_ids = torch.arange(max_positions, device=device).unsqueeze(0)
+    # ``x`` is only used by the original forward for its dtype/device; a float32 dummy yields a
+    # float32 cos/sin table.
+    dummy = torch.zeros(1, 1, 1, dtype=torch.float32, device=device)
+    with torch.no_grad():
+        cos, sin = rotary_emb.forward(dummy, position_ids)
+    rotary_emb.register_buffer("_ov_cos_cached", cos[0].float(), persistent=False)
+    rotary_emb.register_buffer("_ov_sin_cached", sin[0].float(), persistent=False)
+    rotary_emb._ov_orig_forward = rotary_emb.forward
+    rotary_emb.forward = types.MethodType(_rotary_emb_cos_sin_cached_forward, rotary_emb)
+
+
+def unpatch_rotary_emb_cos_sin_cached(rotary_emb):
+    if rotary_emb is None or getattr(rotary_emb, "_ov_orig_forward", None) is None:
+        return
+    rotary_emb.forward = rotary_emb._ov_orig_forward
+    del rotary_emb._ov_orig_forward
+    for attr in ("_ov_cos_cached", "_ov_sin_cached"):
+        if hasattr(rotary_emb, attr):
+            delattr(rotary_emb, attr)
+
+
 # Adapted from https://github.com/huggingface/transformers/blob/3c307e380ad07ca16903a39e09a47d532cb782d9/src/transformers/models/phimoe/modular_phimoe.py#L57
 def _longrope_forward(self, x, position_ids=None, layer_type=None, **kwargs):
     # _compute_longrope_parameters https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/modeling_rope_utils.py#L391
@@ -3924,6 +3968,45 @@ class DeepseekPatcher(OVDecoderModelPatcher):
             block.self_attn.forward = block.self_attn._orig_forward
             if hasattr(block.mlp, "_orig_moe_infer"):
                 block.mlp.moe_infer = block.mlp._orig_moe_infer
+
+
+class DeepseekV3Patcher(DeepseekPatcher):
+    """Patcher for ``deepseek_v3``.
+
+    transformers < 5 keeps the legacy modeling with a custom rotary attention forward and a
+    data-dependent ``moe_infer`` routine, handled by :class:`DeepseekPatcher`. transformers >= 5
+    reimplements ``deepseek_v3`` with a standard MLA attention forward (traceable as-is) and the
+    shared grouped-expert MoE (``DeepseekV3NaiveMoe``), so we only swap the expert kernel for the
+    OpenVINO-friendly batched-matmul implementation (:func:`lfm2_moe_experts_forward`, shared with
+    Qwen3-MoE / LFM2-MoE), which OpenVINO fuses via ``ConvertTiledMoeBlockToGatherMatmuls``.
+    """
+
+    def __enter__(self):
+        if is_transformers_version("<", "5"):
+            super().__enter__()
+        else:
+            from transformers.models.deepseek_v3.modeling_deepseek_v3 import DeepseekV3NaiveMoe
+
+            OVDecoderModelPatcher.__enter__(self)
+            self.original_moe_forward = DeepseekV3NaiveMoe.forward
+            DeepseekV3NaiveMoe.forward = lfm2_moe_experts_forward
+            # DeepSeek-V3 uses YaRN-scaled rotary embeddings computed dynamically inside the graph.
+            # Keep the fp16 export numerically stable for long contexts by caching cos/sin.
+            model = self._model.model if hasattr(self._model, "model") else self._model
+            patch_rotary_emb_cos_sin_cached(
+                getattr(model, "rotary_emb", None), self._model.config.max_position_embeddings
+            )
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if is_transformers_version("<", "5"):
+            super().__exit__(exc_type, exc_value, traceback)
+        else:
+            from transformers.models.deepseek_v3.modeling_deepseek_v3 import DeepseekV3NaiveMoe
+
+            OVDecoderModelPatcher.__exit__(self, exc_type, exc_value, traceback)
+            DeepseekV3NaiveMoe.forward = self.original_moe_forward
+            model = self._model.model if hasattr(self._model, "model") else self._model
+            unpatch_rotary_emb_cos_sin_cached(getattr(model, "rotary_emb", None))
 
 
 def deepseek_v3_attn_forward(

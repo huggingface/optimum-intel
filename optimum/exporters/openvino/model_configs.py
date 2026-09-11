@@ -123,6 +123,7 @@ from optimum.exporters.openvino.model_patcher import (
     DeepseekOCR2LMPatcher,
     DeepseekOCR2VisionEmbeddingsPatcher,
     DeepseekPatcher,
+    DeepseekV3Patcher,
     FalconModelPatcher,
     FluxTransformerModelPatcher,
     FunASRModelPatcher,
@@ -4928,9 +4929,6 @@ class M2M100OpenVINOConfig(BartOpenVINOConfig):
 
 
 @register_in_tasks_manager(
-    "deepseek_v3", *["text-generation", "text-generation-with-past"], library_name="transformers"
-)
-@register_in_tasks_manager(
     "deepseek_v2", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 @register_in_tasks_manager("deepseek", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -4938,6 +4936,19 @@ class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
     MAX_TRANSFORMERS_VERSION = "4.53.3"
     _MODEL_PATCHER = DeepseekPatcher
+
+
+@register_in_tasks_manager(
+    "deepseek_v3", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class DeepseekV3OpenVINOConfig(DeepseekOpenVINOConfig):
+    # transformers >= 5 reimplements ``deepseek_v3`` with the shared "experts implementation"
+    # MoE dispatch and a standard MLA attention forward, which optimum-intel handles through
+    # ``DeepseekV3Patcher`` (OV batched-mm experts). Older transformers releases keep using the
+    # legacy custom attention / ``moe_infer`` tracing patch.
+    MIN_TRANSFORMERS_VERSION = "4.51.0"
+    MAX_TRANSFORMERS_VERSION = "5.6.0"
+    _MODEL_PATCHER = DeepseekV3Patcher
 
 
 @register_in_tasks_manager("got_ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")

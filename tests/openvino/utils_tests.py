@@ -194,6 +194,57 @@ def _create_tiny_mistral3_model():
     return str(output_dir)
 
 
+def _create_tiny_deepseek_v3_model():
+    """Generate a tiny random DeepSeek-V3 (``deepseek_v3``) model and return its local path.
+
+    The reduced model preserves the real architecture (Multi-head Latent Attention with
+    LoRA-compressed q/kv projections and the grouped MoE with shared experts), but uses the native
+    ``transformers`` ``DeepseekV3ForCausalLM`` implementation (the ``auto_map`` remote code is
+    dropped) so it is compatible with recent ``transformers`` releases.
+    """
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_deepseek_v3"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+
+    if config_file.exists() and weights_file.exists():
+        return str(output_dir)
+
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+
+    model_id = "ByteDance-Seed/academic-ds-9B"
+
+    torch.manual_seed(SEED)
+
+    config = AutoConfig.from_pretrained(model_id)
+    # Use the native transformers modeling instead of the bundled remote code.
+    config.auto_map = {}
+    # Reduce scale while preserving MLA + grouped MoE (with shared experts) invariants.
+    config.num_hidden_layers = 2
+    config.first_k_dense_replace = 1  # layer 0 dense MLP, layer 1 MoE
+    config.hidden_size = 32
+    config.intermediate_size = 64
+    config.moe_intermediate_size = 32
+    config.q_lora_rank = 32
+    config.kv_lora_rank = 16
+    config.n_routed_experts = 8
+    config.n_group = 2
+    config.topk_group = 2
+    config.num_experts_per_tok = 4
+    config.n_shared_experts = 1
+    config.num_attention_heads = 2
+    config.num_key_value_heads = 2
+    config.dtype = "float32"
+    config.torch_dtype = "float32"
+
+    model = AutoModelForCausalLM.from_config(config).float().eval()
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(output_dir, safe_serialization=True)
+    AutoTokenizer.from_pretrained(model_id).save_pretrained(output_dir)
+
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -239,6 +290,7 @@ HUB_MODEL_NAMES = {
     "deberta-v2": "optimum-intel-internal-testing/tiny-random-DebertaV2Model",
     "decilm": "optimum-intel-internal-testing/tiny-random-decilm",
     "deepseek": "optimum-intel-internal-testing/tiny-random-deepseek-v3",
+    "deepseek_v3": _create_tiny_deepseek_v3_model(),
     "deepseek_ocr2": "optimum-intel-internal-testing/tiny-random-deepseek-ocr-2",
     "deit": "optimum-intel-internal-testing/tiny-random-DeiTModel",
     "convnext": "optimum-intel-internal-testing/tiny-random-convnext",
@@ -795,6 +847,7 @@ ARCH_TO_MODEL_CLASS = {
     "lfm2": "OVModelForCausalLM",
     "lfm2_moe": "OVModelForCausalLM",
     "qwen3_moe": "OVModelForCausalLM",
+    "deepseek_v3": "OVModelForCausalLM",
     "llama4": "OVModelForCausalLM",
     "llava": "OVModelForVisualCausalLM",
     "qwen3_5_moe": "OVModelForVisualCausalLM",
