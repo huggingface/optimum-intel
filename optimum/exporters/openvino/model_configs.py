@@ -2766,6 +2766,7 @@ class Gemma3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
         sequence_length="text_config.max_position_embeddings",
         num_layers="text_config.num_hidden_layers",
     )
+    _MODEL_PATCHER = LTX2TextEncoderPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -2781,14 +2782,6 @@ class Gemma3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
         for i in range(num_layers + 1):
             outputs[f"hidden_states.{i}"] = {0: "batch_size", 1: "sequence_length"}
         return outputs
-
-    @property
-    def values_override(self) -> Optional[Dict[str, Any]]:
-        # The per-layer outputs above only exist if the model is asked for them, same as
-        # `Qwen3TextEncoderOpenVINOConfig`.
-        values = super().values_override or {}
-        values.update({"output_hidden_states": True, "return_dict": True, "use_cache": False})
-        return values
 
 
 @register_in_tasks_manager("ltx2-text-encoder", *["feature-extraction"], library_name="diffusers")
@@ -2829,6 +2822,14 @@ class LTX2TextEncoderOpenVINOConfig(Gemma3TextEncoderOpenVINOConfig):
         # not appear here. The last dimension is `(num_layers + 1) * hidden_size`, left dynamic
         # because the export declares no static shape for it.
         return {"prompt_embeds": {0: "batch_size", 1: "sequence_length"}}
+
+    @property
+    def values_override(self) -> Optional[Dict[str, Any]]:
+        # Both contracts are built out of the per-layer hidden states, which only exist if the model
+        # is asked for them, same as `Qwen3TextEncoderOpenVINOConfig`.
+        values = super().values_override or {}
+        values.update({"output_hidden_states": True, "return_dict": True, "use_cache": False})
+        return values
 
     def _select_text_encoder_patcher(self) -> Type[ModelPatcher]:
         return LTX2PackedTextEncoderPatcher if self.pack_hidden_states else LTX2TextEncoderPatcher

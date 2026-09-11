@@ -16,7 +16,6 @@ import importlib
 import inspect
 import logging
 import os
-import re
 import shutil
 from abc import abstractmethod
 from collections import OrderedDict
@@ -51,7 +50,6 @@ from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.utils import validate_hf_hub_args
 from openvino import Core
-from openvino import opset11 as ops
 from openvino._offline_transformations import compress_model_transformation
 from transformers import CLIPImageProcessor, CLIPTokenizer
 from transformers.modeling_outputs import ModelOutput
@@ -1463,76 +1461,9 @@ class OVModelQwenImageTransformer(OVPipelinePart):
         return (sample,)
 
 
-# Both cross attentions live under `<block scope>.<direction>_attn`, whatever prefix the export gave
-# the module tree ("__module.model." when the exporter wrapped the patched forward, "__module." when
-# it traced it directly).
-_LTX2_CROSS_ATTENTION_SCOPE = re.compile(
-    r"^(?P<scope>(?P<block>.*\.transformer_blocks\.\d+)\.(?:audio_to_video|video_to_audio)_attn)\b"
-)
-
-
-def add_ltx2_cross_modality_gate(model: openvino.Model) -> bool:
-    """Splice a `cross_modality_gate` input into an LTX-2 transformer exported without one.
-
-    Modality isolation guidance runs the transformer with the audio-to-video and video-to-audio
-    cross attentions switched off. The reference implementation does that with a Python flag, which
-    a traced graph cannot carry, so the export turns it into a scalar input instead. LTX-2.0 IRs are
-    published without that input and are kept that way so they stay reproducible, which leaves this
-    as the only way to offer the feature to them: each cross attention contributes through a residual
-    add, so scaling its output projection by zero is exactly the switched-off branch.
-
-    Rewriting the loaded graph rather than the export keeps published IRs byte-identical. Note that
-    it does reach `save_pretrained`, which writes the model as loaded, gate included.
-
-    Returns whether the gate was added. When it was not, the graph is untouched and the caller falls
-    back to serving the plain pass.
-    """
-    anchors = {}
-    for op in model.get_ordered_ops():
-        match = _LTX2_CROSS_ATTENTION_SCOPE.match(op.get_friendly_name())
-        if match is None:
-            continue
-        # Of everything leaving the attention scope, only the output projection feeds the multiply
-        # the block applies its AdaLN gate with; the rest is shape arithmetic, or rotary embeddings
-        # that are named after one attention but consumed by its sibling.
-        residual_inputs = [
-            target
-            for output in op.outputs()
-            for target in output.get_target_inputs()
-            if target.get_node().get_type_name() == "Multiply"
-            and target.get_node().get_friendly_name().split("/", 1)[0] == match.group("block")
-        ]
-        if residual_inputs:
-            anchors.setdefault(match.group("scope"), []).append((op, residual_inputs))
-
-    # One output projection per cross attention. Anything else means the graph is not shaped the way
-    # this transformation assumes, so leave it alone rather than gate the wrong tensor.
-    if not anchors or any(len(found) != 1 for found in anchors.values()):
-        return False
-
-    gate = ops.parameter([], openvino.Type.f32, name="cross_modality_gate")
-    gate.get_output_tensor(0).set_names({"cross_modality_gate"})
-    for scope, found in anchors.items():
-        op, residual_inputs = found[0]
-        gated = ops.multiply(op.output(0), gate)
-        gated.set_friendly_name(f"{scope}/cross_modality_gate/Multiply")
-        for target in residual_inputs:
-            target.replace_source_output(gated.output(0))
-
-    model.add_parameters([gate])
-    model.validate_nodes_and_infer_types()
-    return True
-
-
 class OVModelTransformerLTX2(OVPipelinePart):
+    # Class-level, so the unsupported-feature notice below is emitted once per process.
     _warned_no_cross_modality_gate = False
-
-    def __init__(self, model: openvino.Model, parent_pipeline: OVDiffusionPipeline, model_name: str = ""):
-        super().__init__(model, parent_pipeline, model_name=model_name)
-
-        # `compile_only` hands over an already compiled model, which can no longer be edited.
-        if "cross_modality_gate" not in self._ov_input_names and not parent_pipeline._compile_only:
-            add_ltx2_cross_modality_gate(self.model)
 
     def forward(
         self,
@@ -1629,17 +1560,14 @@ class OVModelTransformerLTX2(OVPipelinePart):
         if "cross_modality_gate" in self._ov_input_names:
             model_inputs["cross_modality_gate"] = torch.tensor(0.0 if isolate_modalities else 1.0)
         elif isolate_modalities and not self._warned_no_cross_modality_gate:
-            # An LTX-2.0 export starts without the gate and `add_ltx2_cross_modality_gate` adds it on
-            # load, so getting here means that could not be done: a `compile_only` model, or a graph
-            # it did not recognise. `modality_scale` defaults above 1.0 in diffusers>=0.40.0, so
-            # refusing would break the default path. The isolated pass returns the conditional
-            # prediction instead, which cancels the guidance term.
+            # Only LTX-2.3 exports carry the gate. `modality_scale` defaults above 1.0 in
+            # diffusers>=0.40.0, so LTX-2.0 would otherwise warn on every step of every call; the
+            # isolated pass serves the conditional prediction instead, cancelling the guidance term.
             self._warned_no_cross_modality_gate = True
             logger.warning(
-                "This LTX-2 transformer has no `cross_modality_gate` input and one could not be "
-                "added, so modality isolation guidance is skipped and the output differs from the "
-                "reference pipeline. Load without `compile_only` to enable it, or pass "
-                "`modality_scale=1.0` (and `audio_modality_scale=1.0`) to skip the redundant pass."
+                "Modality isolation guidance is not supported for LTX-2.0, so it is skipped and the "
+                "output differs from the reference pipeline. Pass `modality_scale=1.0` and "
+                "`audio_modality_scale=1.0` to skip the redundant pass."
             )
 
         stg_blocks = spatio_temporal_guidance_blocks or []

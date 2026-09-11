@@ -471,9 +471,8 @@ class LTX2ExportContractTest(unittest.TestCase):
             self.assertNotIn("prompt_embeds", text_encoder_outputs)
             self.assertIn("hidden_states.0", text_encoder_outputs)
 
-        # Read the transformer back from disk instead of taking it off the pipeline: LTX-2.0 has a
-        # `cross_modality_gate` spliced into the loaded graph, and what has to stay pinned here is
-        # what the export writes.
+        # Read the transformer back from disk rather than taking it off the pipeline, so what is
+        # pinned is what the export writes rather than whatever loading made of it.
         transformer = ov.Core().read_model(pipeline.transformer.model_save_dir / "openvino_model.xml")
         transformer_inputs = {name: inp for inp in transformer.inputs for name in inp.names}
         self.assertEqual("cross_modality_gate" in transformer_inputs, is_ltx2_3)

@@ -27,7 +27,6 @@ from diffusers import (
 )
 from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.utils import load_image
-from openvino import Core
 from parameterized import parameterized
 from utils_tests import HUB_MODEL_NAMES, MODEL_NAMES, OPENVINO_DEVICE, SEED
 
@@ -75,6 +74,20 @@ def _generate_images(height=128, width=128, batch_size=1, channel=3, input_type=
         image = torch.rand((channel, height, width))
 
     return [image] * batch_size
+
+
+def _ltx2_modality_isolation_off(model_arch):
+    """Turn off modality isolation guidance, which LTX-2.0 exports cannot serve.
+
+    The isolated pass runs the transformer with the cross-modality attentions switched off, which
+    the traced graph expresses as a `cross_modality_gate` input. LTX-2.0 is exported without one so
+    its published IRs stay reproducible, and diffusers>=0.40.0 asks for the pass by default, so
+    every LTX-2.0 call has to opt out. Passing this to the reference pipeline too keeps the
+    comparisons like for like. LTX-2.3 has the input and is left on its defaults.
+    """
+    if model_arch != "ltx2" or is_diffusers_version("<", "0.40.0"):
+        return {}
+    return {"modality_scale": 1.0, "audio_modality_scale": 1.0}
 
 
 class OVPipelineForText2ImageTest(unittest.TestCase):
@@ -1081,7 +1094,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
 
     TASK = "text-to-video"
 
-    def generate_inputs(self, height=128, width=128, batch_size=1, num_frames=4):
+    def generate_inputs(self, height=128, width=128, batch_size=1, num_frames=4, model_arch=""):
         inputs = _generate_prompts(batch_size=batch_size)
 
         inputs["height"] = height
@@ -1089,6 +1102,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
 
         inputs["num_inference_steps"] = 2
         inputs["num_frames"] = num_frames
+        inputs.update(_ltx2_modality_isolation_off(model_arch))
 
         return inputs
 
@@ -1122,7 +1136,9 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
             for height in [64, 128]:
                 for width in [64, 128]:
                     for num_videos_per_prompt in [1, 3]:
-                        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+                        inputs = self.generate_inputs(
+                            height=height, width=width, batch_size=batch_size, model_arch=model_arch
+                        )
                         outputs = pipeline(**inputs, num_videos_per_prompt=num_videos_per_prompt).frames
                         self.assertEqual(outputs.shape, (batch_size * num_videos_per_prompt, 1, height, width, 3))
 
@@ -1130,7 +1146,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
     @require_diffusers
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
         height, width, batch_size = 64, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_arch=model_arch)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
         auto_cls = self.AUTOMODEL_CLASS
         diffusers_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
@@ -1156,7 +1172,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
         # `stg_perturbation_mask` is per-block and carries no batch dimension, so batch_size > 1
         # checks that the perturbation still reaches every batch element.
         for batch_size in [1, 2]:
-            inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+            inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_arch=model_arch)
             # The test checkpoints have a single transformer block, so that is the one to perturb.
             inputs["spatio_temporal_guidance_blocks"] = [0]
 
@@ -1166,27 +1182,30 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
-    def test_modality_isolation_gate_added_on_load(self, model_arch: str):
-        # LTX-2.0 is exported without a `cross_modality_gate` so its published IRs stay reproducible,
-        # and gets one spliced in on load instead. Check the IR on disk really lacks it, that loading
-        # adds it, and that it does something: isolation is what diffusers>=0.40.0 asks for by
-        # default, so `test_compare_to_diffusers_pipeline` only exercises it through this path.
+    def test_modality_isolation_unsupported_warns(self, model_arch: str):
+        # An LTX-2.0 export has no `cross_modality_gate`, so the isolated pass diffusers>=0.40.0 asks
+        # for by default is skipped, with one notice rather than one per step.
         if model_arch != "ltx2" or is_diffusers_version("<", "0.40.0"):
             self.skipTest(f"{model_arch} exports a cross_modality_gate")
 
-        height, width = 64, 64
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
-        exported = Core().read_model(pipeline.transformer.model_save_dir / "openvino_model.xml")
-        self.assertNotIn("cross_modality_gate", {inp.get_any_name() for inp in exported.inputs})
-        self.assertIn("cross_modality_gate", pipeline.transformer._ov_input_names)
+        from optimum.intel.openvino.modeling_diffusion import OVModelTransformerLTX2
+        from optimum.intel.openvino.modeling_diffusion import logger as diffusers_logger
 
-        inputs = self.generate_inputs(height=height, width=width)
-        isolated = pipeline(**inputs, generator=get_generator("pt", SEED)).frames
-        plain = pipeline(
-            **inputs, modality_scale=1.0, audio_modality_scale=1.0, generator=get_generator("pt", SEED)
-        ).frames
-        self.assertEqual(isolated.shape, (1, 1, height, width, 3))
-        self.assertFalse(np.allclose(isolated, plain, atol=1e-3))
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+        self.assertNotIn("cross_modality_gate", pipeline.transformer._ov_input_names)
+
+        inputs = self.generate_inputs(height=64, width=64, model_arch=model_arch)
+        self.assertEqual(pipeline(**inputs).frames.shape, (1, 1, 64, 64, 3))
+
+        OVModelTransformerLTX2._warned_no_cross_modality_gate = False
+        try:
+            with self.assertLogs(diffusers_logger, logging.WARN) as warning_log:
+                pipeline(**{**inputs, "modality_scale": 3.0})
+            self.assertEqual(
+                1, sum("Modality isolation guidance is not supported" in line for line in warning_log.output)
+            )
+        finally:
+            OVModelTransformerLTX2._warned_no_cross_modality_gate = False
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
@@ -1194,7 +1213,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         height, width, batch_size = 128, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_arch=model_arch)
 
         for output_type in ["np", "pt"]:
             inputs["output_type"] = output_type
@@ -1210,7 +1229,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         height, width, batch_size = 64, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_arch=model_arch)
 
         for generator_framework in ["np", "pt"]:
             ov_outputs_1 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
@@ -1254,7 +1273,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
         pipeline.compile()
         # generation with incompatible size
         height, width, batch_size = 64, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_arch=model_arch)
         from optimum.intel.openvino.modeling_diffusion import logger as diffusers_logger
 
         with self.assertLogs(diffusers_logger, logging.WARN) as warning_log:
@@ -1302,6 +1321,7 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
         # diffusers 0.40.0 re-compresses the conditioning image with H.264, which only accepts a single PIL image.
         if model_arch.startswith("ltx2") and is_diffusers_version(">=", "0.40.0"):
             inputs["image_crf"] = 0
+        inputs.update(_ltx2_modality_isolation_off(model_arch))
 
         return inputs
 

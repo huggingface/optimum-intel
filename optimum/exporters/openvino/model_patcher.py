@@ -11610,24 +11610,23 @@ class LTX2PackedTextEncoderPatcher(LTX2TextEncoderPatcher):
     LTX-2.0 keeps the un-fixed base patcher so its already-published IRs stay reproducible.
     """
 
+    def __init__(self, config, model, model_kwargs=None):
+        # The hook is attached for the lifetime of the patch rather than per call, see `__enter__`.
+        self._final_norm = _ltx2_text_encoder_final_norm(model)
+        self._final_norm_hook = None
+        self._captured_final_norm = {}
+        super().__init__(config, model, model_kwargs)
+
     def _build_patched_forward(self, model):
         orig_forward = self.orig_forward
-        final_norm = _ltx2_text_encoder_final_norm(model)
+        captured = self._captured_final_norm
 
         def patched_forward(input_ids, attention_mask=None, **kwargs):
-            captured = {}
-            handle = None
-            if final_norm is not None:
-                handle = final_norm.register_forward_hook(lambda module, args, output: captured.update(out=output))
-            try:
-                outputs = orig_forward(
-                    input_ids=input_ids,
-                    attention_mask=_ltx2_text_encoder_causal_mask(attention_mask),
-                    output_hidden_states=True,
-                )
-            finally:
-                if handle is not None:
-                    handle.remove()
+            outputs = orig_forward(
+                input_ids=input_ids,
+                attention_mask=_ltx2_text_encoder_causal_mask(attention_mask),
+                output_hidden_states=True,
+            )
 
             hidden_states = list(outputs.hidden_states)
             post_norm = captured.get("out")
@@ -11639,6 +11638,20 @@ class LTX2PackedTextEncoderPatcher(LTX2TextEncoderPatcher):
             return {"prompt_embeds": torch.stack(hidden_states, dim=-1).flatten(2, 3)}
 
         return patched_forward
+
+    def __enter__(self):
+        super().__enter__()
+        if self._final_norm is not None:
+            self._final_norm_hook = self._final_norm.register_forward_hook(
+                lambda module, args, output: self._captured_final_norm.update(out=output)
+            )
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self._final_norm_hook is not None:
+            self._final_norm_hook.remove()
+            self._final_norm_hook = None
+        self._captured_final_norm.clear()
+        super().__exit__(exc_type, exc_value, traceback)
 
 
 def _ltx2_cross_modality_gated_forward(orig_forward, guidance_state):
