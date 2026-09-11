@@ -18,12 +18,14 @@ import unittest
 from pathlib import Path
 
 import nncf
+import numpy as np
 import openvino as ov
+import torch
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
 from utils_tests import MODEL_NAMES
 
-from optimum.exporters.openvino import export_from_model
+from optimum.exporters.openvino import export_from_model, main_export
 from optimum.intel.openvino.utils import TemporaryDirectory
 from optimum.intel.utils.import_utils import is_transformers_version
 
@@ -92,6 +94,103 @@ class DFlashExportTest(unittest.TestCase):
 
         self._export_and_assert_hidden_state_locators(
             model_type, AutoModelForImageTextToText, "image-text-to-text", "openvino_language_model.xml"
+        )
+
+    def test_dflash2_export_produces_backbone_and_selector(self):
+        model_id = MODEL_NAMES["qwen3_dflash2"]
+        config = AutoConfig.from_pretrained(model_id)
+        dflash_config = config.dflash_config
+        num_drafted_tokens = dflash_config["block_size"] - 1
+
+        with TemporaryDirectory() as tmpdirname:
+            tmpdirname = Path(tmpdirname)
+            main_export(
+                model_name_or_path=model_id,
+                task="text-generation-with-past",
+                trust_remote_code=True,
+                convert_tokenizer=False,
+                output=tmpdirname,
+            )
+
+            core = ov.Core()
+            backbone = core.read_model(tmpdirname / "openvino_model.xml")
+            selector = core.read_model(tmpdirname / "openvino_dflash2_selector_model.xml")
+
+            self.assertEqual(
+                {inp.get_any_name() for inp in backbone.inputs},
+                {"inputs_embeds", "hidden_states", "position_ids", "attention_mask", "beam_idx"},
+            )
+            self.assertEqual([out.get_any_name() for out in backbone.outputs], ["last_hidden_state"])
+
+            # The selector's walk over the block is unrolled at trace time, so the drafted-token
+            # axis must come out static while the batch axis stays dynamic.
+            selector_inputs = {inp.get_any_name(): inp.get_partial_shape() for inp in selector.inputs}
+            self.assertEqual(set(selector_inputs), {"last_hidden_state", "logits", "anchor_ids"})
+            for name in ("last_hidden_state", "logits"):
+                self.assertTrue(selector_inputs[name][0].is_dynamic)
+                self.assertEqual(selector_inputs[name][1].get_length(), num_drafted_tokens)
+            self.assertEqual(
+                [out.get_any_name() for out in selector.outputs], ["draft_token_ids", "candidate_token_ids"]
+            )
+
+            for model in (backbone, selector):
+                self.assertEqual(model.get_rt_info()["dflash_mode"].value, "True")
+                rt_info = model.get_rt_info()["dflash"]
+                self.assertEqual(rt_info["version"].value, "2")
+                self.assertEqual(rt_info["block_size"].value, str(dflash_config["block_size"]))
+                self.assertEqual(rt_info["selector_top_k"].value, str(dflash_config["selector_top_k"]))
+                self.assertEqual(
+                    rt_info["target_layer_ids"].value, ",".join(map(str, dflash_config["target_layer_ids"]))
+                )
+
+            self._assert_dflash2_matches_torch(model_id, config, tmpdirname, core)
+
+    def _assert_dflash2_matches_torch(self, model_id, config, exported_dir, core):
+        from optimum.exporters.openvino.model_patcher import Qwen3DFlash2ForCausalLM
+
+        torch.manual_seed(0)
+        block_size = config.dflash_config["block_size"]
+        context_length = 3 * block_size
+        num_target_layers = len(config.dflash_config["target_layer_ids"])
+
+        reference = Qwen3DFlash2ForCausalLM.from_pretrained(model_id, dtype=torch.float32).eval()
+        target_hidden = torch.randn(1, context_length, num_target_layers * config.hidden_size)
+        inputs_embeds = torch.randn(1, block_size, config.hidden_size)
+        position_ids = torch.arange(context_length + block_size)[None]
+        anchor_ids = torch.randint(0, config.vocab_size, (1,))
+        logits = torch.randn(1, block_size - 1, config.vocab_size)
+
+        with torch.no_grad():
+            expected_hidden = reference(
+                inputs_embeds=inputs_embeds,
+                hidden_states=target_hidden,
+                position_ids=position_ids,
+                use_cache=False,
+            ).last_hidden_state
+            expected_selection = reference.candidate_selector(expected_hidden, logits, anchor_ids)
+
+        backbone = core.compile_model(exported_dir / "openvino_model.xml", "CPU").create_infer_request()
+        actual_hidden = backbone.infer(
+            {
+                "inputs_embeds": inputs_embeds.numpy(),
+                "hidden_states": target_hidden.numpy(),
+                "position_ids": position_ids.numpy(),
+                "attention_mask": np.ones((1, context_length + block_size), dtype=np.int64),
+                "beam_idx": np.zeros(1, dtype=np.int32),
+            }
+        )["last_hidden_state"]
+        np.testing.assert_allclose(actual_hidden, expected_hidden.numpy(), rtol=1e-4, atol=1e-4)
+
+        selector = core.compile_model(exported_dir / "openvino_dflash2_selector_model.xml", "CPU")
+        actual_selection = selector(
+            {
+                "last_hidden_state": expected_hidden.numpy(),
+                "logits": logits.numpy(),
+                "anchor_ids": anchor_ids.numpy(),
+            }
+        )
+        np.testing.assert_array_equal(
+            actual_selection["draft_token_ids"], expected_selection["draft_token_ids"].numpy()
         )
 
     def test_hidden_state_locators_survive_weight_compression(self):
