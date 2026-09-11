@@ -343,6 +343,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
     def run(self):
         from ...exporters.openvino.__main__ import _main_quantize, _merge_move, main_export
+        from ...exporters.openvino.disk_utils import check_output_path, get_export_tmpdir
         from ...intel.openvino.configuration import (
             _DEFAULT_4BIT_WQ_CONFIG,
             OVConfig,
@@ -459,10 +460,18 @@ class OVExportCommand(BaseOptimumCLICommand):
             # in the case when quantization unexpectedly fails, and an intermediate floating point model ends up at the
             # target location.
             original_output = Path(self.args.output)
-            temporary_directory = TemporaryDirectory()
+            check_output_path(original_output)
+            # By default the intermediate model is written next to the final output so that it lives on the same
+            # filesystem: this avoids being constrained by a possibly small '$TMPDIR' (often a size-limited tmpfs)
+            # and a costly cross-device move. It can be overridden with the OPTIMUM_OPENVINO_TMPDIR env variable.
+            tmp_parent = get_export_tmpdir(original_output)
+            Path(tmp_parent).mkdir(parents=True, exist_ok=True)
+            temporary_directory = TemporaryDirectory(dir=tmp_parent)
             output = Path(temporary_directory.name)
+            check_output_path(output)
         else:
             output = Path(self.args.output)
+            check_output_path(output)
 
         try:
             # TODO : add input shapes

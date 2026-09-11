@@ -74,6 +74,7 @@ from optimum.intel.utils.import_utils import (
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 
 from ...intel.utils.modeling_utils import _infer_library_from_model_or_model_class
+from .disk_utils import format_save_error
 from .stateful import (
     ensure_export_task_support_stateful,
     ensure_model_type_support_stateful,
@@ -163,7 +164,13 @@ def _save_model(
     }:
         add_hidden_states_rt_info(source_model, model, config)
 
-    save_model(model, path, compress_to_fp16)
+    try:
+        save_model(model, path, compress_to_fp16)
+    except Exception as e:
+        # OpenVINO serialization is done by a native std::ofstream and only reports an opaque
+        # "basic_ios::clear: iostream error" when the write fails (disk full, read-only mount, FAT32 file size
+        # limit, ...). Re-raise with an actionable message so users know where to look.
+        raise RuntimeError(format_save_error(path, e)) from e
     del model
     gc.collect()
 
