@@ -470,12 +470,22 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "group_size_fallback": "adjust",
     },
     "google/gemma-4-E4B-it": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 64,
-        "dataset": "textvqa",
-        "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+                "dataset": "textvqa",
+                "quant_method": OVQuantizationMethod.AWQ,
+                "scale_estimation": True,
+            },
+            "audio_embeddings_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+            },
+        },
+        "default_config": {"bits": 8, "sym": True, "weight_only": True},
     },
     "Qwen/Qwen3.5-35B-A3B": {
         "quantization_configs": {
@@ -545,6 +555,7 @@ _DEFAULT_8BIT_WQ_CONFIGS = {
 model_id_aliases = [
     ("meta-llama/Meta-Llama-3.1-8B-Instruct", "meta-llama/Llama-3.1-8B-Instruct"),
     ("meta-llama/Meta-Llama-3.1-8B", "meta-llama/Llama-3.1-8B"),
+    ("google/gemma-4-E4B-it", "google/gemma-4-e2B-it"),
 ]
 for m_id_1, m_id_2 in model_id_aliases:
     _DEFAULT_4BIT_WQ_CONFIGS[m_id_2] = _DEFAULT_4BIT_WQ_CONFIGS[m_id_1]

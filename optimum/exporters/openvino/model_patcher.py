@@ -5670,6 +5670,7 @@ def gemma4_text_attention_forward(
     hidden_states: torch.Tensor,
     position_embeddings: torch.Tensor,
     attention_mask: Optional[torch.Tensor],
+    shared_kv_states: Optional[Dict[str, Tuple[torch.Tensor, torch.Tensor]]] = None,
     past_key_values: Optional[Cache] = None,
     cache_position: Optional[torch.LongTensor] = None,
     **kwargs,
