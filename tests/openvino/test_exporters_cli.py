@@ -827,6 +827,49 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),
     ]
 
+    # Pre-quantized compressed-tensors (AWQ pack-quantized) model. It is already quantized, so
+    # it is exported without a `--weight-format`: the OpenVINO PyTorch frontend converts the
+    # packed weights directly into int4 constants. This relies on the frontend compressed-tensors
+    # patcher (OpenVINO 2026.3+) and on the `compressed_tensors` package, which CI installs for
+    # transformers 4.57.6+. Both conditions gate the config so it is only exercised where the
+    # dependency is guaranteed present -- a missing package then surfaces as a hard failure.
+    if is_openvino_version(">=", "2026.3") and is_transformers_version(">=", "4.57.6"):
+        TRANSFORMERS_4BIT_CONFIGURATIONS.append(
+            (
+                "text-generation-with-past",
+                "llama_compressed_tensors",
+                None,
+                {"model": {"int4": 14}},
+            )
+        )
+
+    # Same as above, but for a Qwen3.5 (VLM) checkpoint, mirroring the ignore pattern of the
+    # real-world cyankiwi/Qwen3.5-4B-AWQ-4bit checkpoint that motivated this feature: only the
+    # language-model linears are pack-quantized, the vision tower is untouched. Qwen3.5 is only
+    # registered for transformers 5.2.0-5.2.99 (see Qwen3_5OpenVINOConfig), so this config is only
+    # exercised by the `preview_models` workflow, which pins that narrow transformers range.
+    if is_openvino_version(">=", "2026.3"):
+        TRANSFORMERS_4BIT_CONFIGURATIONS.append(
+            (
+                "image-text-to-text",
+                "qwen3_5_compressed_tensors",
+                None,
+                {
+                    "lm_model": {"int4": 25},
+                    "text_embeddings_model": {},
+                    "vision_embeddings_model": {},
+                    "vision_embeddings_merger_model": {},
+                    "vision_embeddings_pos_model": {},
+                },
+            )
+        )
+
+    def _name_4bit_config(testcase_func, param_num, param):
+        # Embed the model type in the generated test name (default naming only keeps the
+        # first positional arg, `task`) so CI can select a specific config with `pytest -k`.
+        task, model_type = param.args[0], param.args[1]
+        return parameterized.to_safe_name(f"{testcase_func.__name__}_{param_num}_{task}_{model_type}")
+
     # filter models type depending on min max transformers version
     SUPPORTED_4BIT_CONFIGURATIONS = [
         config
@@ -880,6 +923,14 @@ class OVCLIExportTestCase(unittest.TestCase):
         }
         if is_transformers_version(">=", "5"):
             expected.update({"videochat_flash_qwen", "llama4", "llava_next_video", "minicpmv", "internvl_chat"})
+
+        # qwen3_5_compressed_tensors is only added to TRANSFORMERS_4BIT_CONFIGURATIONS when
+        # OpenVINO >= 2026.3, and Qwen3_5OpenVINOConfig only supports transformers 5.2.0-5.2.99,
+        # so outside that narrow window it is present but filtered out of SUPPORTED.
+        if is_openvino_version(">=", "2026.3") and not (
+            is_transformers_version(">=", "5.2.0") and is_transformers_version("<=", "5.2.99")
+        ):
+            expected.add("qwen3_5_compressed_tensors")
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.SUPPORTED_4BIT_CONFIGURATIONS}
@@ -1148,19 +1199,23 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertEqual(expected_fake_nodes, num_fake_nodes)
             self.assertFalse(vision_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
-    @parameterized.expand(SUPPORTED_4BIT_CONFIGURATIONS)
+    @parameterized.expand(SUPPORTED_4BIT_CONFIGURATIONS, name_func=_name_4bit_config)
     def test_exporters_cli_4bit(
         self, task: str, model_type: str, option: str, expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]]
     ):
+        # option=None means the model is already quantized (e.g. compressed-tensors) and is
+        # exported as-is, without an NNCF weight-compression `--weight-format`.
+        is_prequantized = option is None
         with TemporaryDirectory() as tmpdir:
+            weight_format = "" if is_prequantized else f"--weight-format {option}"
             result = subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {weight_format} {tmpdir}",
                 shell=True,
                 check=True,
                 capture_output=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-            if "--trust-remote-code" in option:
+            if not is_prequantized and "--trust-remote-code" in option:
                 model_kwargs["trust_remote_code"] = True
             model = eval(
                 _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
@@ -1168,7 +1223,21 @@ class OVCLIExportTestCase(unittest.TestCase):
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
 
-            check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
+            # Already-quantized models keep the default f16 KV cache precision, unlike models
+            # whose weights are compressed by NNCF during export.
+            check_compression_state_per_model(
+                self,
+                model.ov_models,
+                expected_num_weight_nodes_per_model,
+                check_kv_cache_precision=not is_prequantized,
+            )
+
+            if is_prequantized:
+                # Already-quantized models (e.g. compressed-tensors) are exported as-is, without
+                # going through NNCF weight compression, so none of the `--awq`/`--gptq`/
+                # `--scale-estimation`/`--lora-correction` NNCF algorithms below ever run for
+                # them; there is nothing to check.
+                return
 
             # Starting from NNCF 2.17 there is a support for data-free AWQ
             awq_str = b"Applying data-aware AWQ" if "--dataset" in option else b"Applying data-free AWQ"
