@@ -17,6 +17,8 @@ import tempfile
 import time
 import unittest
 from contextlib import contextmanager
+from copy import deepcopy
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -28,6 +30,83 @@ from huggingface_hub import constants, scan_cache_dir
 import optimum.exporters.openvino  # noqa: F401 (registers OpenVINO export configs in TasksManager)
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import is_transformers_version
+
+
+def _save_tiny_qwen3_tokenizer(output_dir: Path) -> None:
+    from transformers import AutoTokenizer
+
+    AutoTokenizer.from_pretrained("optimum-intel-internal-testing/tiny-random-qwen3").save_pretrained(output_dir)
+
+
+@lru_cache(maxsize=1)
+def get_dflash2_model_path():
+    """Create a process-local tiny DFlash-2 checkpoint only when a DFlash-2 test needs it."""
+    output_dir = Path(tempfile.gettempdir()) / f"optimum_intel_tiny_random_qwen3_dflash2_{os.getpid()}"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+    tokenizer_file = output_dir / "tokenizer.json"
+    if config_file.exists() and weights_file.exists() and tokenizer_file.exists():
+        return str(output_dir)
+
+    from transformers import AutoConfig
+
+    from optimum.exporters.openvino.model_patcher import Qwen3DFlash2ForCausalLM
+
+    target_config = AutoConfig.from_pretrained("optimum-intel-internal-testing/tiny-random-qwen3")
+    target_num_hidden_layers = target_config.num_hidden_layers
+    config = deepcopy(target_config)
+    config.num_hidden_layers = min(2, target_num_hidden_layers)
+    config.num_target_layers = target_num_hidden_layers
+    if getattr(config, "layer_types", None):
+        config.layer_types = list(config.layer_types[: config.num_hidden_layers])
+    config.architectures = ["DFlash2DraftModel"]
+    config.is_causal = False
+    config.dflash_config = {
+        "conv_group_size": 8 if config.hidden_size % 8 == 0 else 1,
+        "conv_kernel_size": 2,
+        "mask_token_id": config.vocab_size - 1,
+        "selector_rank": 8,
+        "selector_top_k": 4,
+        "target_layer_ids": [0, target_num_hidden_layers - 1],
+        "input_embedding_scale": 1.25,
+        "output_multiplier": 0.75,
+        "final_logit_softcapping": 8.0,
+    }
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with torch.random.fork_rng():
+        torch.manual_seed(0)
+        model = Qwen3DFlash2ForCausalLM(config).eval()
+        model.save_pretrained(output_dir)
+    # save_pretrained records the implementation class; published DFlash-2
+    # checkpoints use this architecture marker to select the custom loader.
+    model.config.architectures = ["DFlash2DraftModel"]
+    model.config.save_pretrained(output_dir)
+    _save_tiny_qwen3_tokenizer(output_dir)
+    return str(output_dir)
+
+
+@lru_cache(maxsize=1)
+def get_dflash2_target_model_path():
+    """Create a matching process-local Qwen3 target checkpoint for DFlash-2 integration tests."""
+    output_dir = Path(tempfile.gettempdir()) / f"optimum_intel_tiny_random_qwen3_target_{os.getpid()}"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+    tokenizer_file = output_dir / "tokenizer.json"
+    if config_file.exists() and weights_file.exists() and tokenizer_file.exists():
+        return str(output_dir)
+
+    from transformers import AutoConfig
+    from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
+
+    config = AutoConfig.from_pretrained("optimum-intel-internal-testing/tiny-random-qwen3")
+    config.architectures = ["Qwen3ForCausalLM"]
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with torch.random.fork_rng():
+        torch.manual_seed(1)
+        Qwen3ForCausalLM(config).eval().save_pretrained(output_dir)
+    _save_tiny_qwen3_tokenizer(output_dir)
+    return str(output_dir)
 
 
 def _create_tiny_kokoro_model():
@@ -455,6 +534,14 @@ EAGLE3_MODELS = {"qwen3_eagle3": ("qwen3_eagle3", "qwen3_eagle3_target")}
 DFLASH_MODELS = {
     "qwen3_dflash": ("qwen3_dflash", "qwen3"),
 }
+
+
+@lru_cache(maxsize=1)
+def get_dflash2_model_pairs():
+    if not is_transformers_version(">=", "4.57"):
+        return {}
+    return {"qwen3_dflash2": (get_dflash2_model_path(), get_dflash2_target_model_path())}
+
 
 DFLASH_VLM_MODELS = {
     "qwen3_5_dflash": ("qwen3_5_dflash", "qwen3_5"),

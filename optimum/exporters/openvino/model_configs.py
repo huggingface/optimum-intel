@@ -22,6 +22,8 @@ import torch
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
 from optimum.exporters.openvino.base import (
+    ACTIVATIONS_SCALE_FACTOR_RT_OPTION,
+    DEFAULT_ACTIVATIONS_SCALE_FACTOR,
     ConfigBehavior,
     OpenVINOConfig,
     OpenVINOConfigWithPast,
@@ -38,10 +40,16 @@ from optimum.exporters.openvino.config import (
     TextSeq2SeqOpenVINOConfig,
     VisionOpenVINOConfig,
 )
+from optimum.exporters.openvino.dflash_utils import (
+    DFLASH2_RECOMMENDED_ACTIVATIONS_SCALE_FACTOR,
+    DFLASH_ARCHITECTURES,
+    parse_and_validate_dflash_config,
+)
 from optimum.exporters.openvino.input_generators import (
     AquilaDummyPastKeyValuesGenerator,
     ChatGLM2DummyPastKeyValuesGenerator,
     DeciDummyPastKeyValuesGenerator,
+    DFlash2SelectorDummyGenerator,
     DummyAudioPhi4MMInputGenerator,
     DummyDeepseekOCR2VisionInputGenerator,
     DummyDeepseekOCR2VisionTilesInputGenerator,
@@ -470,14 +478,16 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             preprocessors=preprocessors,
         )
         archs = getattr(config, "architectures", None)
-        self.dflash = isinstance(archs, list) and len(archs) > 0 and archs[0] == "DFlashDraftModel"
+        architecture = archs[0] if isinstance(archs, list) and archs else None
+        self.dflash = architecture in DFLASH_ARCHITECTURES
+        self.dflash2 = False
         if self.dflash:
-            model_type = getattr(config, "model_type", "")
-            if model_type != "qwen3":
-                raise ValueError(f"DFlash export supports only Qwen3-based draft models, got model_type={model_type}.")
-            dflash_config = getattr(config, "dflash_config", {}) or {}
-            if not dflash_config.get("target_layer_ids", []):
-                raise ValueError("DFlash export requires non-empty dflash_config['target_layer_ids'].")
+            dflash = parse_and_validate_dflash_config(config)
+            self.dflash2 = dflash.version == 2
+            if self.dflash2:
+                self.runtime_options[ACTIVATIONS_SCALE_FACTOR_RT_OPTION] = str(
+                    DFLASH2_RECOMMENDED_ACTIVATIONS_SCALE_FACTOR
+                )
             # DFlash draft checkpoints still advertise model_type="qwen3"; the
             # architecture and dflash_config fields identify the draft variant.
             self.DUMMY_INPUT_GENERATOR_CLASSES = (
@@ -553,6 +563,45 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
                 for axis, name in axes.items():
                     if name == "past_sequence_length + sequence_length":
                         axes[axis] = "past_sequence_length + context_length"
+
+
+class DFlash2SelectorOpenVINOConfig(OpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DFlash2SelectorDummyGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    # The selector is accuracy-sensitive and excluded from draft-backbone
+    # compression until quantized selector quality is characterized.
+    PRESERVE_CHECKPOINT_PRECISION = True
+
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        preprocessors: list[Any] | None = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        parse_and_validate_dflash_config(config, expected_version=2)
+        self.dflash2_selector = True
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "candidate_ids": {0: "batch_size", 1: "draft_sequence_length"},
+            "unary_logits": {0: "batch_size", 1: "draft_sequence_length"},
+            "draft_hidden_states": {0: "batch_size", 1: "draft_sequence_length"},
+            "anchor_token_ids": {0: "batch_size"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"edge_scores": {0: "batch_size", 1: "draft_sequence_length"}}
 
 
 @register_in_tasks_manager(
@@ -5503,6 +5552,10 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
         )
         self._behavior = behavior
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            # The encoder-free vision embedder produces values large enough to
+            # overflow in FP16, so retain the upstream scaling recommendation
+            # as component-owned runtime metadata.
+            self.runtime_options[ACTIVATIONS_SCALE_FACTOR_RT_OPTION] = str(DEFAULT_ACTIVATIONS_SCALE_FACTOR)
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4UnifiedVisionInputGenerator,)
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)

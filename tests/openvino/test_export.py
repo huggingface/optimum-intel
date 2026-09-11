@@ -15,6 +15,7 @@
 
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 from parameterized import parameterized
@@ -30,6 +31,11 @@ from utils_tests import (
 )
 
 from optimum.exporters.openvino import export_from_model, main_export
+from optimum.exporters.openvino.base import (
+    ACTIVATIONS_SCALE_FACTOR_RT_OPTION,
+    DEFAULT_ACTIVATIONS_SCALE_FACTOR,
+)
+from optimum.exporters.openvino.convert import _set_runtime_options
 from optimum.exporters.openvino.model_configs import BertOpenVINOConfig, Qwen3OmniMoeConfigBehavior
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
@@ -71,6 +77,32 @@ from optimum.utils.save_utils import maybe_load_preprocessors
 
 
 logger = logging.get_logger()
+
+
+class RuntimeOptionsTest(unittest.TestCase):
+    def test_generic_defaults_do_not_replace_config_recommendations(self):
+        default_config = SimpleNamespace(task="text-generation", runtime_options={})
+        stateless_config = SimpleNamespace(task=None, runtime_options={})
+        recommended_config = SimpleNamespace(
+            task="text-generation",
+            runtime_options={
+                ACTIVATIONS_SCALE_FACTOR_RT_OPTION: "32.0",
+                "KV_CACHE_PRECISION": "bf16",
+            },
+        )
+
+        _set_runtime_options({"model": (None, default_config)}, "text-generation", "transformers", False)
+        _set_runtime_options({"selector": (None, stateless_config)}, "text-generation", "transformers", False)
+        _set_runtime_options({"model": (None, recommended_config)}, "text-generation", "transformers", False)
+
+        self.assertEqual(
+            default_config.runtime_options[ACTIVATIONS_SCALE_FACTOR_RT_OPTION],
+            str(DEFAULT_ACTIVATIONS_SCALE_FACTOR),
+        )
+        self.assertEqual(default_config.runtime_options["KV_CACHE_PRECISION"], "f16")
+        self.assertEqual(stateless_config.runtime_options, {})
+        self.assertEqual(recommended_config.runtime_options[ACTIVATIONS_SCALE_FACTOR_RT_OPTION], "32.0")
+        self.assertEqual(recommended_config.runtime_options["KV_CACHE_PRECISION"], "bf16")
 
 
 class ExportModelTest(unittest.TestCase):

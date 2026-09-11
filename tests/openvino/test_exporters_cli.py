@@ -34,6 +34,7 @@ from utils_tests import (
     REMOTE_CODE_MODELS,
     TEST_NAME_TO_MODEL_TYPE,
     check_compression_state_per_model,
+    get_dflash2_model_path,
     get_num_quantized_nodes,
     get_supported_model_for_library,
     is_model_type_transformers_compatible,
@@ -918,6 +919,114 @@ class OVCLIExportTestCase(unittest.TestCase):
                 model_kwargs["trust_remote_code"] = True
 
             self._load_exported_ov_model(model_type, task, tmpdir, model_kwargs)
+
+    @unittest.skipUnless(is_transformers_version(">=", "4.57"), "DFlash-2 requires Transformers 4.57 or newer")
+    def test_exporters_cli_dflash2_two_ir_package(self):
+        model_path = get_dflash2_model_path()
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                [
+                    "optimum-cli",
+                    "export",
+                    "openvino",
+                    "--model",
+                    model_path,
+                    "--task",
+                    "text-generation-with-past",
+                    "--trust-remote-code",
+                    tmpdir,
+                ],
+                check=True,
+            )
+            draft_path = Path(tmpdir) / "openvino_model.xml"
+            selector_path = Path(tmpdir) / "openvino_selector_model.xml"
+            self.assertTrue(draft_path.exists())
+            self.assertTrue(selector_path.exists())
+
+            import openvino as ov
+
+            core = ov.Core()
+            draft_model = core.read_model(draft_path)
+            self.assertTrue(draft_model.has_rt_info(["dflash", "version"]))
+            self.assertEqual(
+                draft_model.get_rt_info()["runtime_options"]["ACTIVATIONS_SCALE_FACTOR"].value,
+                "32.0",
+            )
+            selector_model = core.read_model(selector_path)
+            self.assertTrue(selector_model.has_rt_info(["dflash_selector", "dflash_version"]))
+            self.assertFalse(selector_model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
+            self.assertFalse(selector_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+
+    @unittest.skipUnless(is_transformers_version(">=", "4.57"), "DFlash-2 requires Transformers 4.57 or newer")
+    def test_exporters_cli_dflash2_selector_preserves_checkpoint_precision(self):
+        model_path = get_dflash2_model_path()
+        for weight_format in ("int8", "int4"):
+            with self.subTest(weight_format=weight_format), TemporaryDirectory() as tmpdir:
+                command = [
+                    "optimum-cli",
+                    "export",
+                    "openvino",
+                    "--model",
+                    model_path,
+                    "--task",
+                    "text-generation-with-past",
+                    "--weight-format",
+                    weight_format,
+                    "--trust-remote-code",
+                ]
+                if weight_format == "int4":
+                    command.extend(["--group-size", "-1"])
+                subprocess.run([*command, tmpdir], check=True)
+                import openvino as ov
+
+                core = ov.Core()
+                draft_model = core.read_model(Path(tmpdir) / "openvino_model.xml")
+                selector_model = core.read_model(Path(tmpdir) / "openvino_selector_model.xml")
+                self.assertTrue(draft_model.has_rt_info(["nncf"]))
+                self.assertFalse(selector_model.has_rt_info(["nncf"]))
+                self.assertFalse(selector_model.has_rt_info(["dflash_selector", "quantization_status"]))
+
+    @unittest.skipUnless(is_transformers_version(">=", "4.57"), "DFlash-2 requires Transformers 4.57 or newer")
+    def test_exporters_cli_dflash2_selector_skips_fp16_compression(self):
+        model_path = get_dflash2_model_path()
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                [
+                    "optimum-cli",
+                    "export",
+                    "openvino",
+                    "--model",
+                    model_path,
+                    "--task",
+                    "text-generation-with-past",
+                    "--weight-format",
+                    "fp16",
+                    "--trust-remote-code",
+                    tmpdir,
+                ],
+                check=True,
+            )
+            import openvino as ov
+            from transformers import AutoConfig
+
+            config = AutoConfig.from_pretrained(model_path)
+            core = ov.Core()
+            draft_model = core.read_model(Path(tmpdir) / "openvino_model.xml")
+            selector_model = core.read_model(Path(tmpdir) / "openvino_selector_model.xml")
+
+            draft_constant_types = {
+                op.get_element_type() for op in draft_model.get_ops() if op.get_type_name() == "Constant"
+            }
+            self.assertIn(ov.Type.f16, draft_constant_types)
+
+            codebook_shape = [config.vocab_size, config.dflash_config["selector_rank"]]
+            selector_codebooks = [
+                op
+                for op in selector_model.get_ops()
+                if op.get_type_name() == "Constant" and list(op.get_output_shape(0)) == codebook_shape
+            ]
+            self.assertGreaterEqual(len(selector_codebooks), 2)
+            self.assertTrue(all(op.get_element_type() == ov.Type.f32 for op in selector_codebooks))
 
     @parameterized.expand(
         arch
