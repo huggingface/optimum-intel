@@ -2260,9 +2260,7 @@ class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
 
         if behavior == Mistral3ConfigBehavior.TEXT_EMBEDDINGS:
             # newer transformers versions nest the decoder under `model.model.language_model`
-            language_model = getattr(model, "language_model", None) or getattr(
-                model.model, "language_model", None
-            )
+            language_model = getattr(model, "language_model", None) or getattr(model.model, "language_model", None)
             text_embedding = model.get_input_embeddings()
             if language_model is not None:
                 text_embedding.config = language_model.config
