@@ -8051,6 +8051,50 @@ def granite_moe_hybrid_mamba_mixer_forward(
     return contextualized_states, new_conv_state, new_recurrent_state
 
 
+# Tiled (vectorized) MoE forward for the GraniteMoeHybrid `block_sparse_moe` layer.
+#
+# Unlike `_granite_moe_experts_forward`, which relies on `torch._grouped_mm` (GroupedMatMul),
+# this expresses the experts as batched `torch.bmm` over all experts combined with dense
+# routing weights. This matches the tiled MoE pattern recognized by the OpenVINO
+# `ConvertTiledMoeBlockToGatherMatmuls` transformation, enabling MoE fusion.
+#
+# The per-expert gate/up/down weights are expected to be pre-stacked and stored on the layer
+# as `gate_projs` / `up_projs` / `down_projs` (see `GraniteMoeHybridModelPatcher`).
+def _granite_moe_hybrid_tiled_experts_forward(self, layer_input):
+    batch_size, length, hidden_dim = layer_input.size()
+    hidden_states = layer_input.reshape(-1, hidden_dim)
+    num_tokens = hidden_states.shape[0]
+
+    router = self.router
+    num_experts = router.num_experts
+    logits = router.layer(hidden_states).float()  # [num_tokens, num_experts]
+    top_k_logits, top_k_indices = logits.topk(router.top_k, dim=1)  # [num_tokens, top_k]
+    top_k_gates = torch.softmax(top_k_logits, dim=1).type_as(hidden_states)  # [num_tokens, top_k]
+
+    # dense routing weights: [num_tokens, num_experts], zeros for non-selected experts
+    dense_routing_weights = torch.zeros(
+        num_tokens, num_experts, dtype=hidden_states.dtype, device=hidden_states.device
+    )
+    dense_routing_weights.scatter_(dim=1, index=top_k_indices, src=top_k_gates)
+
+    # broadcast the input to every expert: [num_experts, num_tokens, hidden_dim]
+    hidden_states = hidden_states.repeat(num_experts, 1)
+    hidden_states = hidden_states.view(num_experts, -1, hidden_dim)
+
+    # batched expert projections in a vectorized form
+    gate = torch.bmm(hidden_states, self.gate_projs.transpose(1, 2))
+    up = torch.bmm(hidden_states, self.up_projs.transpose(1, 2))
+    gate_up = self.activation(gate) * up
+    next_states = torch.bmm(gate_up, self.down_projs.transpose(1, 2))  # [num_experts, num_tokens, hidden_dim]
+
+    # apply routing weights and combine experts
+    next_states = next_states.view(num_experts, batch_size, -1, hidden_dim)
+    next_states = next_states * dense_routing_weights.transpose(0, 1).view(num_experts, batch_size, -1)[..., None]
+    next_states = next_states.sum(dim=0)
+
+    return next_states.view(batch_size, length, hidden_dim)
+
+
 class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
@@ -8181,18 +8225,22 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
 
     def __enter__(self):
         def patch_sparse_moe(sparse_moe_layer):
-            sparse_moe_layer.router._orig_forward = sparse_moe_layer.router.forward
-            sparse_moe_layer.router.forward = types.MethodType(
-                _granite_moe_topk_gating_forward, sparse_moe_layer.router
-            )
-            sparse_moe_layer.input_linear._orig_forward = sparse_moe_layer.input_linear.forward
-            sparse_moe_layer.input_linear.forward = types.MethodType(
-                _granite_moe_parallel_experts_forward, sparse_moe_layer.input_linear
-            )
-            sparse_moe_layer.output_linear._orig_forward = sparse_moe_layer.output_linear.forward
-            sparse_moe_layer.output_linear.forward = types.MethodType(
-                _granite_moe_parallel_experts_forward, sparse_moe_layer.output_linear
-            )
+            # Pre-stack per-expert gate/up/down weights so they can be consumed directly by
+            # `torch.bmm` in the tiled MoE forward (see `_granite_moe_hybrid_tiled_experts_forward`).
+            # input_linear.weight:  [num_experts, 2 * intermediate, hidden_dim]
+            #   -> first half produces the activated branch, second half the gating branch
+            # output_linear.weight: [num_experts, hidden_dim, intermediate]
+            intermediate_dim = sparse_moe_layer.input_linear.weight.shape[1] // 2
+            gate_projs = sparse_moe_layer.input_linear.weight[:, :intermediate_dim, :].detach()
+            up_projs = sparse_moe_layer.input_linear.weight[:, intermediate_dim:, :].detach()
+            down_projs = sparse_moe_layer.output_linear.weight.detach()
+
+            sparse_moe_layer.gate_projs = gate_projs
+            sparse_moe_layer.up_projs = up_projs
+            sparse_moe_layer.down_projs = down_projs
+
+            sparse_moe_layer._orig_forward = sparse_moe_layer.forward
+            sparse_moe_layer.forward = types.MethodType(_granite_moe_hybrid_tiled_experts_forward, sparse_moe_layer)
 
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
@@ -8229,9 +8277,11 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         def unpatch_sparse_moe(sparse_moe_layer):
-            sparse_moe_layer.router.forward = sparse_moe_layer.router._orig_forward
-            sparse_moe_layer.input_linear.forward = sparse_moe_layer.input_linear._orig_forward
-            sparse_moe_layer.output_linear.forward = sparse_moe_layer.output_linear._orig_forward
+            sparse_moe_layer.forward = sparse_moe_layer._orig_forward
+            del sparse_moe_layer._orig_forward
+            del sparse_moe_layer.gate_projs
+            del sparse_moe_layer.up_projs
+            del sparse_moe_layer.down_projs
 
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
