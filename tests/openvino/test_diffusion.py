@@ -1069,7 +1069,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
 class OVPipelineForText2VideoTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = []
     if is_diffusers_version(">=", "0.28.2"):
-        SUPPORTED_ARCHITECTURES.extend(["ltx-video"])
+        SUPPORTED_ARCHITECTURES.extend(["ltx-video", "ltx-video-0.9.1"])
     if is_diffusers_version(">=", "0.38.0"):
         SUPPORTED_ARCHITECTURES.extend(["ltx2"])
 

@@ -3200,6 +3200,39 @@ class FluxTransformerModelPatcher(ModelPatcher):
             self._model.pos_embed.forward = self._model.pos_embed._orig_forward
 
 
+def _ltx_vae_decoder_forward(model, latent_sample, timestep=None):
+    if timestep is not None:
+        if timestep.ndim == 0:
+            timestep = timestep.reshape(1)
+        elif timestep.ndim > 1:
+            timestep = timestep.reshape(-1)
+
+        batch_size = latent_sample.shape[0]
+        if timestep.shape[0] != batch_size:
+            if timestep.shape[0] == 1:
+                timestep = timestep.expand(batch_size)
+            else:
+                timestep = timestep[:1].expand(batch_size)
+
+        timestep = timestep.to(dtype=latent_sample.dtype)
+
+    return model.decode(z=latent_sample, temb=timestep)
+
+
+class LTXVaeDecoderModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        @functools.wraps(self.orig_forward)
+        def patched_forward(latent_sample, timestep=None):
+            return _ltx_vae_decoder_forward(self._model, latent_sample, timestep)
+
+        self.patched_forward = patched_forward
 # Patching is needed, as OpenVINO PyTorch frontend fails to trace torch.cat with Complex tensors,
 # so the Rotary embeddings related calculations are rewritten in float values.
 # Original code: https://github.com/huggingface/diffusers/blob/f27949dad9f88a34eb22ff80956bbbb940cdbd2b/src/diffusers/models/transformers/transformer_qwenimage.py#L94

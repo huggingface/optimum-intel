@@ -99,6 +99,7 @@ class ExportModelTest(unittest.TestCase):
         "flux": OVFluxPipeline,
         "qwenimage": OVQwenImagePipeline,
         "ltx-video": OVLTXPipeline,
+        "ltx-video-0.9.1": OVLTXPipeline,
         "ltx2": OVLTX2Pipeline,
         "kokoro": OVModelForTextToSpeechSeq2Seq,
         "cohere2": OVModelForCausalLM,
@@ -154,6 +155,7 @@ class ExportModelTest(unittest.TestCase):
         "z-image": {"text_encoder": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "stable-diffusion-xl-refiner": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "ltx-video": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
+        "ltx-video-0.9.1": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "ltx2": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
     }
 
