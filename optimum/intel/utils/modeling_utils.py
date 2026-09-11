@@ -203,7 +203,7 @@ def _infer_library_from_model_or_model_class(
         library_name = "kokoro"
     elif model.__module__.startswith("funasr") or getattr(model, "_funasr_model", False):
         library_name = "funasr"
-    elif model.__module__.startswith("optimum"):
+    elif model.__module__.startswith("optimum") and hasattr(model, "model"):
         # for wrapped models like timm in optimum.intel.openvino.modeling_timm
         library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
     else:
