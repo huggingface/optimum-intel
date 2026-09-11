@@ -67,7 +67,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--weight-format",
         type=str,
-        choices=["fp32", "fp16", "int8", "int4", "mxfp4", "nf4", "cb4"],
+        choices=["fp32", "fp16", "int8", "int4", "int2", "mxfp4", "nf4", "cb4"],
         default=None,
         help=(
             "The weight format of the exported model. Option 'cb4' represents a codebook with 16 fixed fp8 values in E4M3 format."
@@ -503,8 +503,9 @@ class OVExportCommand(BaseOptimumCLICommand):
 
 def prepare_wc_config(args, default_configs):
     is_int8 = args.weight_format == "int8"
+    is_int2 = args.weight_format == "int2"
     return {
-        "bits": 8 if is_int8 else 4,
+        "bits": 8 if is_int8 else 2 if is_int2 else 4,
         "ratio": 1.0 if is_int8 else (args.ratio or default_configs["ratio"]),
         "sym": args.sym or False,
         "group_size": -1 if is_int8 else args.group_size,
