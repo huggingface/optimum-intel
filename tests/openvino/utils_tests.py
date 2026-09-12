@@ -43,15 +43,8 @@ def _create_tiny_kokoro_model():
     if config_file.exists() and weights_file.exists() and voice_file.exists():
         return str(output_dir)
 
-    try:
-        from kokoro.istftnet import Decoder
-        from kokoro.modules import CustomAlbert, ProsodyPredictor, TextEncoder
-    except ImportError:
-        # Building the fixture needs the `kokoro` package. Returning the Hub id keeps this
-        # module importable without it, so tests for other architectures still collect; the
-        # Kokoro tests themselves skip on `is_kokoro_available()`.
-        return "hexgrad/Kokoro-82M"
-
+    from kokoro.istftnet import Decoder
+    from kokoro.modules import CustomAlbert, ProsodyPredictor, TextEncoder
     from transformers import AlbertConfig
 
     output_dir.mkdir(parents=True, exist_ok=True)
