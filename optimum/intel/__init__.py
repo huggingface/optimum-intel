@@ -65,6 +65,7 @@ _import_structure = {
         "OVModelForCustomTasks",
         "OVModelForFeatureExtraction",
         "OVModelForImageClassification",
+        "OVModelForImageToImage",
         "OVModelForMaskedLM",
         "OVModelForMultimodalLM",
         "OVModelForPix2Struct",
