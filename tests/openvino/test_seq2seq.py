@@ -1419,7 +1419,11 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         ref_model = _Qwen3TTSForTextToSpeech.from_pretrained(model_id)
 
         with TemporaryDirectory() as tmpdir:
-            export_from_model(model=ref_model, output=tmpdir, task="text-to-audio", stateful=True)
+            # The checkpoint is bfloat16 and the loader keeps that precision, so tracing needs the
+            # 16-bit patch that ``main_export`` would otherwise derive from the loaded model.
+            export_from_model(
+                model=ref_model, output=tmpdir, task="text-to-audio", stateful=True, patch_16bit_model=True
+            )
 
             # Every neural component must be exported; the runtime has no weights to fall back on.
             for name in (

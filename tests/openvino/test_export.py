@@ -330,7 +330,16 @@ class ExportModelTest(unittest.TestCase):
         }
 
         with TemporaryDirectory() as tmpdirname:
-            export_from_model(model=model, output=Path(tmpdirname), task="text-to-audio", stateful=True)
+            # Qwen3-TTS checkpoints are published in bfloat16 and the loader keeps that precision,
+            # so the model has to be made traceable with fp32 activations. ``main_export`` derives
+            # this from the loaded model; a direct ``export_from_model`` call passes it.
+            export_from_model(
+                model=model,
+                output=Path(tmpdirname),
+                task="text-to-audio",
+                stateful=True,
+                patch_16bit_model=True,
+            )
 
             exported = {p.stem[len("openvino_") :] for p in Path(tmpdirname).glob("openvino_*.xml")}
             self.assertTrue(expected_submodels.issubset(exported), f"missing: {expected_submodels - exported}")

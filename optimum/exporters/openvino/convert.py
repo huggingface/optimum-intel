@@ -613,21 +613,6 @@ def _save_kokoro_config_and_assets(model, output: Path):
         logger.info(f"Exported voice {voice_name} -> {voice_bin}")
 
 
-# Checkpoint files are not copied into a Qwen3-TTS export: every parameter of the model - the
-# two decoder stacks, the embedding tables and output heads, the speaker encoder and both codec
-# directions - lives in an exported IR, and the runtime rebuilds the ``qwen_tts`` module tree
-# from its configs alone. The configs, tokenizer, and processor assets are still required and
-# are copied as usual.
-_QWEN3_TTS_WEIGHT_PATTERNS = (
-    "*.safetensors",
-    "*.safetensors.index.json",
-    "*.bin",
-    "*.bin.index.json",
-    "*.pt",
-    "*.pth",
-)
-
-
 def _save_qwen3_tts_config_and_assets(model, output: Path):
     """Materialize the original Qwen3-TTS repository files alongside the exported IRs.
 
@@ -636,7 +621,7 @@ def _save_qwen3_tts_config_and_assets(model, output: Path):
     neural component, so the original configs, tokenizer and processor assets must be present
     in ``output``. Two classes of file are left out: OpenVINO IRs that already live in the
     source directory (so a freshly exported graph is not clobbered) and the checkpoints
-    themselves (see :data:`_QWEN3_TTS_WEIGHT_PATTERNS`).
+    themselves.
     """
     import shutil
 
@@ -644,10 +629,24 @@ def _save_qwen3_tts_config_and_assets(model, output: Path):
     if repo_id is None:
         return
 
+    # Checkpoint files are not copied into a Qwen3-TTS export: every parameter of the model - the
+    # two decoder stacks, the embedding tables and output heads, the speaker encoder and both codec
+    # directions - lives in an exported IR, and the runtime rebuilds the ``qwen_tts`` module tree
+    # from its configs alone. The configs, tokenizer, and processor assets are still required and
+    # are copied as usual.
+    weight_patterns = (
+        "*.safetensors",
+        "*.safetensors.index.json",
+        "*.bin",
+        "*.bin.index.json",
+        "*.pt",
+        "*.pth",
+    )
+
     output = Path(output)
     src = Path(repo_id)
     skip_names = {".git", ".cache", "openvino_talker_model.xml", "openvino_talker_model.bin"}
-    ignore_weights = shutil.ignore_patterns(*_QWEN3_TTS_WEIGHT_PATTERNS)
+    ignore_weights = shutil.ignore_patterns(*weight_patterns)
 
     # Exporting a directory onto itself: the assets are already in place, and copying would
     # raise SameFileError on the nested `speech_tokenizer` directory.
@@ -674,8 +673,8 @@ def _save_qwen3_tts_config_and_assets(model, output: Path):
             ignore_patterns=[
                 "openvino_talker_model.xml",
                 "openvino_talker_model.bin",
-                *_QWEN3_TTS_WEIGHT_PATTERNS,
-                *[f"speech_tokenizer/{pattern}" for pattern in _QWEN3_TTS_WEIGHT_PATTERNS],
+                *weight_patterns,
+                *[f"speech_tokenizer/{pattern}" for pattern in weight_patterns],
             ],
         )
 
@@ -696,14 +695,6 @@ def export_from_model(
     **kwargs_shapes,
 ):
     model_kwargs = model_kwargs or {}
-
-    # ``main_export`` turns this on after inspecting the loaded model; callers that reach
-    # ``export_from_model`` directly (tests, custom pipelines) would otherwise trace a 16-bit
-    # model with fp32 dummy inputs and fail on the dtype mismatch.
-    import torch
-
-    if not patch_16bit_model and getattr(model, "dtype", None) in [torch.float16, torch.bfloat16]:
-        patch_16bit_model = True
 
     if ov_config is not None and ov_config.quantization_config and not is_nncf_available():
         raise ImportError(
