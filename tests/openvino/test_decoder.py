@@ -287,6 +287,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         supported_architectures -= to_remove
         # llama4_text is the text sub-model of llama4 (VLM), tested in the VLM group
         supported_architectures.discard("llama4_text")
+        # ministral3 is the text sub-model of the Mistral3 VLM, tested in the seq2seq group
+        supported_architectures.discard("ministral3")
         # *_text variants below are sub-models of VLM architectures tested in the seq2seq group
         supported_architectures -= {
             "qwen3_vl_text",
