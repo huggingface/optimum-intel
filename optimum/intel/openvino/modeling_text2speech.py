@@ -1171,8 +1171,8 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
     @classproperty
     def _all_ov_model_paths(cls) -> Dict[str, str]:
         return {
-            "talker": "openvino_talker_model.xml",
-            "code_predictor": "openvino_code_predictor_model.xml",
+            "talker_model": "openvino_talker_model.xml",
+            "code_predictor_model": "openvino_code_predictor_model.xml",
             "text_embeddings": "openvino_text_embeddings.xml",
             "talker_embeddings": "openvino_talker_embeddings.xml",
             "code_predictor_embeddings": "openvino_code_predictor_embeddings.xml",
@@ -1201,13 +1201,18 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
     # stateful graph and the beam-reordered one.
     _DECODER_STACK_INPUTS = ("inputs_embeds", "attention_mask", "position_ids")
     _DECODER_STACK_OUTPUTS = ("last_hidden_state", "logits")
+    _DECODER_STACK_PORTS = {
+        "talker_model": (_DECODER_STACK_INPUTS, _DECODER_STACK_OUTPUTS),
+        # The code predictor's graph additionally picks a depth with ``step``.
+        "code_predictor_model": (_DECODER_STACK_INPUTS + ("step",), _DECODER_STACK_OUTPUTS),
+    }
 
     # The components every export carries, whatever the variant, and so the ones a directory has
     # to hold before a previous conversion may be reused instead of repeated. The speaker encoder
     # is left out because only the voice-clone (``base``) checkpoints have one.
     _MANDATORY_COMPONENTS = (
-        "talker",
-        "code_predictor",
+        "talker_model",
+        "code_predictor_model",
         "text_embeddings",
         "talker_embeddings",
         "code_predictor_embeddings",
@@ -1223,8 +1228,8 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
     # tables tolerate it. The speaker encoder is excluded too - it is 9M parameters, so
     # compressing it saves nothing worth the risk to voice similarity.
     _COMPRESSIBLE_COMPONENTS = (
-        "talker",
-        "code_predictor",
+        "talker_model",
+        "code_predictor_model",
         "text_embeddings",
         "talker_embeddings",
         "code_predictor_embeddings",
@@ -1242,7 +1247,7 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
     #     defaults already fall back to 8-bit for them.
     # Within an IR, `--ratio` still splits layers between 4-bit and the 8-bit backup precision as
     # usual; this only decides which IRs are offered 4-bit at all.
-    _INT4_COMPONENTS = ("talker",)
+    _INT4_COMPONENTS = ("talker_model",)
 
     @staticmethod
     def is_qwen3_tts_config(config: Optional["PretrainedConfig"]) -> bool:
@@ -1445,11 +1450,30 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
         (``'Qwen3TTSTalkerConfig' object has no attribute 'text_vocab_size'``). Interrupted
         conversions and directories written by a version that exported only the talker both land
         in that state, and both are indistinguishable from a finished export by one IR alone.
+
+        A full set of files is not enough either: the cache entry is keyed by model id alone, so it
+        outlives exporter changes, and a set written before the decoder stacks moved their cache
+        into OpenVINO state loads fine and is then rejected component by component. The stacks'
+        ports are checked so that such an entry is converted again rather than reused.
         """
         directory = Path(directory)
         if not (directory / "config.json").is_file():
             return False
-        return all((directory / cls._all_ov_model_paths[name]).is_file() for name in cls._MANDATORY_COMPONENTS)
+        if not all((directory / cls._all_ov_model_paths[name]).is_file() for name in cls._MANDATORY_COMPONENTS):
+            return False
+        core = openvino.Core()
+        for name, ports in cls._DECODER_STACK_PORTS.items():
+            ir_xml = directory / cls._all_ov_model_paths[name]
+            model = core.read_model(ir_xml)
+            try:
+                cls._check_ir_signature(model, ir_xml, name, *ports)
+            except RuntimeError:
+                return False
+            finally:
+                # A reused-or-not verdict must not leave the .bin mapped: a re-conversion writes
+                # over it next.
+                del model
+        return True
 
     @classmethod
     def _convert_checkpoint(cls, model_id, cache_dir, weight_compression=None):
@@ -1657,16 +1681,16 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
                 return None
             return part_cls(model, self, model_name=name, **extra)
 
-        self.talker = build(
-            "talker",
+        self.talker_model = build(
+            "talker_model",
             OVQwen3TTSDecoderStack,
             num_layers=len(talker.model.layers),
             num_key_value_heads=talker_config.num_key_value_heads,
             ov_config=self._part_ov_config(self._TALKER_OV_CONFIG),
             position_fn=OVQwen3TTSDecoderStack.mrope_positions,
         )
-        self.code_predictor = build(
-            "code_predictor",
+        self.code_predictor_model = build(
+            "code_predictor_model",
             OVQwen3TTSDecoderStack,
             num_layers=len(code_predictor.model.layers),
             num_key_value_heads=code_predictor.model.config.num_key_value_heads,
@@ -1693,8 +1717,8 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
             required |= {"codec_encoder", "codec_decoder"}
         if not self._weights_present:
             required |= {
-                "talker",
-                "code_predictor",
+                "talker_model",
+                "code_predictor_model",
                 "text_embeddings",
                 "talker_embeddings",
                 "code_predictor_embeddings",
@@ -1747,13 +1771,13 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
         talker = self.model.talker
         code_predictor = talker.code_predictor
 
-        if self.talker is not None:
-            self._patch_forward(talker.model, "forward", self.talker.forward)
+        if self.talker_model is not None:
+            self._patch_forward(talker.model, "forward", self.talker_model.forward)
             # ``codec_head`` is folded into the talker graph, which computed these logits on the
             # call that produced the hidden states a moment ago.
-            self._patch_forward(talker.codec_head, "forward", self.talker.head_logits)
-        if self.code_predictor is not None:
-            self._patch_forward(code_predictor.model, "forward", self.code_predictor.forward)
+            self._patch_forward(talker.codec_head, "forward", self.talker_model.head_logits)
+        if self.code_predictor_model is not None:
+            self._patch_forward(code_predictor.model, "forward", self.code_predictor_model.forward)
             self._patch_forward(code_predictor, "forward", self._code_predictor_forward)
         if self.text_embeddings is not None:
             self._patch_forward(talker.get_text_embeddings(), "forward", self.text_embeddings.forward)
@@ -1819,7 +1843,7 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
         # `small_to_mtp_projection` is folded into the graph, so the embeddings are handed over in
         # the talker's width.
 
-        outputs = self.code_predictor.forward(
+        outputs = self.code_predictor_model.forward(
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_values=past_key_values,
@@ -1832,7 +1856,7 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
         )
         return Qwen3TTSTalkerCodePredictorOutputWithPast(
             loss=None,
-            logits=self.code_predictor.head_state["logits"],
+            logits=self.code_predictor_model.head_state["logits"],
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
@@ -1927,11 +1951,6 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
     def _load_ov_models(cls, ir_dir) -> Dict[str, openvino.Model]:
         """Read whichever component IRs are in ``ir_dir``, checking each is one this runtime drives."""
         core = openvino.Core()
-        expectations = {
-            "talker": (cls._DECODER_STACK_INPUTS, cls._DECODER_STACK_OUTPUTS),
-            # The code predictor's graph additionally picks a depth with ``step``.
-            "code_predictor": (cls._DECODER_STACK_INPUTS + ("step",), cls._DECODER_STACK_OUTPUTS),
-        }
         models = {}
         for name, ir_name in cls._all_ov_model_paths.items():
             ir_xml = Path(ir_dir) / ir_name
@@ -1940,7 +1959,7 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
                     raise FileNotFoundError(f"{name} OpenVINO IR not found at {ir_xml}")
                 logger.info(f"Qwen3-TTS: loading {name} OpenVINO IR from {ir_xml}.")
                 model = core.read_model(ir_xml)
-                cls._check_ir_signature(model, ir_xml, name, *expectations.get(name, ((), ())))
+                cls._check_ir_signature(model, ir_xml, name, *cls._DECODER_STACK_PORTS.get(name, ((), ())))
                 models[name] = model
             except Exception as exc:  # pragma: no cover - the component stays on PyTorch
                 logger.debug(f"Qwen3-TTS: OpenVINO {name} offload disabled ({exc}); using PyTorch.")
