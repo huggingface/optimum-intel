@@ -38,6 +38,7 @@ from optimum.exporters.openvino.utils import (
     _get_kokoro_submodels_fn_and_export_configs,
     _get_model_dtype,
     _get_open_clip_submodels_fn_and_export_configs,
+    _get_qwen3_tts_submodels_fn_and_export_configs,
     _normalize_dummy_inputs,
     allow_skip_tracing_check,
     clear_class_registry,
@@ -416,7 +417,16 @@ def export_pytorch(
             input_name = input_names[idx]
             inp_tensor.get_tensor().set_names({input_name})
 
-        if stateful:
+        # An export config may know how to hide its own cache, which the generic patcher cannot:
+        # that one matches the `past_key_values.<i>.<key|value>` naming and does not fit graphs
+        # carrying the whole cache as one stacked tensor. Defining `patch_stateful_model` is an
+        # explicit opt-in, so it is honoured regardless of the `stateful` flag - that flag
+        # follows task support (`ensure_export_task_support_stateful`), and a component-wise
+        # pipeline exported under, say, `text-to-audio` never qualifies.
+        custom_stateful_patcher = getattr(config, "patch_stateful_model", None)
+        if callable(custom_stateful_patcher):
+            custom_stateful_patcher(ov_model)
+        elif stateful:
             patch_stateful(model.config, ov_model)
 
         library_name = _infer_library_from_model_or_model_class(model=model, library_name=library_name)
@@ -603,6 +613,72 @@ def _save_kokoro_config_and_assets(model, output: Path):
         logger.info(f"Exported voice {voice_name} -> {voice_bin}")
 
 
+def _save_qwen3_tts_config_and_assets(model, output: Path):
+    """Materialize the original Qwen3-TTS repository files alongside the exported IRs.
+
+    The OpenVINO runtime (:class:`optimum.intel.openvino.modeling_text2speech._OVModelForQwen3TTS`)
+    rebuilds the ``qwen_tts`` pipeline from these files and loads the exported IRs for every
+    neural component, so the original configs, tokenizer and processor assets must be present
+    in ``output``. Two classes of file are left out: OpenVINO IRs that already live in the
+    source directory (so a freshly exported graph is not clobbered) and the checkpoints
+    themselves.
+    """
+    import shutil
+
+    repo_id = getattr(model, "_qwen3_tts_repo_id", None)
+    if repo_id is None:
+        return
+
+    # Checkpoint files are not copied into a Qwen3-TTS export: every parameter of the model - the
+    # two decoder stacks, the embedding tables and output heads, the speaker encoder and both codec
+    # directions - lives in an exported IR, and the runtime rebuilds the ``qwen_tts`` module tree
+    # from its configs alone. The configs, tokenizer, and processor assets are still required and
+    # are copied as usual.
+    weight_patterns = (
+        "*.safetensors",
+        "*.safetensors.index.json",
+        "*.bin",
+        "*.bin.index.json",
+        "*.pt",
+        "*.pth",
+    )
+
+    output = Path(output)
+    src = Path(repo_id)
+    skip_names = {".git", ".cache", "openvino_talker_model.xml", "openvino_talker_model.bin"}
+    ignore_weights = shutil.ignore_patterns(*weight_patterns)
+
+    # Exporting a directory onto itself: the assets are already in place, and copying would
+    # raise SameFileError on the nested `speech_tokenizer` directory.
+    if src.is_dir() and output.is_dir() and src.resolve() == output.resolve():
+        return
+
+    if src.is_dir():
+        for item in src.iterdir():
+            if item.name in skip_names or ignore_weights(str(src), [item.name]):
+                continue
+            dest = output / item.name
+            if item.is_dir():
+                shutil.copytree(item, dest, dirs_exist_ok=True, ignore=ignore_weights)
+            else:
+                if dest.resolve() == item.resolve():
+                    continue
+                shutil.copy2(item, dest)
+    else:
+        from huggingface_hub import snapshot_download
+
+        snapshot_download(
+            repo_id=str(repo_id),
+            local_dir=str(output),
+            ignore_patterns=[
+                "openvino_talker_model.xml",
+                "openvino_talker_model.bin",
+                *weight_patterns,
+                *[f"speech_tokenizer/{pattern}" for pattern in weight_patterns],
+            ],
+        )
+
+
 def export_from_model(
     model: Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"],
     output: Union[str, Path],
@@ -626,7 +702,7 @@ def export_from_model(
         )
 
     library_name = _infer_library_from_model_or_model_class(model)
-    if library_name not in ("open_clip", "kokoro", "funasr"):
+    if library_name not in ("open_clip", "kokoro", "qwen3_tts", "funasr"):
         TasksManager.standardize_model_attributes(model, library_name=library_name)
 
     if hasattr(model.config, "export_model_type") and model.config.export_model_type is not None:
@@ -644,7 +720,7 @@ def export_from_model(
     if task is not None and task != "auto":
         task = TasksManager.map_from_synonym(task)
     else:
-        if library_name == "kokoro":
+        if library_name in ("kokoro", "qwen3_tts"):
             task = "text-to-audio"
         else:
             try:
@@ -730,6 +806,12 @@ def export_from_model(
             model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
         )
 
+    if library_name == "qwen3_tts":
+        custom_architecture = True
+        custom_export_configs, fn_get_submodels = _get_qwen3_tts_submodels_fn_and_export_configs(
+            model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
+        )
+
     if library_name == "diffusers":
         export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
         stateful_submodels = False
@@ -767,6 +849,9 @@ def export_from_model(
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
     elif library_name == "kokoro":
         _save_kokoro_config_and_assets(model, output)
+        files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
+    elif library_name == "qwen3_tts":
+        _save_qwen3_tts_config_and_assets(model, output)
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
     elif library_name != "diffusers":
         if is_transformers_version("<", "5"):

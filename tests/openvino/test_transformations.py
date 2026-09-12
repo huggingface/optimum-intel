@@ -27,7 +27,11 @@ from utils_tests import (
     get_supported_model_for_library,
 )
 
-from optimum.intel.utils.import_utils import is_diffusers_version, is_transformers_version
+from optimum.intel.utils.import_utils import (
+    is_diffusers_version,
+    is_qwen_tts_available,
+    is_transformers_version,
+)
 
 
 # Expected transformations per architecture, separated by stage:
@@ -239,6 +243,34 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToPowerStatic",
         ],
     },
+    "qwen3_tts": {
+        # Qwen3-TTS is exported component-wise into stateless graphs, so there is no
+        # MakeStateful/StatefulSDPAFusion here; what is checked is that the talker and code
+        # predictor stacks still get the usual decoder fusions (RoPE, SDPA subgraph, matmul
+        # conversion) and that the compressed embedding tables go through the decompression
+        # path rather than being folded to full precision.
+        "model_class": "OVModelForTextToSpeechSeq2Seq",
+        "convert": [
+            "CommonOptimizations",
+            "CompressedGatherTransformation",
+            "DecompressionHandling",
+            "EnableDecompressionConvertConstantFolding",
+        ],
+        "compile": [
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "RoPEFusion",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "CausalMaskPreprocessFusion",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertBroadcast3",
+            "ConvertToCPUSpecificOpset",
+        ],
+    },
     "qwen3_omni_moe": {
         "convert": [
             "SDPAFusion",
@@ -324,10 +356,14 @@ if is_transformers_version(">=", "5.0.0"):
 
 
 # filter architectures depending on min/max transformers supported versions
+# Architectures exported through an out-of-tree library are not part of the transformers set,
+# so they are kept explicitly and gated on that library being installed.
+_NON_TRANSFORMERS_ARCHS = {"qwen3_tts": is_qwen_tts_available()}
+
 ARCH_TO_EXPECTED_TRANSFORMATIONS = {
     arch: v
     for arch, v in ARCH_TO_EXPECTED_TRANSFORMATIONS.items()
-    if arch in get_supported_model_for_library("transformers")
+    if arch in get_supported_model_for_library("transformers") or _NON_TRANSFORMERS_ARCHS.get(arch, False)
 }
 
 

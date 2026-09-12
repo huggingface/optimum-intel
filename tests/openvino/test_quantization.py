@@ -53,6 +53,7 @@ from optimum.intel import (
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
     OVModelForSpeechSeq2Seq,
+    OVModelForTextToSpeechSeq2Seq,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
     OVStableDiffusion3Pipeline,
@@ -81,7 +82,13 @@ from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
 
 from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrationDatasetBuilder
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version, is_nncf_version
+from optimum.exporters.openvino import main_export
+from optimum.intel.utils.import_utils import (
+    is_nncf_version,
+    is_openvino_version,
+    is_qwen_tts_available,
+    is_transformers_version,
+)
 from utils_tests import (
     MODEL_NAMES,
     get_num_quantized_nodes,
@@ -650,6 +657,49 @@ class OVQuantizerTest(unittest.TestCase):
                 expected_num_weight_nodes_per_model,
                 expected_fake_nodes_per_model,
             )
+
+
+@unittest.skipUnless(is_qwen_tts_available(), "qwen_tts package is not installed")
+class OVQwen3TTSWeightCompressionTest(unittest.TestCase):
+    """Weight compression for the component-wise Qwen3-TTS export.
+
+    Qwen3-TTS is not an ``OVBaseModel`` - it keeps the ``qwen_tts`` generation orchestration in
+    PyTorch and drives one IR per component - so it is compressed through the exporter rather
+    than through ``from_pretrained(load_in_8bit=True)``. What matters is that compression is
+    applied per component, and to the right ones: the language-model side is compressed while
+    the neural codec stays in floating point, because int8 weights there cost the vocoder
+    ~29 dB of SNR.
+    """
+
+    def test_int8_weight_compression(self):
+        model = OVModelForTextToSpeechSeq2Seq.from_pretrained(
+            MODEL_NAMES["qwen3_tts"], export=True, load_in_8bit=True, device=OPENVINO_DEVICE
+        )
+        expected = {k: {"int8": v} for k, v in _ARCHITECTURES_TO_EXPECTED_INT8["qwen3_tts"].items()}
+        check_compression_state_per_model(self, model.ov_models, expected)
+
+    def test_int4_weight_compression_is_mixed(self):
+        model = OVModelForTextToSpeechSeq2Seq.from_pretrained(
+            MODEL_NAMES["qwen3_tts"],
+            export=True,
+            quantization_config=OVWeightQuantizationConfig(bits=4, group_size=128, ratio=1.0),
+            device=OPENVINO_DEVICE,
+        )
+        ov_models = model.ov_models
+
+        # Only the talker is worth 4 bits; the rest of the language-model side falls back
+        # to 8, and the codec and speaker encoder are not compressed at all.
+        _, talker_weights = get_num_quantized_nodes(ov_models["talker_model"])
+        self.assertGreater(talker_weights.get("int4", 0), 0, "talker was not quantized to int4")
+
+        for name in ("code_predictor_model", "text_embeddings", "talker_embeddings", "code_predictor_embeddings"):
+            _, weights = get_num_quantized_nodes(ov_models[name])
+            self.assertEqual(weights.get("int4", 0), 0, f"{name} should not be quantized to int4")
+            self.assertGreater(weights.get("int8", 0), 0, f"{name} should be quantized to int8")
+
+        for name in ("speaker_encoder", "codec_encoder", "codec_decoder"):
+            _, weights = get_num_quantized_nodes(ov_models[name])
+            self.assertEqual(sum(weights.values()), 0, f"{name} should be left in floating point")
 
 
 class OVWeightCompressionTest(unittest.TestCase):

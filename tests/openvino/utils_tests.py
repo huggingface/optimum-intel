@@ -356,6 +356,7 @@ HUB_MODEL_NAMES = {
     "qwen3_vl": "optimum-intel-internal-testing/tiny-random-qwen3-vl",
     "qwen3_vl_embedding": "optimum-intel-internal-testing/tiny-random-qwen3-vl-embedding",
     "qwen3_omni_moe": "optimum-intel-internal-testing/tiny-random-qwen3-omni",
+    "qwen3_tts": "optimum-intel-internal-testing/tiny-random-qwen3-tts",
     "qwen3_next": "optimum-intel-internal-testing/tiny-random-qwen3-next",
     "qwen3_5": "optimum-intel-internal-testing/tiny-random-qwen3.5",
     "qwen3_5_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-mtp",
@@ -692,6 +693,18 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vocoder": 80,
     },
     "kokoro": {"model": 352},
+    # Weight compression covers the language-model side only; the codec and the speaker encoder
+    # are deliberately left in floating point (see _QWEN3_TTS_COMPRESSIBLE_OV_IR_NAMES).
+    "qwen3_tts": {
+        "talker_model": 30,
+        "code_predictor_model": 16,
+        "text_embeddings": 2,
+        "talker_embeddings": 2,
+        "code_predictor_embeddings": 2,
+        "speaker_encoder": 0,
+        "codec_encoder": 0,
+        "codec_decoder": 0,
+    },
     "clip": {"model": 130},
     "mamba": {"model": 324 if is_transformers_version("==", "5.0") else 322},
     "falcon_mamba": {"model": 164 if is_transformers_version("==", "5.0") else 162},
