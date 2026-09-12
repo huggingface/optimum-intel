@@ -49,6 +49,22 @@ As shown in the table below, each task is associated with a class enabling to au
 | `OVModelForImageTextToText`          | `image-to-text`                      |
 | `OVModelForTextToSpeechSeq2Seq`      | `text-to-audio`                      |
 
+`OVModelForFeatureExtraction` also supports multilingual text-embedding models built on
+encoder-only backbones registered under `feature-extraction`, such as the
+[XLM-RoBERTa](https://huggingface.co/docs/transformers/model_doc/xlm-roberta)-based
+[`BAAI/bge-m3`](https://huggingface.co/BAAI/bge-m3):
+
+```python
+from optimum.intel import OVModelForFeatureExtraction
+from transformers import AutoTokenizer
+
+model_id = "BAAI/bge-m3"
+model = OVModelForFeatureExtraction.from_pretrained(model_id, export=True)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+inputs = tokenizer("Hello, this is a multilingual embedding example.", return_tensors="pt")
+embeddings = model(**inputs).last_hidden_state
+```
+
 ### Diffusers models
 
 Make sure you have 🤗 Diffusers installed. To install `diffusers`:
