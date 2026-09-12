@@ -78,7 +78,7 @@ jobs:
           pytest tests/openvino/${{ matrix.test-pattern }} -k "qwen3_asr or fun_asr" --durations=0
 
       - if: ${{ matrix.test-pattern == '*export*' || matrix.test-pattern == '*quantization*' }}
-        name: Install qwen-tts package
+        name: Install qwen-tts package and uninstall qwen-asr
         run: |
           # qwen-tts pins transformers==4.57.3 and qwen-asr pins 4.57.6, so the two cannot be
           # resolved together. qwen-asr is removed once its tests above have run, and qwen-tts
@@ -94,16 +94,17 @@ jobs:
           pytest tests/openvino/test_exporters_cli.py -k "text_to_audio" --durations=0
           pytest tests/openvino/test_export.py -k "qwen3_tts" --durations=0
           pytest tests/openvino/test_seq2seq.py -k "qwen3_tts" --durations=0
+          pytest tests/openvino/test_transformations.py -k "qwen3_tts" --durations=0
 
       - if: ${{ matrix.test-pattern == '*quantization*' }}
         name: Test Qwen3-TTS weight compression
         run: |
           pytest tests/openvino/test_quantization.py -k "Qwen3TTS" --durations=0
 
-      - if: ${{ matrix.test-pattern == '*export*' }}
-        name: Test Qwen3-TTS transformations
+      - if: ${{ matrix.test-pattern == '*export*' || matrix.test-pattern == '*quantization*' }}
+        name: Uninstall qwen-tts package
         run: |
-          pytest tests/openvino/test_transformations.py -k "qwen3_tts" --durations=0
+          uv pip uninstall qwen-tts
 
       - if: ${{ matrix.test-pattern == '*export*' }}
         name: Test DFlash
