@@ -10,7 +10,7 @@ def pytest_report_header(config):
     import transformers
 
     device = os.getenv("OPENVINO_TEST_DEVICE", "CPU")
-    header = f"OpenVINO {ov.__version__} Transformers {transformers.__version__} Device: {device}"
+    header = f"OpenVINO GenAI {ov.__version__} Transformers {transformers.__version__} Device: {device}"
     if device == "NPU":
         try:
             header += f", NPU driver version: {ov.Core().get_property('NPU', 'NPU_DRIVER_VERSION')}"
