@@ -1181,19 +1181,20 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
             "codec_decoder": "openvino_codec_decoder.xml",
         }
 
-    # Both decoder stacks keep their key/value cache in OpenVINO state, which makes the CPU
-    # plugin apply its default `u8` cache compression. That trade is made for long-context LLMs;
-    # here the cache spans a couple of hundred 12.5 Hz frames at most, so it saves little, while
-    # quantizing the keys is enough to move sampled codes away from what PyTorch produces.
-    _TALKER_OV_CONFIG = {"KV_CACHE_PRECISION": "f32"}
-
-    # The code predictor is additionally pinned to f32 arithmetic. It runs `num_code_groups - 1`
-    # steps inside every talker frame off a cache that is reset each frame, and in f16 - the GPU
-    # plugin's default inference precision - its logits go non-finite within the first few frames,
-    # which surfaces as `probability tensor contains either inf, nan or element < 0` out of the
-    # multinomial sampling in `code_predictor.generate`. The talker stack is unaffected and keeps
-    # the device default, so the bulk of the compute (28 layers vs 5) still runs in f16 on GPU.
-    _CODE_PREDICTOR_OV_CONFIG = {**_TALKER_OV_CONFIG, "INFERENCE_PRECISION_HINT": "f32"}
+    # The code predictor is pinned to f32 arithmetic. It runs `num_code_groups - 1` steps inside
+    # every talker frame off a cache that is reset each frame, and in f16 - the GPU plugin's default
+    # inference precision - its logits go non-finite within the first few frames, which surfaces as
+    # `probability tensor contains either inf, nan or element < 0` out of the multinomial sampling
+    # in `code_predictor.generate`. The talker stack is unaffected and keeps the device default, so
+    # the bulk of the compute (28 layers vs 5) still runs in f16 on GPU.
+    #
+    # Neither stack pins its key/value cache precision. Both compile to fused stateful SDPA on CPU
+    # and GPU, which quantizes the cache per the plugin's default (u8 on CPU), and that costs no
+    # output quality: greedy decoding with the default cache yields the same codes as PyTorch, frame
+    # for frame. What it does give up is bit-exact reproduction of a *sampled* PyTorch run under a
+    # fixed seed on CPU - a near-tie resolves differently and the sample takes another path - so a
+    # caller who needs that passes `ov_config={"KV_CACHE_PRECISION": "f32"}`.
+    _CODE_PREDICTOR_OV_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
 
     # The ports :class:`OVQwen3TTSDecoderStack` addresses by name, checked when a stack is loaded
     # so that an IR from an older exporter is rejected up front rather than at the first generated
@@ -1686,7 +1687,7 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
             OVQwen3TTSDecoderStack,
             num_layers=len(talker.model.layers),
             num_key_value_heads=talker_config.num_key_value_heads,
-            ov_config=self._part_ov_config(self._TALKER_OV_CONFIG),
+            ov_config=self._part_ov_config(),
             position_fn=OVQwen3TTSDecoderStack.mrope_positions,
         )
         self.code_predictor_model = build(

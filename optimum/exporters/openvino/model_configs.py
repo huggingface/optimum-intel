@@ -7726,6 +7726,14 @@ class Qwen3TTSSteppedDecoderStackOpenVINOConfig(Qwen3TTSDecoderStackOpenVINOConf
 
     Used for the code predictor, whose ``lm_head`` is one linear per residual depth: the
     stacked weights live in the same graph as the decoder layers, gathered with ``step``.
+
+    The cache is made stateful the same way as the talker's, ``beam_idx`` included, even though
+    this stack never reorders it - its cache covers the inner steps of a single talker frame and
+    is reset at the start of the next one, and the runtime feeds identity indices. The ``Gather``
+    through ``beam_idx`` is what the CPU plugin's stateful SDPA fusion matches on: without it the
+    five attention blocks are decomposed into plain ``MatMul``/``Softmax`` and the cache stays in
+    generic memory nodes, while with it they compile into fused ``ScaledDotProductAttention``
+    nodes that own the cache, as the talker's do. GPU fuses either form.
     """
 
     POSITION_IDS_ROWS = 1
@@ -7736,33 +7744,6 @@ class Qwen3TTSSteppedDecoderStackOpenVINOConfig(Qwen3TTSDecoderStackOpenVINOConf
         common_inputs = super().inputs
         common_inputs["position_ids"] = {0: "batch_size", 1: "sequence_length"}
         return {**common_inputs, "step": {}}
-
-    def patch_stateful_model(self, ov_model) -> None:
-        """Hide the cache as state, without the ``beam_idx`` cache reordering.
-
-        Unlike the talker, this stack is never driven by ``generate``: its cache covers the
-        inner steps of a single talker frame and is reset at the start of the next one, so
-        there is no beam to reorder and the extra input would only be dead weight.
-        """
-        from optimum.exporters.openvino.stateful import make_stateful
-
-        key_value_input_names = [name for model_input in ov_model.inputs for name in model_input.get_names()]
-        key_value_input_names = [name for name in key_value_input_names if "key_values" in name]
-        key_value_output_names = [
-            name for model_output in ov_model.outputs for name in model_output.get_names() if "present" in name
-        ]
-        not_kv_inputs = [
-            model_input
-            for model_input in ov_model.inputs
-            if not any(name in key_value_input_names for name in model_input.get_names())
-        ]
-        make_stateful(
-            ov_model,
-            not_kv_inputs=not_kv_inputs,
-            key_value_input_names=key_value_input_names,
-            key_value_output_names=key_value_output_names,
-            batch_dim=0,
-        )
 
 
 class Qwen3TTSComponentOpenVINOConfig(OpenVINOConfig):
