@@ -371,9 +371,9 @@ class OVQwen3TTSCodecEncoder(_OVQwen3TTSPart):
     """The codec encoder: reference waveform -> the residual codes that seed voice cloning.
 
     The waveform is handed over as it comes. The exported convolutions derive their own right
-    padding from the traced shape (see ``_traceable_extra_padding_for_conv1d`` in the exporter),
-    so the graph returns the same ``ceil(samples / 1920)`` frames as PyTorch for any length, with
-    the same values; the caller then trims the code stream back with its own padding mask.
+    padding from the traced shape (see ``Qwen3TTSCodecPatcher`` in the exporter), so the graph
+    returns the same ``ceil(samples / 1920)`` frames as PyTorch for any length, with the same
+    values; the caller then trims the code stream back with its own padding mask.
     Padding the waveform up to a frame boundary here instead would change the last frame's codes,
     because the stock convs pad per layer rather than once at the input.
     """
