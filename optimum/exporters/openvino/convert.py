@@ -645,38 +645,43 @@ def _save_qwen3_tts_config_and_assets(model, output: Path):
 
     output = Path(output)
     src = Path(repo_id)
-    skip_names = {".git", ".cache", "openvino_talker_model.xml", "openvino_talker_model.bin"}
+    if not src.is_dir():
+        from huggingface_hub import snapshot_download
+
+        # Resolve the repo into the Hugging Face cache - where the checkpoint already sits, since
+        # the model was loaded from it - and copy from there exactly as from a local checkout.
+        # Downloading with ``local_dir=output`` instead would leave ``huggingface_hub``'s per-file
+        # ``.lock``/``.metadata`` bookkeeping behind in ``output/.cache/huggingface``.
+        src = Path(
+            snapshot_download(
+                repo_id=str(repo_id),
+                ignore_patterns=[
+                    *weight_patterns,
+                    *[f"speech_tokenizer/{pattern}" for pattern in weight_patterns],
+                ],
+            )
+        )
+
+    # Repository bookkeeping and any IR a source directory already holds (so a freshly exported
+    # graph is not clobbered) are not part of the export.
+    skip_names = {".git", ".gitattributes", ".cache", "openvino_talker_model.xml", "openvino_talker_model.bin"}
     ignore_weights = shutil.ignore_patterns(*weight_patterns)
 
     # Exporting a directory onto itself: the assets are already in place, and copying would
     # raise SameFileError on the nested `speech_tokenizer` directory.
-    if src.is_dir() and output.is_dir() and src.resolve() == output.resolve():
+    if output.is_dir() and src.resolve() == output.resolve():
         return
 
-    if src.is_dir():
-        for item in src.iterdir():
-            if item.name in skip_names or ignore_weights(str(src), [item.name]):
+    for item in src.iterdir():
+        if item.name in skip_names or ignore_weights(str(src), [item.name]):
+            continue
+        dest = output / item.name
+        if item.is_dir():
+            shutil.copytree(item, dest, dirs_exist_ok=True, ignore=ignore_weights)
+        else:
+            if dest.resolve() == item.resolve():
                 continue
-            dest = output / item.name
-            if item.is_dir():
-                shutil.copytree(item, dest, dirs_exist_ok=True, ignore=ignore_weights)
-            else:
-                if dest.resolve() == item.resolve():
-                    continue
-                shutil.copy2(item, dest)
-    else:
-        from huggingface_hub import snapshot_download
-
-        snapshot_download(
-            repo_id=str(repo_id),
-            local_dir=str(output),
-            ignore_patterns=[
-                "openvino_talker_model.xml",
-                "openvino_talker_model.bin",
-                *weight_patterns,
-                *[f"speech_tokenizer/{pattern}" for pattern in weight_patterns],
-            ],
-        )
+            shutil.copy2(item, dest)
 
 
 def export_from_model(
