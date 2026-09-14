@@ -1186,12 +1186,15 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
             "codec_decoder": "openvino_codec_decoder.xml",
         }
 
-    # The code predictor is pinned to f32 arithmetic. It runs `num_code_groups - 1` steps inside
-    # every talker frame off a cache that is reset each frame, and in f16 - the GPU plugin's default
-    # inference precision - its logits go non-finite within the first few frames, which surfaces as
-    # `probability tensor contains either inf, nan or element < 0` out of the multinomial sampling
-    # in `code_predictor.generate`. The talker stack is unaffected and keeps the device default, so
-    # the bulk of the compute (28 layers vs 5) still runs in f16 on GPU.
+    # On GPU the code predictor is pinned to f32 arithmetic. It runs `num_code_groups - 1` steps
+    # inside every talker frame off a cache that is reset each frame, and in f16 - the GPU plugin's
+    # default inference precision - its logits go non-finite within the first few frames, which
+    # surfaces as `probability tensor contains either inf, nan or element < 0` out of the multinomial
+    # sampling in `code_predictor.generate`. The talker stack is unaffected and keeps the device
+    # default, so the bulk of the compute (28 layers vs 5) still runs in f16 on GPU.
+    #
+    # CPU keeps its own default. That is f32, or bf16 where the CPU has AMX - and bf16 has f32's
+    # exponent range, so the overflow f16 hits cannot happen there.
     #
     # Neither stack pins its key/value cache precision. Both compile to fused stateful SDPA on CPU
     # and GPU, which quantizes the cache per the plugin's default (u8 on CPU), and that costs no
@@ -1701,7 +1704,9 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
             OVQwen3TTSDecoderStack,
             num_layers=len(code_predictor.model.layers),
             num_key_value_heads=code_predictor.model.config.num_key_value_heads,
-            ov_config=self._part_ov_config(self._CODE_PREDICTOR_OV_CONFIG),
+            # Only GPU needs the f32 pin (see `_CODE_PREDICTOR_OV_CONFIG`); `GPU` also matches `GPU.1`
+            # and composite targets such as `HETERO:GPU,CPU`.
+            ov_config=self._part_ov_config(self._CODE_PREDICTOR_OV_CONFIG if "GPU" in self._device else None),
             with_step=True,
         )
         self.text_embeddings = build("text_embeddings", OVQwen3TTSEmbedding, embedding_dim=hidden_size)
