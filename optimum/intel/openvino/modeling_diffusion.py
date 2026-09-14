@@ -2212,6 +2212,9 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         self.vae = OVModelVae(decoder=self.vae_decoder, encoder=self.vae_encoder)
         self.scheduler = scheduler
         self.tokenizer = tokenizer
+        self.tokenizer_2 = None
+        self.tokenizer_3 = None
+        self.feature_extractor = None
 
         # Get latents_mean/std from vae_decoder config or audio_vae_decoder config
         vae_cfg = self.vae_decoder.config
