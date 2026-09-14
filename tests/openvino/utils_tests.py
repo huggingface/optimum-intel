@@ -365,7 +365,7 @@ HUB_MODEL_NAMES = {
     "qwen3_5_moe_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-dflash",
     "qwen3_asr": "optimum-intel-internal-testing/tiny-random-qwen3-asr",
     "qwen3_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
-    "qwen3_deepspec_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
+    "qwen3_deepspec_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-deepspec-dflash",
     "fun_asr": "optimum-intel-internal-testing/tiny-random-fun-asr",
     "rembert": "optimum-intel-internal-testing/tiny-random-rembert",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",
@@ -455,6 +455,7 @@ EAGLE3_MODELS = {"qwen3_eagle3": ("qwen3_eagle3", "qwen3_eagle3_target")}
 
 DFLASH_MODELS = {
     "qwen3_dflash": ("qwen3_dflash", "qwen3"),
+    "qwen3_deepspec_dflash": ("qwen3_deepspec_dflash", "qwen3"),
 }
 
 DFLASH_VLM_MODELS = {
