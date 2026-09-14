@@ -18,6 +18,7 @@ from pathlib import Path
 
 import numpy as np
 import openvino as ov
+import openvino_genai as ov_genai
 import pytest
 import requests
 import torch
@@ -52,6 +53,7 @@ from utils_tests import (
     REMOTE_CODE_MODELS,
     TEST_IMAGE_URL,
     TEST_NAME_TO_MODEL_TYPE,
+    get_dflash2_model_pairs,
     get_supported_model_for_library,
 )
 
@@ -671,6 +673,95 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
 
         # compare outputs
         self.assertEqual(genai_speculative_output, genai_output)
+
+    def test_dflash2_text_selector_presence_selectorless_and_sampled(self):
+        if not callable(getattr(ov_genai, "selector_model", None)):
+            self.skipTest("Installed openvino-genai does not expose DFlash-2 selector_model()")
+
+        # Use a tiny text-only target deliberately: this test isolates the
+        # DFlash-2 selector, selectorless, and sampled decoding contracts without
+        # repeating the vision export covered by the parameterized DFlash VLM
+        # tests below.
+        dflash2_model_pairs = get_dflash2_model_pairs()
+        if not dflash2_model_pairs:
+            self.skipTest("DFlash-2 requires Transformers >= 4.57")
+        draft_model_id, target_model_id = dflash2_model_pairs["qwen3_dflash2"]
+        draft_model_path = Path(self.temp_dir) / "dflash2_draft"
+        main_model_path = Path(self.temp_dir) / "dflash2_main"
+        main_export(
+            model_name_or_path=draft_model_id,
+            task="text-generation-with-past",
+            trust_remote_code=True,
+            convert_tokenizer=False,
+            output=draft_model_path,
+        )
+        main_export(
+            model_name_or_path=target_model_id,
+            task="text-generation-with-past",
+            convert_tokenizer=True,
+            output=main_model_path,
+        )
+
+        scheduler = SchedulerConfig()
+        scheduler.enable_prefix_caching = False
+        scheduler.max_num_batched_tokens = 256
+        scheduler.max_num_seqs = 1
+        pipeline_config = {**TEST_CONFIG, "scheduler_config": scheduler}
+        prompt = "Paris is the capital of"
+        generation_kwargs = {
+            **self.GEN_KWARGS,
+            "num_assistant_tokens": 3,
+            "echo": True,
+            "apply_chat_template": False,
+            "ignore_eos": True,
+        }
+
+        baseline = LLMPipeline(main_model_path, OPENVINO_DEVICE, **pipeline_config)
+        baseline_output = str(
+            baseline.generate(
+                prompt,
+                echo=True,
+                apply_chat_template=False,
+                ignore_eos=True,
+                **self.GEN_KWARGS,
+            )
+        )
+
+        selector_enabled = LLMPipeline(
+            main_model_path,
+            OPENVINO_DEVICE,
+            draft_model=draft_model(draft_model_path, "CPU"),
+            selector_model=ov_genai.selector_model(draft_model_path, "CPU"),
+            **pipeline_config,
+        )
+        selector_output = str(selector_enabled.generate(prompt, **generation_kwargs))
+        self.assertEqual(selector_output, baseline_output)
+
+        selectorless = LLMPipeline(
+            main_model_path,
+            OPENVINO_DEVICE,
+            draft_model=draft_model(draft_model_path, "CPU"),
+            **pipeline_config,
+        )
+        selectorless_output = str(selectorless.generate(prompt, **generation_kwargs))
+        self.assertEqual(selectorless_output, baseline_output)
+
+        sampled_kwargs = {
+            "max_new_tokens": 10,
+            "min_new_tokens": 10,
+            "do_sample": True,
+            "temperature": 1.0,
+            "top_p": 1.0,
+            "top_k": 0,
+            "rng_seed": 42,
+            "num_assistant_tokens": 3,
+            "apply_chat_template": False,
+            "ignore_eos": True,
+        }
+        with self.assertRaisesRegex(RuntimeError, "requires the DFlash-2 selector"):
+            selectorless.generate(prompt, **sampled_kwargs)
+        sampled_output = str(selector_enabled.generate(prompt, **sampled_kwargs))
+        self.assertTrue(sampled_output)
 
     @parameterized.expand(SPECULATIVE_DECODING_VLM_MODELS)
     def test_compare_outputs_vlm(

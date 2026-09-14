@@ -34,6 +34,9 @@ from optimum.utils.doc import add_dynamic_docstring
 
 logger = logging.get_logger(__name__)
 
+ACTIVATIONS_SCALE_FACTOR_RT_OPTION = "ACTIVATIONS_SCALE_FACTOR"
+DEFAULT_ACTIVATIONS_SCALE_FACTOR = 8.0
+
 
 GENERATE_DUMMY_DOCSTRING = r"""
         Generates the dummy inputs necessary for tracing the model. If not explicitly specified, default input shapes are used.
@@ -69,6 +72,7 @@ GENERATE_DUMMY_DOCSTRING = r"""
 class OpenVINOConfig(ExporterConfig, ABC):
     VARIANTS: ClassVar[dict[str, str]] = {"default": "The default OpenVINO variant."}
     DEFAULT_VARIANT = "default"
+    PRESERVE_CHECKPOINT_PRECISION: ClassVar[bool] = False
     PATCHING_SPECS: list[PatchingSpec] | None = None
     _MODEL_PATCHER = ModelPatcher
     MIN_TRANSFORMERS_VERSION = "4.57"
@@ -143,6 +147,9 @@ class OpenVINOConfig(ExporterConfig, ABC):
 
         self.variant = "default"
         self._preprocessors = preprocessors
+        # Export configs may replace generic runtime defaults with
+        # architecture- or component-specific recommendations.
+        self.runtime_options: dict[str, str] = {}
 
     @property
     def variant(self) -> str:
