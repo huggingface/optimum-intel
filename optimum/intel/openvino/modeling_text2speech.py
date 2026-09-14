@@ -197,16 +197,16 @@ class OVQwen3TTSDecoderStack(_OVQwen3TTSPart):
         ov_config: Optional[Dict[str, str]] = None,
         position_fn: Optional[Any] = None,
         with_step: bool = False,
+        with_hidden_states: bool = True,
     ) -> None:
         super().__init__(model, parent_model, ov_config=ov_config, model_name=model_name)
         self._num_layers = num_layers
         self._num_key_value_heads = num_key_value_heads
         self._position_fn = position_fn
         self._with_step = with_step
-        # A graph produced by the standard stateful transformation also takes ``beam_idx`` and
-        # gathers its cache through it, which is detected rather than assumed, so both that form
-        # and a plain stateful graph can be driven by this one part.
-        self._has_beam_idx = "beam_idx" in self.input_names
+        # The talker's graph returns its hidden states, which seed the code predictor's prompt; the
+        # code predictor's returns logits alone, as nothing reads its hidden states.
+        self._with_hidden_states = with_hidden_states
         self.head_state: Dict[str, Any] = {"logits": None, "hidden_shape": None}
 
     def compile(self):
@@ -289,23 +289,19 @@ class OVQwen3TTSDecoderStack(_OVQwen3TTSPart):
             "inputs_embeds": inputs_embeds.numpy(),
             "attention_mask": mask.numpy(),
             "position_ids": position_ids.to(torch.int64).numpy(),
+            # Both stacks gather every cache read through `beam_idx`. Nothing here reorders the
+            # batch - one continuation per sequence - so identity indices are what a reorder
+            # would produce.
+            "beam_idx": np.arange(batch_size, dtype=np.int32),
         }
         if self._with_step:
             graph_inputs["step"] = np.array(step if step is not None else 0, dtype=np.int64)
-        if self._has_beam_idx:
-            # The graph gathers every cache read through `beam_idx`, so it always has to be fed;
-            # the talker samples one continuation per sequence, so the batch keeps its order and
-            # identity indices are what a reorder would produce.
-            graph_inputs["beam_idx"] = np.arange(batch_size, dtype=np.int32)
         self.request.start_async(graph_inputs, share_inputs=True)
         self.request.wait()
 
         self.head_state["logits"] = torch.from_numpy(self.request.get_tensor("logits").data).clone()
-        # The talker's graph returns its hidden states, which seed the code predictor's prompt; the
-        # code predictor's returns logits alone, as nothing reads its hidden states. Exports made
-        # before that change still carry the output, which is then simply not needed.
         hidden = None
-        if "last_hidden_state" in self.output_names:
+        if self._with_hidden_states:
             hidden = torch.from_numpy(self.request.get_tensor("last_hidden_state").data).clone()
         self.head_state["hidden_shape"] = None if hidden is None else tuple(hidden.shape)
 
@@ -1204,19 +1200,6 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
     # caller who needs that passes `ov_config={"KV_CACHE_PRECISION": "f32"}`.
     _CODE_PREDICTOR_OV_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
 
-    # The ports :class:`OVQwen3TTSDecoderStack` addresses by name, checked when a stack is loaded
-    # so that an IR from an older exporter is rejected up front rather than at the first generated
-    # frame. ``beam_idx`` is deliberately absent: the part detects it and drives both the plain
-    # stateful graph and the beam-reordered one.
-    _DECODER_STACK_INPUTS = ("inputs_embeds", "attention_mask", "position_ids")
-    _DECODER_STACK_OUTPUTS = ("last_hidden_state", "logits")
-    _DECODER_STACK_PORTS = {
-        "talker_model": (_DECODER_STACK_INPUTS, _DECODER_STACK_OUTPUTS),
-        # The code predictor's graph additionally picks a depth with ``step``, and returns only the
-        # logits (earlier exports also carried ``last_hidden_state``, which is accepted but unused).
-        "code_predictor_model": (_DECODER_STACK_INPUTS + ("step",), ("logits",)),
-    }
-
     # The components every export carries, whatever the variant, and so the ones a directory has
     # to hold before a previous conversion may be reused instead of repeated. The speaker encoder
     # is left out because only the voice-clone (``base``) checkpoints have one.
@@ -1301,32 +1284,6 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
         if dropped:
             logger.info(f"Qwen3-TTS: {device} does not support {dropped}; compiling without.")
         return {name: value for name, value in ov_config.items() if name in supported}
-
-    @staticmethod
-    def _check_ir_signature(model: openvino.Model, ir_xml, label: str, expected_inputs, expected_outputs) -> None:
-        """Reject an IR whose graph is not the one this runtime drives.
-
-        The IR directory is resolved by model id (see :meth:`_resolve_ir_dir`), so it can hold an
-        export written by an older version of the exporter - an early talker, say, taking
-        ``cos``/``sin``/``past_k``/``past_v`` instead of ``position_ids`` and OpenVINO state. Such
-        an IR reads and compiles perfectly well, and would otherwise fail on the first generated
-        frame, deep inside ``start_async``, with a bare
-        ``Port for tensor name position_ids was not found``.
-        """
-        available_inputs = {name for port in model.inputs for name in port.get_names()}
-        available_outputs = {name for port in model.outputs for name in port.get_names()}
-        missing = [name for name in expected_inputs if name not in available_inputs]
-        missing += [name for name in expected_outputs if name not in available_outputs]
-        if missing:
-            # A stale graph can carry a port per layer, so the names it does have are only sampled
-            # here - enough to recognize the vintage, not enough to bury the message.
-            named = sorted(name for name in available_inputs if not name.isdigit())
-            sample = ", ".join(named[:6]) + (f", ... ({len(available_inputs)} inputs in total)" if named else "")
-            raise RuntimeError(
-                f"the {label} OpenVINO IR at {ir_xml} is not the graph this runtime drives: it has no "
-                f"{', '.join(missing)} (its named inputs are {sample}). The IR predates the current "
-                "exporter; re-export the model with `optimum-cli export openvino`."
-            )
 
     @staticmethod
     def _has_codec_weights(model_id) -> bool:
@@ -1460,30 +1417,11 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
         (``'Qwen3TTSTalkerConfig' object has no attribute 'text_vocab_size'``). Interrupted
         conversions and directories written by a version that exported only the talker both land
         in that state, and both are indistinguishable from a finished export by one IR alone.
-
-        A full set of files is not enough either: the cache entry is keyed by model id alone, so it
-        outlives exporter changes, and a set written before the decoder stacks moved their cache
-        into OpenVINO state loads fine and is then rejected component by component. The stacks'
-        ports are checked so that such an entry is converted again rather than reused.
         """
         directory = Path(directory)
         if not (directory / "config.json").is_file():
             return False
-        if not all((directory / cls._all_ov_model_paths[name]).is_file() for name in cls._MANDATORY_COMPONENTS):
-            return False
-        core = openvino.Core()
-        for name, ports in cls._DECODER_STACK_PORTS.items():
-            ir_xml = directory / cls._all_ov_model_paths[name]
-            model = core.read_model(ir_xml)
-            try:
-                cls._check_ir_signature(model, ir_xml, name, *ports)
-            except RuntimeError:
-                return False
-            finally:
-                # A reused-or-not verdict must not leave the .bin mapped: a re-conversion writes
-                # over it next.
-                del model
-        return True
+        return all((directory / cls._all_ov_model_paths[name]).is_file() for name in cls._MANDATORY_COMPONENTS)
 
     @classmethod
     def _convert_checkpoint(cls, model_id, cache_dir, weight_compression=None):
@@ -1708,6 +1646,7 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
             # and composite targets such as `HETERO:GPU,CPU`.
             ov_config=self._part_ov_config(self._CODE_PREDICTOR_OV_CONFIG if "GPU" in self._device else None),
             with_step=True,
+            with_hidden_states=False,
         )
         self.text_embeddings = build("text_embeddings", OVQwen3TTSEmbedding, embedding_dim=hidden_size)
         self.talker_embeddings = build("talker_embeddings", OVQwen3TTSEmbedding, embedding_dim=hidden_size)
@@ -1961,7 +1900,7 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
 
     @classmethod
     def _load_ov_models(cls, ir_dir) -> Dict[str, openvino.Model]:
-        """Read whichever component IRs are in ``ir_dir``, checking each is one this runtime drives."""
+        """Read whichever component IRs are in ``ir_dir``."""
         core = openvino.Core()
         models = {}
         for name, ir_name in cls._all_ov_model_paths.items():
@@ -1970,9 +1909,7 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
                 if not ir_xml.is_file():
                     raise FileNotFoundError(f"{name} OpenVINO IR not found at {ir_xml}")
                 logger.info(f"Qwen3-TTS: loading {name} OpenVINO IR from {ir_xml}.")
-                model = core.read_model(ir_xml)
-                cls._check_ir_signature(model, ir_xml, name, *cls._DECODER_STACK_PORTS.get(name, ((), ())))
-                models[name] = model
+                models[name] = core.read_model(ir_xml)
             except Exception as exc:  # pragma: no cover - the component stays on PyTorch
                 logger.debug(f"Qwen3-TTS: OpenVINO {name} offload disabled ({exc}); using PyTorch.")
         return models
