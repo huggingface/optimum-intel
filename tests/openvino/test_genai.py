@@ -130,7 +130,10 @@ def _assert_tokens_match(test_case, ref_ids, ref_top_k, test_ids, ref_label, tes
             f"This indicates a real inference divergence, not a near-tied logit flip.",
         )
         # After first divergence, the autoregressive cascade makes further comparisons meaningless
-        break
+        return
+
+    # Matching tokens with unequal lengths means one output is a strict prefix of the other.
+    test_case.assertEqual(len(ref_ids), len(test_ids), f"{ref_label} ids and {test_label} ids are not the same")
 
 
 _temp_dirs = []  # Collect temp dirs for batch cleanup after all tests finish
@@ -204,7 +207,6 @@ _GENAI_LLM_UNSUPPORTED_ARCHITECTURES = (
     # SSM / hybrid models
     "mamba",
     "falcon_mamba",
-    "granitemoehybrid",
     "zamba2",
     # not supported by GenAI
     "afmoe",
@@ -273,6 +275,7 @@ class LLMPipelineTestCase(unittest.TestCase):
         prompt = "Paris is the capital of"
 
         # BitNet uses torch.compile for custom ternary weight ops, which requires a C++ compiler (cl.exe on Windows)
+        original_dynamo_disable = torch._dynamo.config.disable
         if model_arch == "bitnet":
             torch._dynamo.config.disable = True
 
@@ -338,6 +341,7 @@ class LLMPipelineTestCase(unittest.TestCase):
             # rest of the session, which would leave OpenVINO objects (and their file handles) around.
             transformers_model = optimum_model = genai_model = None
             gc.collect()
+            torch._dynamo.config.disable = original_dynamo_disable
 
         _assert_tokens_match(self, transformers_ids, transformers_top_k, genai_ids, "Transformers", "OpenVINO GenAI")
 

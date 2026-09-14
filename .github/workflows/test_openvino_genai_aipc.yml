@@ -15,7 +15,7 @@ on:
           - 2026.4-release-candidate
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.ref_name }}
   cancel-in-progress: true
 
 permissions:
@@ -32,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        transformers-version: ["4.57.6", "5.0.0", "5.5.*"]
+        transformers-version: ["4.57.6", "latest"]
         device: ["GPU", "NPU", "CPU"]
         runner: ["MTL", "LNL"]
     runs-on: [self-hosted, "${{ matrix.runner }}"]
@@ -55,8 +55,14 @@ jobs:
       - name: Install dependencies
         shell: cmd
         run: |
-          %RUNNER_TEMP%\venv\Scripts\python -m uv pip install ".[tests]" "transformers==${{ matrix.transformers-version }}"
+          %RUNNER_TEMP%\venv\Scripts\python -m uv pip install ".[tests]"
           %RUNNER_TEMP%\venv\Scripts\python -m uv pip install pytest-xdist
+
+      - name: Install transformers
+        if: matrix.transformers-version != 'latest'
+        shell: cmd
+        run: |
+          %RUNNER_TEMP%\venv\Scripts\python -m uv pip install "transformers==${{ matrix.transformers-version }}"
 
       # Workaround for internlm tokenizer issue with sentencepiece>=0.3
       - name: Pin sentencepiece for transformers 4.57.6
