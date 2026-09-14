@@ -203,12 +203,10 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3OmniMoeLanguageModelPatcher,
     Qwen3OmniMoeTalkerLanguageModelPatcher,
     Qwen3OmniMoeVisionMergerPatcher,
-    Qwen3TTSCodecDecoderPatcher,
-    Qwen3TTSCodecEncoderPatcher,
+    Qwen3TTSCodecPatcher,
     Qwen3TTSDecoderStackPatcher,
     Qwen3TTSEmbeddingPatcher,
     Qwen3TTSSpeakerEncoderPatcher,
-    Qwen3TTSSteppedEmbeddingPatcher,
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
     QwenImageTextEncoderModelPatcher,
@@ -7785,8 +7783,6 @@ class Qwen3TTSTextEmbeddingOpenVINOConfig(Qwen3TTSEmbeddingOpenVINOConfig):
 class Qwen3TTSSteppedEmbeddingOpenVINOConfig(Qwen3TTSEmbeddingOpenVINOConfig):
     """Export configuration for the code predictor's per-depth tables, stacked."""
 
-    _MODEL_PATCHER = Qwen3TTSSteppedEmbeddingPatcher
-
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         return {**super().inputs, "step": {}}
@@ -7817,7 +7813,7 @@ class Qwen3TTSCodecEncoderOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
     voice cloning.
     """
 
-    _MODEL_PATCHER = Qwen3TTSCodecEncoderPatcher
+    _MODEL_PATCHER = Qwen3TTSCodecPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -7835,7 +7831,7 @@ class Qwen3TTSCodecDecoderOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
     Qwen3-TTS counterpart of the Qwen3-Omni ``code2wav`` submodel.
     """
 
-    _MODEL_PATCHER = Qwen3TTSCodecDecoderPatcher
+    _MODEL_PATCHER = Qwen3TTSCodecPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:

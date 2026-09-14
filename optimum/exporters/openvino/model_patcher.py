@@ -12182,93 +12182,59 @@ class ZImageTextEncoderModelPatcher(ModelPatcher):
             del self._model.config._orig_ov_attn_impl
 
 
-class Qwen3TTSDecoderStackWrapper(nn.Module):
-    """Structural holder for a Qwen3-TTS decoder stack used during export.
+class Qwen3TTSSubmodelWrapper(nn.Module):
+    """Structural holder for one Qwen3-TTS submodel exported to OpenVINO.
 
-    Both autoregressive stacks of Qwen3-TTS share the same layer topology
-    (``Qwen3TTS*Attention`` with q/k norms + gated MLP), so one wrapper covers both:
+    The ``qwen_tts`` pipeline reaches its parts - the two decoder stacks, the embedding tables,
+    the speaker encoder and the two codec directions - through hand-written call sites rather
+    than a ``forward``, so each is exported through this holder: it carries the ``config`` the
+    export pipeline expects and the modules the matching patcher traces, which installs the
+    actual computation.
 
-    * ``talker.model`` - 28 layers, driven once per audio frame,
-    * ``talker.code_predictor.model`` - 5 layers, driven ``num_code_groups - 1`` times
-      inside every talker step.
-
-    It exposes the decoder layers and final norm with an export-friendly forward signature
-    matching the graph inputs (``inputs_embeds``, ``attention_mask``, ``position_ids``,
-    ``past_key_values``). The rotary embedding is built inside the graph from ``position_ids``,
-    and the cache is traced as one key/value pair per layer under the usual
-    ``past_key_values.<i>.<key|value>`` naming, so the standard stateful transformation
-    recognises it and hides it as OpenVINO state. The computation itself is installed by
-    :class:`Qwen3TTSDecoderStackPatcher`.
+    ``forward`` lists every graph input a Qwen3-TTS submodel takes, in graph order. The exporter
+    only reads it to order the dummy inputs, each export config supplying its own subset.
     """
 
-    def __init__(self, decoder_model, head=None, heads=None):
+    def __init__(self, config, **modules):
         super().__init__()
-        self.layers = decoder_model.layers
-        self.norm = decoder_model.norm
-        # Kept so a stack with plain 1D RoPE can build cos/sin inside the graph from
-        # ``position_ids``; the talker's interleaved m-RoPE is merged outside instead.
-        self.rotary_emb = decoder_model.rotary_emb
-        self.config = decoder_model.config
-        self.num_attention_heads = self.config.num_attention_heads
-        self.num_key_value_heads = self.config.num_key_value_heads
-        self.head_dim = getattr(self.config, "head_dim", self.config.hidden_size // self.num_attention_heads)
-        self.scaling = self.head_dim**-0.5
-        # Output head folded into the same graph, since it is applied to the stack's hidden
-        # states immediately after every call: a single ``Linear`` for the talker
-        # (``codec_head``), or the code predictor's per-depth ``lm_head`` list, which is
-        # stacked and gathered with a runtime ``step`` index.
-        self.head = head
-        self.heads = heads
-        # Interleaved m-RoPE mixes three position streams and is merged per layer; a stack
-        # without it (the code predictor) uses plain 1D RoPE.
-        rope_scaling = getattr(self.config, "rope_scaling", None) or {}
-        self.mrope_section = rope_scaling.get("mrope_section")
-        self.mrope_interleaved = rope_scaling.get("interleaved", False)
+        self.config = config
+        for name, module in modules.items():
+            setattr(self, name, module)
 
-    def forward(self, inputs_embeds, attention_mask, position_ids, past_key_values):
-        raise RuntimeError(
-            "Qwen3TTSDecoderStackWrapper must be used within Qwen3TTSDecoderStackPatcher for OpenVINO export."
-        )
-
-
-class Qwen3TTSSteppedDecoderStackWrapper(Qwen3TTSDecoderStackWrapper):
-    """Decoder stack that builds its own RoPE and selects its head by a runtime depth index.
-
-    Used for the code predictor: its rotary embedding is the plain 1D kind, so ``inv_freq``
-    becomes a graph constant and the graph takes ``position_ids`` rather than ready-made
-    ``cos``/``sin``.
-    """
-
-    def __init__(self, decoder_model, head=None, heads=None, input_projection=None):
-        super().__init__(decoder_model, head=head, heads=heads)
-        # On variants whose code predictor is narrower than the talker this is a real Linear
-        # (2048 -> 1024 on the 1.7B model) rather than an Identity, so it holds weights and has
-        # to travel into the graph with the rest of the stack.
-        self.input_projection = input_projection
-
-    def forward(self, inputs_embeds, attention_mask, position_ids, past_key_values, step):
-        raise RuntimeError(
-            "Qwen3TTSSteppedDecoderStackWrapper must be used within Qwen3TTSDecoderStackPatcher for OpenVINO export."
-        )
+    def forward(
+        self,
+        inputs_embeds=None,
+        attention_mask=None,
+        position_ids=None,
+        past_key_values=None,
+        input_ids=None,
+        step=None,
+        mel_features=None,
+        input_values=None,
+        audio_codes=None,
+    ):
+        raise RuntimeError(f"{type(self).__name__} must be used within its model patcher for OpenVINO export.")
 
 
 class Qwen3TTSDecoderStackPatcher(ModelPatcher):
-    """Rewrites a Qwen3-TTS decoder stack into a stateless, KV-explicit forward.
+    """Rewrites a Qwen3-TTS decoder stack into a KV-explicit forward with its output head folded in.
 
-    The talker decoder (28 layers + final norm) and the code predictor (5 layers + final
-    norm) dominate Qwen3-TTS inference. For OpenVINO export they are traced as stateless
-    graphs whose rotary ``cos``/``sin`` and per-layer key/value cache are passed explicitly.
+    Both autoregressive stacks share the same layer topology (``Qwen3TTS*Attention`` with q/k
+    norms + gated MLP), so one patcher covers both:
+
+    * ``talker.model`` - 28 layers + ``codec_head``, driven once per audio frame,
+    * ``talker.code_predictor.model`` - 5 layers + the per-depth ``lm_head`` list, driven
+      ``num_code_groups - 1`` times inside every talker step. The list is stacked and gathered
+      with a runtime ``step`` index, and ``input_projection`` maps the talker-width embeddings
+      to the stack's own width.
+
     The attention/rotary math reuses the ``qwen_tts`` helpers (``rotate_half``,
     ``eager_attention_forward``) and the model's own weight modules, so nothing is
-    re-implemented.
-
-    Both graphs build their own rotary embedding from ``position_ids`` and trace one
-    ``past_key_values.<i>.<key|value>`` pair per layer, which the stateful transformation then
-    hides as OpenVINO state - so neither ``cos``/``sin`` nor the past/present pairs survive at
-    the boundary of the saved IR.
-    The two differ only in the rotary kind: the talker applies interleaved m-RoPE, which mixes
-    three position streams, so ``position_ids`` arrives as ``[3, batch, sequence]``; the code
-    predictor uses plain 1D RoPE with ``[batch, sequence]``.
+    re-implemented. Both graphs build their own rotary embedding from ``position_ids`` and trace
+    one ``past_key_values.<i>.<key|value>`` pair per layer, which the stateful transformation then
+    hides as OpenVINO state. They differ in the rotary kind: the talker applies interleaved
+    m-RoPE, which mixes three position streams, so ``position_ids`` arrives as
+    ``[3, batch, sequence]``; the code predictor uses plain 1D RoPE with ``[batch, sequence]``.
     """
 
     def __init__(self, config, model, model_kwargs=None):
@@ -12289,13 +12255,17 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
             ) from exc
 
         wrapper = self._model
-        num_heads = wrapper.num_attention_heads
-        num_kv = wrapper.num_key_value_heads
-        head_dim = wrapper.head_dim
-        scaling = wrapper.scaling
-        stacked_heads = None if wrapper.heads is None else torch.stack([head.weight for head in wrapper.heads])
-        mrope_section = wrapper.mrope_section
-        mrope_interleaved = wrapper.mrope_interleaved
+        stack_config = wrapper.config
+        num_heads = stack_config.num_attention_heads
+        num_kv = stack_config.num_key_value_heads
+        head_dim = getattr(stack_config, "head_dim", stack_config.hidden_size // num_heads)
+        scaling = head_dim**-0.5
+        rope_scaling = getattr(stack_config, "rope_scaling", None) or {}
+        mrope_section = rope_scaling.get("mrope_section")
+        mrope_interleaved = rope_scaling.get("interleaved", False)
+        heads = getattr(wrapper, "heads", None)
+        stacked_heads = None if heads is None else torch.stack([head.weight for head in heads])
+        input_projection = getattr(wrapper, "input_projection", None)
 
         def rotate(query, key, cos, sin):
             if mrope_section is not None:
@@ -12309,7 +12279,15 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
                 (key * cos_u) + (rotate_half(key) * sin_u),
             )
 
-        def run_stack(inputs_embeds, attention_mask, cos, sin, past_key_values):
+        def patched_forward(inputs_embeds, attention_mask, position_ids, past_key_values, step=None):
+            # On variants whose code predictor is narrower than the talker this is a real Linear
+            # (2048 -> 1024 on the 1.7B model) rather than an Identity.
+            if input_projection is not None:
+                inputs_embeds = input_projection(inputs_embeds)
+            cos, sin = wrapper.rotary_emb(inputs_embeds, position_ids)
+            cos = cos.to(inputs_embeds.dtype)
+            sin = sin.to(inputs_embeds.dtype)
+
             hidden = inputs_embeds
             present_key_values = []
             for idx, layer in enumerate(wrapper.layers):
@@ -12328,72 +12306,46 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
                 # cache (past + new): the Assign has to grow the state, not replace it.
                 present_key_values.append((k, v))
                 attn_out, _ = eager_attention_forward(attn, q, k, v, attention_mask, scaling)
-                attn_out = attn_out.reshape(bs, seq, -1)
-                attn_out = attn.o_proj(attn_out)
+                attn_out = attn.o_proj(attn_out.reshape(bs, seq, -1))
                 hidden = residual + attn_out
                 residual = hidden
                 h = layer.post_attention_layernorm(hidden)
                 hidden = residual + layer.mlp(h)
             hidden = wrapper.norm(hidden)
-            return hidden, present_key_values
 
-        if stacked_heads is not None:
-
-            def patched_forward(inputs_embeds, attention_mask, position_ids, past_key_values, step):
-                # The stack is fed embeddings in the talker's width; this maps them to its own
-                # (an Identity when the two match).
-                if wrapper.input_projection is not None:
-                    inputs_embeds = wrapper.input_projection(inputs_embeds)
-                # Plain 1D RoPE depends only on position_ids, so it is traced into the graph
-                # rather than recomputed by the caller on every one of the inner steps.
-                cos, sin = wrapper.rotary_emb(inputs_embeds, position_ids)
-                hidden, present_key_values = run_stack(
-                    inputs_embeds,
-                    attention_mask,
-                    cos.to(inputs_embeds.dtype),
-                    sin.to(inputs_embeds.dtype),
-                    past_key_values,
-                )
-                # Cast the stacked weights before the gather, for the same reason as the
-                # embedding tables: it keeps them 16-bit on disk while leaving the
-                # Constant -> Convert -> Gather pattern that NNCF can compress.
-                weight = torch.index_select(stacked_heads.to(torch.float32), 0, step.reshape(1)).squeeze(0)
-                # Logits only: nothing reads the code predictor's hidden states - ``qwen_tts``
-                # takes just the sampled codes out of its ``generate`` - so exporting them would
-                # only copy one more tensor to the host on each of the fifteen inner steps.
-                return {
-                    "logits": torch.nn.functional.linear(hidden, weight),
-                    "present_key_values": present_key_values,
-                }
-
-        else:
-
-            def patched_forward(inputs_embeds, attention_mask, position_ids, past_key_values):
-                cos, sin = wrapper.rotary_emb(inputs_embeds, position_ids)
-                hidden, present_key_values = run_stack(
-                    inputs_embeds,
-                    attention_mask,
-                    cos.to(inputs_embeds.dtype),
-                    sin.to(inputs_embeds.dtype),
-                    past_key_values,
-                )
+            if stacked_heads is None:
                 return {
                     "last_hidden_state": hidden,
                     "logits": wrapper.head(hidden),
                     "present_key_values": present_key_values,
                 }
+            # Cast the stacked weights before the gather, for the same reason as the embedding
+            # tables: it keeps them 16-bit on disk while leaving the Constant -> Convert -> Gather
+            # pattern that NNCF can compress.
+            weight = torch.index_select(stacked_heads.to(torch.float32), 0, step.reshape(1)).squeeze(0)
+            # Logits only: nothing reads the code predictor's hidden states - ``qwen_tts`` takes
+            # just the sampled codes out of its ``generate``.
+            return {
+                "logits": torch.nn.functional.linear(hidden, weight),
+                "present_key_values": present_key_values,
+            }
 
         self.patched_forward = patched_forward
 
 
 class Qwen3TTSEmbeddingPatcher(ModelPatcher):
-    """Traces one Qwen3-TTS embedding table (token ids -> talker hidden states).
+    """Traces a Qwen3-TTS embedding table (token ids -> talker hidden states).
 
-    When the wrapper also carries a ``projection``, that projection is applied to the table
-    rows at export time instead of at inference time. This is used for the text table: the
-    projection is a per-token MLP and every call site in ``qwen_tts`` applies it directly to
-    the text embeddings, so baking it in is exact - and it shrinks what is otherwise the
-    largest tensor in the model from the text hidden size down to the talker's.
+    A wrapper holding a single ``embedding`` gives a plain lookup. When it also carries a
+    ``projection``, that projection is applied to the table rows at export time instead of at
+    inference time. This is used for the text table: the projection is a per-token MLP and every
+    call site in ``qwen_tts`` applies it directly to the text embeddings, so baking it in is
+    exact - and it shrinks what is otherwise the largest tensor in the model from the text hidden
+    size down to the talker's.
+
+    A wrapper holding the code predictor's ``embeddings`` - one table per residual depth - gives
+    a single step-indexed graph instead of 15, reusing the approach of
+    :class:`Qwen3OmniMoeCodePredictorPatcher`.
     """
 
     # Rows converted per chunk when baking a projection, to bound peak memory.
@@ -12404,23 +12356,32 @@ class Qwen3TTSEmbeddingPatcher(ModelPatcher):
         wrapper = self._model
         output_name = list(config.outputs.keys())[0]
 
-        with torch.no_grad():
+        if hasattr(wrapper, "embeddings"):
+            # Tables flattened to [num_steps * vocab, hidden], so a step gathers only the rows it
+            # needs, with ids offset by step * vocab, rather than selecting a whole table.
+            stacked = torch.stack([embedding.weight for embedding in wrapper.embeddings])
+            vocab_size = stacked.shape[1]
+            table = stacked.reshape(-1, stacked.shape[-1])
+        else:
             table = wrapper.embedding.weight
             projection = getattr(wrapper, "projection", None)
             if projection is not None:
-                # Bake in fp32 on a copy, then store back in the table's own precision: the
-                # rows are computed once here, so there is no reason to do it at 16-bit
-                # accuracy, and no reason to mutate the model either.
-                projection = copy.deepcopy(projection).float()
-                table = torch.cat(
-                    [
-                        projection(table[start : start + self._PROJECTION_CHUNK_ROWS].float())
-                        for start in range(0, table.shape[0], self._PROJECTION_CHUNK_ROWS)
-                    ],
-                    dim=0,
-                ).to(wrapper.embedding.weight.dtype)
+                with torch.no_grad():
+                    # Bake in fp32 on a copy, then store back in the table's own precision: the
+                    # rows are computed once here, so there is no reason to do it at 16-bit
+                    # accuracy, and no reason to mutate the model either.
+                    projection = copy.deepcopy(projection).float()
+                    table = torch.cat(
+                        [
+                            projection(table[start : start + self._PROJECTION_CHUNK_ROWS].float())
+                            for start in range(0, table.shape[0], self._PROJECTION_CHUNK_ROWS)
+                        ],
+                        dim=0,
+                    ).to(wrapper.embedding.weight.dtype)
 
-        def patched_forward(input_ids):
+        def patched_forward(input_ids, step=None):
+            if step is not None:
+                input_ids = input_ids + step.reshape(()).to(dtype=input_ids.dtype) * vocab_size
             # Cast the table, not the gathered rows: that traces to
             # ``Constant(16-bit) -> Convert(f32) -> Gather``, the canonical compressed-weight
             # pattern. It keeps a 16-bit checkpoint 16-bit on disk, and it is the shape NNCF
@@ -12431,135 +12392,16 @@ class Qwen3TTSEmbeddingPatcher(ModelPatcher):
         self.patched_forward = patched_forward
 
 
-class Qwen3TTSSteppedEmbeddingPatcher(ModelPatcher):
-    """Traces the code predictor's per-depth embedding tables as one step-indexed graph.
-
-    The code predictor owns ``num_code_groups - 1`` tables, one per residual depth. Stacking
-    them and gathering with a runtime ``step`` index keeps this a single IR instead of 15,
-    reusing the approach of :class:`Qwen3OmniMoeCodePredictorPatcher`.
-    """
-
-    def __init__(self, config, model, model_kwargs=None):
-        super().__init__(config, model, model_kwargs)
-        stacked = torch.stack([embedding.weight for embedding in self._model.embeddings])
-        vocab_size = stacked.shape[1]
-        flat_stacked = stacked.reshape(-1, stacked.shape[-1])
-        output_name = list(config.outputs.keys())[0]
-
-        def patched_forward(input_ids, step):
-            # Avoid selecting a full [vocab, hidden] table per step. Instead gather
-            # only the requested token rows from a flattened [num_steps*vocab, hidden]
-            # table, using ids offset by step*vocab.
-            step_idx = step.reshape(()).to(dtype=input_ids.dtype)
-            flat_ids = input_ids + step_idx * vocab_size
-            return {output_name: torch.nn.functional.embedding(flat_ids, flat_stacked.to(torch.float32))}
-
-        self.patched_forward = patched_forward
-
-
-def _qwen3_tts_asp_forward(self, hidden_states):
-    """Dynamic-length replacement for ``AttentiveStatisticsPooling.forward``.
-
-    The original builds its all-ones mask from ``torch.arange(seq_length)`` where
-    ``seq_length`` is a Python ``int`` read off the tensor shape, which bakes the traced mel
-    length into the graph. Deriving the mask from the tensor itself keeps the time axis
-    dynamic; the arithmetic below is otherwise the original, unchanged.
-    Based on: ``qwen_tts.core.models.modeling_qwen3_tts.AttentiveStatisticsPooling.forward``
-    """
-    # [B, 1, T], built from the input so the time axis stays symbolic.
-    mask = torch.ones_like(hidden_states[:, :1, :])
-    total = mask.sum(dim=2, keepdim=True)
-
-    mean, std = self._compute_statistics(hidden_states, mask / total)
-    # Original uses .repeat(1, 1, seq_length) with a static int; expand_as keeps T dynamic.
-    mean = mean.unsqueeze(2).expand_as(hidden_states)
-    std = std.unsqueeze(2).expand_as(hidden_states)
-    attention = torch.cat([hidden_states, mean, std], dim=1)
-
-    attention = self.conv(self.tanh(self.tdnn(attention)))
-    attention = attention.masked_fill(mask == 0, float("-inf"))
-    attention = torch.nn.functional.softmax(attention, dim=2)
-
-    mean, std = self._compute_statistics(hidden_states, attention)
-    return torch.cat((mean, std), dim=1).unsqueeze(2)
-
-
-class Qwen3TTSComponentWrapper(nn.Module):
-    """Structural holder for a non-autoregressive Qwen3-TTS component.
-
-    The speaker encoder and the two codec directions are plain feed-forward modules that the
-    ``qwen_tts`` pipeline reaches through hand-written call sites rather than a ``forward``.
-    Each subclass gives one of them the ``config`` attribute the export pipeline expects and
-    declares the graph's input name in its ``forward`` signature (which is what the exporter
-    matches the dummy inputs against); the real computation is installed by the matching
-    patcher.
-    """
-
-    def __init__(self, config, **components):
-        super().__init__()
-        self.config = config
-        for name, module in components.items():
-            setattr(self, name, module)
-
-    def _unpatched(self):
-        raise RuntimeError(f"{type(self).__name__} must be used within its model patcher for OpenVINO export.")
-
-
-class Qwen3TTSSpeakerEncoderWrapper(Qwen3TTSComponentWrapper):
-    def forward(self, mel_features):
-        self._unpatched()
-
-
-class Qwen3TTSEmbeddingWrapper(Qwen3TTSComponentWrapper):
-    """Holds one embedding table, optionally with the projection to bake into its rows."""
-
-    def forward(self, input_ids):
-        self._unpatched()
-
-
-class Qwen3TTSSteppedEmbeddingWrapper(Qwen3TTSComponentWrapper):
-    """Holds the code predictor's per-depth embedding tables."""
-
-    def forward(self, input_ids, step):
-        self._unpatched()
-
-
-class Qwen3TTSCodecEncoderWrapper(Qwen3TTSComponentWrapper):
-    def forward(self, input_values):
-        self._unpatched()
-
-
-class Qwen3TTSCodecDecoderWrapper(Qwen3TTSComponentWrapper):
-    def forward(self, audio_codes):
-        self._unpatched()
-
-
-# Attribute OpenVINO's 16-bit helper uses to recognise an already-patched module; setting it
-# makes ``__make_16bit_traceable`` skip the module instead of casting its weights to fp32.
-_OV_16BIT_PATCH_ATTR = "_openvino_module_extension_patch_orig_forward"
-
-
-def _qwen3_tts_conv_16bit_forward(self, hidden_states):
-    """Convolution forward that keeps its weights at their stored precision.
-
-    ``__make_16bit_traceable`` only has 16-bit extensions for ``Linear``/``Embedding``; every
-    other module with weights - here the ECAPA-TDNN's ``nn.Conv1d`` stack - has its parameters
-    cast to fp32, which would double the size of that component in the IR. Casting the weight
-    to the activation dtype inside the forward instead keeps the constant 16-bit with an
-    explicit ``Convert`` in front of it, the same shape of graph the extensions produce.
-    """
-    weight = self.weight.to(hidden_states.dtype)
-    bias = None if self.bias is None else self.bias.to(hidden_states.dtype)
-    # ``_conv_forward`` carries torch's own padding_mode handling ("same"/reflect here).
-    return self._conv_forward(hidden_states, weight, bias)
-
-
 class Qwen3TTSSpeakerEncoderPatcher(ModelPatcher):
     """Traces the Qwen3-TTS ECAPA-TDNN speaker encoder (mel spectrogram -> x-vector).
 
     Only the attentive-statistics pooling needs adjusting; every other block is plain
     conv/activation math that traces as-is.
     """
+
+    # Attribute OpenVINO's 16-bit helper uses to recognise an already-patched module; setting it
+    # makes ``__make_16bit_traceable`` skip the module instead of casting its weights to fp32.
+    _OV_16BIT_PATCH_ATTR = "_openvino_module_extension_patch_orig_forward"
 
     def __init__(self, config, model, model_kwargs=None):
         super().__init__(config, model, model_kwargs)
@@ -12569,35 +12411,73 @@ class Qwen3TTSSpeakerEncoderPatcher(ModelPatcher):
             return {"speaker_embedding": speaker_encoder(mel_features)}
 
         self.patched_forward = patched_forward
-        self._patched_pooling = []
-        self._patched_convs = []
+        self._patched_modules = []
+
+    @staticmethod
+    def _asp_forward(self, hidden_states):
+        """Dynamic-length replacement for ``AttentiveStatisticsPooling.forward``.
+
+        The original builds its all-ones mask from ``torch.arange(seq_length)`` where
+        ``seq_length`` is a Python ``int`` read off the tensor shape, which bakes the traced mel
+        length into the graph. Deriving the mask from the tensor itself keeps the time axis
+        dynamic; the arithmetic below is otherwise the original, unchanged.
+        Based on: ``qwen_tts.core.models.modeling_qwen3_tts.AttentiveStatisticsPooling.forward``
+        """
+        # [B, 1, T], built from the input so the time axis stays symbolic.
+        mask = torch.ones_like(hidden_states[:, :1, :])
+        total = mask.sum(dim=2, keepdim=True)
+
+        mean, std = self._compute_statistics(hidden_states, mask / total)
+        # Original uses .repeat(1, 1, seq_length) with a static int; expand_as keeps T dynamic.
+        mean = mean.unsqueeze(2).expand_as(hidden_states)
+        std = std.unsqueeze(2).expand_as(hidden_states)
+        attention = torch.cat([hidden_states, mean, std], dim=1)
+
+        attention = self.conv(self.tanh(self.tdnn(attention)))
+        attention = attention.masked_fill(mask == 0, float("-inf"))
+        attention = torch.nn.functional.softmax(attention, dim=2)
+
+        mean, std = self._compute_statistics(hidden_states, attention)
+        return torch.cat((mean, std), dim=1).unsqueeze(2)
+
+    @staticmethod
+    def _conv_16bit_forward(self, hidden_states):
+        """Convolution forward that keeps its weights at their stored precision.
+
+        ``__make_16bit_traceable`` only has 16-bit extensions for ``Linear``/``Embedding``; every
+        other module with weights - here the ECAPA-TDNN's ``nn.Conv1d`` stack - has its parameters
+        cast to fp32, which would double the size of that component in the IR. Casting the weight
+        to the activation dtype inside the forward instead keeps the constant 16-bit with an
+        explicit ``Convert`` in front of it, the same shape of graph the extensions produce.
+        """
+        weight = self.weight.to(hidden_states.dtype)
+        bias = None if self.bias is None else self.bias.to(hidden_states.dtype)
+        # ``_conv_forward`` carries torch's own padding_mode handling ("same"/reflect here).
+        return self._conv_forward(hidden_states, weight, bias)
 
     def __enter__(self):
         super().__enter__()
         for module in self._model.modules():
             if module.__class__.__name__ == "AttentiveStatisticsPooling":
-                module._orig_asp_forward = module.forward
-                module.forward = types.MethodType(_qwen3_tts_asp_forward, module)
-                self._patched_pooling.append(module)
+                orig_attr, patched = "_orig_asp_forward", self._asp_forward
             elif isinstance(module, nn.Conv1d) and module.weight.dtype in (torch.float16, torch.bfloat16):
-                setattr(module, _OV_16BIT_PATCH_ATTR, module.forward)
-                module.forward = types.MethodType(_qwen3_tts_conv_16bit_forward, module)
-                self._patched_convs.append(module)
+                orig_attr, patched = self._OV_16BIT_PATCH_ATTR, self._conv_16bit_forward
+            else:
+                continue
+            setattr(module, orig_attr, module.forward)
+            module.forward = types.MethodType(patched, module)
+            self._patched_modules.append((module, orig_attr))
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        for module in self._patched_pooling:
-            module.forward = module._orig_asp_forward
-            del module._orig_asp_forward
-        for module in self._patched_convs:
+        for module, orig_attr in self._patched_modules:
             # ``export_pytorch`` runs OpenVINO's ``unpatch_model`` first when the model is
-            # 16-bit, which already restores and removes the attribute.
-            if hasattr(module, _OV_16BIT_PATCH_ATTR):
-                module.forward = getattr(module, _OV_16BIT_PATCH_ATTR)
-                delattr(module, _OV_16BIT_PATCH_ATTR)
-        self._patched_pooling = []
-        self._patched_convs = []
+            # 16-bit, which already restores the convs and removes their attribute.
+            if hasattr(module, orig_attr):
+                module.forward = getattr(module, orig_attr)
+                delattr(module, orig_attr)
+        self._patched_modules = []
 
 
 def _traceable_extra_padding_for_conv1d(module, hidden_states):
@@ -12623,34 +12503,78 @@ def _traceable_extra_padding_for_conv1d(module, hidden_states):
     return (stride - covered % stride) % stride
 
 
-class _Qwen3TTSCodecPatcherMixin:
-    """Shared tracing fixes for the Qwen3-TTS neural codec (``speech_tokenizer``).
+class Qwen3TTSCodecPatcher(ModelPatcher):
+    """Traces either direction of the Qwen3-TTS neural codec (``speech_tokenizer``).
 
-    Both codec directions are built from causal convolutions whose right padding is computed
-    with ``ceil`` over a Python-int length, and from small sliding-window transformers whose
-    masks are built with ``vmap``. Neither traces into a length-agnostic graph, so:
+    * A wrapper holding the ``encoder`` gives waveform -> 16 residual code streams. The encoder is
+      a Mimi model (``Qwen3TTSTokenizerV2Encoder`` subclasses ``transformers.MimiModel``) whose
+      decode-side branches are stripped. The traced forward inlines ``MimiModel._encode_frame``
+      without the streaming padding cache, and asks the residual quantizer for only the
+      ``encoder_valid_num_quantizers`` codebooks the talker actually consumes instead of all 32.
+      Based on: https://github.com/huggingface/transformers/blob/v4.57.3/src/transformers/models/mimi/modeling_mimi.py#L1442
+    * A wrapper holding the ``decoder`` gives 16 residual code streams -> 24 kHz waveform: the
+      vocoder (RVQ lookup, an 8-layer sliding-window transformer, then transposed-conv upsampling
+      by 1920), the Qwen3-TTS counterpart of the Qwen3-Omni ``code2wav`` submodel.
 
-    * ``_get_extra_padding_for_conv1d`` is swapped for :func:`_traceable_extra_padding_for_conv1d`,
-      which computes the same padding from the traced shape. Each conv therefore pads its own input
-      the way PyTorch does, at every scale of the stack, so the graph is exact for any waveform
-      length rather than only for whole 1920-sample frames. Forcing the padding to 0 instead - the
-      approach :class:`Qwen3OmniMoeCode2WavPatcher` takes - would leave the caller to pad the
-      waveform up to a frame boundary, which is not the same computation: the stock convs pad per
-      layer, at the downsampled scales and with per-layer pad modes, so a single pad at the input
-      moves the last frame's codes.
+    Both directions are built from causal convolutions whose right padding is computed with
+    ``ceil`` over a Python-int length, and from small sliding-window transformers whose masks are
+    built with ``vmap``. Neither traces into a length-agnostic graph, so:
+
+    * ``_get_extra_padding_for_conv1d`` is swapped for :func:`_traceable_extra_padding_for_conv1d`
+      on both causal conv classes, which computes the same padding from the traced shape. Each conv
+      therefore pads its own input the way PyTorch does, at every scale of the stack, so the graph
+      is exact for any waveform length rather than only for whole 1920-sample frames. Forcing the
+      padding to 0 instead - the approach :class:`Qwen3OmniMoeCode2WavPatcher` takes - would leave
+      the caller to pad the waveform up to a frame boundary, which is not the same computation: the
+      stock convs pad per layer, at the downsampled scales and with per-layer pad modes, so a single
+      pad at the input moves the last frame's codes.
     * the vmap-free mask builders are registered for the codec transformers, mirroring
       :class:`OVDecoderModelPatcher`.
     """
 
-    def _causal_conv_class(self):
-        """Return the causal-convolution class whose extra padding must be made traceable."""
-        raise NotImplementedError
+    def __init__(self, config, model, model_kwargs=None):
+        super().__init__(config, model, model_kwargs)
+        # Guarded for the same reason as in Qwen3TTSDecoderStackPatcher.
+        try:
+            from qwen_tts.core.tokenizer_12hz.modeling_qwen3_tts_tokenizer_v2 import (
+                Qwen3TTSTokenizerV2CausalConvNet,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "Exporting Qwen3-TTS requires the `qwen_tts` package. Install it with `pip install qwen-tts`."
+            ) from exc
+        from transformers.models.mimi.modeling_mimi import MimiConv1d
 
-    def _enter_codec_patches(self):
-        conv_cls = self._causal_conv_class()
-        self._orig_get_extra_padding = conv_cls._get_extra_padding_for_conv1d
-        conv_cls._get_extra_padding_for_conv1d = _traceable_extra_padding_for_conv1d
-        self._patched_conv_cls = conv_cls
+        self._conv_classes = (MimiConv1d, Qwen3TTSTokenizerV2CausalConvNet)
+        self._orig_extra_padding = {}
+        wrapper = self._model
+
+        if hasattr(wrapper, "encoder"):
+            encoder = wrapper.encoder
+            num_quantizers = wrapper.num_quantizers
+
+            def patched_forward(input_values):
+                embeddings = encoder.encoder(input_values)
+                encoder_outputs = encoder.encoder_transformer(embeddings.transpose(1, 2))
+                embeddings = encoder_outputs[0].transpose(1, 2)
+                embeddings = encoder.downsample(embeddings)
+                # [num_quantizers, B, T] -> [B, num_quantizers, T], matching MimiModel.encode.
+                codes = encoder.quantizer.encode(embeddings, num_quantizers)
+                return {"audio_codes": codes.transpose(0, 1)}
+
+        else:
+            decoder = wrapper.decoder
+
+            def patched_forward(audio_codes):
+                return {"waveform": decoder(audio_codes)}
+
+        self.patched_forward = patched_forward
+
+    def __enter__(self):
+        super().__enter__()
+        for conv_cls in self._conv_classes:
+            self._orig_extra_padding[conv_cls] = conv_cls._get_extra_padding_for_conv1d
+            conv_cls._get_extra_padding_for_conv1d = _traceable_extra_padding_for_conv1d
 
         # Both codec transformers reach their mask through ``ALL_MASK_ATTENTION_FUNCTIONS``: the encoder's
         # ``encoder_transformer`` (a stock ``MimiTransformerModel``) via ``create_causal_mask``, the decoder's
@@ -12661,93 +12585,13 @@ class _Qwen3TTSCodecPatcherMixin:
         # to a subgraph that stays correct at any length.
         ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
         ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+        return self
 
-    def _exit_codec_patches(self):
-        if getattr(self, "_patched_conv_cls", None) is not None:
-            self._patched_conv_cls._get_extra_padding_for_conv1d = self._orig_get_extra_padding
-            self._patched_conv_cls = None
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for conv_cls, orig in self._orig_extra_padding.items():
+            conv_cls._get_extra_padding_for_conv1d = orig
+        self._orig_extra_padding = {}
 
         ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
         ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
-
-
-class Qwen3TTSCodecEncoderPatcher(_Qwen3TTSCodecPatcherMixin, ModelPatcher):
-    """Traces the Qwen3-TTS codec encoder: waveform -> 16 residual code streams.
-
-    The encoder is a Mimi model (``Qwen3TTSTokenizerV2Encoder`` subclasses
-    ``transformers.MimiModel``) whose decode-side branches are stripped. The traced forward
-    inlines ``MimiModel._encode_frame`` without the streaming padding cache, and asks the
-    residual quantizer for only the ``encoder_valid_num_quantizers`` codebooks the talker
-    actually consumes instead of all 32.
-    Based on: https://github.com/huggingface/transformers/blob/v4.57.3/src/transformers/models/mimi/modeling_mimi.py#L1442
-    """
-
-    def __init__(self, config, model, model_kwargs=None):
-        super().__init__(config, model, model_kwargs)
-        encoder = self._model.encoder
-        num_quantizers = self._model.num_quantizers
-
-        def patched_forward(input_values):
-            embeddings = encoder.encoder(input_values)
-            encoder_outputs = encoder.encoder_transformer(embeddings.transpose(1, 2))
-            embeddings = encoder_outputs[0].transpose(1, 2)
-            embeddings = encoder.downsample(embeddings)
-            # [num_quantizers, B, T] -> [B, num_quantizers, T], matching MimiModel.encode.
-            codes = encoder.quantizer.encode(embeddings, num_quantizers)
-            return {"audio_codes": codes.transpose(0, 1)}
-
-        self.patched_forward = patched_forward
-
-    def _causal_conv_class(self):
-        from transformers.models.mimi.modeling_mimi import MimiConv1d
-
-        return MimiConv1d
-
-    def __enter__(self):
-        super().__enter__()
-        self._enter_codec_patches()
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-        self._exit_codec_patches()
-
-
-class Qwen3TTSCodecDecoderPatcher(_Qwen3TTSCodecPatcherMixin, ModelPatcher):
-    """Traces the Qwen3-TTS codec decoder: 16 residual code streams -> 24 kHz waveform.
-
-    This is the vocoder half of ``speech_tokenizer`` (RVQ lookup, an 8-layer sliding-window
-    transformer, then transposed-conv upsampling by 1920), the Qwen3-TTS counterpart of the
-    Qwen3-Omni ``code2wav`` submodel.
-    """
-
-    def __init__(self, config, model, model_kwargs=None):
-        super().__init__(config, model, model_kwargs)
-        decoder = self._model.decoder
-
-        def patched_forward(audio_codes):
-            return {"waveform": decoder(audio_codes)}
-
-        self.patched_forward = patched_forward
-
-    def _causal_conv_class(self):
-        # Guarded for the same reason as in Qwen3TTSDecoderStackPatcher.
-        try:
-            from qwen_tts.core.tokenizer_12hz.modeling_qwen3_tts_tokenizer_v2 import (
-                Qwen3TTSTokenizerV2CausalConvNet,
-            )
-        except ImportError as exc:
-            raise ImportError(
-                "Exporting Qwen3-TTS requires the `qwen_tts` package. Install it with `pip install qwen-tts`."
-            ) from exc
-
-        return Qwen3TTSTokenizerV2CausalConvNet
-
-    def __enter__(self):
-        super().__enter__()
-        self._enter_codec_patches()
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-        self._exit_codec_patches()

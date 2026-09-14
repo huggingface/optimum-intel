@@ -348,15 +348,7 @@ def _get_qwen3_tts_submodels_fn_and_export_configs(
         Qwen3TTSSteppedEmbeddingOpenVINOConfig,
         Qwen3TTSTextEmbeddingOpenVINOConfig,
     )
-    from optimum.exporters.openvino.model_patcher import (
-        Qwen3TTSCodecDecoderWrapper,
-        Qwen3TTSCodecEncoderWrapper,
-        Qwen3TTSDecoderStackWrapper,
-        Qwen3TTSEmbeddingWrapper,
-        Qwen3TTSSpeakerEncoderWrapper,
-        Qwen3TTSSteppedDecoderStackWrapper,
-        Qwen3TTSSteppedEmbeddingWrapper,
-    )
+    from optimum.exporters.openvino.model_patcher import Qwen3TTSSubmodelWrapper
 
     talker = model.talker
     code_predictor = talker.code_predictor
@@ -384,38 +376,46 @@ def _get_qwen3_tts_submodels_fn_and_export_configs(
         talker = model.talker
         code_predictor = talker.code_predictor
         codec_model = model.speech_tokenizer.model
+
+        def decoder_stack(decoder_model, **modules):
+            # Only the modules the traced stack runs: the decoder model also owns the embedding
+            # tables, which are exported on their own.
+            return Qwen3TTSSubmodelWrapper(
+                decoder_model.config,
+                layers=decoder_model.layers,
+                norm=decoder_model.norm,
+                rotary_emb=decoder_model.rotary_emb,
+                **modules,
+            )
+
         submodels = {
-            "talker_model": Qwen3TTSDecoderStackWrapper(talker.model, head=talker.codec_head).eval(),
-            "code_predictor_model": Qwen3TTSSteppedDecoderStackWrapper(
+            "talker_model": decoder_stack(talker.model, head=talker.codec_head),
+            "code_predictor_model": decoder_stack(
                 code_predictor.model,
                 heads=code_predictor.lm_head,
                 input_projection=code_predictor.small_to_mtp_projection,
-            ).eval(),
-            "text_embeddings": Qwen3TTSEmbeddingWrapper(
+            ),
+            "text_embeddings": Qwen3TTSSubmodelWrapper(
                 talker.config,
                 embedding=talker.get_text_embeddings(),
                 projection=talker.text_projection,
-            ).eval(),
-            "talker_embeddings": Qwen3TTSEmbeddingWrapper(
-                talker.config, embedding=talker.get_input_embeddings()
-            ).eval(),
-            "code_predictor_embeddings": Qwen3TTSSteppedEmbeddingWrapper(
+            ),
+            "talker_embeddings": Qwen3TTSSubmodelWrapper(talker.config, embedding=talker.get_input_embeddings()),
+            "code_predictor_embeddings": Qwen3TTSSubmodelWrapper(
                 code_predictor.config, embeddings=code_predictor.get_input_embeddings()
-            ).eval(),
-            "codec_encoder": Qwen3TTSCodecEncoderWrapper(
+            ),
+            "codec_encoder": Qwen3TTSSubmodelWrapper(
                 codec_model.config,
                 encoder=codec_model.encoder,
                 num_quantizers=codec_model.encoder_valid_num_quantizers,
-            ).eval(),
-            "codec_decoder": Qwen3TTSCodecDecoderWrapper(
-                codec_model.config.decoder_config, decoder=codec_model.decoder
-            ).eval(),
+            ),
+            "codec_decoder": Qwen3TTSSubmodelWrapper(codec_model.config.decoder_config, decoder=codec_model.decoder),
         }
         if model.speaker_encoder is not None:
-            submodels["speaker_encoder"] = Qwen3TTSSpeakerEncoderWrapper(
+            submodels["speaker_encoder"] = Qwen3TTSSubmodelWrapper(
                 model.config.speaker_encoder_config, speaker_encoder=model.speaker_encoder
-            ).eval()
-        return submodels
+            )
+        return {name: submodel.eval() for name, submodel in submodels.items()}
 
     # The code predictor is fed embeddings in the talker's width and narrows them itself, so
     # its graph input is sized by the talker rather than by its own hidden size.
