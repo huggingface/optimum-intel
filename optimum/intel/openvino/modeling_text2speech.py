@@ -300,9 +300,14 @@ class OVQwen3TTSDecoderStack(_OVQwen3TTSPart):
         self.request.start_async(graph_inputs, share_inputs=True)
         self.request.wait()
 
-        hidden = torch.from_numpy(self.request.get_tensor("last_hidden_state").data).clone()
         self.head_state["logits"] = torch.from_numpy(self.request.get_tensor("logits").data).clone()
-        self.head_state["hidden_shape"] = tuple(hidden.shape)
+        # The talker's graph returns its hidden states, which seed the code predictor's prompt; the
+        # code predictor's returns logits alone, as nothing reads its hidden states. Exports made
+        # before that change still carry the output, which is then simply not needed.
+        hidden = None
+        if "last_hidden_state" in self.output_names:
+            hidden = torch.from_numpy(self.request.get_tensor("last_hidden_state").data).clone()
+        self.head_state["hidden_shape"] = None if hidden is None else tuple(hidden.shape)
 
         # Advance the HF cache length only; the tensors themselves are never read back.
         marker = torch.zeros(batch_size, self._num_key_value_heads, sequence_length, 1)
@@ -312,7 +317,7 @@ class OVQwen3TTSDecoderStack(_OVQwen3TTSPart):
         return BaseModelOutputWithPast(
             last_hidden_state=hidden,
             past_key_values=past_key_values,
-            hidden_states=(hidden,) if output_hidden_states else None,
+            hidden_states=(hidden,) if output_hidden_states and hidden is not None else None,
             attentions=None,
         )
 
@@ -1204,8 +1209,9 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
     _DECODER_STACK_OUTPUTS = ("last_hidden_state", "logits")
     _DECODER_STACK_PORTS = {
         "talker_model": (_DECODER_STACK_INPUTS, _DECODER_STACK_OUTPUTS),
-        # The code predictor's graph additionally picks a depth with ``step``.
-        "code_predictor_model": (_DECODER_STACK_INPUTS + ("step",), _DECODER_STACK_OUTPUTS),
+        # The code predictor's graph additionally picks a depth with ``step``, and returns only the
+        # logits (earlier exports also carried ``last_hidden_state``, which is accepted but unused).
+        "code_predictor_model": (_DECODER_STACK_INPUTS + ("step",), ("logits",)),
     }
 
     # The components every export carries, whatever the variant, and so the ones a directory has

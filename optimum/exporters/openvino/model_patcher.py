@@ -12358,8 +12358,10 @@ class Qwen3TTSDecoderStackPatcher(ModelPatcher):
                 # embedding tables: it keeps them 16-bit on disk while leaving the
                 # Constant -> Convert -> Gather pattern that NNCF can compress.
                 weight = torch.index_select(stacked_heads.to(torch.float32), 0, step.reshape(1)).squeeze(0)
+                # Logits only: nothing reads the code predictor's hidden states - ``qwen_tts``
+                # takes just the sampled codes out of its ``generate`` - so exporting them would
+                # only copy one more tensor to the host on each of the fifteen inner steps.
                 return {
-                    "last_hidden_state": hidden,
                     "logits": torch.nn.functional.linear(hidden, weight),
                     "present_key_values": present_key_values,
                 }

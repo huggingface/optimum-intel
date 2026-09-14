@@ -7745,6 +7745,14 @@ class Qwen3TTSSteppedDecoderStackOpenVINOConfig(Qwen3TTSDecoderStackOpenVINOConf
         common_inputs["position_ids"] = {0: "batch_size", 1: "sequence_length"}
         return {**common_inputs, "step": {}}
 
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        # Only the talker's hidden states are consumed (they seed each frame's code predictor
+        # prompt); this stack's are not, so its graph returns logits alone.
+        outputs = super().outputs
+        outputs.pop("last_hidden_state")
+        return outputs
+
 
 class Qwen3TTSComponentOpenVINOConfig(OpenVINOConfig):
     """Base export configuration for the Qwen3-TTS components outside the decoder stacks."""
