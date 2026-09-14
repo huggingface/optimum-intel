@@ -64,6 +64,8 @@ from optimum.exporters.openvino.input_generators import (
     DummyQwen3OmniMoeLMInputGenerator,
     DummyQwen3OmniMoeProjectionInputGenerator,
     DummyQwen3OmniMoeVisionInputGenerator,
+    DummyQwen3TTSComponentInputGenerator,
+    DummyQwen3TTSDecoderStackInputGenerator,
     DummyQwen3VLLMInputGenerator,
     DummyQwen3VLVisionEmbedInputGenerator,
     DummyQwenImageResolutionInputGenerator,
@@ -7628,88 +7630,21 @@ class ZImageTextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
         }
 
 
-class Qwen3TTSDecoderStackDummyInputGenerator(DummyInputGenerator):
-    """Generates the stateless decoder-stack inputs used for the Qwen3-TTS OpenVINO export.
-
-    The Qwen3-TTS talker and code-predictor decoder stacks are exported as stateless graphs
-    whose rotary position information (``cos``/``sin``) and per-layer key/value cache are
-    passed explicitly as separate inputs, so a dedicated dummy input generator is required.
-    """
-
-    SUPPORTED_INPUT_NAMES = (
-        "inputs_embeds",
-        "attention_mask",
-        "cos",
-        "sin",
-        "past_key",
-        "past_value",
-        "position_ids",
-        "step",
-    )
-
-    def __init__(
-        self,
-        task: str,
-        normalized_config: NormalizedTextConfig,
-        batch_size: int = 1,
-        sequence_length: int = 4,
-        **kwargs,
-    ):
-        self.task = task
-        self.normalized_config = normalized_config
-        config = normalized_config.config
-        self.batch_size = batch_size
-        self.sequence_length = sequence_length
-        self.hidden_size = config.hidden_size
-        self.num_attention_heads = config.num_attention_heads
-        self.num_key_value_heads = config.num_key_value_heads
-        self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
-        self.num_hidden_layers = config.num_hidden_layers
-        self.position_ids_rows = kwargs.get("position_ids_rows", 1)
-        # The width of `inputs_embeds`, which is the talker's hidden size for a stack fed from
-        # the talker; it only equals this stack's own hidden size when the two match.
-        self.input_hidden_size = kwargs.get("input_hidden_size") or self.hidden_size
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name == "inputs_embeds":
-            shape = [self.batch_size, self.sequence_length, self.input_hidden_size]
-        elif input_name == "attention_mask":
-            # Additive causal mask; at export there is no past so kv_length == sequence_length.
-            shape = [self.batch_size, 1, self.sequence_length, self.sequence_length]
-        elif input_name in ("cos", "sin"):
-            shape = [self.batch_size, self.sequence_length, self.head_dim]
-        elif input_name == "position_ids":
-            # Rotary positions for stacks that build cos/sin inside the graph; m-RoPE takes
-            # one row per position stream.
-            shape = [self.batch_size, self.sequence_length]
-            if self.position_ids_rows > 1:
-                shape = [self.position_ids_rows] + shape
-            return self.random_int_tensor(shape, max_value=self.sequence_length, framework=framework, dtype=int_dtype)
-        elif input_name == "step":
-            # Scalar depth index selecting one of the folded per-depth output heads.
-            return torch.tensor(0, dtype=torch.int64)
-        elif input_name in ("past_key", "past_value"):
-            # One layer's cache, with zero past length for the prefill trace.
-            shape = [self.batch_size, self.num_key_value_heads, 0, self.head_dim]
-        else:
-            raise ValueError(f"Unsupported input name {input_name} for {self.__class__.__name__}")
-        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
-
-
 class Qwen3TTSDecoderStackOpenVINOConfig(OpenVINOConfig):
-    """OpenVINO export configuration for a stateless Qwen3-TTS decoder stack.
+    """OpenVINO export configuration for a Qwen3-TTS decoder stack.
 
     Used for both autoregressive stacks - the 28-layer talker and the 5-layer code predictor -
     which share the same layer topology and therefore the same graph signature; only the
     ``num_hidden_layers`` of the config passed in differs.
 
     Conversion is performed through the standard ``export`` -> ``export_pytorch`` ->
-    ``convert_model`` pipeline. The forward is rewritten into a stateless, KV-explicit form
-    by :class:`Qwen3TTSDecoderStackPatcher`.
+    ``convert_model`` pipeline. :class:`Qwen3TTSDecoderStackPatcher` rewrites the forward to take
+    the key/value cache explicitly, and :meth:`patch_stateful_model` then turns that cache into
+    OpenVINO state, so the exported IR carries none of it as inputs or outputs.
     """
 
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    DUMMY_INPUT_GENERATOR_CLASSES = (Qwen3TTSDecoderStackDummyInputGenerator,)
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3TTSDecoderStackInputGenerator,)
     _MODEL_PATCHER = Qwen3TTSDecoderStackPatcher
 
     # Rows of the ``position_ids`` input: interleaved m-RoPE carries three position streams,
@@ -7830,83 +7765,19 @@ class Qwen3TTSSteppedDecoderStackOpenVINOConfig(Qwen3TTSDecoderStackOpenVINOConf
         )
 
 
-class Qwen3TTSComponentDummyInputGenerator(DummyInputGenerator):
-    """Generates inputs for the non-autoregressive Qwen3-TTS components.
-
-    Covers the speaker encoder (mel spectrogram), the codec encoder (raw waveform) and the
-    codec decoder (residual code streams). All three have a single input whose time axis is
-    dynamic, so the concrete dummy lengths below only need to be large enough to trace.
-    """
-
-    SUPPORTED_INPUT_NAMES = ("mel_features", "input_values", "audio_codes", "input_ids", "step")
-
-    # A few frames is enough to exercise every block; the traced graphs stay length-agnostic.
-    DUMMY_CODE_FRAMES = 8
-    DUMMY_MEL_FRAMES = 128
-    DUMMY_SEQUENCE_LENGTH = 4
-
-    def __init__(
-        self,
-        task: str,
-        normalized_config,
-        batch_size: int = 1,
-        vocab_size: Optional[int] = None,
-        hidden_size: Optional[int] = None,
-        **kwargs,
-    ):
-        self.task = task
-        self.normalized_config = normalized_config
-        self.config = normalized_config.config
-        self.batch_size = batch_size
-        # Resolved by the export config, since which config field holds them differs per
-        # component (talker text vs codec vocabulary, talker vs code-predictor hidden size).
-        self.vocab_size = vocab_size
-        self.hidden_size = hidden_size
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name == "input_ids":
-            shape = [self.batch_size, self.DUMMY_SEQUENCE_LENGTH]
-            return self.random_int_tensor(shape, max_value=self.vocab_size, framework=framework, dtype=int_dtype)
-
-        if input_name == "step":
-            # Scalar depth index selecting one of the code predictor's per-depth tables.
-            return torch.tensor(0, dtype=torch.int64)
-
-        if input_name == "mel_features":
-            # [B, mel_frames, mel_dim] as produced by ``mel_spectrogram(...).transpose(1, 2)``.
-            shape = [self.batch_size, self.DUMMY_MEL_FRAMES, self.config.mel_dim]
-            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
-
-        if input_name == "input_values":
-            # [B, 1, audio_length]; the length must be a whole number of codec frames.
-            shape = [self.batch_size, 1, self.DUMMY_CODE_FRAMES * self.config.encode_downsample_rate]
-            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype, min_value=-1, max_value=1)
-
-        if input_name == "audio_codes":
-            # [B, num_quantizers, frames], one entry per residual codebook.
-            shape = [self.batch_size, self.config.num_quantizers, self.DUMMY_CODE_FRAMES]
-            return self.random_int_tensor(
-                shape, max_value=self.config.codebook_size, framework=framework, dtype=int_dtype
-            )
-
-        raise ValueError(f"Unsupported input name {input_name} for {self.__class__.__name__}")
-
-
 class Qwen3TTSComponentOpenVINOConfig(OpenVINOConfig):
-    """Base export configuration for the single-input Qwen3-TTS components."""
+    """Base export configuration for the Qwen3-TTS components outside the decoder stacks."""
 
     NORMALIZED_CONFIG_CLASS = NormalizedConfig
-    DUMMY_INPUT_GENERATOR_CLASSES = (Qwen3TTSComponentDummyInputGenerator,)
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3TTSComponentInputGenerator,)
 
-    # Names of the config fields holding the vocabulary / hidden size of this component, when
-    # it consumes token ids or hidden states. Subclasses point them at the right field.
+    # Name of the config field holding the vocabulary of an embedding table, which differs per
+    # table (the talker's text vocabulary vs its codec vocabulary). Subclasses point it there.
     VOCAB_SIZE_ATTR: Optional[str] = None
-    HIDDEN_SIZE_ATTR: Optional[str] = None
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
-        for attr, key in ((self.VOCAB_SIZE_ATTR, "vocab_size"), (self.HIDDEN_SIZE_ATTR, "hidden_size")):
-            if attr is not None:
-                kwargs.setdefault(key, getattr(self._config, attr))
+        if self.VOCAB_SIZE_ATTR is not None:
+            kwargs.setdefault("vocab_size", getattr(self._config, self.VOCAB_SIZE_ATTR))
         generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](self.task, self._normalized_config, **kwargs)
         return {
             name: generator.generate(name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype)

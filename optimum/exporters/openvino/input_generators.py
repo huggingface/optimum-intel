@@ -2445,3 +2445,125 @@ class DummyZImageCapFeatInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
         "encoder_outputs",
         "encoder_hidden_states",
     )
+
+
+class DummyQwen3TTSDecoderStackInputGenerator(DummyInputGenerator):
+    """Generates the inputs for tracing a Qwen3-TTS decoder stack (the talker or the code predictor).
+
+    The stack is traced with its key/value cache passed explicitly, one ``past_key``/``past_value``
+    pair per layer, which the stateful transformation then turns into OpenVINO state - so those
+    two names drive the trace but are not inputs of the exported IR. The rotary embeddings are
+    built inside the graph from ``position_ids``. The IR is left with ``inputs_embeds``,
+    ``attention_mask`` and ``position_ids``, plus ``step`` for the code predictor and the
+    ``beam_idx`` the stateful transformation adds to the talker.
+    """
+
+    SUPPORTED_INPUT_NAMES = (
+        "inputs_embeds",
+        "attention_mask",
+        "position_ids",
+        "step",
+        "past_key",
+        "past_value",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = 1,
+        sequence_length: int = 4,
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        config = normalized_config.config
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.num_key_value_heads = config.num_key_value_heads
+        self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
+        # Rows of ``position_ids``: interleaved m-RoPE carries three position streams (the
+        # talker), plain RoPE a single one (the code predictor).
+        self.position_ids_rows = kwargs.get("position_ids_rows", 1)
+        # The width of `inputs_embeds`, which is the talker's hidden size for a stack fed from
+        # the talker; it only equals this stack's own hidden size when the two match.
+        self.input_hidden_size = kwargs.get("input_hidden_size") or config.hidden_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "inputs_embeds":
+            shape = [self.batch_size, self.sequence_length, self.input_hidden_size]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "attention_mask":
+            # Additive causal mask; at export there is no past so kv_length == sequence_length.
+            shape = [self.batch_size, 1, self.sequence_length, self.sequence_length]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "position_ids":
+            shape = [self.batch_size, self.sequence_length]
+            if self.position_ids_rows > 1:
+                shape = [self.position_ids_rows] + shape
+            return self.random_int_tensor(shape, max_value=self.sequence_length, framework=framework, dtype=int_dtype)
+        if input_name == "step":
+            # Scalar depth index selecting one of the code predictor's folded per-depth output heads.
+            return torch.tensor(0, dtype=torch.int64)
+        if input_name in ("past_key", "past_value"):
+            # One layer's cache, with zero past length for the prefill trace.
+            shape = [self.batch_size, self.num_key_value_heads, 0, self.head_dim]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        raise ValueError(f"Unsupported input name {input_name} for {self.__class__.__name__}")
+
+
+class DummyQwen3TTSComponentInputGenerator(DummyInputGenerator):
+    """Generates the inputs for the Qwen3-TTS components outside the decoder stacks.
+
+    Covers the speaker encoder (``mel_features``), the codec encoder (``input_values``), the codec
+    decoder (``audio_codes``) and the three embedding tables (``input_ids``, plus ``step`` for the
+    code predictor's stacked per-depth table). Every time axis is dynamic in the exported IR, so
+    the concrete dummy lengths below only need to be large enough to trace.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("mel_features", "input_values", "audio_codes", "input_ids", "step")
+
+    # A few frames is enough to exercise every block; the traced graphs stay length-agnostic.
+    DUMMY_CODE_FRAMES = 8
+    DUMMY_MEL_FRAMES = 128
+    DUMMY_SEQUENCE_LENGTH = 4
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = 1,
+        vocab_size: Optional[int] = None,
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        self.config = normalized_config.config
+        self.batch_size = batch_size
+        # Resolved by the export config, since which config field holds it differs per table
+        # (the talker's text vocabulary vs its codec vocabulary).
+        self.vocab_size = vocab_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "input_ids":
+            shape = [self.batch_size, self.DUMMY_SEQUENCE_LENGTH]
+            return self.random_int_tensor(shape, max_value=self.vocab_size, framework=framework, dtype=int_dtype)
+        if input_name == "step":
+            # Scalar depth index selecting one of the code predictor's per-depth tables.
+            return torch.tensor(0, dtype=torch.int64)
+        if input_name == "mel_features":
+            # [B, mel_frames, mel_dim] as produced by ``mel_spectrogram(...).transpose(1, 2)``.
+            shape = [self.batch_size, self.DUMMY_MEL_FRAMES, self.config.mel_dim]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "input_values":
+            # [B, 1, audio_length]. Any length traces, since the causal convolutions derive their
+            # own padding from the input shape; a whole number of codec frames keeps it simple.
+            shape = [self.batch_size, 1, self.DUMMY_CODE_FRAMES * self.config.encode_downsample_rate]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype, min_value=-1, max_value=1)
+        if input_name == "audio_codes":
+            # [B, num_quantizers, frames], one entry per residual codebook.
+            shape = [self.batch_size, self.config.num_quantizers, self.DUMMY_CODE_FRAMES]
+            return self.random_int_tensor(
+                shape, max_value=self.config.codebook_size, framework=framework, dtype=int_dtype
+            )
+        raise ValueError(f"Unsupported input name {input_name} for {self.__class__.__name__}")
