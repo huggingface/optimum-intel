@@ -7639,8 +7639,9 @@ class Qwen3TTSDecoderStackOpenVINOConfig(OpenVINOConfig):
 
     Conversion is performed through the standard ``export`` -> ``export_pytorch`` ->
     ``convert_model`` pipeline. :class:`Qwen3TTSDecoderStackPatcher` rewrites the forward to take
-    the key/value cache explicitly, and :meth:`patch_stateful_model` then turns that cache into
-    OpenVINO state, so the exported IR carries none of it as inputs or outputs.
+    the key/value cache explicitly, and the standard stateful transformation then turns that cache
+    into OpenVINO state - adding ``beam_idx`` - so the exported IR carries none of it as inputs or
+    outputs.
     """
 
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -7670,20 +7671,6 @@ class Qwen3TTSDecoderStackOpenVINOConfig(OpenVINOConfig):
             inputs[f"past_key_values.{layer}.key"] = {0: "batch_size", 2: "past_length"}
             inputs[f"past_key_values.{layer}.value"] = {0: "batch_size", 2: "past_length"}
         return inputs
-
-    def patch_stateful_model(self, ov_model) -> None:
-        """Hide the key/value cache inside the graph as OpenVINO state.
-
-        This is the standard decoder transformation: besides turning every ``past_key_values``
-        pair into a variable, it adds the ``beam_idx`` input and gathers each cache read
-        through it, so a caller can reorder the cache across the batch the way beam search
-        does. It has to be requested here rather than through the ``stateful`` flag, which
-        follows task support (``ensure_export_task_support_stateful``) and is never set for a
-        component-wise pipeline exported under ``text-to-audio``.
-        """
-        from optimum.exporters.openvino.stateful import patch_stateful
-
-        patch_stateful(self._config, ov_model)
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
