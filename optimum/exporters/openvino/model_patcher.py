@@ -62,6 +62,7 @@ from optimum.exporters.openvino.patching_utils import (
     postprocess_past_key_values,
     preprocess_past_key_values,
 )
+from optimum.exporters.openvino.utils import GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE, GRANITEMOEHYBRID_MAMBA_LAYER_TYPE
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
     is_openvino_version,
@@ -5120,29 +5121,33 @@ class GraniteMoEModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        for layer in self._model.model.layers:
-            block_sparse_moe = layer.block_sparse_moe
-            block_sparse_moe.router._orig_forward = block_sparse_moe.router.forward
-            block_sparse_moe.router.forward = types.MethodType(
-                _granite_moe_topk_gating_forward, block_sparse_moe.router
-            )
-            block_sparse_moe.input_linear._orig_forward = block_sparse_moe.input_linear.forward
-            block_sparse_moe.input_linear.forward = types.MethodType(
-                _granite_moe_parallel_experts_forward, block_sparse_moe.input_linear
-            )
-            block_sparse_moe.output_linear._orig_forward = block_sparse_moe.output_linear.forward
-            block_sparse_moe.output_linear.forward = types.MethodType(
-                _granite_moe_parallel_experts_forward, block_sparse_moe.output_linear
-            )
+        if is_transformers_version("<", "5.13"):
+            for layer in self._model.model.layers:
+                block_sparse_moe = layer.block_sparse_moe
+                block_sparse_moe.router._orig_forward = block_sparse_moe.router.forward
+                block_sparse_moe.router.forward = types.MethodType(
+                    _granite_moe_topk_gating_forward, block_sparse_moe.router
+                )
+                block_sparse_moe.input_linear._orig_forward = block_sparse_moe.input_linear.forward
+                block_sparse_moe.input_linear.forward = types.MethodType(
+                    _granite_moe_parallel_experts_forward, block_sparse_moe.input_linear
+                )
+                block_sparse_moe.output_linear._orig_forward = block_sparse_moe.output_linear.forward
+                block_sparse_moe.output_linear.forward = types.MethodType(
+                    _granite_moe_parallel_experts_forward, block_sparse_moe.output_linear
+                )
+        else:
+            register_ov_batched_mm(self)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        for layer in self._model.model.layers:
-            block_sparse_moe = layer.block_sparse_moe
-            block_sparse_moe.router.forward = block_sparse_moe.router._orig_forward
-            block_sparse_moe.input_linear.forward = block_sparse_moe.input_linear._orig_forward
-            block_sparse_moe.output_linear.forward = block_sparse_moe.output_linear._orig_forward
+        if is_transformers_version("<", "5.13"):
+            for layer in self._model.model.layers:
+                block_sparse_moe = layer.block_sparse_moe
+                block_sparse_moe.router.forward = block_sparse_moe.router._orig_forward
+                block_sparse_moe.input_linear.forward = block_sparse_moe.input_linear._orig_forward
+                block_sparse_moe.output_linear.forward = block_sparse_moe.output_linear._orig_forward
 
 
 class OVSeq2SeqModelPatcher(ModelPatcher):
@@ -5467,7 +5472,7 @@ def _create_gemma4_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids,
     same_group = same_group.unsqueeze(1)  # [batch, 1, seq_len, total_len]
 
     # Un-mask same-group vision tokens in both masks (bidirectional attention within an image).
-    if is_transformers_version(">=", "5.9"):
+    if is_transformers_version(">=", "5.9") and is_transformers_version("<", "5.13"):
         full_mask = full_mask.masked_fill(same_group, 0.0)
     sliding_mask = sliding_mask.masked_fill(same_group, 0.0)
 
@@ -8077,10 +8082,10 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
                 mamba_idx = 0
                 attn_idx = 0
                 for i, block_type in enumerate(config.layers_block_type):
-                    if block_type == "mamba":
+                    if block_type == GRANITEMOEHYBRID_MAMBA_LAYER_TYPE:
                         self.mamba_mapping[i] = mamba_idx
                         mamba_idx += 1
-                    elif block_type == "attention":
+                    elif block_type == GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE:
                         self.attn_mapping[i] = attn_idx
                         attn_idx += 1
                 self.num_attn_layers = attn_idx
@@ -8095,6 +8100,9 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
                 if self.num_attn_layers == 0 or self.key_cache[0] is None:
                     return 0
                 return self.key_cache[0].shape[-2]
+
+            def get_query_offset(self, layer_idx: Optional[int] = 0) -> int:
+                return self.get_seq_length(layer_idx=layer_idx)
 
             def get_mask_sizes(self, query_length, layer_idx: int = 0):
                 # transformers >= 5.x passes the scalar `query_length` (int or 0-dim tensor);
@@ -8119,8 +8127,8 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             attention_mask=None,
             cache_params=None,
         ):
-            num_mamba_layers = layer_types.count("mamba")
-            num_attn_layers = layer_types.count("attention")
+            num_mamba_layers = layer_types.count(GRANITEMOEHYBRID_MAMBA_LAYER_TYPE)
+            num_attn_layers = layer_types.count(GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE)
 
             use_cache = False
             wrapped_cache_params = None
@@ -8219,13 +8227,16 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             return _forward
 
         for layer in self._model.model.layers:
-            if getattr(layer, "block_sparse_moe", None) is not None:
+            if getattr(layer, "block_sparse_moe", None) is not None and is_transformers_version("<", "5.13"):
                 patch_sparse_moe(layer.block_sparse_moe)
             if layer.mamba is not None:
                 mamba_layer = layer.mamba
                 mamba_layer._orig_forward = mamba_layer.forward
                 mamba_layer.selective_ssm_recurrent_cell = SelectiveSSMRecurrentCell()
                 mamba_layer.forward = make_mamba_forward(mamba_layer)
+
+        if is_transformers_version(">=", "5.13"):
+            register_ov_batched_mm(self)
 
     def __exit__(self, exc_type, exc_value, traceback):
         def unpatch_sparse_moe(sparse_moe_layer):
@@ -8237,7 +8248,7 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
 
         for layer in self._model.model.layers:
-            if getattr(layer, "block_sparse_moe", None) is not None:
+            if getattr(layer, "block_sparse_moe", None) is not None and is_transformers_version("<", "5.13"):
                 unpatch_sparse_moe(layer.block_sparse_moe)
             if layer.mamba is not None:
                 mamba_layer = layer.mamba

@@ -26,7 +26,7 @@ from openvino import Dimension, PartialShape, Symbol
 from openvino.utils.types import get_element_type
 from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.tasks import TasksManager
-from optimum.intel.utils.import_utils import is_safetensors_available
+from optimum.intel.utils.import_utils import is_safetensors_available, is_transformers_version
 from optimum.utils import is_diffusers_available
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
@@ -356,6 +356,15 @@ SSM_MODELS = [
     "qwen3_5_text",
     "qwen3_5_moe_text",
 ]
+
+# GraniteMoeHybrid's `config.layer_types` used "mamba"/"attention" for transformers < 5.13 and later
+# renamed to "linear_attention"/"full_attention" in v5.13 https://github.com/huggingface/transformers/pull/46738
+if is_transformers_version(">=", "5.13"):
+    GRANITEMOEHYBRID_MAMBA_LAYER_TYPE = "linear_attention"
+    GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE = "full_attention"
+else:
+    GRANITEMOEHYBRID_MAMBA_LAYER_TYPE = "mamba"
+    GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE = "attention"
 
 # All transformers, diffusers, timm and sentence transformers models that were supported via optimum-onnx OnnxConfigs for which support is now removed
 ONNX_SUPPORTED_ARCHITECTURES = {
