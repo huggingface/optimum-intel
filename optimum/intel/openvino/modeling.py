@@ -365,8 +365,6 @@ class OVModelForFeatureExtraction(OVModel):
                 "This model is a Sentence Transformers model. Please use `OVSentenceTransformer` to load this model."
             )
 
-        # A `feature-extraction-with-past` export keeps its KV cache inside the model, so a growing
-        # sequence can be scored token by token instead of being re-read from scratch on every call.
         self.stateful = model_has_state(model)
         super().__init__(model, config, **kwargs)
         self._past_length = 0
@@ -383,7 +381,6 @@ class OVModelForFeatureExtraction(OVModel):
     ):
         if not self.stateful:
             return super()._reshape(model, batch_size, sequence_length, height, width)
-        # `beam_idx`, added by the stateful export, is 1D and only indexes the batch
         shapes = {}
         for model_input in model.inputs:
             shapes[model_input] = model_input.get_partial_shape()
@@ -405,7 +402,6 @@ class OVModelForFeatureExtraction(OVModel):
         if self.request is None:
             super().compile()
             if self.stateful:
-                # an InferRequest, unlike a CompiledModel, owns the KV cache and can reset it
                 self.request = self.request.create_infer_request()
 
     def reset_state(self):
@@ -428,7 +424,6 @@ class OVModelForFeatureExtraction(OVModel):
             if invalid_inputs_msg is not None:
                 e.args += (invalid_inputs_msg,)
             raise e
-        # the request owns these tensors and overwrites them on the next call
         return {name: self.request.get_tensor(name).data.copy() for name in self.output_names}
 
     @add_start_docstrings_to_model_forward(
@@ -457,8 +452,6 @@ class OVModelForFeatureExtraction(OVModel):
         token_type_ids = ensure_numpy(token_type_ids)
         position_ids = ensure_numpy(position_ids)
 
-        # On a stateful model, `past_key_values` returned by a previous call means "keep scoring the
-        # same sequence"; its absence starts a new one and therefore invalidates the cached prefix.
         if self.stateful and past_key_values is None:
             self.reset_state()
 
@@ -481,11 +474,9 @@ class OVModelForFeatureExtraction(OVModel):
             if position_ids is None:
                 position_ids = np.cumsum(attention_mask, axis=1) - 1
                 position_ids[attention_mask == 0] = 1
-            # the cache already holds the prefix, only the incoming tokens are scored
             inputs["position_ids"] = position_ids[:, -input_ids.shape[1] :]
 
         if "beam_idx" in self.input_names:
-            # feature extraction has no beam search, every sequence keeps its own cache slot
             inputs["beam_idx"] = np.arange(input_ids.shape[0], dtype=np.int32)
 
         outputs = self._inference(inputs)
@@ -496,11 +487,9 @@ class OVModelForFeatureExtraction(OVModel):
 
         if self.stateful:
             self._past_length += input_ids.shape[1]
-            # a non-empty marker, so that passing it back continues this sequence, cf. OVModelForCausalLM
+            # a non-empty marker, so that passing it back continues this sequence (like OVModelForCausalLM)
             model_outputs["past_key_values"] = ((),)
 
-        # models exposing a single embedding keep the historical return type, the ones replacing it by
-        # several tensors (e.g. the four classification heads of Qwen3Guard) are returned as they are
         if set(model_outputs) == {"last_hidden_state"}:
             return BaseModelOutput(last_hidden_state=model_outputs["last_hidden_state"])
         return ModelOutput(**model_outputs)

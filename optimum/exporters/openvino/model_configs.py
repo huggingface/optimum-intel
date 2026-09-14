@@ -474,18 +474,11 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         )
         archs = getattr(config, "architectures", None)
         self.dflash = isinstance(archs, list) and len(archs) > 0 and archs[0] == "DFlashDraftModel"
-        # Qwen3Guard-Stream shares model_type="qwen3" but swaps the language modeling head for four
-        # token classification heads, so it is exported under the `feature-extraction` tasks
         self.is_guard = isinstance(archs, list) and len(archs) > 0 and archs[0] == "Qwen3ForGuardModel"
         if self.is_guard:
             self.MIN_TRANSFORMERS_VERSION = "4.55.0"
             self.MAX_TRANSFORMERS_VERSION = "4.57.6"
-            # `feature-extraction-with-past` is not routed through `get_decoder_models_for_export`,
-            # which is what usually turns `use_past` into past key value *inputs*
             self.use_past_in_inputs = use_past
-            # and it is not a generation task either, so `_set_runtime_options` has to be told that
-            # the export is stateful; without the KV_CACHE_PRECISION it emits, the plugin falls back
-            # to a u8 cache and the classification logits drift by ~1e-1
             self.stateful = use_past
         if self.dflash:
             model_type = getattr(config, "model_type", "")
@@ -519,7 +512,6 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             common_inputs["attention_mask"] = {0: "batch_size", 1: mask_length}
             return common_inputs
         if self.task in ["feature-extraction"] and not self.is_guard:
-            # plain embedding models are scored in one shot, the guard heads need the decoder inputs
             common_inputs = {
                 "input_ids": {0: "batch_size", 1: "sequence_length"},
                 "attention_mask": {0: "batch_size", 1: "sequence_length"},
@@ -531,7 +523,7 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         if self.is_guard:
-            # one score per token per head, instead of the single `last_hidden_state` of an embedding model
+            # One score per token per head, instead of the single `last_hidden_state` of an embedding model
             common_outputs = {
                 name: {0: "batch_size", 1: "sequence_length"}
                 for name in (

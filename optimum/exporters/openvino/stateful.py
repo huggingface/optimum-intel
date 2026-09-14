@@ -187,9 +187,7 @@ _ENCODER_DECODER_TASKS_WITH_PAST = (
 
 _DECODER_TASKS_WITH_PAST = ("text-generation",)
 
-# Architectures that need a KV cache even though their task is not a generation task. Qwen3Guard-Stream
-# reports model_type="qwen3" but replaces the language modeling head with token classification heads,
-# so it is exported under `feature-extraction-with-past` while still being a decoder.
+# Architectures that need KV cache even though their task is not a generation task
 _STATEFUL_ARCHITECTURES = {"Qwen3ForGuardModel"}
 
 
