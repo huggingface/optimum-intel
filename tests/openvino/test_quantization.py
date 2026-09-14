@@ -659,49 +659,6 @@ class OVQuantizerTest(unittest.TestCase):
             )
 
 
-@unittest.skipUnless(is_qwen_tts_available(), "qwen_tts package is not installed")
-class OVQwen3TTSWeightCompressionTest(unittest.TestCase):
-    """Weight compression for the component-wise Qwen3-TTS export.
-
-    Qwen3-TTS is not an ``OVBaseModel`` - it keeps the ``qwen_tts`` generation orchestration in
-    PyTorch and drives one IR per component - so it is compressed through the exporter rather
-    than through ``from_pretrained(load_in_8bit=True)``. What matters is that compression is
-    applied per component, and to the right ones: the language-model side is compressed while
-    the neural codec stays in floating point, because int8 weights there cost the vocoder
-    ~29 dB of SNR.
-    """
-
-    def test_int8_weight_compression(self):
-        model = OVModelForTextToSpeechSeq2Seq.from_pretrained(
-            MODEL_NAMES["qwen3_tts"], export=True, load_in_8bit=True, device=OPENVINO_DEVICE
-        )
-        expected = {k: {"int8": v} for k, v in _ARCHITECTURES_TO_EXPECTED_INT8["qwen3_tts"].items()}
-        check_compression_state_per_model(self, model.ov_models, expected)
-
-    def test_int4_weight_compression_is_mixed(self):
-        model = OVModelForTextToSpeechSeq2Seq.from_pretrained(
-            MODEL_NAMES["qwen3_tts"],
-            export=True,
-            quantization_config=OVWeightQuantizationConfig(bits=4, group_size=128, ratio=1.0),
-            device=OPENVINO_DEVICE,
-        )
-        ov_models = model.ov_models
-
-        # Only the talker is worth 4 bits; the rest of the language-model side falls back
-        # to 8, and the codec and speaker encoder are not compressed at all.
-        _, talker_weights = get_num_quantized_nodes(ov_models["talker_model"])
-        self.assertGreater(talker_weights.get("int4", 0), 0, "talker was not quantized to int4")
-
-        for name in ("code_predictor_model", "text_embeddings", "talker_embeddings", "code_predictor_embeddings"):
-            _, weights = get_num_quantized_nodes(ov_models[name])
-            self.assertEqual(weights.get("int4", 0), 0, f"{name} should not be quantized to int4")
-            self.assertGreater(weights.get("int8", 0), 0, f"{name} should be quantized to int8")
-
-        for name in ("speaker_encoder", "codec_encoder", "codec_decoder"):
-            _, weights = get_num_quantized_nodes(ov_models[name])
-            self.assertEqual(sum(weights.values()), 0, f"{name} should be left in floating point")
-
-
 class OVWeightCompressionTest(unittest.TestCase):
     maxDiff = None
 
@@ -1319,6 +1276,48 @@ class OVWeightCompressionTest(unittest.TestCase):
             },
         ),
     ]
+
+    # Qwen3-TTS resolves `quantization_config` itself rather than through the default-config table,
+    # so the configs given here are the ones it applies for these `bits`. Compression is per
+    # component: the language-model side is compressed, the speaker encoder and the codec stay in
+    # floating point, and a 4-bit request reaches only the talker. It needs the `qwen_tts` package.
+    if is_qwen_tts_available():
+        DEFAULT_COMPRESSION_CONFIGURATIONS.extend(
+            [
+                (
+                    OVModelForTextToSpeechSeq2Seq,
+                    "qwen3_tts",
+                    8,
+                    {"bits": 8},
+                    {
+                        "talker_model": {"int8": 30},
+                        "code_predictor_model": {"int8": 16},
+                        "text_embeddings": {"int8": 2},
+                        "talker_embeddings": {"int8": 2},
+                        "code_predictor_embeddings": {"int8": 2},
+                        "speaker_encoder": {},
+                        "codec_encoder": {},
+                        "codec_decoder": {},
+                    },
+                ),
+                (
+                    OVModelForTextToSpeechSeq2Seq,
+                    "qwen3_tts",
+                    4,
+                    {"bits": 4},
+                    {
+                        "talker_model": {"int8": 2, "int4": 28},
+                        "code_predictor_model": {"int8": 16},
+                        "text_embeddings": {"int8": 2},
+                        "talker_embeddings": {"int8": 2},
+                        "code_predictor_embeddings": {"int8": 2},
+                        "speaker_encoder": {},
+                        "codec_encoder": {},
+                        "codec_decoder": {},
+                    },
+                ),
+            ]
+        )
 
     DEFAULT_IGNORED_SCOPE_CONFIGURATIONS = [
         (
