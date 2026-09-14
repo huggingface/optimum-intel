@@ -95,6 +95,7 @@ jobs:
           pytest tests/openvino/test_export.py -k "qwen3_tts" --durations=0
           pytest tests/openvino/test_seq2seq.py -k "qwen3_tts" --durations=0
           pytest tests/openvino/test_transformations.py -k "qwen3_tts" --durations=0
+          pytest tests/openvino/test_cb_compatible.py -k "qwen3_tts" --durations=0
 
       - if: ${{ matrix.test-pattern == '*quantization*' }}
         name: Test Qwen3-TTS weight compression
