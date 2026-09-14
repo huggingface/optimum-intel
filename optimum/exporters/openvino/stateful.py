@@ -187,6 +187,11 @@ _ENCODER_DECODER_TASKS_WITH_PAST = (
 
 _DECODER_TASKS_WITH_PAST = ("text-generation",)
 
+# Architectures that need a KV cache even though their task is not a generation task. Qwen3Guard-Stream
+# reports model_type="qwen3" but replaces the language modeling head with token classification heads,
+# so it is exported under `feature-extraction-with-past` while still being a decoder.
+_STATEFUL_ARCHITECTURES = {"Qwen3ForGuardModel"}
+
 
 def ensure_export_task_support_stateful(task: str):
     from optimum.exporters.tasks import TasksManager
@@ -200,12 +205,10 @@ def ensure_export_task_support_stateful(task: str):
     return is_stateful
 
 
-def ensure_model_type_support_stateful(model_type: str, config: Optional[PretrainedConfig] = None):
-    if model_type in MULTI_MODAL_TEXT_GENERATION_MODELS:
-        return True
-    # Qwen3Guard-Stream keeps model_type="qwen3" but replaces the LM head with classification heads
-    archs = getattr(config, "architectures", None)
-    return isinstance(archs, list) and len(archs) > 0 and archs[0] == "Qwen3ForGuardModel"
+def ensure_model_type_support_stateful(model_type: str, architectures: Optional[List[str]] = None):
+    return model_type in MULTI_MODAL_TEXT_GENERATION_MODELS or bool(
+        _STATEFUL_ARCHITECTURES.intersection(architectures or [])
+    )
 
 
 def remove_parameters_by_names(model: ov.Model, names: list):

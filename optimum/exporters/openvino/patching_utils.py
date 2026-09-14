@@ -344,6 +344,8 @@ class ModelPatcher:
 
             outputs = self.orig_forward(*args, **kwargs)
 
+            # Models with custom remote code may return a plain dataclass instead of a `ModelOutput`
+            # (which is both a dataclass and a dict); normalize it so it can be filtered by name below.
             if dataclasses.is_dataclass(outputs) and not isinstance(outputs, dict):
                 outputs = {
                     field.name: getattr(outputs, field.name)

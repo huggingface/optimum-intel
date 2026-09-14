@@ -76,7 +76,6 @@ from optimum.intel import (
     OVModelForCTC,
     OVModelForCustomTasks,
     OVModelForFeatureExtraction,
-    OVModelForGuard,
     OVModelForImageClassification,
     OVModelForMaskedLM,
     OVModelForQuestionAnswering,
@@ -1123,6 +1122,10 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
 
 
 class OVModelForGuardIntegrationTest(unittest.TestCase):
+    """Qwen3Guard replaces the language modeling head of Qwen3 by four token classification heads,
+    so it is a `feature-extraction` model whose output is several tensors instead of a single
+    `last_hidden_state`, and which is exported with a KV cache to be scored token by token."""
+
     SUPPORTED_ARCHITECTURES = ("qwen3_guard",)
     OUTPUT_NAMES = (
         "risk_level_logits",
@@ -1135,10 +1138,9 @@ class OVModelForGuardIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForGuard.from_pretrained(
+        ov_model = OVModelForFeatureExtraction.from_pretrained(
             model_id,
             export=True,
-            use_cache=False,
             trust_remote_code=True,
             ov_config=F32_CONFIG,
             device=OPENVINO_DEVICE,
@@ -1155,6 +1157,7 @@ class OVModelForGuardIntegrationTest(unittest.TestCase):
         for input_type in ["pt", "np"]:
             tokens = tokenizer("This is a sample input", return_tensors=input_type)
             ov_outputs = ov_model(**tokens)
+            self.assertNotIn("last_hidden_state", ov_outputs)
             for name in self.OUTPUT_NAMES:
                 self.assertIn(name, ov_outputs)
                 self.assertIsInstance(ov_outputs[name], TENSOR_ALIAS_TO_TYPE[input_type])
@@ -1168,21 +1171,10 @@ class OVModelForGuardIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_feature_extraction_dispatch(self, model_arch):
-        """A guard checkpoint loaded through the feature-extraction entry point must return a guard model."""
-        model_id = MODEL_NAMES[model_arch]
-        ov_model = OVModelForFeatureExtraction.from_pretrained(
-            model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
-        )
-        self.assertIsInstance(ov_model, OVModelForGuard)
-        del ov_model
-        gc.collect()
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_stateful_streaming(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForGuard.from_pretrained(
+        ov_model = OVModelForFeatureExtraction.from_pretrained(
             model_id,
             export=True,
             task="feature-extraction-with-past",
@@ -1217,8 +1209,7 @@ class OVModelForGuardIntegrationTest(unittest.TestCase):
                     f"{name} differs from the reference at step {offset}",
                 )
 
-        # a new stream must not see the cache left behind by the previous one
-        ov_model.reset_state()
+        # omitting `past_key_values` must start a new sequence instead of continuing the previous one
         restarted = ov_model(input_ids=input_ids[:, :prefix_length])
         self.assertTrue(torch.allclose(restarted.risk_level_logits, streamed[0].risk_level_logits, atol=1e-5))
 
