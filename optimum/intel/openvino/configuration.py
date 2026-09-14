@@ -534,6 +534,14 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
+    "openbmb/MiniCPM5-2B": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "gsm8k",
+        "scale_estimation": True,
+    },
 }
 
 _DEFAULT_8BIT_WQ_CONFIGS = {
