@@ -154,7 +154,7 @@ def _save_model(
         model = _add_dflash_mode_to_rt_info(
             model,
             config._config,
-            candidate_position_offset=config.candidate_position_offset,
+            candidate_position_offset=getattr(config, "candidate_position_offset", 1),
         )
     if source_model is not None and getattr(getattr(source_model, "config", None), "model_type", None) in {
         "qwen3",
