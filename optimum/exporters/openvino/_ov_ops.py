@@ -111,3 +111,158 @@ def convert_recurrent_attention_cell(context):
     final_output = ops.concat([core_attn_out_new, last_recurrent_state_new], 0)
 
     return [final_output.output(0)]
+
+
+# Conversion rule for the `SelectiveSSMRecurrentCellOp` operation in a Torch graph.
+#
+# This generalizes the recurrent-cell-to-`ov::Loop` approach (originally introduced for the
+# GatedDeltaNet block, see `convert_recurrent_attention_cell` above) to the Mamba2 selective
+# state-space recurrence used by hybrid Mamba2 models such as GraniteMoeHybrid (Granite-4.0).
+#
+# The Mamba2 single-step recurrence follows the standard Mamba-2 discretization:
+#       state_t = state_{t-1} * dA_t + dBx_t             # [B, H, P, N]
+#       y_t     = reduce_sum(state_t * C_t, axis=N)       # [B, H, P]
+#
+# All the heavy discretization tensors are computed vectorized over the whole sequence BEFORE
+# the loop, so the loop body stays as simple as possible. This mirrors the torch reference:
+#       dA  = exp(A * dt).reshape(B, T, H, 1, 1)                 # [B, T, H, 1, 1]
+#       dB  = dt.reshape(B, T, H, 1) * B                         # [B, T, H, N]
+#       dBx = dB.reshape(B, T, H, 1, N) * x.reshape(B, T, H, P, 1)  # [B, T, H, P, N]
+#       C   = C.reshape(B, T, H, 1, N)                          # [B, T, H, 1, N]
+# The loop then simply slices dA/dBx/C along dim 1 (T) and runs the two-line recurrence.
+# Inputs are in [B, T, H, ...] layout; the skip connection `x_t * D` does not depend on the
+# recurrent state and is added outside.
+#
+# The `SelectiveSSMRecurrentCellOp` appears in the Torch graph as a result of replacing the
+# `SelectiveSSMRecurrentCell` `torch.nn.Module` via a registered `ModuleExtension` in the OpenVINO
+# PyTorch frontend; OpenVINO then applies this conversion rule to the resulting operation.
+def convert_recurrent_selective_ssm_cell(context):
+    # Inputs match the forward signature of `SelectiveSSMRecurrentCell`:
+    #   A          [H]          — negative log-decay rates
+    #   dt         [B, T, H]   — time steps
+    #   B          [B, T, G, N] — input matrix (G groups, expanded to H before the loop)
+    #   x          [B, T, H, P] — input hidden states
+    #   C          [B, T, G, N] — output matrix (G groups, expanded to H before the loop)
+    #   recurrent_state [B, H, P, N] — initial recurrent state
+    A = context.get_input(0)  # [H]
+    dt = context.get_input(1)  # [B, T, H]
+    B = context.get_input(2)  # [B, T, G, N]
+    x = context.get_input(3)  # [B, T, H, P]
+    C = context.get_input(4)  # [B, T, G, N]
+    recurrent_state = context.get_input(5)  # [B, H, P, N]
+
+    const_zero_axis = ops.constant(0, dtype=np.int32)
+    const_one = ops.constant(1, dtype=np.int32)
+    const_minus_one = ops.constant(-1, dtype=np.int32)
+    const_minus_two = ops.constant(-2, dtype=np.int32)
+
+    # Compute heads_per_group = H / G from the shapes of dt and B.
+    dt_shape = ops.shape_of(dt)
+    B_shape = ops.shape_of(B)
+    const_two = ops.constant(2, dtype=np.int32)
+    num_heads = ops.gather(dt_shape, const_two, const_zero_axis)  # H
+    num_groups = ops.gather(B_shape, const_two, const_zero_axis)  # G
+    heads_per_group = ops.convert(ops.divide(num_heads, num_groups), "i64")
+
+    # Expand grouped B/C from [B, T, G, N] → [B, T, H, N] via repeat_interleave along dim 2:
+    # reshape to [B, T, G, 1, N] → tile [1, 1, 1, heads_per_group, 1] → reshape [B, T, H, N]
+    B_5d = ops.unsqueeze(B, ops.constant(3, dtype=np.int32))  # [B, T, G, 1, N]
+    C_5d = ops.unsqueeze(C, ops.constant(3, dtype=np.int32))  # [B, T, G, 1, N]
+    tile_shape = ops.concat(
+        [
+            ops.constant([1, 1, 1], dtype=np.int64),
+            ops.unsqueeze(heads_per_group, const_zero_axis),
+            ops.constant([1], dtype=np.int64),
+        ],
+        0,
+    )
+    B_tiled = ops.tile(B_5d, tile_shape)  # [B, T, G, H/G, N]
+    C_tiled = ops.tile(C_5d, tile_shape)  # [B, T, G, H/G, N]
+
+    # Reshape [B, T, G, H/G, N] → [B, T, H, N]
+    x_shape = ops.shape_of(x)
+    N = ops.gather(B_shape, ops.constant(3, dtype=np.int32), const_zero_axis)
+    BC_shape = ops.concat([ops.constant([0, 0, -1], dtype=np.int64), ops.unsqueeze(N, const_zero_axis)], 0)
+    B = ops.reshape(B_tiled, BC_shape, True)  # [B, T, H, N]
+    C = ops.reshape(C_tiled, BC_shape, True)  # [B, T, H, N]
+
+    # Vectorized discretization over the whole sequence, before the loop (mirrors torch):
+    #   dA  = exp(A * dt).reshape(B, T, H, 1, 1)
+    #   dB  = dt.reshape(B, T, H, 1) * B
+    #   dBx = dB.reshape(B, T, H, 1, N) * x.reshape(B, T, H, P, 1)  → [B, T, H, P, N]
+    #   C   = C.reshape(B, T, H, 1, N)
+    dA = ops.exp(ops.multiply(A, dt))  # [B, T, H]
+    dA = ops.reshape(dA, ops.constant([0, 0, 0, 1, 1], dtype=np.int64), True)  # [B, T, H, 1, 1]
+    dB = ops.multiply(ops.unsqueeze(dt, const_minus_one), B)  # [B, T, H, N]
+    dBx = ops.multiply(
+        ops.unsqueeze(dB, const_minus_two),  # [B, T, H, 1, N]
+        ops.unsqueeze(x, const_minus_one),  # [B, T, H, P, 1]
+    )  # [B, T, H, P, N]
+    C = ops.unsqueeze(C, const_minus_two)  # [B, T, H, 1, N]
+
+    # Build the zero-initialized output accumulator with shape [B, T, H, P].
+    const_zero_f32 = ops.constant(0, dtype=np.float32)
+    output = ops.broadcast(const_zero_f32, x_shape)
+
+    # Trip count for the loop equals the sequence length (dim 1 of x).
+    seq_len = ops.gather(x_shape, const_one, const_zero_axis)
+    seq_len = ops.convert(seq_len, "i32")
+
+    # Body parameters (one timestep slice each along dim 1). All tensors are already discretized.
+    timestep_param = ops.parameter([], np.int32, "timestep")
+    dA_t_param = ops.parameter([-1, 1, -1, 1, 1], np.float32, "dA_t")  # [B, 1, H, 1, 1]
+    dBx_t_param = ops.parameter([-1, 1, -1, -1, -1], np.float32, "dBx_t")  # [B, 1, H, P, N]
+    C_t_param = ops.parameter([-1, 1, -1, 1, -1], np.float32, "C_t")  # [B, 1, H, 1, N]
+    recurrent_state_t = ops.parameter([-1, -1, -1, -1], np.float32, "recurrent_state_t")  # [B, H, P, N]
+    output_t = ops.parameter([-1, -1, -1, -1], np.float32, "output_t")  # [B, T, H, P]
+
+    # Drop the singleton sequence dimension introduced by slicing.
+    dA_t = ops.squeeze(dA_t_param, const_one)  # [B, H, 1, 1]
+    dBx_t = ops.squeeze(dBx_t_param, const_one)  # [B, H, P, N]
+    C_t = ops.squeeze(C_t_param, const_one)  # [B, H, 1, N]
+
+    # output_recurrent_state = output_recurrent_state * dA[:, t] + dBx[:, t]
+    recurrent_state_new = ops.add(ops.multiply(recurrent_state_t, dA_t), dBx_t)  # [B, H, P, N]
+
+    # output[:, t] = (output_recurrent_state * C[:, t]).sum(dim=-1)
+    y_t = ops.reduce_sum(ops.multiply(recurrent_state_new, C_t), const_minus_one, False)  # [B, H, P]
+    y_t = ops.unsqueeze(y_t, const_one)  # [B, 1, H, P]
+
+    timestep = ops.unsqueeze(timestep_param, const_zero_axis)
+    output_res = ops.scatter_update(output_t, timestep, y_t, const_one)
+    recurrent_state_res = recurrent_state_new
+
+    body_cond = ops.constant([True], dtype=bool)
+    body_model = ov.Model(
+        [body_cond, recurrent_state_res, output_res],
+        [
+            timestep_param,
+            dA_t_param,
+            dBx_t_param,
+            C_t_param,
+            recurrent_state_t,
+            output_t,
+        ],
+        "selective_ssm_body_model",
+    )
+
+    loop = ops.loop(seq_len, ops.constant(True, dtype="bool"))
+    loop.set_function(body_model)
+
+    loop.set_sliced_input(dA_t_param, dA.output(0), 0, 1, 1, -1, 1)
+    loop.set_sliced_input(dBx_t_param, dBx.output(0), 0, 1, 1, -1, 1)
+    loop.set_sliced_input(C_t_param, C.output(0), 0, 1, 1, -1, 1)
+    loop.set_merged_input(recurrent_state_t, recurrent_state, recurrent_state_res.output(0))
+    loop.set_merged_input(output_t, output.output(0), output_res.output(0))
+    loop.set_special_body_ports([0, 0])
+
+    output_new = loop.get_iter_value(output_res.output(0), -1)
+    output_recurrent_state_new = loop.get_iter_value(recurrent_state_res.output(0), -1)
+
+    flatten_shape = ops.constant([-1], dtype=np.int32)
+    output_new = ops.reshape(output_new, flatten_shape, False)
+    output_recurrent_state_new = ops.reshape(output_recurrent_state_new, flatten_shape, False)
+
+    final_output = ops.concat([output_new, output_recurrent_state_new], 0)
+
+    return [final_output.output(0)]

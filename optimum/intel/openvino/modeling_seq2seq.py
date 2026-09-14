@@ -59,6 +59,10 @@ from .utils import (
 )
 
 
+class FunASRPretrainedConfig(PretrainedConfig):
+    model_type = "fun_asr"
+
+
 core = Core()
 
 logger = logging.getLogger(__name__)
@@ -637,7 +641,10 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             except (KeyError, ValueError):
                 # Custom model types not registered with transformers AutoConfig (e.g. `fun_asr`,
                 # loaded via the funasr library) are stored as a plain PretrainedConfig.
-                config = PretrainedConfig.from_pretrained(save_dir_path)
+                if getattr(config, "model_type", None) == "fun_asr":
+                    config = FunASRPretrainedConfig.from_pretrained(save_dir_path)
+                else:
+                    config = PretrainedConfig.from_pretrained(save_dir_path)
             # PretrainedConfig does not serialize the instance-level `model_type`; restore it
             # from `export_model_type` so downstream model_type-based dispatch keeps working.
             if not getattr(config, "model_type", None) and getattr(config, "export_model_type", None):

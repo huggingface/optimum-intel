@@ -25,7 +25,7 @@ from openvino import Core
 from transformers import PretrainedConfig
 
 from ..utils.import_utils import is_funasr_available
-from .modeling_seq2seq import OVModelForSpeechSeq2Seq
+from .modeling_seq2seq import FunASRPretrainedConfig, OVModelForSpeechSeq2Seq
 from .utils import OV_TOKENIZER_NAME
 
 
@@ -105,8 +105,7 @@ class _FunASRForSpeechSeq2Seq(torch.nn.Module):
 
         # Build a transformers-style config so the model flows through the speech-seq2seq export path.
         # The decoder is a standard Qwen3 LLM; we surface its text-config attributes for KV cache shapes.
-        config = PretrainedConfig()
-        config.model_type = "fun_asr"
+        config = FunASRPretrainedConfig()
         config.export_model_type = "fun_asr"
         config.is_encoder_decoder = True
         config.audio_token_id = 0
@@ -179,7 +178,7 @@ def _is_funasr_source(model_id, **kwargs) -> bool:
 
     if "config.json" in all_files:
         try:
-            cfg = PretrainedConfig.from_pretrained(
+            cfg = FunASRPretrainedConfig.from_pretrained(
                 model_id, subfolder=subfolder, cache_dir=cache_dir, revision=revision, token=token
             )
             return getattr(cfg, "export_model_type", None) == "fun_asr"
@@ -214,9 +213,7 @@ class _OVModelForFunAsr(OVModelForSpeechSeq2Seq):
             del funasr_wrapped
             return cls._export(model_id, config=config, **kwargs)
 
-        config = PretrainedConfig.from_pretrained(model_id)
-        if getattr(config, "export_model_type", None) == "fun_asr":
-            config.model_type = "fun_asr"
+        config = FunASRPretrainedConfig.from_pretrained(model_id)
         config.is_encoder_decoder = True
         return cls._from_pretrained(model_id, config=config, **kwargs)
 

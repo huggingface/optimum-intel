@@ -8,6 +8,7 @@ on:
   pull_request:
     branches:
       - main
+      - v*-release
     types:
       - opened
       - labeled
@@ -49,17 +50,17 @@ jobs:
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # main
 
       - name: Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.10"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip uv
-          uv pip install .[tests] librosa diffusers
+          uv pip install .[tests,diffusers] librosa
 
       - name: Restore HF models cache
         id: hf-cache-restore
@@ -73,6 +74,11 @@ jobs:
         name: Install specific dependencies and versions required for older transformers
         run: |
           uv pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.32.* transformers_stream_generator
+
+      - if: ${{ matrix.transformers-version == '4.57.6' }}
+        name: Pin diffusers (diffusers>=0.40 requires huggingface-hub>=1.23, incompatible with transformers==4.57.6's huggingface-hub<1.0)
+        run: |
+          uv pip install "diffusers<0.40"
 
       - if: ${{ matrix.transformers-version == 'main' }}
         name: Install transformers from repository

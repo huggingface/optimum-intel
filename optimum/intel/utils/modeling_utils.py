@@ -23,6 +23,7 @@ from typing import Dict, List, Optional, Type, Union
 import torch
 from huggingface_hub import HfApi, get_token, hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+from huggingface_hub.errors import OfflineModeIsEnabled
 from huggingface_hub.hf_api import file_exists
 from transformers import CLIPConfig, PretrainedConfig, PreTrainedModel
 
@@ -135,7 +136,16 @@ def _find_files_matching_pattern(
             files_ = [p for p in files_ if re.search(pattern, str(p))]
             files.extend(files_)
     else:
-        repo_files = map(Path, HfApi().list_repo_files(model_name_or_path, revision=revision, token=token))
+        hf_api = HfApi()
+        try:
+            repo_files = map(Path, hf_api.list_repo_files(model_name_or_path, revision=revision, token=token))
+        except (ConnectionError, OfflineModeIsEnabled):
+            snapshot_path = hf_api.snapshot_download(repo_id=str(model_name_or_path), revision=revision, token=token)
+            repo_files = [
+                Path(os.path.relpath(os.path.join(dirpath, file), snapshot_path))
+                for dirpath, _, filenames in os.walk(snapshot_path)
+                for file in filenames
+            ]
         files = [Path(p) for p in repo_files if re.match(pattern, str(p)) and str(p.parent) in subfolders]
 
     return files

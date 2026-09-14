@@ -80,6 +80,7 @@ from .stateful import (
     ensure_stateful_is_available,
     patch_stateful,
 )
+from .utils_annotations import add_hidden_states_rt_info
 
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,8 @@ if is_diffusers_available():
 
 
 if TYPE_CHECKING:
+    from transformers.configuration_utils import PretrainedConfig
+
     from optimum.exporters.openvino.base import OpenVINOConfig
     from optimum.intel.openvino.configuration import OVConfig
 
@@ -122,6 +125,13 @@ def _set_runtime_options(
             or getattr(sub_export_config, "stateful", False)
         ):
             sub_export_config.runtime_options["KV_CACHE_PRECISION"] = "f16"
+        # The gemma4_unified vision embedder produces activations large enough to overflow in
+        # fp16, so scale them down at runtime the same way the language model does.
+        if (
+            model_name == "vision_embeddings_model"
+            and getattr(getattr(sub_export_config, "_orig_config", None), "model_type", None) == "gemma4_unified"
+        ):
+            sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
 
 
 def _save_model(
@@ -130,9 +140,9 @@ def _save_model(
     ov_config: Optional["OVConfig"] = None,
     library_name: Optional[str] = None,
     config: "OpenVINOConfig" = None,
-    patch_16bit_model: bool = False,
+    source_model=None,
 ):
-    compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16" and not patch_16bit_model
+    compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
     model = _add_version_info_to_model(model, library_name)
 
     runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}
@@ -140,6 +150,18 @@ def _save_model(
 
     if getattr(config, "eagle3", False):
         model = _add_eagle3_mode_to_rt_info(model)
+    if getattr(config, "dflash", False):
+        model = _add_dflash_mode_to_rt_info(model, config._config)
+    if source_model is not None and getattr(getattr(source_model, "config", None), "model_type", None) in {
+        "qwen3",
+        "qwen3_moe",
+        "qwen3_5",
+        "qwen3_5_moe",
+        "qwen3_5_text",
+        "qwen3_5_moe_text",
+        "gemma4",
+    }:
+        add_hidden_states_rt_info(source_model, model, config)
 
     save_model(model, path, compress_to_fp16)
     del model
@@ -405,7 +427,7 @@ def export_pytorch(
             ov_config=ov_config,
             library_name=library_name,
             config=config,
-            patch_16bit_model=patch_16bit_model,
+            source_model=model,
         )
         clear_class_registry()
         del ov_model
@@ -918,6 +940,26 @@ def _add_eagle3_mode_to_rt_info(model: Model):
     return model
 
 
+def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig") -> Model:
+    """
+    Add DFlash metadata to DFlash draft model.
+
+    Marks model as DFlash draft model and adds DFlash configuration to the model including
+    mask token id and target layer ids.
+    """
+    try:
+        model.set_rt_info("True", ["dflash_mode"])
+        dflash_config = getattr(hf_config, "dflash_config", {})
+        if "mask_token_id" in dflash_config:
+            model.set_rt_info(str(dflash_config["mask_token_id"]), ["dflash", "mask_token_id"])
+        if "target_layer_ids" in dflash_config:
+            model.set_rt_info(",".join(map(str, dflash_config["target_layer_ids"])), ["dflash", "target_layer_ids"])
+    except Exception:
+        pass
+
+    return model
+
+
 def _add_version_info_to_model(model: Model, library_name: Optional[str] = None):
     """
     Add dependency versions to OpenVINO model
@@ -993,6 +1035,11 @@ def _get_multi_modal_submodels_and_export_configs(
         model.config.image_newline = model.image_newline.tolist()
     if hasattr(model, "model") and hasattr(model.model, "image_newline"):
         model.config.image_newline = model.model.image_newline.tolist()
+
+    # DeepSeek-OCR-2 keeps a learnable view separator embedding appended after the image tokens;
+    # persist it into the config so the OV model can rebuild the merged visual features.
+    if model_type == "deepseek_ocr2" and hasattr(model, "model") and hasattr(model.model, "view_separator"):
+        model.config.view_separator = model.model.view_separator.tolist()
 
     main_config_cls = TasksManager.get_exporter_config_constructor(
         model=model, task=task, exporter="openvino", library_name=library_name
@@ -1074,6 +1121,8 @@ def get_diffusion_models_for_export_ext(
     is_flux = pipeline.__class__.__name__.startswith("Flux")
     is_sana = pipeline.__class__.__name__.startswith("Sana")
     is_ltx_video = pipeline.__class__.__name__.startswith("LTX")
+    is_qwen_image = pipeline.__class__.__name__.startswith("QwenImage")
+    is_zimage = pipeline.__class__.__name__.startswith("ZImage")
     is_sd = pipeline.__class__.__name__.startswith("StableDiffusion") and not is_sd3
     is_lcm = pipeline.__class__.__name__.startswith("LatentConsistencyModel")
 
@@ -1097,15 +1146,104 @@ def get_diffusion_models_for_export_ext(
         models_for_export = get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_sana:
         models_for_export = get_sana_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+    elif is_qwen_image:
+        models_for_export = get_qwen_image_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_ltx_video:
         is_ltx2 = pipeline.__class__.__name__.startswith("LTX2")
         if is_ltx2:
             models_for_export = get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
         else:
             models_for_export = get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+    elif is_zimage:
+        models_for_export = get_zimage_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     else:
         raise ValueError(f"Unsupported pipeline type `{pipeline.__class__.__name__}` provided")
     return None, models_for_export
+
+
+def get_zimage_models_for_export(pipeline, exporter, int_dtype, float_dtype):
+    """
+    Build the models_for_export dict for ZImagePipeline (Tongyi-MAI/Z-Image-Turbo).
+
+    Components exported:
+      text_encoder   - Qwen3Model → produces cap_feat_dim-dimensional text features
+      transformer    - ZImageTransformer2DModel (patched forward)
+      vae_encoder    - standard AutoencoderKL encoder
+      vae_decoder    - standard AutoencoderKL decoder
+    """
+    models_for_export = {}
+
+    # ── Text encoder (Qwen3Model) ──────────────────────────────────────────
+    text_encoder = pipeline.text_encoder
+    text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=text_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="feature-extraction",
+        # Z-Image's own config, not the shared "qwen3-text-encoder": see
+        # ZImageTextEncoderOpenVINOConfig for why the registrations must stay separate.
+        model_type="z-image-text-encoder",
+    )
+    text_encoder_export_config = text_encoder_config_constructor(
+        text_encoder.config,
+        int_dtype=int_dtype,
+        float_dtype=float_dtype,
+    )
+    text_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["text_encoder"] = (text_encoder, text_encoder_export_config)
+
+    # ── Transformer (ZImageTransformer2DModel) ─────────────────────────────
+    transformer = pipeline.transformer
+    # Propagate cap_feat_dim so the export config can size encoder_hidden_states
+    transformer.config.text_encoder_projection_dim = transformer.config.cap_feat_dim
+    transformer.config.requires_aesthetics_score = False
+    transformer.config.time_cond_proj_dim = None
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=transformer,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="z-image-transformer",
+    )
+    transformer_export_config = export_config_constructor(
+        transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    transformer_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["transformer"] = (transformer, transformer_export_config)
+
+    # ── VAE Encoder ────────────────────────────────────────────────────────
+    vae_encoder = copy.deepcopy(pipeline.vae)
+    vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="vae-encoder",
+    )
+    vae_encoder_export_config = vae_config_constructor(
+        vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
+
+    # ── VAE Decoder ────────────────────────────────────────────────────────
+    vae_decoder = copy.deepcopy(pipeline.vae)
+    vae_decoder.forward = lambda latent_sample: vae_decoder.decode(z=latent_sample)
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_decoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="vae-decoder",
+    )
+    vae_decoder_export_config = vae_config_constructor(
+        vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
+
+    return models_for_export
 
 
 def get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
@@ -1256,6 +1394,22 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
 
+    # VAE Encoder (needed for image-to-video conditioning; harmless for text-to-video, which won't load it)
+    vae_encoder = copy.deepcopy(pipeline.vae)
+    vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
+    vae_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="ltx2-vae-encoder",
+    )
+    vae_encoder_export_config = vae_encoder_config_constructor(
+        vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
+
     # Audio VAE decoder and vocoder
     if hasattr(pipeline, "audio_vae") and pipeline.audio_vae is not None:
         # Audio VAE decoder
@@ -1374,7 +1528,9 @@ def get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     text_encoder = getattr(pipeline, "text_encoder", None)
     if text_encoder is not None:
         text_encoder.config.output_hidden_states = True
-        text_encoder.text_model.config.output_hidden_states = True
+        # `CLIPTextTransformer` removed since transformers v5.6
+        if hasattr(text_encoder, "text_model"):
+            text_encoder.text_model.config.output_hidden_states = True
         text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
             model=text_encoder,
             exporter=exporter,
@@ -1436,7 +1592,9 @@ def get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     text_encoder_2 = getattr(pipeline, "text_encoder_2", None)
     if text_encoder_2 is not None:
         text_encoder_2.config.output_hidden_states = True
-        text_encoder_2.text_model.config.output_hidden_states = True
+        # `CLIPTextTransformer` removed since transformers v5.6
+        if hasattr(text_encoder_2, "text_model"):
+            text_encoder_2.text_model.config.output_hidden_states = True
         export_config_constructor = TasksManager.get_exporter_config_constructor(
             model=text_encoder_2,
             exporter=exporter,
@@ -1581,6 +1739,98 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
         )
         export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
         models_for_export["text_encoder_2"] = (text_encoder_2, export_config)
+
+    return models_for_export
+
+
+def get_qwen_image_models_for_export(pipeline, exporter, int_dtype, float_dtype):
+    import torch
+
+    models_for_export = {}
+
+    # Text encoder: QwenImage uses a Qwen2.5-VL model that is run text-only. Only the language model
+    # part is required to reproduce the prompt embeddings (the last hidden state).
+    text_encoder = getattr(pipeline, "text_encoder", None)
+    if text_encoder is not None:
+        text_encoder = text_encoder.model.language_model
+        text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=text_encoder,
+            exporter=exporter,
+            library_name="diffusers",
+            task="feature-extraction",
+            model_type="qwenimage-text-encoder",
+        )
+        text_encoder_export_config = text_encoder_config_constructor(
+            text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        text_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+        models_for_export["text_encoder"] = (text_encoder, text_encoder_export_config)
+
+    transformer = pipeline.transformer
+    transformer.config.time_cond_proj_dim = None
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=transformer,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="qwenimage-transformer",
+    )
+    transformer_export_config = export_config_constructor(
+        pipeline.transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    transformer_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["transformer"] = (transformer, transformer_export_config)
+
+    # VAE Encoder. QwenImage uses a 3D causal-conv (video) VAE; for images it is run on a single
+    # temporal frame. We bypass the streaming feature cache (which inserts untraceable None placeholders) -
+    # this is numerically identical to the cached path for a single frame.
+    vae_encoder = copy.deepcopy(pipeline.vae)
+
+    def _qwen_vae_encode(sample, vae_encoder=vae_encoder):
+        vae_encoder.clear_cache()
+        latent = vae_encoder.encoder(sample)
+        return {"latent_parameters": vae_encoder.quant_conv(latent)}
+
+    vae_encoder.forward = _qwen_vae_encode
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="qwenimage-vae-encoder",
+    )
+    vae_encoder_export_config = vae_config_constructor(
+        vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
+
+    # VAE Decoder
+    vae_decoder = copy.deepcopy(pipeline.vae)
+    vae_decoder.register_to_config(
+        latents_mean_data=vae_decoder.config.latents_mean,
+        latents_std_data=vae_decoder.config.latents_std,
+    )
+
+    def _qwen_vae_decode(latent_sample, vae_decoder=vae_decoder):
+        vae_decoder.clear_cache()
+        sample = vae_decoder.post_quant_conv(latent_sample)
+        sample = vae_decoder.decoder(sample)
+        return torch.clamp(sample, min=-1.0, max=1.0)
+
+    vae_decoder.forward = _qwen_vae_decode
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_decoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="qwenimage-vae-decoder",
+    )
+    vae_decoder_export_config = vae_config_constructor(
+        vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
 
     return models_for_export
 
