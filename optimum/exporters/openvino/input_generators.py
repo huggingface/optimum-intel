@@ -1111,16 +1111,15 @@ class LTX2VocoderDummyInputGenerator(DummyVisionInputGenerator):
         # Small dims to speed up tracing; the exported model uses dynamic shapes at runtime.
         num_channels: int = 2,
         num_frames: int = 8,
-        mel_bins: Optional[int] = None,
         **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, **kwargs)
         self.out_channels = getattr(normalized_config.config, "out_channels", 2)
         self.num_frames = num_frames
         # LTX-2.3's vocoder config names the mel bin count; LTX-2.0's does not, and 64 is what both
-        # checkpoints actually use. The axis is exported dynamic either way, so this only sets the
-        # tracing shape.
-        self.mel_bins = mel_bins or getattr(normalized_config.config, "num_mel_channels", 64)
+        # checkpoints actually use. Not a tracing convenience like the dims above: this axis feeds
+        # `conv_in` as its input-channel dim, so the weights pin it and no other width will run.
+        self.mel_bins = getattr(normalized_config.config, "num_mel_channels", 64)
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "hidden_states":
