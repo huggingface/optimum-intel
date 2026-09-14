@@ -1443,7 +1443,9 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
                 "export should not ship codec weights",
             )
 
-            ov_model = self.OVMODEL_CLASS.from_pretrained(tmpdir, device=OPENVINO_DEVICE)
+            # f32, as the speaker encoder is compared to PyTorch: a bf16/f16 default inference precision (e.g. CPUs
+            # with AMX) moves its output by ~2e-3, past the tolerance below.
+            ov_model = self.OVMODEL_CLASS.from_pretrained(tmpdir, ov_config=F32_CONFIG, device=OPENVINO_DEVICE)
             self.assertIsInstance(ov_model, _OVModelForQwen3TTS)
             self.assertEqual(getattr(ov_model.config, "model_type", None), "qwen3_tts")
             self.assertEqual(sum(p.numel() for p in ov_model.model.parameters()), 0)
