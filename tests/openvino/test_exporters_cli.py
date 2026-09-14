@@ -87,6 +87,17 @@ from optimum.intel.utils.import_utils import (
 from optimum.utils.save_utils import maybe_save_preprocessors
 
 
+def _task_and_model_type_name(testcase_func, param_num, params):
+    """Name a ``(task, model_type, ...)`` case after both, so ``pytest -k`` can select it by either.
+
+    ``parameterized`` names a case after its first string argument only - the task here - which
+    leaves the model type out of the name and the case unreachable by ``-k <model_type>``.
+    """
+    task, model_type = params.args[0], params.args[1]
+    safe_name = parameterized.to_safe_name
+    return f"{testcase_func.__name__}_{param_num}_{safe_name(task)}_{safe_name(model_type)}"
+
+
 class OVCLIExportTestCase(unittest.TestCase):
     """
     Integration tests ensuring supported models are correctly exported.
@@ -913,7 +924,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         skipped = all_model_type - filtered_model_type
         cls.assertEqual(skipped, expected)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, name_func=_task_and_model_type_name)
     def test_export(self, task: str, model_type: str):
         model_kwargs = None
         if task == "text-to-audio" and model_type == "speecht5":
@@ -925,7 +936,7 @@ class OVCLIExportTestCase(unittest.TestCase):
 
         self._openvino_export(MODEL_NAMES[model_type], task, model_kwargs=model_kwargs, loading_kwargs=loading_kwargs)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, name_func=_task_and_model_type_name)
     def test_exporters_cli(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
             add_ops = ""
@@ -947,9 +958,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             self._load_exported_ov_model(model_type, task, tmpdir, model_kwargs)
 
     @parameterized.expand(
-        arch
-        for arch in SUPPORTED_ARCHITECTURES
-        if not arch[0].endswith("-with-past") and not arch[1].endswith("-refiner")
+        [
+            arch
+            for arch in SUPPORTED_ARCHITECTURES
+            if not arch[0].endswith("-with-past") and not arch[1].endswith("-refiner")
+        ],
+        name_func=_task_and_model_type_name,
     )
     def test_exporters_cli_tokenizers(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
@@ -1113,7 +1127,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                         f"Expected text:\n{reference_input_text_gen_prompt}\nSimplified text:\n{simplified_input_text_gen_prompt}",
                     )
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, name_func=_task_and_model_type_name)
     def test_exporters_cli_fp16(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
             add_ops = ""
@@ -1132,7 +1146,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 model_kwargs["trust_remote_code"] = True
             self._load_exported_ov_model(model_type, task, tmpdir, model_kwargs)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, name_func=_task_and_model_type_name)
     def test_exporters_cli_int8(self, task: str, model_type: str):
         if model_type in ["bitnet"]:
             self.skipTest("CVS-176501 INT8 compression fails for BitNet; need to compress remaining BF16 weights")
@@ -1175,7 +1189,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertEqual(expected_fake_nodes, num_fake_nodes)
             self.assertFalse(vision_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
-    @parameterized.expand(SUPPORTED_4BIT_CONFIGURATIONS)
+    @parameterized.expand(SUPPORTED_4BIT_CONFIGURATIONS, name_func=_task_and_model_type_name)
     def test_exporters_cli_4bit(
         self, task: str, model_type: str, option: str, expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]]
     ):

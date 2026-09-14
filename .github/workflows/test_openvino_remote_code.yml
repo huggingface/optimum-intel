@@ -89,9 +89,9 @@ jobs:
       - if: ${{ matrix.test-pattern == '*export*' }}
         name: Test Qwen3-TTS export
         run: |
-          # The CLI cases are named after the task, so this also picks up SpeechT5; the
-          # Qwen3-TTS ones only exist when `qwen-tts` is installed, as it is here.
-          pytest tests/openvino/test_exporters_cli.py -k "text_to_audio" --durations=0
+          # The Qwen3-TTS cases only exist when `qwen-tts` is installed, as it is here, and every
+          # one of them is named after its model type.
+          pytest tests/openvino/test_exporters_cli.py -k "qwen3_tts" --durations=0
           pytest tests/openvino/test_export.py -k "qwen3_tts" --durations=0
           pytest tests/openvino/test_seq2seq.py -k "qwen3_tts" --durations=0
           pytest tests/openvino/test_transformations.py -k "qwen3_tts" --durations=0
@@ -99,7 +99,9 @@ jobs:
       - if: ${{ matrix.test-pattern == '*quantization*' }}
         name: Test Qwen3-TTS weight compression
         run: |
-          pytest tests/openvino/test_quantization.py -k "Qwen3TTS" --durations=0
+          # The int8 and int4 cases of the default-compression test; they are only added to its
+          # configurations when `qwen-tts` is installed, as it is here.
+          pytest tests/openvino/test_quantization.py -k "default_compression and qwen3_tts" --durations=0
 
       - if: ${{ matrix.test-pattern == '*export*' || matrix.test-pattern == '*quantization*' }}
         name: Uninstall qwen-tts package

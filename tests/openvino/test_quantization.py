@@ -1594,7 +1594,13 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
         self.assertEqual(0, num_weight_nodes["int4"])
 
-    @parameterized.expand(DEFAULT_COMPRESSION_CONFIGURATIONS)
+    @parameterized.expand(
+        DEFAULT_COMPRESSION_CONFIGURATIONS,
+        # The first parameter is a model class, which would otherwise leave the index as the only
+        # name; the model type is added so the cases can be selected by it. The index stays, since
+        # a model type can appear more than once and a repeated name would replace the earlier case.
+        name_func=lambda testcase_func, param_num, params: f"{testcase_func.__name__}_{param_num}_{parameterized.to_safe_name(params.args[1])}",
+    )
     def test_ovmodel_default_compression(
         self, model_cls, model_type, bits, default_config, expected_num_weight_nodes_per_model
     ):
