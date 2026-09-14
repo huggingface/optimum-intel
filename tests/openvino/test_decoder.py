@@ -35,7 +35,11 @@ from optimum.exporters.tasks import TasksManager
 from optimum.intel import OVModelForCausalLM, OVModelForSequenceClassification
 from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import is_transformers_version
+from optimum.intel.utils.import_utils import (
+    is_compressed_tensors_available,
+    is_openvino_version,
+    is_transformers_version,
+)
 
 
 if is_transformers_version(">=", "4.55"):
@@ -145,9 +149,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     # Pre-quantized compressed-tensors (pack-quantized) checkpoint. Its packed weights are turned
     # into int4 constants by the OpenVINO PyTorch frontend compressed-tensors patcher, which is
-    # only available since OpenVINO 2026.3. Requires the `compressed_tensors` package, installed
-    # by CI for the relevant jobs.
-    if is_openvino_version(">=", "2026.3") and is_transformers_version(">=", "4.57.6"):
+    # only available since OpenVINO 2026.3. The dependency is installed by the dedicated
+    # preview-models validation job.
+    if (
+        is_openvino_version(">=", "2026.3")
+        and is_transformers_version(">=", "4.57.6")
+        and is_compressed_tensors_available()
+    ):
         SUPPORTED_ARCHITECTURES += ("llama_compressed_tensors",)
 
     GENERATION_LENGTH = 100

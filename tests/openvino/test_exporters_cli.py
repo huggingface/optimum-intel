@@ -81,6 +81,7 @@ from optimum.intel.openvino.configuration import (
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
+    is_compressed_tensors_available,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_qwen_tts_available,
@@ -852,10 +853,13 @@ class OVCLIExportTestCase(unittest.TestCase):
     # Pre-quantized compressed-tensors (AWQ pack-quantized) model. It is already quantized, so
     # it is exported without a `--weight-format`: the OpenVINO PyTorch frontend converts the
     # packed weights directly into int4 constants. This relies on the frontend compressed-tensors
-    # patcher (OpenVINO 2026.3+) and on the `compressed_tensors` package, which CI installs for
-    # transformers 4.57.6+. Both conditions gate the config so it is only exercised where the
-    # dependency is guaranteed present -- a missing package then surfaces as a hard failure.
-    if is_openvino_version(">=", "2026.3") and is_transformers_version(">=", "4.57.6"):
+    # patcher (OpenVINO 2026.3+) and on the `compressed_tensors` package. The latter is installed
+    # by the dedicated preview-models validation job, which is the only CI job that exercises it.
+    if (
+        is_openvino_version(">=", "2026.3")
+        and is_transformers_version(">=", "4.57.6")
+        and is_compressed_tensors_available()
+    ):
         TRANSFORMERS_4BIT_CONFIGURATIONS.append(
             (
                 "text-generation-with-past",
@@ -870,7 +874,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     # language-model linears are pack-quantized, the vision tower is untouched. Qwen3.5 is only
     # registered for transformers 5.2.0-5.2.99 (see Qwen3_5OpenVINOConfig), so this config is only
     # exercised by the `preview_models` workflow, which pins that narrow transformers range.
-    if is_openvino_version(">=", "2026.3"):
+    if is_openvino_version(">=", "2026.3") and is_compressed_tensors_available():
         TRANSFORMERS_4BIT_CONFIGURATIONS.append(
             (
                 "image-text-to-text",
@@ -961,11 +965,13 @@ class OVCLIExportTestCase(unittest.TestCase):
         if is_transformers_version(">=", "5"):
             expected.update({"videochat_flash_qwen", "llama4", "llava_next_video", "minicpmv", "internvl_chat"})
 
-        # qwen3_5_compressed_tensors is only added to TRANSFORMERS_4BIT_CONFIGURATIONS when
-        # OpenVINO >= 2026.3, and Qwen3_5OpenVINOConfig only supports transformers 5.2.0-5.2.99,
-        # so outside that narrow window it is present but filtered out of SUPPORTED.
-        if is_openvino_version(">=", "2026.3") and not (
-            is_transformers_version(">=", "5.2.0") and is_transformers_version("<=", "5.2.99")
+        # qwen3_5_compressed_tensors is available with OpenVINO >= 2026.3 and compressed-tensors.
+        # Qwen3_5OpenVINOConfig only supports transformers 5.2.0-5.2.99, so outside that narrow
+        # window it is present but filtered out of SUPPORTED.
+        if (
+            is_openvino_version(">=", "2026.3")
+            and is_compressed_tensors_available()
+            and not (is_transformers_version(">=", "5.2.0") and is_transformers_version("<=", "5.2.99"))
         ):
             expected.add("qwen3_5_compressed_tensors")
 
