@@ -420,6 +420,18 @@ class OVCLIExportTestCase(unittest.TestCase):
             },
         ),
         (
+            "feature-extraction",
+            "xlm-roberta",
+            "int8",
+            "--dataset c4 --num-samples 1",
+            {
+                "model": 12,
+            },
+            {
+                "model": {"int8": 15},
+            },
+        ),
+        (
             "fill-mask",
             "roberta",
             "int8",
