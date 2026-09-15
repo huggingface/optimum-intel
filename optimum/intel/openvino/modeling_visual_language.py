@@ -2239,7 +2239,7 @@ class _OVMistral3ForCausalLMBase(OVModelForVisualCausalLM):
     @staticmethod
     def preprocess_inputs(
         text: str,
-        image: Optional["Image"] = None,
+        image: Optional[Union["Image", List["Image"]]] = None,
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
@@ -2251,6 +2251,7 @@ class _OVMistral3ForCausalLMBase(OVModelForVisualCausalLM):
         if video is not None or audio is not None:
             raise ValueError("Video/Audio input is not supported for Mistral3")
 
+        images = list(image) if isinstance(image, (list, tuple)) else ([image] if image is not None else [])
         conversation = [
             {
                 "role": "user",
@@ -2261,16 +2262,18 @@ class _OVMistral3ForCausalLMBase(OVModelForVisualCausalLM):
         if not hasattr(processor, "image_processor"):
             # Checkpoints published in Mistral's own format, such as Mistral-Small-3.2-24B-Instruct-2506, only
             # provide tekken.json and are loaded as MistralCommonTokenizer. It tokenizes text and images in a
-            # single call and accepts images as an URL only, so in-memory images are passed as a data URL.
-            if image is not None:
+            # single call and accepts images as an URL only, so in-memory images are passed as data URLs.
+            image_contents = []
+            for current_image in images:
                 buffer = io.BytesIO()
-                image.convert("RGB").save(buffer, format="PNG")
+                current_image.convert("RGB").save(buffer, format="PNG")
                 image_url = f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode()}"
-                conversation[0]["content"].insert(0, {"type": "image", "url": image_url})
+                image_contents.append({"type": "image", "url": image_url})
+            conversation[0]["content"] = image_contents + conversation[0]["content"]
             return processor.apply_chat_template(conversation, return_dict=True, return_tensors="pt")
 
-        if image is not None:
-            conversation[0]["content"].insert(0, {"type": "image"})
+        if images:
+            conversation[0]["content"] = [{"type": "image"} for _ in images] + conversation[0]["content"]
 
         prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
 
@@ -2279,7 +2282,7 @@ class _OVMistral3ForCausalLMBase(OVModelForVisualCausalLM):
         if "bos_token" in processor.tokenizer.chat_template:
             processor.tokenizer.add_bos_token = False
 
-        inputs = processor(images=image, text=prompt, return_tensors="pt")
+        inputs = processor(images=images or None, text=prompt, return_tensors="pt")
 
         # recover add_bos_token flag in tokenizer
         processor.tokenizer.add_bos_token = orig_add_bos_token
