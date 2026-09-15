@@ -14,7 +14,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 import openvino
@@ -51,6 +51,7 @@ from transformers.modeling_outputs import (
 )
 from transformers.models.clip.modeling_clip import CLIPOutput
 
+from ...exporters.openvino.stateful import model_has_state
 from ..utils.import_utils import is_timm_available, is_timm_version
 from .configuration import OVQuantizationConfigBase
 from .modeling_base import OVBaseModel
@@ -364,7 +365,66 @@ class OVModelForFeatureExtraction(OVModel):
                 "This model is a Sentence Transformers model. Please use `OVSentenceTransformer` to load this model."
             )
 
+        self.stateful = model_has_state(model)
         super().__init__(model, config, **kwargs)
+        self._past_length = 0
+        if self.stateful and self._compile_only:
+            self.request = self.model.create_infer_request()
+
+    def _reshape(
+        self,
+        model: openvino.Model,
+        batch_size: int,
+        sequence_length: int,
+        height: int = None,
+        width: int = None,
+    ):
+        if not self.stateful:
+            return super()._reshape(model, batch_size, sequence_length, height, width)
+        shapes = {}
+        for model_input in model.inputs:
+            shapes[model_input] = model_input.get_partial_shape()
+            shapes[model_input][0] = batch_size
+            if model_input.get_any_name() != "beam_idx":
+                shapes[model_input][1] = sequence_length
+        model.reshape(shapes)
+        return model
+
+    def reshape(self, batch_size: int, sequence_length: int, height: int = None, width: int = None):
+        if self.stateful and sequence_length != -1:
+            logger.warning(
+                "Static sequence length is not supported for a model with a KV cache, the request will be ignored."
+            )
+            return self
+        return super().reshape(batch_size, sequence_length, height, width)
+
+    def compile(self):
+        if self.request is None:
+            super().compile()
+            if self.stateful:
+                self.request = self.request.create_infer_request()
+
+    def reset_state(self):
+        """
+        Drops the cached prefix of a stateful model, so that the next call starts a new sequence.
+        """
+        if self.stateful and self.request is not None:
+            self.request.reset_state()
+        self._past_length = 0
+
+    def _inference(self, inputs):
+        if not self.stateful:
+            return super()._inference(inputs)
+
+        try:
+            self.request.start_async(inputs, share_inputs=True)
+            self.request.wait()
+        except Exception as e:
+            invalid_inputs_msg = self._incompatible_inputs_warning(inputs)
+            if invalid_inputs_msg is not None:
+                e.args += (invalid_inputs_msg,)
+            raise e
+        return {name: self.request.get_tensor(name).data.copy() for name in self.output_names}
 
     @add_start_docstrings_to_model_forward(
         INPUTS_DOCSTRING.format("batch_size, sequence_length")
@@ -377,8 +437,10 @@ class OVModelForFeatureExtraction(OVModel):
     def forward(
         self,
         input_ids: Union[torch.Tensor, np.ndarray],
-        attention_mask: Union[torch.Tensor, np.ndarray],
+        attention_mask: Optional[Union[torch.Tensor, np.ndarray]] = None,
         token_type_ids: Optional[Union[torch.Tensor, np.ndarray]] = None,
+        position_ids: Optional[Union[torch.Tensor, np.ndarray]] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         **kwargs,
     ):
         self.compile()
@@ -388,6 +450,13 @@ class OVModelForFeatureExtraction(OVModel):
         input_ids = ensure_numpy(input_ids)
         attention_mask = ensure_numpy(attention_mask)
         token_type_ids = ensure_numpy(token_type_ids)
+        position_ids = ensure_numpy(position_ids)
+
+        if self.stateful and past_key_values is None:
+            self.reset_state()
+
+        if attention_mask is None:
+            attention_mask = np.ones((input_ids.shape[0], self._past_length + input_ids.shape[1]), dtype=np.int64)
 
         inputs = {
             "input_ids": input_ids,
@@ -401,13 +470,29 @@ class OVModelForFeatureExtraction(OVModel):
         if "decoder_input_ids" in self.input_names:
             inputs["decoder_input_ids"] = input_ids
 
+        if "position_ids" in self.input_names:
+            if position_ids is None:
+                position_ids = np.cumsum(attention_mask, axis=1) - 1
+                position_ids[attention_mask == 0] = 1
+            inputs["position_ids"] = position_ids[:, -input_ids.shape[1] :]
+
+        if "beam_idx" in self.input_names:
+            inputs["beam_idx"] = np.arange(input_ids.shape[0], dtype=np.int32)
+
         outputs = self._inference(inputs)
-        last_hidden_state = (
-            torch.from_numpy(outputs["last_hidden_state"]).to(self.device)
-            if not np_inputs
-            else outputs["last_hidden_state"]
-        )
-        return BaseModelOutput(last_hidden_state=last_hidden_state)
+        model_outputs = {
+            name: outputs[name] if np_inputs else torch.from_numpy(outputs[name]).to(self.device)
+            for name in self.output_names
+        }
+
+        if self.stateful:
+            self._past_length += input_ids.shape[1]
+            # a non-empty marker, so that passing it back continues this sequence (like OVModelForCausalLM)
+            model_outputs["past_key_values"] = ((),)
+
+        if set(model_outputs) == {"last_hidden_state"}:
+            return BaseModelOutput(last_hidden_state=model_outputs["last_hidden_state"])
+        return ModelOutput(**model_outputs)
 
     @classmethod
     def _from_pretrained(cls, model_id: Union[str, Path], config: PretrainedConfig, *args, **kwargs):

@@ -13,7 +13,7 @@
 #  limitations under the License.
 
 import logging as log
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 from transformers import PretrainedConfig
@@ -187,6 +187,9 @@ _ENCODER_DECODER_TASKS_WITH_PAST = (
 
 _DECODER_TASKS_WITH_PAST = ("text-generation",)
 
+# Architectures that need KV cache even though their task is not a generation task
+_STATEFUL_ARCHITECTURES = {"Qwen3ForGuardModel"}
+
 
 def ensure_export_task_support_stateful(task: str):
     from optimum.exporters.tasks import TasksManager
@@ -200,8 +203,10 @@ def ensure_export_task_support_stateful(task: str):
     return is_stateful
 
 
-def ensure_model_type_support_stateful(model_type: str):
-    return model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
+def ensure_model_type_support_stateful(model_type: str, architectures: Optional[List[str]] = None):
+    return model_type in MULTI_MODAL_TEXT_GENERATION_MODELS or bool(
+        _STATEFUL_ARCHITECTURES.intersection(architectures or [])
+    )
 
 
 def remove_parameters_by_names(model: ov.Model, names: list):

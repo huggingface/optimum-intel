@@ -1169,6 +1169,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForCausalLM, "hunyuan_v1_dense", False),
         (OVModelForCausalLM, "smollm3", False),
         (OVModelForFeatureExtraction, "qwen3_vl_embedding", False),
+        (OVModelForFeatureExtraction, "qwen3_guard", True),
         (OVModelForVisualCausalLM, "qwen3_omni_moe", False),
         (OVModelForCausalLM, "exaone4", True),
         (OVModelForCausalLM, "ouro", True),
