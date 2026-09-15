@@ -396,6 +396,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "deepseek_ocr2",
     "qwen3_omni_moe",
     "muse_glimmer",
+    "unlimited-ocr",
 ]
 
 
@@ -629,6 +630,7 @@ SKIP_CHECK_TRACE_MODELS = (
     "deepseek",
     "deepseek-v2",
     "deepseek_v3",
+    "unlimited-ocr",
     "esm",
     "levit",
     "llama4",

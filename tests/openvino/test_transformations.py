@@ -312,6 +312,30 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
+    # baidu/Unlimited-OCR shares the DeepSeek-V2 MoE backbone. Its remote attention uses an explicit
+    # matmul+softmax that OpenVINO still fuses to SDPA/RoPE. StatefulSDPAFusion and the tiled-MoE
+    # transform do not fire here (the experts run through the shared ``deepseek_moe_infer`` path, like
+    # deepseek_ocr2), so only the verified-applied passes are listed.
+    "unlimited-ocr": {
+        "model_class": "OVModelForVisualCausalLM",
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "TransposeMatMul",
+        ],
+        "compile": [
+            "SDPASubgraphFusion",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "RMSFusion",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    },
 }
 
 if is_transformers_version(">=", "5.0.0"):
