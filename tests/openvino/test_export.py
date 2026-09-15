@@ -73,8 +73,9 @@ from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MA
 from optimum.intel.openvino.utils import TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     _transformers_version,
+    is_diffusers_version,
     is_qwen_tts_available,
-    is_diffusers_version, is_transformers_version,
+    is_transformers_version,
 )
 from optimum.utils import logging
 from optimum.utils.save_utils import maybe_load_preprocessors
