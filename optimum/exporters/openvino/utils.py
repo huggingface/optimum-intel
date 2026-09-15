@@ -396,6 +396,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "deepseek_ocr2",
     "qwen3_omni_moe",
     "muse_glimmer",
+    "lfm2_vl",
 ]
 
 
@@ -405,6 +406,7 @@ SSM_MODELS = [
     "zamba2",
     "lfm2",
     "lfm2_moe",
+    "lfm2_vl",
     "granitemoehybrid",
     "qwen3_next",
     "qwen3_5_text",

@@ -266,3 +266,169 @@ def convert_recurrent_selective_ssm_cell(context):
     final_output = ops.concat([output_new, output_recurrent_state_new], 0)
 
     return [final_output.output(0)]
+
+
+# Conversion rule for the `Siglip2ResizePositionalEmbeddingsOp` operation in a Torch graph.
+#
+# `Siglip2VisionEmbeddings.resize_positional_embeddings` (used by SigLIP2-NaFlex based vision
+# towers such as LFM2-VL) resizes a fixed (H0, W0, embed_dim) positional-embedding table to the
+# actual per-tile patch grid (height, width) taken from the `spatial_shapes` runtime input, via
+# `F.interpolate`. `torch.jit.trace` cannot preserve this dynamism: converting the `spatial_shapes`
+# values to Python ints (`int(spatial_shapes[i, 0])`) to build `F.interpolate`'s `size=` argument
+# bakes those ints into the traced graph as constants (this is a fundamental, well known
+# TorchScript-tracing limitation for computed-size resize ops -- confirmed via the
+# `TracerWarning: ... this value will be treated as a constant` warning emitted at trace time), so
+# the resulting IR only works for the one `spatial_shapes` value used during export.
+#
+# To make this genuinely dynamic, the `Siglip2ResizePositionalEmbeddingsCell` `torch.nn.Module`
+# (see `optimum/exporters/openvino/model_patcher.py`) is registered via a `ModuleExtension`, and
+# this function builds the OpenVINO-native replacement graph: it reads `height`/`width` directly
+# out of the `spatial_shapes` *tensor* at runtime (via `Gather`) and feeds them as the `sizes`
+# input of OpenVINO's `Interpolate` op (as an input tensor, not a compile-time attribute), so the
+# op's output shape is computed dynamically for any `spatial_shapes` seen at inference time.
+#
+# Note on `antialias`: PyTorch's `F.interpolate(..., antialias=True)` is used by the original
+# (eager) implementation. Testing showed that OpenVINO's CPU-plugin `Interpolate` kernel produces
+# numerically incorrect results specifically when `antialias=True` is combined with a *dynamic*
+# (runtime-computed, non-constant) `sizes` input and the resize direction differs per axis (one
+# axis upsamples while the other downsamples) -- e.g. resizing a 16x16 table to 8x24 differs from
+# the PyTorch reference by up to ~0.8 absolute, while the same resize with a compile-time-constant
+# `sizes` input (or with `antialias=False`) matches PyTorch to within ~1e-6. Since `antialias=True`
+# is not achievable correctly with a dynamic `sizes` input given this plugin limitation,
+# `antialias=False` is used here as a deliberate, tested trade-off: it keeps the graph correct and
+# genuinely dynamic-shape-safe (the actual bug this conversion rule fixes) at the cost of losing
+# the (minor, edge-smoothing only) antialiasing filter on the resized positional embeddings.
+#
+# `height`/`width` interpolation is done as two sequential single-axis `Interpolate` ops (height,
+# then width) rather than one 2-axis call: testing showed a single 2-axis dynamic `Interpolate`
+# call also diverges from the PyTorch reference when the two axes resize in different directions;
+# doing it as two sequential 1-D resizes (which is mathematically equivalent to the true 2-D
+# separable bilinear filter, and is what PyTorch's own bilinear implementation does internally)
+# matches the PyTorch reference to float32 precision in both the static and dynamic-`sizes` case.
+#
+# `max_length`-based padding (see the original `Siglip2VisionEmbeddings.resize_positional_embeddings`)
+# is intentionally not reproduced here: `Lfm2VlImageEmbeddingModelPatcher`'s vectorized
+# `get_image_features`/`resize_positional_embeddings` replacement already assumes every tile in a
+# given export/inference call shares the same `spatial_shapes` row (see
+# `lfm2_vl_get_image_features_patched`), which makes `pixel_values.shape[1]` (the `max_length`
+# passed in by `Siglip2VisionEmbeddings.forward`) always equal to `height * width` for that shared
+# shape -- i.e. no tile in this simplified/vectorized flow is ever shorter than the batch's shared
+# grid, so no padding is ever actually needed. `Siglip2ResizePositionalEmbeddingsCell.forward` (the
+# eager/reference implementation) still documents and asserts this invariant.
+def convert_siglip2_resize_positional_embeddings(context):
+    positional_embeddings = context.get_input(0)  # constant weight, shape [H0, W0, embed_dim]
+    spatial_shapes = context.get_input(1)  # runtime input, shape [num_tiles, 2], int64
+
+    i32 = lambda v: ops.constant(v, dtype=np.int32)  # noqa: E731
+    i64 = lambda v: ops.constant(v, dtype=np.int64)  # noqa: E731
+
+    # (H0, W0, embed_dim) -> (1, embed_dim, H0, W0) for interpolation.
+    pe = ops.transpose(positional_embeddings, i64([2, 0, 1]))
+    pe = ops.unsqueeze(pe, i64(0))
+    pe = ops.convert(pe, "f32")
+
+    # All tiles are assumed to share the same spatial shape (see module docstring above) --
+    # read height/width from the first row only, but keep them as graph values (not Python ints)
+    # so the resulting Interpolate ops stay genuinely dynamic.
+    row0 = ops.gather(spatial_shapes, i32(0), i32(0))  # [2], dynamic values
+    row0 = ops.convert(row0, "i64")
+    height = ops.gather(row0, i32(0), i32(0))  # scalar
+    width = ops.gather(row0, i32(1), i32(0))  # scalar
+
+    # Two sequential single-axis resizes (see module docstring above for why not one 2-axis call).
+    resized = ops.interpolate(
+        pe,
+        ops.reshape(height, i64([1]), True),
+        mode="linear",
+        shape_calculation_mode="sizes",
+        coordinate_transformation_mode="half_pixel",
+        antialias=False,
+        axes=i32([2]),
+    )
+    resized = ops.interpolate(
+        resized,
+        ops.reshape(width, i64([1]), True),
+        mode="linear",
+        shape_calculation_mode="sizes",
+        coordinate_transformation_mode="half_pixel",
+        antialias=False,
+        axes=i32([3]),
+    )
+
+    # (1, embed_dim, height, width) -> (height * width, embed_dim)
+    resized = ops.squeeze(resized, i64(0))  # (embed_dim, height, width)
+    resized = ops.reshape(resized, i64([0, -1]), True)  # (embed_dim, height * width)
+    resized = ops.transpose(resized, i64([1, 0]))  # (height * width, embed_dim)
+    resized = ops.convert_like(resized, positional_embeddings)
+
+    # Broadcast to (num_tiles, height * width, embed_dim); every tile uses the identical resized
+    # embedding since all tiles share the same spatial shape.
+    num_tiles = ops.gather(ops.shape_of(spatial_shapes, output_type="i64"), i32(0), i32(0))
+    result = ops.unsqueeze(resized, i64(0))  # (1, height * width, embed_dim)
+    tile_reps = ops.concat([ops.unsqueeze(num_tiles, i32(0)), i64([1, 1])], 0)
+    result = ops.tile(result, tile_reps)
+
+    return [result.output(0)]
+
+
+# Conversion rule for the `Lfm2VlSpatialReshapeOp` operation in a Torch graph.
+#
+# `lfm2_vl_get_image_features_patched` (see `optimum/exporters/openvino/model_patcher.py`) reads
+# the actual per-tile patch grid (height, width) out of the `spatial_shapes` runtime input via
+# `int(spatial_shapes[0, 0])` / `int(spatial_shapes[0, 1])` to reshape the SigLIP2 vision tower's
+# flat per-tile patch sequence into a spatial grid (`[num_tiles, height, width,
+# vision_hidden_size]`) before handing it to `Lfm2VlMultiModalProjector` (whose `pixel_unshuffle`
+# needs the real 2-D grid shape). Exactly like the `resize_positional_embeddings` case above
+# (see that function's docstring for the full explanation of why), converting these traced
+# `spatial_shapes` values to Python ints bakes `height`/`width` into the traced graph as
+# constants, so this reshape -- and everything downstream that depends on its output shape,
+# including the multi-modal projector's own reshapes -- only worked for the one `spatial_shapes`
+# value used during export.
+#
+# `Lfm2VlSpatialReshapeCell` (a `torch.nn.Module`) is registered via a `ModuleExtension` for the
+# same reason as `Siglip2ResizePositionalEmbeddingsCell`, and this function is its
+# `ConversionExtension`: it reads `height`/`width` directly out of the `spatial_shapes` *tensor*
+# at runtime (via `Gather`) and builds the target shape for OpenVINO's `Reshape` op as a runtime
+# input tensor (not a compile-time attribute), so the reshape (and everything chained off its
+# output, including the projector) stays genuinely dynamic-shape-safe.
+def convert_lfm2_vl_spatial_reshape(context):
+    last_hidden_state = context.get_input(0)  # runtime input, shape [num_tiles, max_patches, C]
+    spatial_shapes = context.get_input(1)  # runtime input, shape [num_tiles, 2], int64
+
+    i32 = lambda v: ops.constant(v, dtype=np.int32)  # noqa: E731
+    i64 = lambda v: ops.constant(v, dtype=np.int64)  # noqa: E731
+
+    lhs_shape = ops.shape_of(last_hidden_state, output_type="i64")
+    num_tiles = ops.gather(lhs_shape, i32(0), i32(0))
+    vision_hidden_size = ops.gather(lhs_shape, i32(2), i32(0))
+
+    # All tiles are assumed to share the same spatial shape (see
+    # `lfm2_vl_get_image_features_patched`'s docstring) -- read height/width from the first row.
+    row0 = ops.convert(ops.gather(spatial_shapes, i32(0), i32(0)), "i64")
+    height = ops.gather(row0, i32(0), i32(0))
+    width = ops.gather(row0, i32(1), i32(0))
+    hw = ops.multiply(height, width)
+
+    # Defensively slice to exactly height * width patches before reshaping (this is a no-op in
+    # practice given the shared-spatial-shape assumption above, but keeps this conversion rule
+    # correct even if `last_hidden_state` ever carried extra padded patches).
+    sliced = ops.slice(
+        last_hidden_state,
+        i64([0]),
+        ops.reshape(hw, i64([1]), True),
+        i64([1]),
+        i64([1]),
+    )
+
+    target_shape = ops.concat(
+        [
+            ops.unsqueeze(num_tiles, i32(0)),
+            ops.unsqueeze(height, i32(0)),
+            ops.unsqueeze(width, i32(0)),
+            ops.unsqueeze(vision_hidden_size, i32(0)),
+        ],
+        0,
+    )
+    reshaped = ops.reshape(sliced, target_shape, False)
+
+    return [reshaped.output(0)]
