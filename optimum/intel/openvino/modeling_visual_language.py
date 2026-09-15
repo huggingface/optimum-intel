@@ -36,6 +36,7 @@ from transformers import (
     GenerationMixin,
     PretrainedConfig,
     PreTrainedTokenizer,
+    ProcessorMixin,
 )
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLModel
@@ -1352,6 +1353,36 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         return True
 
     @staticmethod
+    def _default_preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[ProcessorMixin] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+
+        conversation = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": text}],
+            }
+        ]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+        inputs = processor(images=image, text=text_prompt, return_tensors="pt")
+        return inputs
+
+    @staticmethod
     @abstractmethod
     def preprocess_inputs(
         text: str,
@@ -2143,7 +2174,7 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
         return video_features
 
 
-class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
+class _OVMistral3ForCausalLMBase(OVModelForVisualCausalLM):
     additional_parts = ["multi_modal_projector"]
 
     def get_vision_embeddings(self, pixel_values, input_ids=None, image_sizes=None, **kwargs):
@@ -2208,7 +2239,7 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
     @staticmethod
     def preprocess_inputs(
         text: str,
-        image: Optional["Image"] = None,
+        image: Optional[Union["Image", List["Image"]]] = None,
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
@@ -2220,6 +2251,7 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
         if video is not None or audio is not None:
             raise ValueError("Video/Audio input is not supported for Mistral3")
 
+        images = list(image) if isinstance(image, (list, tuple)) else ([image] if image is not None else [])
         conversation = [
             {
                 "role": "user",
@@ -2230,16 +2262,18 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
         if not hasattr(processor, "image_processor"):
             # Checkpoints published in Mistral's own format, such as Mistral-Small-3.2-24B-Instruct-2506, only
             # provide tekken.json and are loaded as MistralCommonTokenizer. It tokenizes text and images in a
-            # single call and accepts images as an URL only, so in-memory images are passed as a data URL.
-            if image is not None:
+            # single call and accepts images as an URL only, so in-memory images are passed as data URLs.
+            image_contents = []
+            for current_image in images:
                 buffer = io.BytesIO()
-                image.convert("RGB").save(buffer, format="PNG")
+                current_image.convert("RGB").save(buffer, format="PNG")
                 image_url = f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode()}"
-                conversation[0]["content"].insert(0, {"type": "image", "url": image_url})
+                image_contents.append({"type": "image", "url": image_url})
+            conversation[0]["content"] = image_contents + conversation[0]["content"]
             return processor.apply_chat_template(conversation, return_dict=True, return_tensors="pt")
 
-        if image is not None:
-            conversation[0]["content"].insert(0, {"type": "image"})
+        if images:
+            conversation[0]["content"] = [{"type": "image"} for _ in images] + conversation[0]["content"]
 
         prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
 
@@ -2248,7 +2282,7 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
         if "bos_token" in processor.tokenizer.chat_template:
             processor.tokenizer.add_bos_token = False
 
-        inputs = processor(images=image, text=prompt, return_tensors="pt")
+        inputs = processor(images=images or None, text=prompt, return_tensors="pt")
 
         # recover add_bos_token flag in tokenizer
         processor.tokenizer.add_bos_token = orig_add_bos_token
@@ -7875,12 +7909,78 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
         return inputs
 
 
+class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
+    def get_vision_embeddings(self, pixel_values, input_ids=None, image_sizes=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+
+        pixel_values = torch.from_numpy(pixel_values) if isinstance(pixel_values, np.ndarray) else pixel_values
+        if pixel_values.dtype != torch.float32:
+            pixel_values = pixel_values.to(torch.float32)
+
+        # Multi-image concat
+        # The exported vision submodel processes a single un-padded image
+        # Pixtral's vision encoder uses a block-diagonal attention mask
+        # with attention_mask=None, images are encoded independently
+        # for multi image per-image patch features concatenated at the end
+        if image_sizes is not None and pixel_values.shape[0] > 1:
+            image_sizes = torch.from_numpy(image_sizes) if isinstance(image_sizes, np.ndarray) else image_sizes
+            features = []
+            for idx in range(pixel_values.shape[0]):
+                height, width = int(image_sizes[idx][0]), int(image_sizes[idx][1])
+                single = pixel_values[idx : idx + 1, :, :height, :width]
+                single_features = self.vision_embeddings(single).last_hidden_state
+                single_features = (
+                    torch.from_numpy(single_features)
+                    if isinstance(single_features, np.ndarray)
+                    else single_features
+                )
+                features.append(single_features.reshape(-1, single_features.shape[-1]))
+            return torch.cat(features, dim=0)
+
+        return self.vision_embeddings(pixel_values).last_hidden_state
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+
+        if hasattr(self.config, "image_token_index"):
+            image_token_id = self.config.image_token_index
+        elif hasattr(self.config, "image_token_id"):
+            image_token_id = self.config.image_token_id
+        else:
+            raise ValueError(
+                "The model configuration must define either `image_token_index` or `image_token_id` "
+                "to merge vision and text embeddings."
+            )
+
+        special_image_mask = input_ids == image_token_id
+        image_features = image_features.view(-1, image_features.shape[-1]).to(inputs_embeds.device, inputs_embeds.dtype)
+        num_image_tokens = special_image_mask.sum().item()
+        num_image_features = image_features.shape[0]
+        if num_image_tokens != num_image_features:
+            raise ValueError(
+                f"Number of image tokens in input_ids ({num_image_tokens}) does not match the number of image "
+                f"features ({num_image_features}). This may indicate mis-tokenization, an incorrect "
+                f"`image_token_id`/`image_token_index`, or mismatched vision projector output."
+            )
+
+        special_image_mask = special_image_mask.unsqueeze(-1).expand_as(inputs_embeds).to(inputs_embeds.device)
+        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    # Reuse main's BOS-safe Mistral3 preprocessing while retaining this PR's multi-image runtime.
+    preprocess_inputs = staticmethod(_OVMistral3ForCausalLMBase.preprocess_inputs)
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "muse_glimmer": _OVMuseGlimmerForCausalLM,
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
     "llava_next_video": _OVLlavaNextVideoForCausalLM,
-    "mistral3": _OVMistral3ForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
     "maira2": _OVMaira2ForCausalLM,
@@ -7909,4 +8009,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
     "deepseek_ocr2": _OVDeepseekOCR2ForCausalLM,
+    "mistral3": _OVMistral3ForCausalLM,
 }
