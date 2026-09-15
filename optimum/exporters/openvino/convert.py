@@ -41,6 +41,7 @@ from optimum.exporters.openvino.utils import (
     _normalize_dummy_inputs,
     allow_skip_tracing_check,
     clear_class_registry,
+    is_ltx2_3_transformer_config,
     remove_none_from_dummy_inputs,
     save_config,
     save_preprocessors,
@@ -1330,12 +1331,15 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
         exporter=exporter,
         library_name="diffusers",
         task="feature-extraction",
-        model_type="gemma3-text-encoder",
+        model_type="ltx2-text-encoder",
     )
+    # The 2.0 and 2.3 text encoder configs are identical, so the packing decision comes from the
+    # transformer. LTX-2.0 keeps one output per layer, as its published IRs already have.
     export_config = export_config_constructor(
         text_encoder.config,
         int_dtype=int_dtype,
         float_dtype=float_dtype,
+        pack_hidden_states=is_ltx2_3_transformer_config(pipeline.transformer.config),
     )
     export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["text_encoder"] = (text_encoder, export_config)
@@ -1432,15 +1436,11 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
             audio_vae_decoder.register_to_config(latents_std_data=pipeline.audio_vae.latents_std.tolist())
         models_for_export["audio_vae_decoder"] = (audio_vae_decoder, audio_vae_export_config)
 
-        # Vocoder
+        # Vocoder. `LTX2VocoderPatcher` renames the input to `hidden_states` and applies the
+        # int32-safe LTX-2.3 trim, and restores the original forward on exit, so unlike the VAEs
+        # above this needs no deep copy.
         if hasattr(pipeline, "vocoder") and pipeline.vocoder is not None:
             vocoder = pipeline.vocoder
-            orig_vocoder_forward = vocoder.forward
-
-            def vocoder_forward(hidden_states):
-                return {"sample": orig_vocoder_forward(hidden_states)}
-
-            vocoder.forward = vocoder_forward
             vocoder_config_constructor = TasksManager.get_exporter_config_constructor(
                 model=vocoder,
                 exporter=exporter,
