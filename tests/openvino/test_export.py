@@ -33,11 +33,10 @@ from utils_tests import (
 from optimum.exporters.openvino import export_from_model, main_export
 from optimum.exporters.openvino.model_configs import (
     BertOpenVINOConfig,
-    Gemma3TextEncoderOpenVINOConfig,
     LTX2TextEncoderOpenVINOConfig,
     Qwen3OmniMoeConfigBehavior,
 )
-from optimum.exporters.openvino.model_patcher import Gemma3TextEncoderPatcher, LTX2TextEncoderPatcher
+from optimum.exporters.openvino.model_patcher import LTX2TextEncoderPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVFlux2KleinPipeline,
@@ -481,21 +480,14 @@ class LTX2ExportContractTest(unittest.TestCase):
         )
 
     def test_text_encoder_packs_hidden_states(self):
-        # The LTX-2 config always packs, while the generic Gemma-3 one it derives from keeps the
-        # per-layer contract. Pin the split, since nothing in the text encoder config itself tells
-        # the two LTX-2 versions apart.
+        # One contract for both LTX-2 versions: nothing in the text encoder config tells them apart,
+        # and the per-layer layout the config used to offer loses the text tower's final norm on
+        # transformers >= 5.
         from transformers import Gemma3Config
 
-        config = Gemma3Config()
-
-        export_config = LTX2TextEncoderOpenVINOConfig(config)
+        export_config = LTX2TextEncoderOpenVINOConfig(Gemma3Config())
         self.assertEqual(set(export_config.outputs), {"prompt_embeds"})
         self.assertIs(export_config._MODEL_PATCHER, LTX2TextEncoderPatcher)
-
-        generic_config = Gemma3TextEncoderOpenVINOConfig(config)
-        self.assertNotIn("prompt_embeds", generic_config.outputs)
-        self.assertIn("hidden_states.0", generic_config.outputs)
-        self.assertIs(generic_config._MODEL_PATCHER, Gemma3TextEncoderPatcher)
 
 
 class CustomExportModelTest(unittest.TestCase):

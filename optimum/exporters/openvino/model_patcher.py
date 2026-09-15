@@ -11555,7 +11555,7 @@ def _ltx2_text_encoder_final_norm(model):
     return None
 
 
-def _gemma3_text_encoder_causal_mask(attention_mask):
+def _ltx2_text_encoder_causal_mask(attention_mask):
     """
     Build the explicit causal mask the text tower is traced with, per attention type. Returns
     `attention_mask` unchanged when it is not the expected 2D padding mask.
@@ -11572,89 +11572,41 @@ def _gemma3_text_encoder_causal_mask(attention_mask):
     return {"full_attention": causal_mask, "sliding_attention": causal_mask}
 
 
-class Gemma3TextEncoderPatcher(ModelPatcher):
+class LTX2TextEncoderPatcher(ModelPatcher):
     """
-    Export patcher for the text encoder. Forces output_hidden_states, builds an explicit
-    causal mask (the connectors consume every hidden-state layer), and returns a flat dict so
-    each `hidden_states.{i}` becomes a named export output.
-
-    This is the generic Gemma-3 text encoder contract. Both LTX-2 versions use
-    `LTX2TextEncoderPatcher`, which subclasses this one to pack the layers and to restore the final
-    norm the per-layer layout loses.
+    Export patcher for the Gemma-3 text encoder, for both LTX-2.0 and LTX-2.3. Packs the hidden
+    states into the connectors' `text_encoder_hidden_states` layout, saving a 735 MiB host copy per
+    encode, and substitutes the text tower's final norm output for `hidden_states[-1]`, which
+    transformers >= 5 leaves pre-norm: |max| 6.6e5 instead of 1.6e2, corrupting all conditioning.
     """
 
     def __init__(self, config, model, model_kwargs=None):
         model.config.output_hidden_states = True
-        super().__init__(config, model, model_kwargs)
-        self.patched_forward = self._build_patched_forward(model)
-
-    def _build_patched_forward(self, model):
-        orig_forward = self.orig_forward
-
-        def patched_forward(input_ids, attention_mask=None, **kwargs):
-            outputs = orig_forward(
-                input_ids=input_ids,
-                attention_mask=_gemma3_text_encoder_causal_mask(attention_mask),
-                output_hidden_states=True,
-            )
-            result = {"last_hidden_state": outputs.hidden_states[-1]}
-            for i, hs in enumerate(outputs.hidden_states):
-                result[f"hidden_states.{i}"] = hs
-            return result
-
-        return patched_forward
-
-
-class LTX2TextEncoderPatcher(Gemma3TextEncoderPatcher):
-    """
-    LTX-2 variant, used by both 2.0 and 2.3: emits the layers already packed the way the connectors
-    want them, as a single `prompt_embeds` output, and fixes the last layer's missing final norm.
-
-    The packing is `LTX2Pipeline._get_gemma_prompt_embeds`'s `stack(dim=-1).flatten(2, 3)`, which is
-    exactly the connectors' `text_encoder_hidden_states` contract — they undo the flatten as their
-    first step. Emitting the layers separately makes the plugin write one output per layer only for
-    the pipeline to interleave them again on the host: 735 MiB copied in 627 ms per encode at the
-    default sequence length of 1024, twice per generation under CFG.
-
-    transformers >= 5 collects `hidden_states` with forward hooks on the decoder layers, so the last
-    entry is the layer output *before* the text tower's final norm, and the exported graph ends up
-    with that pre-norm tensor. Since the connectors consume all layers stacked, that one slot
-    corrupts the whole text conditioning. Capture the norm's output directly.
-
-    Measured on `Lightricks/LTX-2` against eager fp32, over all 49 stacked slots, max abs diff on the
-    non-padding tokens: 152 on slots 0-47 either way, but slot 48 is 6.6e5 (|max| 6.6e5 instead of
-    1.6e2) without this fix and 0.046 with it. A 4.57.6 export is unaffected, so an LTX-2.0 IR
-    exported before transformers 5 is correct; this patcher is what keeps it correct after.
-    """
-
-    def __init__(self, config, model, model_kwargs=None):
-        # The hook is attached for the lifetime of the patch rather than per call, see `__enter__`.
+        # Hooked for the lifetime of the patch rather than per call, see `__enter__`.
         self._final_norm = _ltx2_text_encoder_final_norm(model)
         self._final_norm_hook = None
         self._captured_final_norm = {}
         super().__init__(config, model, model_kwargs)
 
-    def _build_patched_forward(self, model):
         orig_forward = self.orig_forward
         captured = self._captured_final_norm
 
         def patched_forward(input_ids, attention_mask=None, **kwargs):
             outputs = orig_forward(
                 input_ids=input_ids,
-                attention_mask=_gemma3_text_encoder_causal_mask(attention_mask),
+                attention_mask=_ltx2_text_encoder_causal_mask(attention_mask),
                 output_hidden_states=True,
             )
 
             hidden_states = list(outputs.hidden_states)
             post_norm = captured.get("out")
-            # No-op when transformers already substituted the post-norm state. Comparing shapes here
-            # would be traced into the graph, so rely on the explicit module lookup instead.
+            # Absent only if the norm was not found; a shape check here would be traced.
             if post_norm is not None:
                 hidden_states[-1] = post_norm
 
             return {"prompt_embeds": torch.stack(hidden_states, dim=-1).flatten(2, 3)}
 
-        return patched_forward
+        self.patched_forward = patched_forward
 
     def __enter__(self):
         super().__enter__()
