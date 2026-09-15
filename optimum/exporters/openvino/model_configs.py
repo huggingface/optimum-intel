@@ -64,6 +64,8 @@ from optimum.exporters.openvino.input_generators import (
     DummyQwen3OmniMoeLMInputGenerator,
     DummyQwen3OmniMoeProjectionInputGenerator,
     DummyQwen3OmniMoeVisionInputGenerator,
+    DummyQwen3TTSComponentInputGenerator,
+    DummyQwen3TTSDecoderStackInputGenerator,
     DummyQwen3VLLMInputGenerator,
     DummyQwen3VLVisionEmbedInputGenerator,
     DummyQwenImageResolutionInputGenerator,
@@ -203,6 +205,10 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3OmniMoeLanguageModelPatcher,
     Qwen3OmniMoeTalkerLanguageModelPatcher,
     Qwen3OmniMoeVisionMergerPatcher,
+    Qwen3TTSCodecPatcher,
+    Qwen3TTSDecoderStackPatcher,
+    Qwen3TTSEmbeddingPatcher,
+    Qwen3TTSSpeakerEncoderPatcher,
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
     QwenImageTextEncoderModelPatcher,
@@ -7698,3 +7704,222 @@ class ZImageTextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
         return {
             "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
         }
+
+
+class Qwen3TTSDecoderStackOpenVINOConfig(OpenVINOConfig):
+    """OpenVINO export configuration for a Qwen3-TTS decoder stack.
+
+    Used for both autoregressive stacks - the 28-layer talker and the 5-layer code predictor -
+    which share the same layer topology and therefore the same graph signature; only the
+    ``num_hidden_layers`` of the config passed in differs.
+
+    Conversion is performed through the standard ``export`` -> ``export_pytorch`` ->
+    ``convert_model`` pipeline. :class:`Qwen3TTSDecoderStackPatcher` rewrites the forward to take
+    the key/value cache explicitly, and the standard stateful transformation then turns that cache
+    into OpenVINO state - adding ``beam_idx`` - so the exported IR carries none of it as inputs or
+    outputs.
+    """
+
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3TTSDecoderStackInputGenerator,)
+    _MODEL_PATCHER = Qwen3TTSDecoderStackPatcher
+    # `qwen-tts` pins `transformers==4.57.3`, the only version its modeling code is released against.
+    MIN_TRANSFORMERS_VERSION = "4.57.3"
+    MAX_TRANSFORMERS_VERSION = "4.57.3"
+
+    # Rows of the ``position_ids`` input: interleaved m-RoPE carries three position streams,
+    # plain 1D RoPE a single one (see the code predictor's config).
+    POSITION_IDS_ROWS = 3
+
+    # Inputs that follow the cache in the forward signature (the code predictor's ``step``).
+    EXTRA_INPUT_NAMES = ()
+
+    @property
+    def num_layers(self) -> int:
+        return self._normalized_config.num_layers
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        inputs = {
+            "inputs_embeds": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 2: "sequence_length", 3: "kv_length"},
+            "position_ids": {1: "batch_size", 2: "sequence_length"},
+        }
+        # One pair per layer, under the naming the stateful transformation looks for.
+        for layer in range(self.num_layers):
+            inputs[f"past_key_values.{layer}.key"] = {0: "batch_size", 2: "past_length"}
+            inputs[f"past_key_values.{layer}.value"] = {0: "batch_size", 2: "past_length"}
+        return inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        # The output head is folded into the stack, so the graph emits logits directly.
+        outputs = {
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+            "logits": {0: "batch_size", 1: "sequence_length"},
+        }
+        for layer in range(self.num_layers):
+            outputs[f"present.{layer}.key"] = {0: "batch_size", 2: "kv_length"}
+            outputs[f"present.{layer}.value"] = {0: "batch_size", 2: "kv_length"}
+        return outputs
+
+    # Width of `inputs_embeds` when it differs from this stack's hidden size; set by the
+    # exporter for the code predictor, which is fed embeddings in the talker's width.
+    input_hidden_size = None
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        kwargs.setdefault("position_ids_rows", self.POSITION_IDS_ROWS)
+        if self.input_hidden_size is not None:
+            kwargs.setdefault("input_hidden_size", self.input_hidden_size)
+        generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](self.task, self._normalized_config, **kwargs)
+
+        def dummy(name):
+            return generator.generate(
+                name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
+            )
+
+        # Keyed by forward parameter, not by graph input: the cache is one nested argument that
+        # the exporter flattens back into the `past_key_values.<i>.<key|value>` inputs above.
+        dummy_inputs = {name: dummy(name) for name in ("inputs_embeds", "attention_mask", "position_ids")}
+        dummy_inputs["past_key_values"] = [(dummy("past_key"), dummy("past_value")) for _ in range(self.num_layers)]
+        for name in self.EXTRA_INPUT_NAMES:
+            dummy_inputs[name] = dummy(name)
+        return dummy_inputs
+
+
+class Qwen3TTSSteppedDecoderStackOpenVINOConfig(Qwen3TTSDecoderStackOpenVINOConfig):
+    """Decoder stack whose folded output head is chosen by a runtime depth index.
+
+    Used for the code predictor, whose ``lm_head`` is one linear per residual depth: the
+    stacked weights live in the same graph as the decoder layers, gathered with ``step``.
+
+    The cache is made stateful the same way as the talker's, ``beam_idx`` included, even though
+    this stack never reorders it - its cache covers the inner steps of a single talker frame and
+    is reset at the start of the next one, and the runtime feeds identity indices. The ``Gather``
+    through ``beam_idx`` is what the CPU plugin's stateful SDPA fusion matches on: without it the
+    five attention blocks are decomposed into plain ``MatMul``/``Softmax`` and the cache stays in
+    generic memory nodes, while with it they compile into fused ``ScaledDotProductAttention``
+    nodes that own the cache, as the talker's do. GPU fuses either form.
+    """
+
+    POSITION_IDS_ROWS = 1
+    EXTRA_INPUT_NAMES = ("step",)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = super().inputs
+        common_inputs["position_ids"] = {0: "batch_size", 1: "sequence_length"}
+        return {**common_inputs, "step": {}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        # Only the talker's hidden states are consumed (they seed each frame's code predictor
+        # prompt); this stack's are not, so its graph returns logits alone.
+        outputs = super().outputs
+        outputs.pop("last_hidden_state")
+        return outputs
+
+
+class Qwen3TTSComponentOpenVINOConfig(OpenVINOConfig):
+    """Base export configuration for the Qwen3-TTS components outside the decoder stacks."""
+
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3TTSComponentInputGenerator,)
+    MIN_TRANSFORMERS_VERSION = Qwen3TTSDecoderStackOpenVINOConfig.MIN_TRANSFORMERS_VERSION
+    MAX_TRANSFORMERS_VERSION = Qwen3TTSDecoderStackOpenVINOConfig.MAX_TRANSFORMERS_VERSION
+
+    # Name of the config field holding the vocabulary of an embedding table, which differs per
+    # table (the talker's text vocabulary vs its codec vocabulary). Subclasses point it there.
+    VOCAB_SIZE_ATTR: Optional[str] = None
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        if self.VOCAB_SIZE_ATTR is not None:
+            kwargs.setdefault("vocab_size", getattr(self._config, self.VOCAB_SIZE_ATTR))
+        generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](self.task, self._normalized_config, **kwargs)
+        return {
+            name: generator.generate(name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype)
+            for name in self.inputs
+        }
+
+
+class Qwen3TTSEmbeddingOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
+    """Export configuration for one Qwen3-TTS embedding table (token ids -> hidden states)."""
+
+    _MODEL_PATCHER = Qwen3TTSEmbeddingPatcher
+    VOCAB_SIZE_ATTR = "vocab_size"
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"input_ids": {0: "batch_size", 1: "sequence_length"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"embeddings": {0: "batch_size", 1: "sequence_length"}}
+
+
+class Qwen3TTSTextEmbeddingOpenVINOConfig(Qwen3TTSEmbeddingOpenVINOConfig):
+    """Export configuration for the talker's text table, with ``text_projection`` baked in."""
+
+    VOCAB_SIZE_ATTR = "text_vocab_size"
+
+
+class Qwen3TTSSteppedEmbeddingOpenVINOConfig(Qwen3TTSEmbeddingOpenVINOConfig):
+    """Export configuration for the code predictor's per-depth tables, stacked."""
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {**super().inputs, "step": {}}
+
+
+class Qwen3TTSSpeakerEncoderOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
+    """OpenVINO export configuration for the Qwen3-TTS ECAPA-TDNN speaker encoder.
+
+    Runs once per reference audio in voice-clone mode and produces the x-vector that is
+    prefilled into the talker.
+    """
+
+    _MODEL_PATCHER = Qwen3TTSSpeakerEncoderPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"mel_features": {0: "batch_size", 1: "mel_frames"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"speaker_embedding": {0: "batch_size"}}
+
+
+class Qwen3TTSCodecEncoderOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
+    """OpenVINO export configuration for the Qwen3-TTS codec (``speech_tokenizer``) encoder.
+
+    Turns the reference waveform into the residual code streams that seed in-context
+    voice cloning.
+    """
+
+    _MODEL_PATCHER = Qwen3TTSCodecPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"input_values": {0: "batch_size", 2: "audio_length"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"audio_codes": {0: "batch_size", 2: "code_frames"}}
+
+
+class Qwen3TTSCodecDecoderOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
+    """OpenVINO export configuration for the Qwen3-TTS codec (``speech_tokenizer``) decoder.
+
+    The vocoder that turns the generated code frames into the 24 kHz waveform, i.e. the
+    Qwen3-TTS counterpart of the Qwen3-Omni ``code2wav`` submodel.
+    """
+
+    _MODEL_PATCHER = Qwen3TTSCodecPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"audio_codes": {0: "batch_size", 2: "code_frames"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"waveform": {0: "batch_size", 2: "audio_length"}}

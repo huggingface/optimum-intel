@@ -12502,3 +12502,241 @@ class ZImageTextEncoderModelPatcher(ModelPatcher):
         if hasattr(self._model, "config") and hasattr(self._model.config, "_orig_ov_attn_impl"):
             self._model.config._attn_implementation = self._model.config._orig_ov_attn_impl
             del self._model.config._orig_ov_attn_impl
+
+
+class Qwen3TTSDecoderStackPatcher(OVDecoderModelPatcher):
+    """Exports a Qwen3-TTS decoder stack - the talker or the code predictor - with its output head.
+
+    Their ``forward`` wraps generation around the stack (the talker's even runs the code predictor's
+    ``generate``), so it is replaced by one that runs only the decoder and the head:
+    https://github.com/QwenLM/Qwen3-TTS/blob/022e286b98fbec7e1e916cb940cdf532cd9f488e/qwen_tts/core/models/modeling_qwen3_tts.py#L1636
+    https://github.com/QwenLM/Qwen3-TTS/blob/022e286b98fbec7e1e916cb940cdf532cd9f488e/qwen_tts/core/models/modeling_qwen3_tts.py#L1250
+    """
+
+    @staticmethod
+    def _talker_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values):
+        outputs = self.model(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=preprocess_past_key_values(past_key_values),
+            use_cache=True,
+        )
+        hidden_states = outputs.last_hidden_state
+        return hidden_states, self.codec_head(hidden_states), postprocess_past_key_values(outputs.past_key_values)
+
+    @staticmethod
+    def _code_predictor_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values, step):
+        outputs = self.model(
+            inputs_embeds=self.small_to_mtp_projection(inputs_embeds),
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=preprocess_past_key_values(past_key_values),
+            use_cache=True,
+        )
+        # `lm_head[generation_steps]` picks a head with a Python int; gathering the stacked heads by `step`
+        # serves every depth from one graph. Casting before the gather keeps them compressible by NNCF.
+        weight = torch.index_select(self._ov_stacked_heads.to(torch.float32), 0, step.reshape(1)).squeeze(0)
+        return torch.nn.functional.linear(outputs.last_hidden_state, weight), postprocess_past_key_values(
+            outputs.past_key_values
+        )
+
+    def __enter__(self):
+        super().__enter__()
+        if hasattr(self._model, "codec_head"):
+            forward = self._talker_forward
+        else:
+            self._model._ov_stacked_heads = torch.stack([head.weight.detach() for head in self._model.lm_head])
+            forward = self._code_predictor_forward
+        self._model.forward = types.MethodType(forward, self._model)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        # The base class restores the original `forward`.
+        super().__exit__(exc_type, exc_value, traceback)
+        if hasattr(self._model, "_ov_stacked_heads"):
+            del self._model._ov_stacked_heads
+
+
+class Qwen3TTSEmbeddingPatcher(OVDecoderModelPatcher):
+    """Exports a Qwen3-TTS embedding table as a lookup graph.
+
+    ``qwen_tts`` looks its tables up directly during prompt building, so each is exported from its owner:
+
+    * the talker: the text table with ``text_projection`` baked into the rows, as every call site applies it right
+      after the lookup (e.g. https://github.com/QwenLM/Qwen3-TTS/blob/022e286b98fbec7e1e916cb940cdf532cd9f488e/qwen_tts/core/models/modeling_qwen3_tts.py#L1978);
+    * the talker decoder: the codec table;
+    * the code predictor decoder: the per-depth tables, stacked and indexed by ``step`` into one graph instead of 15
+      (https://github.com/QwenLM/Qwen3-TTS/blob/022e286b98fbec7e1e916cb940cdf532cd9f488e/qwen_tts/core/models/modeling_qwen3_tts.py#L1030).
+
+    The table is cast to f32 before the gather, so it stays 16-bit on disk and NNCF can compress it.
+    """
+
+    # Rows projected per chunk when baking `text_projection`, to bound peak memory.
+    _PROJECTION_CHUNK_ROWS = 8192
+
+    @staticmethod
+    def _forward(self, input_ids):
+        return torch.nn.functional.embedding(input_ids, self._ov_embedding_table.to(torch.float32))
+
+    @staticmethod
+    def _stepped_forward(self, input_ids, step):
+        # Offset the ids into the flattened [num_depths * vocab, hidden] table.
+        flat_ids = input_ids + step.reshape(()).to(dtype=input_ids.dtype) * self.config.vocab_size
+        return torch.nn.functional.embedding(flat_ids, self._ov_embedding_table.to(torch.float32))
+
+    def __enter__(self):
+        super().__enter__()
+        if hasattr(self._model, "text_projection"):
+            table = self._model.get_text_embeddings().weight
+            projection = copy.deepcopy(self._model.text_projection).float()
+            table = torch.cat(
+                [
+                    projection(table[start : start + self._PROJECTION_CHUNK_ROWS].float())
+                    for start in range(0, table.shape[0], self._PROJECTION_CHUNK_ROWS)
+                ]
+            ).to(table.dtype)
+            forward = self._forward
+        elif isinstance(self._model.get_input_embeddings(), nn.ModuleList):
+            table = torch.stack([embedding.weight for embedding in self._model.get_input_embeddings()]).flatten(0, 1)
+            forward = self._stepped_forward
+        else:
+            table = self._model.get_input_embeddings().weight.detach()
+            forward = self._forward
+        self._model._ov_embedding_table = table
+        self._model.forward = types.MethodType(forward, self._model)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        # The base class restores the original `forward`.
+        super().__exit__(exc_type, exc_value, traceback)
+        if hasattr(self._model, "_ov_embedding_table"):
+            del self._model._ov_embedding_table
+
+
+class Qwen3TTSSpeakerEncoderPatcher(OVDecoderModelPatcher):
+    """Exports the Qwen3-TTS ECAPA-TDNN speaker encoder (mel spectrogram -> x-vector)."""
+
+    # Marks a module as already patched, so OpenVINO's 16-bit helper leaves its weights alone.
+    _OV_16BIT_PATCH_ATTR = "_openvino_module_extension_patch_orig_forward"
+
+    @staticmethod
+    def _forward(self, mel_features):
+        # Same computation, with the graph input named after the mel features.
+        return type(self).forward(self, mel_features)
+
+    @staticmethod
+    def _asp_forward(self, hidden_states):
+        # `AttentiveStatisticsPooling.forward` builds its mask and repeats from the Python-int `seq_length`, which
+        # tracing freezes to the traced mel length; deriving them from the tensor keeps the time axis dynamic.
+        # Based on: https://github.com/QwenLM/Qwen3-TTS/blob/022e286b98fbec7e1e916cb940cdf532cd9f488e/qwen_tts/core/models/modeling_qwen3_tts.py#L214
+        mask = torch.ones_like(hidden_states[:, :1, :])
+        total = mask.sum(dim=2, keepdim=True)
+
+        mean, std = self._compute_statistics(hidden_states, mask / total)
+        mean = mean.unsqueeze(2).expand_as(hidden_states)
+        std = std.unsqueeze(2).expand_as(hidden_states)
+        attention = torch.cat([hidden_states, mean, std], dim=1)
+
+        attention = self.conv(self.tanh(self.tdnn(attention)))
+        attention = attention.masked_fill(mask == 0, float("-inf"))
+        attention = torch.nn.functional.softmax(attention, dim=2)
+
+        mean, std = self._compute_statistics(hidden_states, attention)
+        return torch.cat((mean, std), dim=1).unsqueeze(2)
+
+    @staticmethod
+    def _conv_16bit_forward(self, hidden_states):
+        # OpenVINO's 16-bit helper casts `nn.Conv1d` weights to f32, doubling their size in the IR; casting inside
+        # the forward keeps the 16-bit constant behind a Convert instead.
+        weight = self.weight.to(hidden_states.dtype)
+        bias = None if self.bias is None else self.bias.to(hidden_states.dtype)
+        return self._conv_forward(hidden_states, weight, bias)
+
+    def __enter__(self):
+        super().__enter__()
+        self._model.forward = types.MethodType(self._forward, self._model)
+        self._patched_modules = []
+        for module in self._model.modules():
+            if module.__class__.__name__ == "AttentiveStatisticsPooling":
+                orig_attr, patched = "_orig_asp_forward", self._asp_forward
+            elif isinstance(module, nn.Conv1d) and module.weight.dtype in (torch.float16, torch.bfloat16):
+                orig_attr, patched = self._OV_16BIT_PATCH_ATTR, self._conv_16bit_forward
+            else:
+                continue
+            setattr(module, orig_attr, module.forward)
+            module.forward = types.MethodType(patched, module)
+            self._patched_modules.append((module, orig_attr))
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        # The base class restores the original `forward`; for 16-bit models it has also unpatched the convs.
+        super().__exit__(exc_type, exc_value, traceback)
+        for module, orig_attr in self._patched_modules:
+            if hasattr(module, orig_attr):
+                module.forward = getattr(module, orig_attr)
+                delattr(module, orig_attr)
+        self._patched_modules = []
+
+
+class Qwen3TTSCodecPatcher(OVDecoderModelPatcher):
+    """Exports the Qwen3-TTS codec (``speech_tokenizer``) encoder or decoder.
+
+    Their causal convs compute the right padding with ``ceil`` over a Python-int length, which tracing freezes to
+    the traced length; it is recomputed from the traced shape, so the graph is exact for any waveform length:
+    https://github.com/QwenLM/Qwen3-TTS/blob/022e286b98fbec7e1e916cb940cdf532cd9f488e/qwen_tts/core/tokenizer_12hz/modeling_qwen3_tts_tokenizer_v2.py#L183
+    https://github.com/huggingface/transformers/blob/v4.57.3/src/transformers/models/mimi/modeling_mimi.py#L263
+    """
+
+    @staticmethod
+    def _extra_padding_for_conv1d(self, hidden_states):
+        # `ceil((length - kernel_size + padding) / stride)` strides, in integer arithmetic on the traced length.
+        stride = int(self.stride)
+        kernel_size = int(self.kernel_size)
+        padding_total = int(self.padding_total if hasattr(self, "padding_total") else self.padding)
+        covered = hidden_states.shape[-1] - kernel_size + padding_total
+        return (stride - covered % stride) % stride
+
+    @staticmethod
+    def _encoder_forward(self, input_values):
+        # `Qwen3TTSTokenizerV2Model.encode` without the streaming padding cache and output wrapping, keeping only the
+        # codebooks the talker consumes. Based on:
+        # https://github.com/QwenLM/Qwen3-TTS/blob/022e286b98fbec7e1e916cb940cdf532cd9f488e/qwen_tts/core/tokenizer_12hz/modeling_qwen3_tts_tokenizer_v2.py#L961
+        # https://github.com/huggingface/transformers/blob/v4.57.3/src/transformers/models/mimi/modeling_mimi.py#L1442
+        encoder = self.encoder
+        embeddings = encoder.encoder(input_values)
+        embeddings = encoder.encoder_transformer(embeddings.transpose(1, 2))[0].transpose(1, 2)
+        embeddings = encoder.downsample(embeddings)
+        codes = encoder.quantizer.encode(embeddings, self.encoder_valid_num_quantizers)
+        return codes.transpose(0, 1)
+
+    @staticmethod
+    def _decoder_forward(self, audio_codes):
+        # Same computation, with the graph input named after the codes.
+        return type(self).forward(self, audio_codes)
+
+    def __enter__(self):
+        super().__enter__()
+        # Guarded: `transformers.dynamic_module_utils.get_imports` scans this file, and a bare `qwen_tts` import would
+        # make unrelated remote-code models require that package.
+        try:
+            from qwen_tts.core.tokenizer_12hz.modeling_qwen3_tts_tokenizer_v2 import (
+                Qwen3TTSTokenizerV2CausalConvNet,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "Exporting Qwen3-TTS requires the `qwen_tts` package. Install it with `pip install qwen-tts`."
+            ) from exc
+        from transformers.models.mimi.modeling_mimi import MimiConv1d
+
+        self._orig_extra_padding = {}
+        for conv_cls in (MimiConv1d, Qwen3TTSTokenizerV2CausalConvNet):
+            self._orig_extra_padding[conv_cls] = conv_cls._get_extra_padding_for_conv1d
+            conv_cls._get_extra_padding_for_conv1d = self._extra_padding_for_conv1d
+
+        forward = self._encoder_forward if hasattr(self._model, "encoder") else self._decoder_forward
+        self._model.forward = types.MethodType(forward, self._model)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        # The base class restores the original `forward`.
+        super().__exit__(exc_type, exc_value, traceback)
+        for conv_cls, orig in self._orig_extra_padding.items():
+            conv_cls._get_extra_padding_for_conv1d = orig
+        self._orig_extra_padding = {}

@@ -71,7 +71,12 @@ from optimum.intel import (
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import _transformers_version, is_diffusers_version, is_transformers_version
+from optimum.intel.utils.import_utils import (
+    _transformers_version,
+    is_diffusers_version,
+    is_qwen_tts_available,
+    is_transformers_version,
+)
 from optimum.utils import logging
 from optimum.utils.save_utils import maybe_load_preprocessors
 from optimum.utils.testing_utils import require_diffusers
@@ -109,6 +114,7 @@ class ExportModelTest(unittest.TestCase):
         "ltx2": OVLTX2Pipeline,
         "ltx2.3": OVLTX2Pipeline,
         "kokoro": OVModelForTextToSpeechSeq2Seq,
+        "qwen3_tts": OVModelForTextToSpeechSeq2Seq,
         "cohere2": OVModelForCausalLM,
         "granitemoehybrid": OVModelForCausalLM,
         "smollm3": OVModelForCausalLM,
@@ -152,6 +158,9 @@ class ExportModelTest(unittest.TestCase):
             | get_supported_model_for_library("diffusers")
             | get_supported_model_for_library("funasr")
         )
+        # Qwen3-TTS is exported component by component through custom export configs rather than a
+        # task registry entry, so the registry lookup above cannot see it; it needs `qwen_tts`.
+        or (model_type == "qwen3_tts" and is_qwen_tts_available())
     }
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
@@ -214,6 +223,13 @@ class ExportModelTest(unittest.TestCase):
                 framework="pt",
                 library_name="kokoro",
             )
+        elif model_type == "qwen3_tts":
+            from optimum.intel.utils.modeling_utils import _Qwen3TTSForTextToSpeech
+
+            model = _Qwen3TTSForTextToSpeech.from_pretrained(model_name)
+            # The checkpoint is bfloat16 and the loader keeps that precision, so tracing needs the
+            # 16-bit patch that ``main_export`` would otherwise derive from the loaded model.
+            patch_16bit_model = True
         elif model_type == "qwen3_omni_moe":
             from transformers import AutoConfig, Qwen3OmniMoeForConditionalGeneration
 
@@ -241,6 +257,7 @@ class ExportModelTest(unittest.TestCase):
                     preprocessors=preprocessors,
                     stateful=stateful,
                     model_kwargs=model_kwargs,
+                    patch_16bit_model=patch_16bit_model,
                 )
 
                 # Models with a Multi-Token Prediction head export it as a separate submodel;
