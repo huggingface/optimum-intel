@@ -63,6 +63,8 @@ from optimum.intel import (  # noqa
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelOpenCLIPText,
     OVModelOpenCLIPVisual,
+    OVPipelineForImage2Video,
+    OVPipelineForText2Video,
     OVSanaPipeline,
     OVSentenceTransformer,
     OVStableDiffusion3Pipeline,
@@ -115,6 +117,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-video", "ltx-video"),
         ("text-to-video", "ltx2"),
         ("image-to-video", "ltx2"),
+        ("text-to-video", "ltx2.3"),
+        ("image-to-video", "ltx2.3"),
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
@@ -187,6 +191,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "sana": 2,
         "ltx-video": 2,
         "ltx2": 2,
+        "ltx2.3": 2,
         "sam": 0,  # no tokenizer
         "speecht5": 2,
         "kokoro": 0,  # uses g2p, no tokenizer
@@ -1133,6 +1138,9 @@ class OVCLIExportTestCase(unittest.TestCase):
                 not task.endswith("with-past") or model.decoder.stateful
             ):
                 expected_int8.pop("decoder_with_past", None)
+            if task == "text-to-video" and model_type.startswith("ltx2"):
+                # Only the LTX-2 image-to-video pipeline loads a VAE encoder, to encode the input image.
+                del expected_int8["vae_encoder"]
             check_compression_state_per_model(self, model.ov_models, expected_int8)
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)
