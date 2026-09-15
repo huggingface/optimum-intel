@@ -57,7 +57,6 @@ from optimum.intel.openvino.utils import (
 )
 from optimum.intel.utils.import_utils import is_transformers_version
 
-
 if is_transformers_version(">=", "4.57"):
     from transformers.models.qwen3_omni_moe.processing_qwen3_omni_moe import _get_feat_extract_output_lengths
     from transformers.models.qwen3_vl.modeling_qwen3_vl import (
@@ -222,7 +221,9 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
             if self.config.model_type in ["qwen3_5", "qwen3_5_moe"] and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 4, axis=0)
-            elif (self.config.model_type in ["qwen2_vl", "qwen2_5_vl", "qwen3_vl"]) and position_ids.ndim == 2:
+            elif (
+                self.config.model_type in ["qwen2_vl", "qwen2_5_vl", "qwen3_vl", "qwen3_asr"]
+            ) and position_ids.ndim == 2:
                 # Qwen2-VL and Qwen3-VL use 3D mrope (3 spatial dimensions)
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
             elif self.config.model_type == "qwen3_omni_moe" and position_ids.ndim == 2:
@@ -428,6 +429,67 @@ class OVAudioEncoder(OVModelPart):
         else:
             inputs = {k: v for k, v in kwargs.items() if k in self.input_names}
         return self.request(inputs)[0]
+
+
+class OVQwen3AudioEncoder(OVAudioEncoder):
+    def encode(self, input_features, feature_attention_mask):
+        encoder_inputs, feature_lens, chunk_lens = self._prepare_inputs(input_features, feature_attention_mask)
+        output = super().forward(**encoder_inputs)
+        return self._compact_features(output, chunk_lens), feature_lens
+
+    def _prepare_inputs(self, input_features, feature_attention_mask):
+        thinker_config = getattr(self.config, "thinker_config", self.config)
+        audio_config = getattr(thinker_config, "audio_config", None)
+        n_window = getattr(audio_config, "n_window", 100) if audio_config else 100
+        n_window_infer = getattr(audio_config, "n_window_infer", 400) if audio_config else 400
+
+        feature_lens = feature_attention_mask.sum(-1).to(torch.int64)
+        if torch.any(feature_lens == 0):
+            raise ValueError("Each sample must contain at least one valid audio frame.")
+        audio_flat = input_features.permute(0, 2, 1)[feature_attention_mask.bool()].permute(1, 0)
+
+        aftercnn_lens = _get_feat_extract_output_lengths(feature_lens)
+        chunk_num = torch.ceil(feature_lens / (n_window * 2)).long()
+        chunk_lengths = torch.tensor([n_window * 2] * chunk_num.sum(), dtype=torch.long)
+        tail_chunk_index = torch.nn.functional.pad(chunk_num, (1, 0), value=-1).cumsum(0)[1:]
+        chunk_lengths[tail_chunk_index] = feature_lens % (n_window * 2)
+        chunk_lengths[chunk_lengths == 0] = n_window * 2
+
+        chunk_list = audio_flat.T.split(chunk_lengths.tolist(), dim=0)
+        padded_feature = torch.nn.utils.rnn.pad_sequence(chunk_list, batch_first=True).transpose(1, 2)
+        chunk_output_lens = _get_feat_extract_output_lengths(chunk_lengths)
+        padded_mask_after_cnn = torch.nn.utils.rnn.pad_sequence(
+            [torch.ones(length, dtype=torch.bool) for length in chunk_output_lens],
+            batch_first=True,
+        )
+
+        window_aftercnn = padded_mask_after_cnn.shape[-1] * (n_window_infer // (n_window * 2))
+        cu_chunk_lens = [0]
+        for cnn_len in aftercnn_lens:
+            cnn_len_val = cnn_len.item()
+            cu_chunk_lens += [window_aftercnn] * (cnn_len_val // window_aftercnn)
+            remainder = cnn_len_val % window_aftercnn
+            if remainder != 0:
+                cu_chunk_lens += [remainder]
+        cu_seqlens = torch.tensor(cu_chunk_lens, device=aftercnn_lens.device).cumsum(-1, dtype=torch.int32)
+
+        encoder_inputs = {
+            "padded_feature": padded_feature,
+            "padded_mask_after_cnn": padded_mask_after_cnn,
+            "aftercnn_lens": aftercnn_lens,
+            "cu_seqlens": cu_seqlens,
+        }
+        return encoder_inputs, aftercnn_lens, chunk_output_lens
+
+    @staticmethod
+    def _compact_features(audio_output, chunk_output_lens):
+        audio_output = torch.from_numpy(audio_output) if not isinstance(audio_output, torch.Tensor) else audio_output
+        if audio_output.ndim != 3:
+            return audio_output
+        return torch.cat(
+            [audio_output[chunk_idx, : length.item()] for chunk_idx, length in enumerate(chunk_output_lens)],
+            dim=0,
+        )
 
 
 class OVTalkerDecoder(OVModelPart):
@@ -4290,6 +4352,8 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
         )
         # OVQwen3OmniMoeVisionEmbeddings merges deepstack into the vision graph; swap in for the default wrapper.
         self.vision_embeddings = OVQwen3OmniMoeVisionEmbeddings(self.vision_embeddings.model, self)
+        if self.audio_encoder is not None:
+            self.audio_encoder = OVQwen3AudioEncoder(self.audio_encoder.model, self, model_name="audio_encoder")
 
         self._apply_component_device_overrides()
         if enable_compilation and not self._compile_only:
@@ -4648,60 +4712,9 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
             cached_features, cached_lens = cached
             return cached_features.clone(), cached_lens.clone()
 
-        thinker_config = getattr(self.config, "thinker_config", self.config)
-        audio_config = getattr(thinker_config, "audio_config", None)
-        n_window = getattr(audio_config, "n_window", 100) if audio_config else 100
-        n_window_infer = getattr(audio_config, "n_window_infer", 400) if audio_config else 400
-
-        feature_lens = feature_attention_mask.sum(-1).to(torch.int64)
-        if feature_lens.sum() == 0:
-            raise ValueError("feature_attention_mask is all-zero; no valid audio frames to process.")
-        audio_flat = input_features.permute(0, 2, 1)[feature_attention_mask.bool()].permute(1, 0)
-
-        aftercnn_lens = _get_feat_extract_output_lengths(feature_lens)
-        chunk_num = torch.ceil(feature_lens / (n_window * 2)).long()
-        chunk_lengths = torch.tensor([n_window * 2] * chunk_num.sum(), dtype=torch.long)
-        tail_chunk_index = torch.nn.functional.pad(chunk_num, (1, 0), value=-1).cumsum(0)[1:]
-        chunk_lengths[tail_chunk_index] = feature_lens % (n_window * 2)
-        chunk_lengths[chunk_lengths == 0] = n_window * 2
-
-        chunk_list = audio_flat.T.split(chunk_lengths.tolist(), dim=0)
-        padded_feature = torch.nn.utils.rnn.pad_sequence(chunk_list, batch_first=True).transpose(1, 2)
-        feature_lens_after_cnn = _get_feat_extract_output_lengths(chunk_lengths)
-        padded_mask_after_cnn = torch.nn.utils.rnn.pad_sequence(
-            [torch.ones(length, dtype=torch.bool) for length in feature_lens_after_cnn],
-            batch_first=True,
-        )
-
-        # cu_seqlens are required by the audio encoder's windowed attention kernels.
-        window_aftercnn = padded_mask_after_cnn.shape[-1] * (n_window_infer // (n_window * 2))
-        cu_chunk_lens = [0]
-        for cnn_len in aftercnn_lens:
-            cnn_len_val = cnn_len.item()
-            cu_chunk_lens += [window_aftercnn] * (cnn_len_val // window_aftercnn)
-            remainder = cnn_len_val % window_aftercnn
-            if remainder != 0:
-                cu_chunk_lens += [remainder]
-        cu_seqlens = torch.tensor(cu_chunk_lens, device=aftercnn_lens.device).cumsum(-1, dtype=torch.int32)
-
         if self.audio_encoder is None:
             raise ValueError("Audio encoder model not loaded. Cannot process audio inputs.")
-        audio_out = self.audio_encoder(
-            padded_feature=padded_feature,
-            padded_mask_after_cnn=padded_mask_after_cnn,
-            aftercnn_lens=aftercnn_lens,
-            cu_seqlens=cu_seqlens,
-        )
-        audio_out = torch.from_numpy(audio_out) if not isinstance(audio_out, torch.Tensor) else audio_out
-
-        # Encoder returns padded [N_chunks, aftercnn_time, dim]; drop pad frames per chunk before concatenation.
-        if audio_out.ndim == 3:
-            valid_tokens = []
-            for i, length in enumerate(feature_lens_after_cnn):
-                valid_tokens.append(audio_out[i, : length.item()])
-            audio_features = torch.cat(valid_tokens, dim=0)
-        else:
-            audio_features = audio_out
+        audio_features, aftercnn_lens = self.audio_encoder.encode(input_features, feature_attention_mask)
         self._lru_put(
             self._audio_cache,
             cache_key,
