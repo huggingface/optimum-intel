@@ -1182,23 +1182,26 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
             "codec_decoder": "openvino_codec_decoder.xml",
         }
 
-    # On GPU the code predictor is pinned to f32 arithmetic. It runs `num_code_groups - 1` steps
-    # inside every talker frame off a cache that is reset each frame, and in f16 - the GPU plugin's
-    # default inference precision - its logits go non-finite within the first few frames, which
-    # surfaces as `probability tensor contains either inf, nan or element < 0` out of the multinomial
-    # sampling in `code_predictor.generate`. The talker stack is unaffected and keeps the device
-    # default, so the bulk of the compute (28 layers vs 5) still runs in f16 on GPU.
+    # Every component compiles with the device defaults unless the caller says otherwise. An
+    # ``ov_config`` key of the form ``"<component>.ov_config"`` - the names above - carries settings
+    # for that component alone, while plain keys reach all of them:
     #
-    # CPU keeps its own default. That is f32, or bf16 where the CPU has AMX - and bf16 has f32's
-    # exponent range, so the overflow f16 hits cannot happen there.
+    #     ov_config={"code_predictor_model.ov_config": {"INFERENCE_PRECISION_HINT": "f32"}}
     #
-    # Neither stack pins its key/value cache precision. Both compile to fused stateful SDPA on CPU
-    # and GPU, which quantizes the cache per the plugin's default (u8 on CPU), and that costs no
-    # output quality: greedy decoding with the default cache yields the same codes as PyTorch, frame
-    # for frame. What it does give up is bit-exact reproduction of a *sampled* PyTorch run under a
-    # fixed seed on CPU - a near-tie resolves differently and the sample takes another path - so a
-    # caller who needs that passes `ov_config={"KV_CACHE_PRECISION": "f32"}`.
-    _CODE_PREDICTOR_OV_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
+    # Two settings are worth knowing about. On GPU the code predictor needs that f32 pin: it runs
+    # `num_code_groups - 1` steps inside every talker frame off a cache that is reset each frame, and
+    # in the plugin's default f16 its logits go non-finite within the first few frames, which surfaces
+    # as `probability tensor contains either inf, nan or element < 0` out of the multinomial sampling
+    # in `code_predictor.generate`. The talker stack is unaffected, so the bulk of the compute
+    # (28 layers vs 5) still runs in f16. On CPU the default is f32, or bf16 where the CPU has AMX -
+    # and bf16 has f32's exponent range, so the overflow f16 hits cannot happen there.
+    #
+    # Both stacks compile to fused stateful SDPA, which quantizes the key/value cache per the
+    # plugin's default (u8 on CPU). Greedy decoding still yields the same codes as PyTorch frame for
+    # frame, but a *sampled* run under a fixed seed diverges - a near-tie resolves differently and
+    # the sample takes another path - so a caller who wants the closer waveform passes
+    # ``{"KV_CACHE_PRECISION": "f32"}`` for the two stacks. A setting the device does not advertise
+    # is dropped rather than failing the compile.
 
     # The components every export carries, whatever the variant, and so the ones a directory has
     # to hold before a previous conversion may be reused instead of repeated. The speaker encoder
@@ -1584,7 +1587,7 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
         self._device = device.upper()
         self.is_dynamic = True
         self.use_cache = True
-        self.ov_config = {} if ov_config is None else {**ov_config}
+        self.ov_config, self._component_ov_config = self._split_component_ov_config(ov_config)
         self.preprocessors = kwargs.get("preprocessors", [])
         self._compile_only = kwargs.get("compile_only", False)
         self.generation_config = kwargs.get("generation_config", None) or GenerationConfig.from_model_config(config)
@@ -1613,8 +1616,30 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
         if kwargs.get("compile", True) and not self._compile_only:
             self.compile()
 
-    def _part_ov_config(self, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        return {**self.ov_config, **self._supported_ov_config(self._device, extra)}
+    @classmethod
+    def _split_component_ov_config(
+        cls, ov_config: Optional[Dict[str, Any]]
+    ) -> Tuple[Dict[str, Any], Dict[str, Dict[str, Any]]]:
+        """Separate the ``"<component>.ov_config"`` entries from the settings shared by every part."""
+        shared: Dict[str, Any] = {}
+        per_component: Dict[str, Dict[str, Any]] = {}
+        for key, value in (ov_config or {}).items():
+            component, _, suffix = str(key).partition(".")
+            if suffix != "ov_config":
+                shared[key] = value
+                continue
+            if component not in cls._all_ov_model_paths:
+                raise ValueError(
+                    f"Unknown Qwen3-TTS component `{component}` in ov_config key `{key}`. "
+                    f"Expected one of: {', '.join(cls._all_ov_model_paths)}."
+                )
+            if not isinstance(value, dict):
+                raise ValueError(f"ov_config key `{key}` expects a dictionary of properties, got {type(value)}.")
+            per_component[component] = {**value}
+        return shared, per_component
+
+    def _part_ov_config(self, name: str) -> Dict[str, Any]:
+        return {**self.ov_config, **self._supported_ov_config(self._device, self._component_ov_config.get(name))}
 
     def _build_parts(self, ov_models: Dict[str, openvino.Model]) -> None:
         """Wrap each loaded graph in the part that drives it; components with no IR stay ``None``."""
@@ -1627,14 +1652,13 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
             model = ov_models.get(name)
             if model is None:
                 return None
-            return part_cls(model, self, model_name=name, **extra)
+            return part_cls(model, self, model_name=name, ov_config=self._part_ov_config(name), **extra)
 
         self.talker_model = build(
             "talker_model",
             OVQwen3TTSDecoderStack,
             num_layers=len(talker.model.layers),
             num_key_value_heads=talker_config.num_key_value_heads,
-            ov_config=self._part_ov_config(),
             position_fn=OVQwen3TTSDecoderStack.mrope_positions,
         )
         self.code_predictor_model = build(
@@ -1642,9 +1666,6 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
             OVQwen3TTSDecoderStack,
             num_layers=len(code_predictor.model.layers),
             num_key_value_heads=code_predictor.model.config.num_key_value_heads,
-            # Only GPU needs the f32 pin (see `_CODE_PREDICTOR_OV_CONFIG`); `GPU` also matches `GPU.1`
-            # and composite targets such as `HETERO:GPU,CPU`.
-            ov_config=self._part_ov_config(self._CODE_PREDICTOR_OV_CONFIG if "GPU" in self._device else None),
             with_step=True,
             with_hidden_states=False,
         )
