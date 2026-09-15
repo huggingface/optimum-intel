@@ -563,6 +563,7 @@ _DEFAULT_4BIT_WQ_CONFIG = {
     "sym": False,
     "group_size": 128,
     "all_layers": None,
+    "group_size_fallback": "ignore",
 }
 
 
@@ -1027,8 +1028,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             the statistics path to avoid confusion.
         group_size_fallback (`str`, *optional*):
             Defines the behavior when the specified group size is not compatible with the weight shape. Possible values:
-            - "error": raises an error if the group size is not compatible with the weight shape (default);
-            - "ignore": skips quantization for the layers where the group size is not compatible with the weight shape;
+            - "error": raises an error if the group size is not compatible with the weight shape;
+            - "ignore": skips quantization for the layers where the group size is not compatible with the weight shape (default);
             - "adjust": automatically adjusts the group size to the maximum compatible value for each weight tensor,
                 if there is no valid value greater than or equal to 32, then the node is quantized to the backup precision
                 which is int8_asym by default.
