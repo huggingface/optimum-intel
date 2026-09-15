@@ -25,14 +25,19 @@ import openvino
 import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+from openvino import save_model
 from torch import nn
 from transformers import (
     AutoConfig,
+    AutoFeatureExtractor,
+    AutoModel,
     AutoModelForTextToSpectrogram,
+    DynamicCache,
     GenerationConfig,
     PretrainedConfig,
 )
 from transformers.file_utils import add_start_docstrings
+from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.utils import ModelOutput
 
 from ...exporters.openvino.stateful import model_has_state
@@ -43,6 +48,7 @@ from .modeling_seq2seq import (
     INPUTS_DOCSTRING,
     OVModelForSeq2SeqLM,
 )
+from .quantization import _weight_only_quantization
 from .utils import TemporaryDirectory, classproperty
 
 
@@ -258,9 +264,6 @@ class OVQwen3TTSDecoderStack(_OVQwen3TTSPart):
         step=None,
         **kwargs,
     ):
-        from transformers import DynamicCache
-        from transformers.modeling_outputs import BaseModelOutputWithPast
-
         self.compile()
         if past_key_values is None:
             past_key_values = DynamicCache()
@@ -1355,7 +1358,6 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
                 raise ImportError(
                     "Qwen3-TTS requires the `qwen_tts` package. Install it with `pip install qwen-tts`."
                 ) from exc
-            from transformers import AutoConfig, AutoFeatureExtractor, AutoModel
 
             for config_cls, model_cls in (
                 (Qwen3TTSTokenizerV1Config, Qwen3TTSTokenizerV1Model),
@@ -1520,11 +1522,6 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
         :meth:`_apply_quantization`) and by :meth:`_convert_checkpoint` when a compression config
         is passed to ``from_pretrained``, so both entry points produce the same model.
         """
-        from openvino import save_model
-
-        from .configuration import OVWeightQuantizationConfig
-        from .quantization import _weight_only_quantization
-
         ir_dir = Path(ir_dir)
         output_dir = Path(output_dir) if output_dir is not None else ir_dir
         core = openvino.Core()

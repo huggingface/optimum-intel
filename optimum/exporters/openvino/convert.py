@@ -21,6 +21,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
+from huggingface_hub import snapshot_download
 from packaging.version import Version
 from transformers.generation import GenerationMixin
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5HifiGan
@@ -638,8 +639,6 @@ def _save_qwen3_tts_config_and_assets(model, output: Path):
     output = Path(output)
     src = Path(repo_id)
     if not src.is_dir():
-        from huggingface_hub import snapshot_download
-
         # Resolve the repo into the Hugging Face cache - where the checkpoint already sits, since
         # the model was loaded from it - and copy from there exactly as from a local checkout.
         # Downloading with ``local_dir=output`` instead would leave ``huggingface_hub``'s per-file
