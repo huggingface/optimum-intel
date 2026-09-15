@@ -7723,6 +7723,9 @@ class Qwen3TTSDecoderStackOpenVINOConfig(OpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3TTSDecoderStackInputGenerator,)
     _MODEL_PATCHER = Qwen3TTSDecoderStackPatcher
+    # `qwen-tts` pins `transformers==4.57.3`, the only version its modeling code is released against.
+    MIN_TRANSFORMERS_VERSION = "4.57.3"
+    MAX_TRANSFORMERS_VERSION = "4.57.3"
 
     # Rows of the ``position_ids`` input: interleaved m-RoPE carries three position streams,
     # plain 1D RoPE a single one (see the code predictor's config).
@@ -7822,6 +7825,8 @@ class Qwen3TTSComponentOpenVINOConfig(OpenVINOConfig):
 
     NORMALIZED_CONFIG_CLASS = NormalizedConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3TTSComponentInputGenerator,)
+    MIN_TRANSFORMERS_VERSION = Qwen3TTSDecoderStackOpenVINOConfig.MIN_TRANSFORMERS_VERSION
+    MAX_TRANSFORMERS_VERSION = Qwen3TTSDecoderStackOpenVINOConfig.MAX_TRANSFORMERS_VERSION
 
     # Name of the config field holding the vocabulary of an embedding table, which differs per
     # table (the talker's text vocabulary vs its codec vocabulary). Subclasses point it there.
