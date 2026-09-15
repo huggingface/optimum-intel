@@ -441,7 +441,6 @@ ONNX_SUPPORTED_ARCHITECTURES = {
     "megatron-bert",
     "metaclip_2",
     "mgp-str",
-    "modernbert",
     "moonshine",
     "musicgen",
     "nemotron",
