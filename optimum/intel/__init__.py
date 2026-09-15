@@ -142,6 +142,9 @@ except OptionalDependencyNotAvailable:
             "OVFluxFillPipeline",
             "OVSanaPipeline",
             "OVQwenImagePipeline",
+            "OVZImagePipeline",
+            "OVZImageImg2ImgPipeline",
+            "OVZImageInpaintPipeline",
             "OVPipelineForImage2Image",
             "OVPipelineForImage2Video",
             "OVPipelineForText2Image",
@@ -175,6 +178,9 @@ else:
             "OVFluxFillPipeline",
             "OVSanaPipeline",
             "OVQwenImagePipeline",
+            "OVZImagePipeline",
+            "OVZImageImg2ImgPipeline",
+            "OVZImageInpaintPipeline",
             "OVPipelineForImage2Image",
             "OVPipelineForImage2Video",
             "OVPipelineForText2Image",
@@ -272,6 +278,9 @@ if TYPE_CHECKING:
             OVStableDiffusionXLImg2ImgPipeline,
             OVStableDiffusionXLInpaintPipeline,
             OVStableDiffusionXLPipeline,
+            OVZImageImg2ImgPipeline,
+            OVZImageInpaintPipeline,
+            OVZImagePipeline,
         )
     else:
         from .openvino import (
@@ -297,6 +306,9 @@ if TYPE_CHECKING:
             OVStableDiffusionXLImg2ImgPipeline,
             OVStableDiffusionXLInpaintPipeline,
             OVStableDiffusionXLPipeline,
+            OVZImageImg2ImgPipeline,
+            OVZImageInpaintPipeline,
+            OVZImagePipeline,
         )
 
     try:

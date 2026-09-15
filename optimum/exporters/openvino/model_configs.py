@@ -12,9 +12,11 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import enum
 import logging
-from typing import Any, Dict, List, Optional, Union
+from collections import OrderedDict
+from typing import Any, Dict, List, Optional, Type, Union
 
 import torch
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
@@ -51,6 +53,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMVImageInputGenerator,
     DummyMiniCPMVResampleInputGenerator,
+    DummyMistral3MultiModalProjectorInputGenerator,
     DummyMuseGlimmerVisionInputGenerator,
     DummyPhi3VisionProjectionInputGenerator,
     DummyQwen2VLLMInputGenerator,
@@ -78,6 +81,9 @@ from optimum.exporters.openvino.input_generators import (
     DummyVideoChatFlashQwenProjectorInputGenerator,
     DummyVisionPositionIdsInputGenerator,
     DummyVisionPositionIdsPhi4InputGenerator,
+    DummyZImageCapFeatInputGenerator,
+    DummyZImagePositionIdsInputGenerator,
+    DummyZImageTransformerVisionInputGenerator,
     Eagle3DummyGenerator,
     Eagle3VLMDummyGenerator,
     FunASRDummyAudioInputGenerator,
@@ -96,6 +102,7 @@ from optimum.exporters.openvino.input_generators import (
     OVMiniCPM3DummyPastKeyValuesGenerator,
     PooledProjectionsDummyInputGenerator,
     Qwen3_5DummyPastKeyValuesGenerator,
+    Qwen3_5MTPDummyInputGenerator,
     Qwen3ASRDummySeq2SeqPastKeyValuesGenerator,
     Qwen3NextDummyPastKeyValuesGenerator,
     QwenDummyPastKeyValuesGenerator,
@@ -149,14 +156,18 @@ from optimum.exporters.openvino.model_patcher import (
     LlavaNextVideoImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
     LTX2ConnectorsPatcher,
+    LTX2PackedTextEncoderPatcher,
     LTX2TextEncoderPatcher,
     LTX2TransformerPatcher,
+    LTX2VocoderPatcher,
     MairaImageEmbeddingModelPatcher,
     MambaPatcher,
     MiniCPM3Patcher,
     MiniCPMModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
+    Mistral3ImageEmbeddingModelPatcher,
+    Mistral3MultiModalProjectorPatcher,
     MistralModelPatcher,
     MixtralModelPatcher,
     ModelPatcher,
@@ -178,6 +189,10 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen2VLVisionEmbMergerPatcher,
     Qwen3_5ModelPatcher,
     Qwen3_5MoeModelPatcher,
+    Qwen3_5MoeMTPModelPatcher,
+    Qwen3_5MoeMTPModule,
+    Qwen3_5MTPModelPatcher,
+    Qwen3_5MTPModule,
     Qwen3_5VisionEmbMergerPatcher,
     Qwen3ASRModelPatcher,
     Qwen3MoeModelPatcher,
@@ -201,13 +216,15 @@ from optimum.exporters.openvino.model_patcher import (
     VideoChatFlashQwenVisionEmbeddingModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
+    ZImageTextEncoderModelPatcher,
+    ZImageTransformerModelPatcher,
     _get_model_attribute,
 )
+from optimum.exporters.openvino.utils import is_ltx2_3_transformer_config
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_diffusers_available,
     is_diffusers_version,
-    is_openvino_version,
     is_transformers_version,
 )
 from optimum.utils.input_generators import (
@@ -267,15 +284,6 @@ COMMON_TEXT2TEXT_GENERATION_TASKS = [
 
 
 logger = logging.getLogger(__name__)
-
-
-def _warn_potential_accuracy_issue_ov_2026_1(model_type: str, min_transformers_version: Optional[str] = None):
-    # Fix CVS-185350: OpenVINO 2026.1.0 inference results mismatch
-    if not is_openvino_version(">=", "2026.1.0"):
-        return
-    if min_transformers_version is not None and not is_transformers_version(">=", min_transformers_version):
-        return
-    logger.warning(f"Model type '{model_type}' may have potential accuracy issues with OpenVINO >= 2026.1.0.")
 
 
 def init_model_configs():
@@ -372,6 +380,11 @@ def init_model_configs():
             TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"] = {}
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["sana"] = "SanaPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["sana-sprint"] = "SanaSprintPipeline"
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["z-image"] = "ZImagePipeline"
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS.setdefault("image-to-image", {})
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["image-to-image"]["z-image"] = "ZImageImg2ImgPipeline"
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS.setdefault("inpainting", {})
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["inpainting"]["z-image"] = "ZImageInpaintPipeline"
     if is_diffusers_available():
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS.setdefault("text-to-video", {})
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx-video"] = "LTXPipeline"
@@ -1279,10 +1292,6 @@ class XGLMConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     )
     _MODEL_PATCHER = OVDecoderModelPatcher
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _warn_potential_accuracy_issue_ov_2026_1("xglm")
-
 
 @register_in_tasks_manager("aquila", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class AquilaMOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
@@ -2020,8 +2029,6 @@ class BaseVLMOpenVINOConfig(OpenVINOConfig):
 
 @register_in_tasks_manager("llava", *["image-text-to-text"], library_name="transformers")
 class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
-    _OV_2026_1_MODEL_TYPE = "llava"
-
     def __init__(
         self,
         config: "PretrainedConfig",
@@ -2043,7 +2050,6 @@ class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
-        _warn_potential_accuracy_issue_ov_2026_1(self._OV_2026_1_MODEL_TYPE, min_transformers_version="5.0")
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
@@ -2059,7 +2065,7 @@ class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
 
 @register_in_tasks_manager("llava_next", *["image-text-to-text"], library_name="transformers")
 class LlavaNextOpenVINOConfig(LlavaOpenVINOConfig):
-    _OV_2026_1_MODEL_TYPE = "llava_next"
+    pass
 
 
 class LLavaMultimodalProjectorOpenVINOConfig(OpenVINOConfig):
@@ -2143,6 +2149,116 @@ class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
         if self._behavior != LlavaNextVideoConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return LlavaNextVideoImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+
+class Mistral3ConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    # VISION_EMBEDDINGS extracts visual features and applies projector.norm().
+    # Combined with the cycle block
+    # (https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L76-L94)
+    # and MULTI_MODAL_PROJECTOR, this is equivalent to get_image_features
+    # (https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L223-L248).
+    VISION_EMBEDDINGS = "vision_embeddings"
+    TEXT_EMBEDDINGS = "text_embeddings"
+    MULTI_MODAL_PROJECTOR = "multi_modal_projector"
+
+
+class Mistral3MultiModalProjectorOpenVINOConfig(OpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyMistral3MultiModalProjectorInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    _MODEL_PATCHER = Mistral3MultiModalProjectorPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"image_features": {0: "num_patches"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"hidden_states": {0: "num_patches"}}
+
+
+@register_in_tasks_manager("mistral3", *["image-text-to-text"], library_name="transformers")
+class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.50.0"
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in Mistral3ConfigBehavior]
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: Mistral3ConfigBehavior = Mistral3ConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            behavior=behavior,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == Mistral3ConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != Mistral3ConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"pixel_values": {0: "batch_size", 2: "height", 3: "width"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != Mistral3ConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"last_hidden_state": {0: "batch_size"}}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, Mistral3ConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, Mistral3ConfigBehavior):
+            behavior = Mistral3ConfigBehavior(behavior)
+
+        if behavior == Mistral3ConfigBehavior.MULTI_MODAL_PROJECTOR:
+            return Mistral3MultiModalProjectorOpenVINOConfig(
+                self._orig_config.vision_config,
+                task="feature-extraction",
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+
+        return super().with_behavior(behavior)
+
+    def get_model_for_behavior(self, model, behavior: Union[str, Mistral3ConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Mistral3ConfigBehavior):
+            behavior = Mistral3ConfigBehavior(behavior)
+
+        if behavior == Mistral3ConfigBehavior.MULTI_MODAL_PROJECTOR:
+            return (
+                model.multi_modal_projector
+                if hasattr(model, "multi_modal_projector")
+                else model.model.multi_modal_projector
+            )
+
+        return super().get_model_for_behavior(model, behavior)
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+
+        if self._behavior != Mistral3ConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+
+        return Mistral3ImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs) -> Dict:
+        if self._behavior == Mistral3ConfigBehavior.VISION_EMBEDDINGS and self._config.model_type == "pixtral":
+            kwargs["batch_size"] = 1
+        return super().generate_dummy_inputs(framework, **kwargs)
 
 
 @register_in_tasks_manager(
@@ -2522,7 +2638,12 @@ class UNetOpenVINOConfig(VisionOpenVINOConfig):
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         dummy_inputs = super().generate_dummy_inputs(framework=framework, **kwargs)
-        dummy_inputs["encoder_hidden_states"] = dummy_inputs["encoder_hidden_states"][0]
+        # The seq2seq generators hand back a `(tensor, None, None)` tuple, so only the first element
+        # is the encoder hidden states. Generators that already return a plain
+        # `[batch, sequence, embed_dim]` tensor must be left alone -- indexing one would silently
+        # strip the batch axis and export a rank-2 input.
+        if isinstance(dummy_inputs["encoder_hidden_states"], (tuple, list)):
+            dummy_inputs["encoder_hidden_states"] = dummy_inputs["encoder_hidden_states"][0]
 
         if getattr(self._normalized_config, "addition_embed_type", None) == "text_time":
             dummy_inputs["added_cond_kwargs"] = {
@@ -2644,6 +2765,62 @@ class Gemma3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
         for i in range(num_layers + 1):
             outputs[f"hidden_states.{i}"] = {0: "batch_size", 1: "sequence_length"}
         return outputs
+
+
+@register_in_tasks_manager("ltx2-text-encoder", *["feature-extraction"], library_name="diffusers")
+class LTX2TextEncoderOpenVINOConfig(Gemma3TextEncoderOpenVINOConfig):
+    """
+    LTX-2's use of the Gemma-3 text encoder, which differs from the generic one above only in how the
+    hidden states leave the graph. Kept separate so that the packed layout, which nothing but the
+    LTX-2 connectors can consume, does not become the contract for every Gemma-3 text encoder export.
+
+    Two contracts, selected by `pack_hidden_states`:
+
+    - `False` (LTX-2.0): one output per layer, packed by the pipeline on the host. Also keeps the
+      unpatched final norm, so already-published LTX-2.0 IRs stay reproducible.
+    - `True` (LTX-2.3): a single `prompt_embeds` output, packed and norm-fixed in the graph.
+
+    The default is the LTX-2.0 contract, so an omitted argument can never change its IRs; LTX-2.3
+    would instead fail loudly at the connectors' input width.
+    """
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        preprocessors: Optional[List[Any]] = None,
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        pack_hidden_states: bool = False,
+    ):
+        super().__init__(config, task=task, preprocessors=preprocessors, int_dtype=int_dtype, float_dtype=float_dtype)
+        self.pack_hidden_states = pack_hidden_states
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if not self.pack_hidden_states:
+            return super().outputs
+        # The patcher returns the hidden states already stacked and flattened into the connectors'
+        # `text_encoder_hidden_states` layout, so there is a single output and the layer count does
+        # not appear here. The last dimension is `(num_layers + 1) * hidden_size`, left dynamic
+        # because the export declares no static shape for it.
+        return {"prompt_embeds": {0: "batch_size", 1: "sequence_length"}}
+
+    @property
+    def values_override(self) -> Optional[Dict[str, Any]]:
+        # Both contracts are built out of the per-layer hidden states, which only exist if the model
+        # is asked for them, same as `Qwen3TextEncoderOpenVINOConfig`.
+        values = super().values_override or {}
+        values.update({"output_hidden_states": True, "return_dict": True, "use_cache": False})
+        return values
+
+    def _select_text_encoder_patcher(self) -> Type[ModelPatcher]:
+        return LTX2PackedTextEncoderPatcher if self.pack_hidden_states else LTX2TextEncoderPatcher
+
+    def patch_model_for_export(
+        self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        return self._select_text_encoder_patcher()(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("sana-transformer", *["semantic-segmentation"], library_name="diffusers")
@@ -3043,15 +3220,23 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
         vocab_size="attention_head_dim",
         allow_new=True,
     )
+    # `generate_dummy_inputs` keeps the FIRST generator that claims a given input name, so
+    # LTX2TransformerDummyInputGenerator must stay ahead of the generic ones: it is the only one
+    # that knows the per-modality text embedding widths (LTX-2.3) vs the shared
+    # `caption_channels` width (LTX-2.0). It covers every input except `timestep`.
     DUMMY_INPUT_GENERATOR_CLASSES = (
         LTX2TransformerDummyInputGenerator,
-        DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator,
         DummySanaTimestepInputGenerator,
     )
 
     @property
     def inputs(self):
-        return {
+        # `cross_modality_gate` and `stg_perturbation_mask` carry the guidance modes the pipeline
+        # otherwise selects with Python flags (`isolate_modalities`, `spatio_temporal_guidance_blocks`),
+        # which a static graph cannot branch on. STG only exists for checkpoints with perturbable
+        # blocks, so its mask is exported only then. The gate is exported only for LTX-2.3, to keep
+        # LTX-2.0's published IRs unchanged -- 2.0 can isolate modalities too, it just cannot here.
+        inputs = {
             "hidden_states": {0: "batch_size", 1: "video_sequence_length"},
             "audio_hidden_states": {0: "batch_size", 1: "audio_sequence_length"},
             "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
@@ -3068,6 +3253,11 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
             "video_coords": {0: "batch_size", 2: "video_sequence_length"},
             "audio_coords": {0: "batch_size", 2: "audio_sequence_length"},
         }
+        if is_ltx2_3_transformer_config(self._normalized_config.config):
+            inputs["cross_modality_gate"] = {}
+        if getattr(self._normalized_config.config, "perturbed_attn", False):
+            inputs["stg_perturbation_mask"] = {}
+        return inputs
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
@@ -3097,6 +3287,7 @@ class LTX2AudioVaeDecoderOpenVINOConfig(VaeDecoderOpenVINOConfig):
 @register_in_tasks_manager("ltx2-vocoder", *["semantic-segmentation"], library_name="diffusers")
 class LTX2VocoderOpenVINOConfig(VaeDecoderOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (LTX2VocoderDummyInputGenerator,)
+    _MODEL_PATCHER = LTX2VocoderPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -3124,7 +3315,6 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in MiniCPMVConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = ()
-    MODEL_TYPE = "minicpmv"
 
     def __init__(
         self,
@@ -3150,7 +3340,6 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == MiniCPMVConfigBehavior.RESAMPLER:
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMVResampleInputGenerator,)
         self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
-        _warn_potential_accuracy_issue_ov_2026_1(self.MODEL_TYPE)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -3264,7 +3453,6 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
 class MiniCPMOOpenVINOConfig(MiniCPMVOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
     MAX_TRANSFORMERS_VERSION = "4.51.3"
-    MODEL_TYPE = "minicpmo"
 
 
 class Phi3VisionConfigBehavior(str, enum.Enum):
@@ -3666,12 +3854,17 @@ class QwenVLConfigBehavior(str, enum.Enum):
     VISION_EMBEDDINGS_MERGER = "vision_embeddings_merger"
     TEXT_EMBEDDINGS = "text_embeddings"
     VISION_EMBEDDINGS_POS = "vision_embeddings_pos"
+    MTP = "mtp"
 
 
 @register_in_tasks_manager("qwen2_vl", *["image-text-to-text"], library_name="transformers")
 class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
+    # `mtp` is a Qwen3.5-only behavior; exclude it here so it does not leak into qwen2_vl /
+    # qwen2_5_vl (which inherit this list) and try to export a non-existent MTP submodel.
     SUPPORTED_BEHAVIORS = [
-        model_type.value for model_type in QwenVLConfigBehavior if model_type.value != "vision_embeddings_pos"
+        model_type.value
+        for model_type in QwenVLConfigBehavior
+        if model_type.value not in ("vision_embeddings_pos", "mtp")
     ]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLVisionEmbedInputGenerator,)
@@ -3841,7 +4034,9 @@ class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
     library_name="transformers",
 )
 class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
-    SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior]
+    # `mtp` is a Qwen3.5-only behavior (Qwen3.5 re-adds it conditionally); keep it out of the
+    # generic qwen3_vl behavior list so it does not try to export a non-existent MTP submodel.
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior if model_type.value != "mtp"]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
 
     def __init__(
@@ -5575,10 +5770,6 @@ class BlenderbotSmallOpenVINOConfig(BartOpenVINOConfig):
 class PegasusOpenVINOConfig(BartOpenVINOConfig):
     _MODEL_PATCHER = OVSeq2SeqModelPatcher
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _warn_potential_accuracy_issue_ov_2026_1("pegasus")
-
 
 @register_in_tasks_manager(
     "marian",
@@ -5784,10 +5975,6 @@ class Llama4TextOpenVINOConfig(LlamaOpenVINOConfig):
 class Llama4OpenVINOConfig(GotOCR2OpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _warn_potential_accuracy_issue_ov_2026_1("llama4")
-
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
@@ -5936,10 +6123,6 @@ class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
     # MIN_TRANSFORMERS_VERSION = "5.2.0"
     _MODEL_PATCHER = Zamba2ModelPatcher
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _warn_potential_accuracy_issue_ov_2026_1("zamba2")
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
@@ -6092,10 +6275,6 @@ class ASTOpenVINOConfig(OpenVINOConfig):
 class AfmoeOpenVINOConfig(LlamaOpenVINOConfig):
     _MODEL_PATCHER = AfmoeModelPatcher
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _warn_potential_accuracy_issue_ov_2026_1("afmoe")
-
 
 @register_in_tasks_manager("olmo2", *COMMON_TEXT_GENERATION_TASKS, library_name="transformers")
 class Olmo2OOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
@@ -6107,10 +6286,6 @@ class Olmo2OOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 @register_in_tasks_manager("opt", *[*COMMON_TEXT_GENERATION_TASKS, "text-classification", "question-answering"])
 class OPTOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _warn_potential_accuracy_issue_ov_2026_1("opt")
 
 
 @register_in_tasks_manager(
@@ -7031,6 +7206,13 @@ class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "5.2.99"
     _MODEL_PATCHER = Qwen3_5ModelPatcher
 
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        common_outputs = OrderedDict({"logits": {0: "batch_size", 1: "sequence_length"}})
+        if self.use_past:
+            self.add_past_key_values(common_outputs, direction="outputs")
+        return common_outputs
+
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
             raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
@@ -7098,7 +7280,9 @@ class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
     library_name="transformers",
 )
 class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
-    SUPPORTED_BEHAVIORS = [model_type.value for model_type in QwenVLConfigBehavior]
+    SUPPORTED_BEHAVIORS = [
+        model_type.value for model_type in QwenVLConfigBehavior if model_type != QwenVLConfigBehavior.MTP
+    ]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
     MIN_TRANSFORMERS_VERSION = "5.2.0"
     MAX_TRANSFORMERS_VERSION = "5.2.99"
@@ -7124,6 +7308,21 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self._normalized_config.use_embed_dim = True
+
+        # Conditionally add MTP behavior if model has MTP layers
+        text_config = getattr(config, "text_config", config)
+        mtp_num_hidden_layers = getattr(text_config, "mtp_num_hidden_layers", 0)
+        if mtp_num_hidden_layers > 0:
+            # The MTP head is exported as a single decoder layer (see Qwen3_5MTPModule /
+            # Qwen3_5MoeMTPModule); every supported checkpoint has mtp_num_hidden_layers == 1. Fail
+            # loudly rather than silently exporting only the first layer.
+            if mtp_num_hidden_layers != 1:
+                raise NotImplementedError(
+                    "MTP export currently supports a single decoder layer, but "
+                    f"mtp_num_hidden_layers={mtp_num_hidden_layers}."
+                )
+            if QwenVLConfigBehavior.MTP.value not in self.SUPPORTED_BEHAVIORS:
+                self.SUPPORTED_BEHAVIORS = self.SUPPORTED_BEHAVIORS + [QwenVLConfigBehavior.MTP.value]
 
     def with_behavior(
         self,
@@ -7168,6 +7367,28 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
                 preprocessors=self._preprocessors,
             )
 
+        if behavior == QwenVLConfigBehavior.MTP:
+            return Qwen3_5MTPOpenVINOConfig(
+                self._orig_config,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, QwenVLConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
+
+        if behavior == QwenVLConfigBehavior.MTP:
+            return Qwen3_5MTPModule.from_pretrained_model(model)
+
+        if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
+            vision_emb_pos = _get_model_attribute(model, "visual").pos_embed
+            vision_emb_pos.config = model.config.vision_config
+            return vision_emb_pos
+
+        return Qwen2VLOpenVINOConfig.get_model_for_behavior(model, behavior)
+
     def patch_model_for_export(self, model: Union["PreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
@@ -7189,6 +7410,77 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
                 "qwen3_5_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
             ).outputs
         raise Exception("Unknown Qwen3.5 behavior type.")
+
+
+class Qwen3_5MTPOpenVINOConfig(OpenVINOConfigWithPast):
+    """Export configuration for the Qwen3.5 MTP (Multi-Token Prediction) head."""
+
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (Qwen3_5MTPDummyInputGenerator, MistralDummyPastKeyValuesGenerator)
+    _MODEL_PATCHER = Qwen3_5MTPModelPatcher
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+    ):
+        text_config = getattr(config, "text_config", config)
+        # The MTP head is a single decoder layer. Expose num_hidden_layers=1 to the export
+        # config so the KV-cache generator (keyed off `num_layers`) produces a single-layer cache.
+        mtp_config = copy.deepcopy(text_config)
+        mtp_config.num_hidden_layers = 1
+        super().__init__(
+            mtp_config,
+            task="text-generation-with-past",
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            use_past=True,
+            use_past_in_inputs=True,
+        )
+        self._orig_config = config
+        self._text_config = text_config
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = OrderedDict(
+            {
+                "hidden_states": {0: "batch_size", 1: "sequence_length"},
+                "inputs_embeds": {0: "batch_size", 1: "sequence_length"},
+                "attention_mask": {0: "batch_size", 1: "past_sequence_length + sequence_length"},
+                "position_ids": {0: "batch_size", 1: "sequence_length"},
+            }
+        )
+        if self.use_past_in_inputs:
+            common_inputs["past_key_values.0.key"] = {0: "batch_size", 2: "past_sequence_length"}
+            common_inputs["past_key_values.0.value"] = {0: "batch_size", 2: "past_sequence_length"}
+        return common_inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        common_outputs = OrderedDict({"last_hidden_state": {0: "batch_size", 1: "sequence_length"}})
+        if self.use_past:
+            common_outputs["present_key_values.0.key"] = {0: "batch_size", 2: "past_sequence_length + sequence_length"}
+            common_outputs["present_key_values.0.value"] = {
+                0: "batch_size",
+                2: "past_sequence_length + sequence_length",
+            }
+        return common_outputs
+
+    def overwrite_shape_and_generate_input(self, dummy_input_gen, input_name, framework, input_shapes):
+        # The base "with past" implementation shrinks token-id inputs (input_ids/position_ids) to a
+        # single token. The MTP head is driven instead by full-sequence `hidden_states` / `inputs_embeds`,
+        # so `position_ids` must keep the same sequence length as those inputs. Generate every input at
+        # its natural length (no shrink).
+        return dummy_input_gen.generate(
+            input_name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
+        )
+
+
+class Qwen3_5MoeMTPOpenVINOConfig(Qwen3_5MTPOpenVINOConfig):
+    """Export configuration for the Qwen3.5-MoE MTP head (e.g. Qwen3.6-35B-A3B)."""
+
+    _MODEL_PATCHER = Qwen3_5MoeMTPModelPatcher
 
 
 @register_in_tasks_manager(
@@ -7242,6 +7534,23 @@ class Qwen3_5MoeOpenVINOConfig(Qwen3_5OpenVINOConfig):
                 behavior=behavior,
                 preprocessors=self._preprocessors,
             )
+
+        if behavior == QwenVLConfigBehavior.MTP:
+            return Qwen3_5MoeMTPOpenVINOConfig(
+                self._orig_config,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, QwenVLConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
+
+        if behavior == QwenVLConfigBehavior.MTP:
+            return Qwen3_5MoeMTPModule.from_pretrained_model(model)
+
+        return Qwen3_5OpenVINOConfig.get_model_for_behavior(model, behavior)
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
@@ -7308,3 +7617,84 @@ class TrOCROpenVINOConfig(TextSeq2SeqOpenVINOConfig):
         decoder_num_attention_heads="decoder_attention_heads",
         hidden_size="hidden_size",
     )
+
+
+@register_in_tasks_manager("z-image-transformer", *["semantic-segmentation"], library_name="diffusers")
+class ZImageTransformerOpenVINOConfig(UNetOpenVINOConfig):
+    """
+    Export config for ZImageTransformer2DModel.
+
+    The patched forward (via ZImageTransformerModelPatcher) accepts:
+      hidden_states:          [B, C, H, W]    — latent without the frame (F) dim
+      timestep:               [B]
+      encoder_hidden_states:  [B, seq_len, cap_feat_dim]
+      encoder_attention_mask: [B, seq_len]        — 1 on real caption tokens
+      txt_ids:                [B, seq_len, 3]     — caption RoPE position ids
+      img_ids:                [B, img_seq_len, 3] — image RoPE position ids
+
+    And returns:
+      sample: [B, C, H, W]
+    """
+
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        image_size="sample_size",  # not used directly but required by base class
+        num_channels="in_channels",
+        hidden_size="cap_feat_dim",  # used for encoder_hidden_states dim
+        vocab_size="n_heads",  # dummy — needed by base class
+        allow_new=True,
+    )
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummyTransformerTimestpsInputGenerator,
+        DummyZImageTransformerVisionInputGenerator,
+        DummyZImageCapFeatInputGenerator,
+        DummyZImagePositionIdsInputGenerator,
+    )
+    _MODEL_PATCHER = ZImageTransformerModelPatcher
+
+    @property
+    def inputs(self):
+        return {
+            "hidden_states": {0: "batch_size", 2: "height", 3: "width"},
+            "timestep": {0: "batch_size"},
+            "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+            "encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
+            "txt_ids": {0: "batch_size", 1: "sequence_length"},
+            "img_ids": {0: "batch_size", 1: "image_sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "height", 3: "width"},
+        }
+
+
+@register_in_tasks_manager("z-image-text-encoder", *["feature-extraction"], library_name="diffusers")
+class ZImageTextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+    """
+    Export config for the Qwen3Model text encoder used in ZImagePipeline.
+
+    The patched forward (via ZImageTextEncoderModelPatcher) returns hidden_states[-2]
+    directly as the main output tensor.
+
+    Registered under its own model type rather than the shared "qwen3-text-encoder": both
+    are Qwen3 encoders, but this one exports a single last_hidden_state, while
+    Qwen3TextEncoderOpenVINOConfig also exports every hidden_states.N. Reusing the shared
+    key would overwrite that registration (this class is defined later in the file) and
+    strip the per-layer outputs that Flux.2-Klein indexes.
+    """
+
+    _MODEL_PATCHER = ZImageTextEncoderModelPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+        }

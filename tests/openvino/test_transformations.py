@@ -380,6 +380,34 @@ if is_diffusers_version(">=", "0.38.0"):
     }
 
 
+if is_diffusers_version(">=", "0.37.0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["z-image"] = {
+        "model_class": "OVZImagePipeline",
+        "convert": [
+            "CommonFusions",
+            "SDPAFusion",
+            "TransposeFuse",
+        ],
+        "compile": [
+            "CausalMaskPreprocessFusion",
+            "CommonDecompositions",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "DecompressionHandling",
+            "MultiplyFusions",
+            "RoPEFusion",
+            "RoPEFusionGPTNEOX",
+            "SDPASubgraphFusion",
+            "Snippets",
+            "Tokenization",
+        ],
+    }
+
+
 def _get_flat_transforms(arch):
     """Return a flat list of all expected transformations (convert + compile) for an architecture."""
     entry = ARCH_TO_EXPECTED_TRANSFORMATIONS[arch]

@@ -63,11 +63,14 @@ from optimum.intel import (  # noqa
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelOpenCLIPText,
     OVModelOpenCLIPVisual,
+    OVPipelineForImage2Video,
+    OVPipelineForText2Video,
     OVSanaPipeline,
     OVSentenceTransformer,
     OVStableDiffusion3Pipeline,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
+    OVZImagePipeline,
 )
 from optimum.intel.openvino.configuration import (
     _DEFAULT_4BIT_WQ_CONFIGS,
@@ -114,6 +117,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-video", "ltx-video"),
         ("text-to-video", "ltx2"),
         ("image-to-video", "ltx2"),
+        ("text-to-video", "ltx2.3"),
+        ("image-to-video", "ltx2.3"),
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
@@ -137,6 +142,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
+        ("image-text-to-text", "mistral3"),
+        ("text-to-image", "z-image"),
         ("image-text-to-text", "muse_glimmer"),
     ]
     # filter architectures depending on min/max transformers supported versions
@@ -168,15 +175,22 @@ class OVCLIExportTestCase(unittest.TestCase):
         "stable-diffusion-3": 6,
         "flux": 4,
         "flux.2-klein": 2,
+        # Z-Image declares the slow Qwen2Tokenizer. On transformers 5.x that name resolves to
+        # the fast implementation and converts fine; on 4.x it is the genuinely slow tokenizer
+        # and openvino_tokenizers reports "OpenVINO Tokenizer export for Qwen2Tokenizer is not
+        # supported", producing no tokenizer models at all.
+        "z-image": (2 if is_transformers_version(">=", "5.0") else 0),
         "flux-fill": 4,
         "lfm2": (
             2 if is_openvino_version(">=", "2026.0") else 0
         ),  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
         "lfm2_moe": 2,
         "llava": 2,
+        "mistral3": 2,
         "sana": 2,
         "ltx-video": 2,
         "ltx2": 2,
+        "ltx2.3": 2,
         "sam": 0,  # no tokenizer
         "speecht5": 2,
         "kokoro": 0,  # uses g2p, no tokenizer
@@ -1120,6 +1134,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
                 del expected_int8["decoder_with_past"]
+            if task == "text-to-video" and model_type.startswith("ltx2"):
+                # Only the LTX-2 image-to-video pipeline loads a VAE encoder, to encode the input image.
+                del expected_int8["vae_encoder"]
             check_compression_state_per_model(self, model.ov_models, expected_int8)
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)
