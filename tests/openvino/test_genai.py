@@ -162,6 +162,7 @@ class LLMPipelineTestCase(unittest.TestCase):
         "arcee",
         "gpt_oss",
         "smollm3",
+        "hunyuan_v1_dense",
         "phi3",
         "phimoe",
         "exaone4",

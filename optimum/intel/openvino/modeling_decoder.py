@@ -76,13 +76,9 @@ logger = logging.getLogger(__name__)
 core = Core()
 
 
-# Decoder model types that require FP32 activation precision at inference time. For these architectures
-# the default FP16 activation precision used on some devices (e.g. GPU) accumulates enough numerical error
-# during long generation to flip greedy token selection and diverge from the reference output, even though
-# CPU (FP32) inference matches. Forcing `INFERENCE_PRECISION_HINT=f32` governs activations only and remains
-# compatible with INT4/INT8 weight compression. Unlike the VLM path in `modeling_visual_language.py`, which
-# forces FP32 unconditionally for a single accuracy-sensitive model class, the decoder path applies it only to
-# the model types listed here, so all other decoder architectures keep their device-default precision.
+# Decoder model types whose greedy decoding diverges with the default FP16 activation precision used on some
+# devices (e.g. GPU). Forcing `INFERENCE_PRECISION_HINT=f32` governs activations only and stays compatible with
+# INT4/INT8 weight compression.
 _MODEL_TYPES_REQUIRING_FP32_INFERENCE = {"hunyuan_v1_dense"}
 
 
@@ -274,10 +270,6 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
 
     def _set_ov_config_parameters(self):
         super()._set_ov_config_parameters()
-        # Accuracy-sensitive decoder architectures require FP32 activation precision to avoid greedy-decoding
-        # divergence caused by the default FP16 activation precision on some devices (e.g. GPU). Only applied
-        # when the user has not explicitly requested an inference precision, and only for the affected model
-        # types, so behavior of all other architectures is unchanged.
         if (
             getattr(self.config, "model_type", None) in _MODEL_TYPES_REQUIRING_FP32_INFERENCE
             and self.ov_config.get("INFERENCE_PRECISION_HINT") is None
