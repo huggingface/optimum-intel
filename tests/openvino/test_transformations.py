@@ -322,6 +322,32 @@ if is_transformers_version(">=", "5.0.0"):
         ]
     )
 
+# deepseek_v3 (DeepSeek-V3 MLA + grouped MoE with shared experts) is only enabled through the
+# native transformers modeling (>= 5), where DeepseekV3Patcher swaps the expert kernel for the
+# shared batched-matmul implementation that OpenVINO fuses via ConvertTiledMoeBlockToGatherMatmuls.
+if is_transformers_version(">=", "5.0.0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["deepseek_v3"] = {
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "TransposeMatMul",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "CommonDecompositions",
+            "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
+            "ConvertBroadcast3",
+            "ConvertTiledMoeBlockToGatherMatmuls",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    }
+
 
 # filter architectures depending on min/max transformers supported versions
 ARCH_TO_EXPECTED_TRANSFORMATIONS = {
