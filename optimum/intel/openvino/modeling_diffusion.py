@@ -2454,7 +2454,7 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         # Mirror `LTX2Pipeline._get_gemma_prompt_embeds`:
         # https://github.com/huggingface/diffusers/blob/v0.40.0/src/diffusers/pipelines/ltx2/pipeline_ltx2.py#L300-L362
         # but read the packed prompt embeddings
-        # straight from the text encoder: `LTX2PackedTextEncoderPatcher` moves the reference
+        # straight from the text encoder: `LTX2TextEncoderPatcher` moves the reference
         # implementation's `stack(dim=-1).flatten(2, 3)` into the exported graph, where it is the
         # connectors' `text_encoder_hidden_states` layout already. On the host that copy is 735 MiB
         # per encode for LTX-2.3 at the default sequence length, twice per generation under CFG.
