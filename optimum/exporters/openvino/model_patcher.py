@@ -3077,10 +3077,19 @@ def _mistral3_vision_embed_forward(self, pixel_values):
     )
 
     vision_feature_layer = self.config.vision_feature_layer
+    hidden_states = getattr(transformer_out, "hidden_states", None)
     if isinstance(vision_feature_layer, int):
-        selected_image_feature = transformer_out.hidden_states[vision_feature_layer]
+        if vision_feature_layer == -1 and hidden_states is None:
+            # Transformers 5.10 PixtralTransformer exposes only last_hidden_state.
+            selected_image_feature = transformer_out.last_hidden_state
+        elif hidden_states is not None:
+            selected_image_feature = hidden_states[vision_feature_layer]
+        else:
+            raise ValueError("Pixtral vision output does not contain the requested hidden-state layer.")
     else:
-        hs_pool = [transformer_out.hidden_states[layer_idx] for layer_idx in vision_feature_layer]
+        if hidden_states is None:
+            raise ValueError("Pixtral vision output does not contain the requested hidden-state layers.")
+        hs_pool = [hidden_states[layer_idx] for layer_idx in vision_feature_layer]
         selected_image_feature = torch.cat(hs_pool, dim=-1)
 
     projector = self.model.multi_modal_projector
@@ -3244,7 +3253,7 @@ def mistral3_multi_modal_projector_forward(self, image_features):
     return hidden_states
 
 
-class Mistral3ImageEmbeddingModelPatcher(ModelPatcher):
+class LegacyMistral3ImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OpenVINOConfig",

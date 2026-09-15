@@ -164,6 +164,7 @@ from optimum.exporters.openvino.model_patcher import (
     MiniCPMModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
+    LegacyMistral3ImageEmbeddingModelPatcher,
     Mistral3ImageEmbeddingModelPatcher,
     Mistral3MultiModalProjectorPatcher,
     Mistral3LanguageModelPatcher,
@@ -2256,7 +2257,7 @@ class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior != Mistral3ConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
 
-        return Mistral3ImageEmbeddingModelPatcher(self, model, model_kwargs)
+        return LegacyMistral3ImageEmbeddingModelPatcher(self, model, model_kwargs)
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs) -> Dict:
         if self._behavior == Mistral3ConfigBehavior.VISION_EMBEDDINGS and self._config.model_type == "pixtral":

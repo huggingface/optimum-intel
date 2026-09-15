@@ -2174,7 +2174,7 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
         return video_features
 
 
-class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
+class _OVMistral3ForCausalLMBase(OVModelForVisualCausalLM):
     additional_parts = ["multi_modal_projector"]
 
     def get_vision_embeddings(self, pixel_values, input_ids=None, image_sizes=None, **kwargs):
@@ -7969,7 +7969,8 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
 
         return inputs_embeds, attention_mask, position_ids
 
-    preprocess_inputs = staticmethod(OVModelForVisualCausalLM._default_preprocess_inputs)
+    # Reuse main's BOS-safe Mistral3 preprocessing while retaining this PR's multi-image runtime.
+    preprocess_inputs = staticmethod(_OVMistral3ForCausalLMBase.preprocess_inputs)
 
 
 MODEL_TYPE_TO_CLS_MAPPING = {
@@ -7977,7 +7978,6 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
     "llava_next_video": _OVLlavaNextVideoForCausalLM,
-    "mistral3": _OVMistral3ForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
     "maira2": _OVMaira2ForCausalLM,
