@@ -80,7 +80,11 @@ from optimum.intel.openvino.modeling_visual_language import (
     _OVQwen3OmniMoeForCausalLM,
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import (
+    is_compressed_tensors_available,
+    is_openvino_version,
+    is_transformers_version,
+)
 
 
 if is_transformers_version("<=", "4.52"):
@@ -603,6 +607,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "muse_glimmer",
         "deepseek_ocr2",
     ]
+    if is_openvino_version(">=", "2026.3") and is_compressed_tensors_available():
+        SUPPORTED_ARCHITECTURES.append("qwen3_5_compressed_tensors")
     SUPPORT_VIDEO = [
         "llava_next_video",
         "qwen2_vl",
@@ -672,6 +678,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "llama4",
             "qwen3_vl",
             "qwen3_5",
+            "qwen3_5_compressed_tensors",
             "qwen3_5_mtp",
             "qwen3_5_moe",
             "qwen3_5_moe_mtp",
@@ -783,13 +790,18 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             transformers_model.get_vision_tower().load_model()
         preprocessors = self.get_preprocessors(model_arch)
         set_seed(SEED)
+        ov_config = F32_CONFIG
+        if model_arch == "qwen3_5_compressed_tensors":
+            # The reference dequantizes packed weights, whereas OpenVINO preserves them as int4.
+            # Disable CPU dynamic activation quantization so both paths are compared at the same precision.
+            ov_config = {**F32_CONFIG, "DYNAMIC_QUANTIZATION_GROUP_SIZE": "0"}
         ov_model = self.OVMODEL_CLASS.from_pretrained(
             model_id,
             export=True,
             trust_remote_code=trust_remote_code,
             compile=False,
             device=OPENVINO_DEVICE,
-            ov_config=F32_CONFIG,
+            ov_config=ov_config,
         )
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
 
