@@ -16,7 +16,7 @@ import copy
 import enum
 import logging
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
@@ -130,6 +130,7 @@ from optimum.exporters.openvino.model_patcher import (
     Gemma3LMModelPatcher,
     Gemma3nImageEmbeddingsModelPatcher,
     Gemma3nLMModelPatcher,
+    Gemma3TextEncoderPatcher,
     Gemma4ImageEmbeddingsModelPatcher,
     Gemma4LMModelPatcher,
     Gemma4UnifiedImageEmbeddingsModelPatcher,
@@ -156,7 +157,6 @@ from optimum.exporters.openvino.model_patcher import (
     LlavaNextVideoImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
     LTX2ConnectorsPatcher,
-    LTX2PackedTextEncoderPatcher,
     LTX2TextEncoderPatcher,
     LTX2TransformerPatcher,
     LTX2VocoderPatcher,
@@ -2749,7 +2749,7 @@ class Gemma3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
         sequence_length="text_config.max_position_embeddings",
         num_layers="text_config.num_hidden_layers",
     )
-    _MODEL_PATCHER = LTX2TextEncoderPatcher
+    _MODEL_PATCHER = Gemma3TextEncoderPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -2774,32 +2774,18 @@ class LTX2TextEncoderOpenVINOConfig(Gemma3TextEncoderOpenVINOConfig):
     hidden states leave the graph. Kept separate so that the packed layout, which nothing but the
     LTX-2 connectors can consume, does not become the contract for every Gemma-3 text encoder export.
 
-    Two contracts, selected by `pack_hidden_states`:
-
-    - `False` (LTX-2.0): one output per layer, packed by the pipeline on the host. Also keeps the
-      unpatched final norm, so already-published LTX-2.0 IRs stay reproducible.
-    - `True` (LTX-2.3): a single `prompt_embeds` output, packed and norm-fixed in the graph.
-
-    The default is the LTX-2.0 contract, so an omitted argument can never change its IRs; LTX-2.3
-    would instead fail loudly at the connectors' input width.
+    Both LTX-2.0 and LTX-2.3 emit a single `prompt_embeds` output, packed and norm-fixed in the graph
+    by `LTX2TextEncoderPatcher`. LTX-2.0 used to export one output per layer and pack them on the
+    host; that contract loses the text tower's final norm on transformers >= 5, leaving the last of
+    the 49 stacked slots at |max| 6.6e5 instead of 1.6e2 and corrupting the whole text conditioning.
+    IRs already published with the per-layer layout still load, see
+    `_OVLTX2Base._get_gemma_prompt_embeds`.
     """
 
-    def __init__(
-        self,
-        config: "PretrainedConfig",
-        task: str = "feature-extraction",
-        preprocessors: Optional[List[Any]] = None,
-        int_dtype: str = "int64",
-        float_dtype: str = "fp32",
-        pack_hidden_states: bool = False,
-    ):
-        super().__init__(config, task=task, preprocessors=preprocessors, int_dtype=int_dtype, float_dtype=float_dtype)
-        self.pack_hidden_states = pack_hidden_states
+    _MODEL_PATCHER = LTX2TextEncoderPatcher
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        if not self.pack_hidden_states:
-            return super().outputs
         # The patcher returns the hidden states already stacked and flattened into the connectors'
         # `text_encoder_hidden_states` layout, so there is a single output and the layer count does
         # not appear here. The last dimension is `(num_layers + 1) * hidden_size`, left dynamic
@@ -2808,19 +2794,11 @@ class LTX2TextEncoderOpenVINOConfig(Gemma3TextEncoderOpenVINOConfig):
 
     @property
     def values_override(self) -> Optional[Dict[str, Any]]:
-        # Both contracts are built out of the per-layer hidden states, which only exist if the model
-        # is asked for them, same as `Qwen3TextEncoderOpenVINOConfig`.
+        # The packed output is built out of the per-layer hidden states, which only exist if the
+        # model is asked for them, same as `Qwen3TextEncoderOpenVINOConfig`.
         values = super().values_override or {}
         values.update({"output_hidden_states": True, "return_dict": True, "use_cache": False})
         return values
-
-    def _select_text_encoder_patcher(self) -> Type[ModelPatcher]:
-        return LTX2PackedTextEncoderPatcher if self.pack_hidden_states else LTX2TextEncoderPatcher
-
-    def patch_model_for_export(
-        self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
-        return self._select_text_encoder_patcher()(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("sana-transformer", *["semantic-segmentation"], library_name="diffusers")

@@ -11555,7 +11555,7 @@ def _ltx2_text_encoder_final_norm(model):
     return None
 
 
-def _ltx2_text_encoder_causal_mask(attention_mask):
+def _gemma3_text_encoder_causal_mask(attention_mask):
     """
     Build the explicit causal mask the text tower is traced with, per attention type. Returns
     `attention_mask` unchanged when it is not the expected 2D padding mask.
@@ -11572,13 +11572,15 @@ def _ltx2_text_encoder_causal_mask(attention_mask):
     return {"full_attention": causal_mask, "sliding_attention": causal_mask}
 
 
-class LTX2TextEncoderPatcher(ModelPatcher):
+class Gemma3TextEncoderPatcher(ModelPatcher):
     """
     Export patcher for the text encoder. Forces output_hidden_states, builds an explicit
     causal mask (the connectors consume every hidden-state layer), and returns a flat dict so
     each `hidden_states.{i}` becomes a named export output.
 
-    This is the LTX-2.0 contract; LTX-2.3 uses `LTX2PackedTextEncoderPatcher` instead.
+    This is the generic Gemma-3 text encoder contract. Both LTX-2 versions use
+    `LTX2TextEncoderPatcher`, which subclasses this one to pack the layers and to restore the final
+    norm the per-layer layout loses.
     """
 
     def __init__(self, config, model, model_kwargs=None):
@@ -11592,7 +11594,7 @@ class LTX2TextEncoderPatcher(ModelPatcher):
         def patched_forward(input_ids, attention_mask=None, **kwargs):
             outputs = orig_forward(
                 input_ids=input_ids,
-                attention_mask=_ltx2_text_encoder_causal_mask(attention_mask),
+                attention_mask=_gemma3_text_encoder_causal_mask(attention_mask),
                 output_hidden_states=True,
             )
             result = {"last_hidden_state": outputs.hidden_states[-1]}
@@ -11603,10 +11605,10 @@ class LTX2TextEncoderPatcher(ModelPatcher):
         return patched_forward
 
 
-class LTX2PackedTextEncoderPatcher(LTX2TextEncoderPatcher):
+class LTX2TextEncoderPatcher(Gemma3TextEncoderPatcher):
     """
-    LTX-2.3 variant: emits the layers already packed the way the connectors want them, as a single
-    `prompt_embeds` output, and fixes the last layer's missing final norm.
+    LTX-2 variant, used by both 2.0 and 2.3: emits the layers already packed the way the connectors
+    want them, as a single `prompt_embeds` output, and fixes the last layer's missing final norm.
 
     The packing is `LTX2Pipeline._get_gemma_prompt_embeds`'s `stack(dim=-1).flatten(2, 3)`, which is
     exactly the connectors' `text_encoder_hidden_states` contract — they undo the flatten as their
@@ -11614,12 +11616,15 @@ class LTX2PackedTextEncoderPatcher(LTX2TextEncoderPatcher):
     the pipeline to interleave them again on the host: 735 MiB copied in 627 ms per encode at the
     default sequence length of 1024, twice per generation under CFG.
 
-    transformers collects `hidden_states` with forward hooks on the decoder layers, so the last entry
-    is the layer output *before* the text tower's final norm, and the exported graph ended up with
-    that pre-norm tensor (|max| 6.6e5 instead of 1.6e2). Since the connectors consume all layers
-    stacked, that one slot corrupted the whole text conditioning. Capture the norm's output directly.
+    transformers >= 5 collects `hidden_states` with forward hooks on the decoder layers, so the last
+    entry is the layer output *before* the text tower's final norm, and the exported graph ends up
+    with that pre-norm tensor. Since the connectors consume all layers stacked, that one slot
+    corrupts the whole text conditioning. Capture the norm's output directly.
 
-    LTX-2.0 keeps the un-fixed base patcher so its already-published IRs stay reproducible.
+    Measured on `Lightricks/LTX-2` against eager fp32, over all 49 stacked slots, max abs diff on the
+    non-padding tokens: 152 on slots 0-47 either way, but slot 48 is 6.6e5 (|max| 6.6e5 instead of
+    1.6e2) without this fix and 0.046 with it. A 4.57.6 export is unaffected, so an LTX-2.0 IR
+    exported before transformers 5 is correct; this patcher is what keeps it correct after.
     """
 
     def __init__(self, config, model, model_kwargs=None):
@@ -11636,7 +11641,7 @@ class LTX2PackedTextEncoderPatcher(LTX2TextEncoderPatcher):
         def patched_forward(input_ids, attention_mask=None, **kwargs):
             outputs = orig_forward(
                 input_ids=input_ids,
-                attention_mask=_ltx2_text_encoder_causal_mask(attention_mask),
+                attention_mask=_gemma3_text_encoder_causal_mask(attention_mask),
                 output_hidden_states=True,
             )
 
