@@ -342,7 +342,6 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "deepseek_ocr2",
     "qwen3_omni_moe",
     "muse_glimmer",
-    "mistral3",
 ]
 
 

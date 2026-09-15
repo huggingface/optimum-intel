@@ -192,7 +192,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         "clip": 2,
         "mamba": 2,
         "falcon_mamba": 2,
-        "mistral3": 2,
         "qwen3": 2,
         "qwen3_omni_moe": 2,
         "zamba2": 2,
