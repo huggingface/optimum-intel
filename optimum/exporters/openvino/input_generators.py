@@ -2523,8 +2523,8 @@ class DummyQwen3TTSDecoderStackInputGenerator(DummyInputGenerator):
         self,
         task: str,
         normalized_config: NormalizedTextConfig,
-        batch_size: int = 1,
-        sequence_length: int = 4,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
         **kwargs,
     ):
         self.task = task
