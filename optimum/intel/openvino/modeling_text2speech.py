@@ -48,7 +48,6 @@ from .modeling_seq2seq import (
     INPUTS_DOCSTRING,
     OVModelForSeq2SeqLM,
 )
-from .quantization import _weight_only_quantization
 from .utils import TemporaryDirectory, classproperty
 
 
@@ -1522,6 +1521,9 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
         :meth:`_apply_quantization`) and by :meth:`_convert_checkpoint` when a compression config
         is passed to ``from_pretrained``, so both entry points produce the same model.
         """
+        # Imported here: `.quantization` needs `nncf`, which only weight compression requires.
+        from .quantization import _weight_only_quantization
+
         ir_dir = Path(ir_dir)
         output_dir = Path(output_dir) if output_dir is not None else ir_dir
         core = openvino.Core()
