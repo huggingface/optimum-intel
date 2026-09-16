@@ -66,6 +66,9 @@ from optimum.exporters.openvino.input_generators import (
     DummyQwen3OmniMoeVisionInputGenerator,
     DummyQwen3VLLMInputGenerator,
     DummyQwen3VLVisionEmbedInputGenerator,
+    DummyQwenImage21I2ITextInputGenerator,
+    DummyQwenImage21TransformerInputGenerator,
+    DummyQwenImage21VisionInputGenerator,
     DummyQwenImageResolutionInputGenerator,
     DummyQwenImageTextInputGenerator,
     DummyQwenImageTransformerVisionInputGenerator,
@@ -106,6 +109,7 @@ from optimum.exporters.openvino.input_generators import (
     Qwen3ASRDummySeq2SeqPastKeyValuesGenerator,
     Qwen3NextDummyPastKeyValuesGenerator,
     QwenDummyPastKeyValuesGenerator,
+    QwenImage21VaeDummyInputGenerator,
     Zamba2DummyPastKeyValuesGenerator,
 )
 from optimum.exporters.openvino.model_patcher import (
@@ -205,6 +209,10 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3OmniMoeVisionMergerPatcher,
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
+    QwenImage21I2ITextEncoderModelPatcher,
+    QwenImage21TransformerModelPatcher,
+    QwenImage21VaeModelPatcher,
+    QwenImage21VisionModelPatcher,
     QwenImageTextEncoderModelPatcher,
     QwenImageTransformerModelPatcher,
     QwenImageVaeModelPatcher,
@@ -3158,6 +3166,165 @@ class QwenImageVaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(num_channels="z_dim", allow_new=True)
     DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeDummyInputGenerator,)
     _MODEL_PATCHER = QwenImageVaeModelPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+        }
+
+
+@register_in_tasks_manager("qwenimage21-transformer", *["semantic-segmentation"], library_name="diffusers")
+class QwenImage21TransformerOpenVINOConfig(UNetOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        image_size="sample_size",
+        num_channels="in_channels",
+        hidden_size="context_in_dim",
+        vocab_size="attention_head_dim",
+        allow_new=True,
+    )
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwenImage21TransformerInputGenerator,)
+    _MODEL_PATCHER = QwenImage21TransformerModelPatcher
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        return OpenVINOConfig.generate_dummy_inputs(self, framework=framework, **kwargs)
+
+    @property
+    def inputs(self):
+        return {
+            "hidden_states": {0: "batch_size", 1: "packed_height_width", 2: "in_channels"},
+            "encoder_hidden_states": {0: "batch_size", 1: "text_sequence_length", 2: "context_in_dim"},
+            "timestep": {0: "batch_size"},
+            "cos": {1: "joint_sequence_length"},
+            "sin": {1: "joint_sequence_length"},
+            "gather_idx": {0: "joint_sequence_length"},
+            "attn_mask": {0: "batch_size", 2: "joint_sequence_length", 3: "joint_sequence_length"},
+            "modulation_mask": {0: "joint_sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "out_hidden_states": {0: "batch_size", 1: "joint_sequence_length"},
+        }
+
+
+@register_in_tasks_manager("qwenimage21-text-encoder", *["feature-extraction"], library_name="diffusers")
+class QwenImage21TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+    # QwenImage2.1 uses a Qwen3-VL model run text-only for the prompt embeddings. Only the language model
+    # (`text_encoder.model.language_model`, a `Qwen3VLTextModel`) is exported; its `last_hidden_state`
+    # equals the pipeline's `outputs.hidden_states[-1]`. The patcher forces SDPA and installs the
+    # vmap-free mask so the traced attention fuses and stays numerically consistent under OpenVINO.
+    _MODEL_PATCHER = QwenImageTextEncoderModelPatcher
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+        }
+
+
+@register_in_tasks_manager("qwenimage21-vision-encoder", *["feature-extraction"], library_name="diffusers")
+class QwenImage21VisionEncoderOpenVINOConfig(OpenVINOConfig):
+    # Qwen3-VL vision tower for QwenImage2.1 image-to-image. The traceable graph consumes host-precomputed
+    # grid-derived tensors (bilinear position-embedding gather indices/weights and rotary cos/sin) and the
+    # flattened patch pixels. It returns the merged image embeddings plus one DeepStack feature per
+    # DeepStack layer. The patcher swaps the eager cu_seqlens attention for a single fusable SDPA.
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwenImage21VisionInputGenerator,)
+    _MODEL_PATCHER = QwenImage21VisionModelPatcher
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        return OpenVINOConfig.generate_dummy_inputs(self, framework=framework, **kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "pixel_values": {0: "sequence_length"},
+            "bilinear_indices": {1: "sequence_length"},
+            "bilinear_weights": {1: "sequence_length"},
+            "cos": {0: "sequence_length"},
+            "sin": {0: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        n_deep = len(self._normalized_config.config.deepstack_visual_indexes)
+        outputs = {"image_embeds": {0: "merged_sequence_length"}}
+        for i in range(n_deep):
+            outputs[f"deepstack_{i}"] = {0: "merged_sequence_length"}
+        return outputs
+
+
+@register_in_tasks_manager("qwenimage21-text-encoder-i2i", *["feature-extraction"], library_name="diffusers")
+class QwenImage21I2ITextEncoderOpenVINOConfig(OpenVINOConfig):
+    # Qwen3-VL language model for QwenImage2.1 image-to-image. Unlike the t2i text encoder (input_ids only)
+    # this graph takes host-precomputed `inputs_embeds` (vision embeds already scattered), 3D M-RoPE
+    # `position_ids`, and the DeepStack visual features as a dense additive tensor. The passed config is the
+    # top-level Qwen3-VL config (it carries both `text_config` and `vision_config`).
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwenImage21I2ITextInputGenerator,)
+    _MODEL_PATCHER = QwenImage21I2ITextEncoderModelPatcher
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        return OpenVINOConfig.generate_dummy_inputs(self, framework=framework, **kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "image_embeds": {0: "num_image_tokens"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+            "position_ids": {1: "batch_size", 2: "sequence_length"},
+            "deepstack_dense": {1: "batch_size", 2: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+        }
+
+
+@register_in_tasks_manager("qwenimage21-vae-encoder", *["semantic-segmentation"], library_name="diffusers")
+class QwenImage21VaeEncoderOpenVINOConfig(VisionOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(num_channels="in_channels", allow_new=True)
+    DUMMY_INPUT_GENERATOR_CLASSES = (QwenImage21VaeDummyInputGenerator,)
+    _MODEL_PATCHER = QwenImage21VaeModelPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_parameters": {0: "batch_size", 2: "num_frames", 3: "height_latent", 4: "width_latent"},
+        }
+
+
+@register_in_tasks_manager("qwenimage21-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
+class QwenImage21VaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(num_channels="z_dim", allow_new=True)
+    DUMMY_INPUT_GENERATOR_CLASSES = (QwenImage21VaeDummyInputGenerator,)
+    _MODEL_PATCHER = QwenImage21VaeModelPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:

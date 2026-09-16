@@ -3491,6 +3491,249 @@ class QwenImageTextEncoderModelPatcher(ModelPatcher):
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
 
 
+# --- QwenImage2.1 image-to-image text encoder (Qwen3-VL vision tower + language model) ---------------
+# The vision tower processes the condition image. Its eager attention splits Q/K/V by `cu_seqlens`
+# (variable-length packing). For a single condition image `cu_seqlens` has exactly one segment, so the
+# reference is one full-attention pass; replacing the split with a single `scaled_dot_product_attention`
+# removes the data-dependent `torch.split`/`.tolist()` and keeps the sequence length dynamic while
+# fusing to a `ScaledDotProductAttention`. All grid-derived tensors (bilinear gather indices/weights and
+# the rotary cos/sin) are precomputed on the host and passed in as graph inputs.
+def _qwenimage21_vision_attn(attn, hidden_states, cos, sin):
+    from transformers.models.qwen3_vl.modeling_qwen3_vl import apply_rotary_pos_emb_vision
+
+    seq_length = hidden_states.shape[0]
+    query_states, key_states, value_states = (
+        attn.qkv(hidden_states).reshape(seq_length, 3, attn.num_heads, -1).permute(1, 0, 2, 3).unbind(0)
+    )
+    query_states, key_states = apply_rotary_pos_emb_vision(query_states, key_states, cos, sin)
+    query_states = query_states.transpose(0, 1).unsqueeze(0)
+    key_states = key_states.transpose(0, 1).unsqueeze(0)
+    value_states = value_states.transpose(0, 1).unsqueeze(0)
+    attn_output = F.scaled_dot_product_attention(query_states, key_states, value_states)
+    attn_output = attn_output.transpose(1, 2).reshape(seq_length, -1)
+    return attn.proj(attn_output)
+
+
+def _qwenimage21_vision_forward(self, pixel_values, bilinear_indices, bilinear_weights, cos, sin):
+    hidden_states = self.patch_embed(pixel_values)
+    pos_embeds = (self.pos_embed(bilinear_indices) * bilinear_weights[:, :, None]).sum(0)
+    hidden_states = hidden_states + pos_embeds.to(hidden_states.dtype)
+    deepstack_features = []
+    for layer_num, block in enumerate(self.blocks):
+        hidden_states = hidden_states + _qwenimage21_vision_attn(block.attn, block.norm1(hidden_states), cos, sin)
+        hidden_states = hidden_states + block.mlp(block.norm2(hidden_states))
+        if layer_num in self.deepstack_visual_indexes:
+            merger = self.deepstack_merger_list[self.deepstack_visual_indexes.index(layer_num)]
+            deepstack_features.append(merger(hidden_states))
+    merged = self.merger(hidden_states)
+    return (merged, *deepstack_features)
+
+
+class QwenImage21VisionModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        self._model._orig_forward = self._model.forward
+        self._model.forward = types.MethodType(_qwenimage21_vision_forward, self._model)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model._orig_forward
+        del self._model._orig_forward
+
+
+# The i2i language graph consumes host-precomputed `inputs_embeds` (with the vision embeds already
+# scattered), 3D M-RoPE `position_ids`, and the DeepStack visual features as a dense additive tensor of
+# shape [num_deepstack_layers, batch, seq, hidden]. `_deepstack_process` (a boolean-mask scatter-add in
+# the eager model) is replaced with a plain add of the dense slice, which traces without data-dependent
+# indexing. The same SDPA + vmap-free mask patch as the t2i text encoder keeps attention fusable.
+def _qwenimage21_dense_deepstack(self, hidden_states, visual_pos_masks, visual_embeds):
+    return hidden_states + visual_embeds.to(hidden_states.dtype)
+
+
+def _qwenimage21_i2i_text_forward(self, input_ids, image_embeds, attention_mask, position_ids, deepstack_dense):
+    # Embed the tokens and scatter the vision embeds into the image-pad positions inside the graph so the
+    # host does not need the embedding weights (masked_scatter converts cleanly and stays dynamic in seq).
+    inputs_embeds = self.embed_tokens(input_ids)
+    image_mask = (input_ids == self._image_token_id).unsqueeze(-1).expand_as(inputs_embeds)
+    inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds.to(inputs_embeds.dtype))
+    n_deep = deepstack_dense.shape[0]
+    deepstack_visual_embeds = [deepstack_dense[i] for i in range(n_deep)]
+    outputs = self._orig_forward(
+        input_ids=None,
+        inputs_embeds=inputs_embeds,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+        visual_pos_masks=None,
+        deepstack_visual_embeds=deepstack_visual_embeds,
+        use_cache=False,
+    )
+    return outputs[0] if isinstance(outputs, tuple) else outputs.last_hidden_state
+
+
+class QwenImage21I2ITextEncoderModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+        self._model.config._attn_implementation = "sdpa"
+        if is_transformers_version(">=", "4.53"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+        # `model_kwargs["image_token_id"]` is stashed on the config by the exporter so the traced forward
+        # can build the image-pad mask.
+        self._model._image_token_id = self._model.config._qwenimage21_image_token_id
+        self._model._orig_forward = self._model.forward
+        self._model.forward = types.MethodType(_qwenimage21_i2i_text_forward, self._model)
+        self._orig_deepstack = self._model._deepstack_process
+        self._model._deepstack_process = types.MethodType(_qwenimage21_dense_deepstack, self._model)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+        del self._model.config._orig_attn_implementation
+        if is_transformers_version(">=", "4.53"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
+        self._model.forward = self._model._orig_forward
+        del self._model._orig_forward
+        del self._model._image_token_id
+        self._model._deepstack_process = self._orig_deepstack
+
+
+
+# subgraph is recognized by OpenVINO's `RoPEFusion` matcher and collapsed into the dedicated
+# `ov::op::internal::RoPE` operation at compile time. Same de-interleave convention as QwenImage.
+# Original code: transformer_qwenimage21.py `apply_rotary_emb_qwen(use_real=False)`.
+def _qwenimage21_apply_rotary_emb(x, cos, sin):
+    # x: [batch, seq, heads, head_dim]; cos/sin: [1, seq, 1, head_dim] with the half-width table
+    # duplicated onto both halves. QwenImage21 rotates *interleaved* pairs (dims 2j, 2j+1); the fixed
+    # de-interleave permutation P (even dims -> first half, odd dims -> second half) turns this into the
+    # contiguous rotate-half convention the matcher accepts. P is applied identically to q and k and
+    # cancels in q.k^T, so the model is numerically unchanged. The negation must be `x2 * -1.0`
+    # (Eltwise Multiply); a unary `-x` traces to a `Negative` op the matcher does not recognize.
+    x_even = x[..., 0::2]
+    x_odd = x[..., 1::2]
+    xp = torch.cat([x_even, x_odd], dim=-1)
+    half = xp.shape[-1] // 2
+    x1 = xp[..., :half]
+    x2 = xp[..., half:]
+    rot = torch.cat([x2 * -1.0, x1], dim=-1)
+    return (xp * cos + rot * sin).type_as(x)
+
+
+# Patched attention processor (QwenImage21SDPAAttnProcessor / QwenImage21FlexAttnProcessor) that consumes
+# precomputed real rotary embeddings (cos, sin) and a dense block-causal attention mask instead of the
+# complex rotary + flex/multi-pass KV-cache orchestration, so the single-pass graph can be traced for
+# OpenVINO with a fusable `ScaledDotProductAttention`.
+def _qwenimage21_attn_processor_call(
+    self,
+    attn,
+    hidden_states,
+    attention_mask=None,
+    rotary_emb=None,
+    **kwargs,
+):
+    query = attn.to_q(hidden_states).unflatten(-1, (attn.heads, -1))
+    key = attn.to_k(hidden_states).unflatten(-1, (attn.heads, -1))
+    value = attn.to_v(hidden_states).unflatten(-1, (attn.heads, -1))
+
+    query = attn.norm_q(query).to(value.dtype)
+    key = attn.norm_k(key).to(value.dtype)
+
+    cos, sin = rotary_emb
+    query = _qwenimage21_apply_rotary_emb(query, cos, sin)
+    key = _qwenimage21_apply_rotary_emb(key, cos, sin)
+
+    query = query.transpose(1, 2)
+    key = key.transpose(1, 2)
+    value = value.transpose(1, 2)
+    hidden_states = F.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask)
+    hidden_states = hidden_states.transpose(1, 2).flatten(2, 3).type_as(query)
+
+    hidden_states = attn.to_out[0](hidden_states)
+    return attn.to_out[1](hidden_states)
+
+
+# Patched QwenImage21Transformer2DModel forward. The original forward builds a data-dependent joint
+# sequence (scatter + dynamic repeat_interleave + python loops over `img_shapes`), a complex rotary
+# embedding and a KV-cache/flex/multi-pass attention that cannot be traced. Here every data-dependent
+# tensor is precomputed on the host and passed in as a graph input, leaving pure tensor algebra:
+#   - `gather_idx` assembles the joint sequence from cat([txt, img]) with a single index_select
+#     (replaces `joint_hidden_states[:, image_pad_mask] = hidden_states`).
+#   - `cos`/`sin` are the real-valued rotary table (replaces the complex `self.pos_embed`).
+#   - `attn_mask` is the additive dense block-causal mask (replaces flex/multi-pass orchestration).
+#   - `modulation_mask` is `target_token_mask` (selects the per-token modulation row).
+def _qwenimage21_transformer_forward(
+    self,
+    hidden_states,
+    encoder_hidden_states,
+    timestep,
+    cos,
+    sin,
+    gather_idx,
+    attn_mask,
+    modulation_mask,
+):
+    txt = self.txt_in(encoder_hidden_states)
+    img = self.img_in(hidden_states)
+    combined = torch.cat([txt, img], dim=1)
+    joint = torch.index_select(combined, 1, gather_idx)
+
+    timestep = timestep.to(joint.dtype)
+    # causal_condition: text and condition-image tokens modulate from t=0 (the trailing row).
+    timestep = torch.cat([timestep, timestep.new_zeros(1)], dim=0)
+    temb = self.time_text_embed(timestep, joint)
+    modulation = self.modulation(temb)
+
+    rotary_emb = (cos, sin)
+    for block in self.transformer_blocks:
+        joint = block(
+            hidden_states=joint,
+            modulation=modulation,
+            rotary_emb=rotary_emb,
+            attention_mask=attn_mask,
+            target_token_mask=modulation_mask,
+        )
+
+    joint = self.norm_out(joint, temb, modulation_mask)
+    return self.proj_out(joint)
+
+
+class QwenImage21TransformerModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        self._model._orig_forward = self._model.forward
+        self._model.forward = types.MethodType(_qwenimage21_transformer_forward, self._model)
+        # Python resolves __call__ on the type, so the attention processor class (shared by all blocks)
+        # is patched at the class level rather than per-instance.
+        processor_cls = type(self._model.transformer_blocks[0].attn.processor)
+        self._processor_cls = processor_cls
+        self._orig_processor_call = processor_cls.__call__
+        processor_cls.__call__ = _qwenimage21_attn_processor_call
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model._orig_forward
+        del self._model._orig_forward
+        self._processor_cls.__call__ = self._orig_processor_call
+
+
+class QwenImage21VaeModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        from diffusers.models.autoencoders.autoencoder_kl_qwenimage21 import QwenImage21Upsample
+
+        # OpenVINO has no "nearest-exact" upsampling op; "nearest" is identical for the integer
+        # scale factor of 2 used here.
+        self._patched_upsamplers = []
+        for module in self._model.modules():
+            if isinstance(module, QwenImage21Upsample) and getattr(module, "mode", None) == "nearest-exact":
+                module.mode = "nearest"
+                self._patched_upsamplers.append(module)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for module in self._patched_upsamplers:
+            module.mode = "nearest-exact"
+
+
 def _minicpmv_resampler_forward(self, image_feature, pos_embed, key_padding_mask):
     bs = image_feature.shape[0]
     image_feature = self.kv_proj(image_feature)  # B * L * D
