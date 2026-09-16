@@ -21,6 +21,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
+from huggingface_hub import snapshot_download
 from packaging.version import Version
 from transformers.generation import GenerationMixin
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5HifiGan
@@ -38,9 +39,11 @@ from optimum.exporters.openvino.utils import (
     _get_kokoro_submodels_fn_and_export_configs,
     _get_model_dtype,
     _get_open_clip_submodels_fn_and_export_configs,
+    _get_qwen3_tts_submodels_fn_and_export_configs,
     _normalize_dummy_inputs,
     allow_skip_tracing_check,
     clear_class_registry,
+    is_ltx2_3_transformer_config,
     remove_none_from_dummy_inputs,
     save_config,
     save_preprocessors,
@@ -603,6 +606,75 @@ def _save_kokoro_config_and_assets(model, output: Path):
         logger.info(f"Exported voice {voice_name} -> {voice_bin}")
 
 
+def _save_qwen3_tts_config_and_assets(model, output: Path):
+    """Materialize the original Qwen3-TTS repository files alongside the exported IRs.
+
+    The OpenVINO runtime (:class:`optimum.intel.openvino.modeling_text2speech._OVModelForQwen3TTS`)
+    rebuilds the ``qwen_tts`` pipeline from these files and loads the exported IRs for every
+    neural component, so the original configs, tokenizer and processor assets must be present
+    in ``output``. Two classes of file are left out: OpenVINO IRs that already live in the
+    source directory (so a freshly exported graph is not clobbered) and the checkpoints
+    themselves.
+    """
+    import shutil
+
+    repo_id = getattr(model, "_qwen3_tts_repo_id", None)
+    if repo_id is None:
+        return
+
+    # Checkpoint files are not copied into a Qwen3-TTS export: every parameter of the model - the
+    # two decoder stacks, the embedding tables and output heads, the speaker encoder and both codec
+    # directions - lives in an exported IR, and the runtime rebuilds the ``qwen_tts`` module tree
+    # from its configs alone. The configs, tokenizer, and processor assets are still required and
+    # are copied as usual.
+    weight_patterns = (
+        "*.safetensors",
+        "*.safetensors.index.json",
+        "*.bin",
+        "*.bin.index.json",
+        "*.pt",
+        "*.pth",
+    )
+
+    output = Path(output)
+    src = Path(repo_id)
+    if not src.is_dir():
+        # Resolve the repo into the Hugging Face cache - where the checkpoint already sits, since
+        # the model was loaded from it - and copy from there exactly as from a local checkout.
+        # Downloading with ``local_dir=output`` instead would leave ``huggingface_hub``'s per-file
+        # ``.lock``/``.metadata`` bookkeeping behind in ``output/.cache/huggingface``.
+        src = Path(
+            snapshot_download(
+                repo_id=str(repo_id),
+                ignore_patterns=[
+                    *weight_patterns,
+                    *[f"speech_tokenizer/{pattern}" for pattern in weight_patterns],
+                ],
+            )
+        )
+
+    # Repository bookkeeping and any IR a source directory already holds (so a freshly exported
+    # graph is not clobbered) are not part of the export.
+    skip_names = {".git", ".gitattributes", ".cache", "openvino_talker_model.xml", "openvino_talker_model.bin"}
+    ignore_weights = shutil.ignore_patterns(*weight_patterns)
+
+    # Exporting a directory onto itself: the assets are already in place, and copying would
+    # raise SameFileError on the nested `speech_tokenizer` directory.
+    if output.is_dir() and src.resolve() == output.resolve():
+        return
+
+    for item in src.iterdir():
+        if item.name in skip_names or ignore_weights(str(src), [item.name]):
+            continue
+        dest = output / item.name
+        if item.is_dir():
+            shutil.copytree(item, dest, dirs_exist_ok=True, ignore=ignore_weights)
+        else:
+            if dest.resolve() == item.resolve():
+                continue
+            shutil.copy2(item, dest)
+
+
 def export_from_model(
     model: Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"],
     output: Union[str, Path],
@@ -626,7 +698,7 @@ def export_from_model(
         )
 
     library_name = _infer_library_from_model_or_model_class(model)
-    if library_name not in ("open_clip", "kokoro", "funasr"):
+    if library_name not in ("open_clip", "kokoro", "qwen3_tts", "funasr"):
         TasksManager.standardize_model_attributes(model, library_name=library_name)
 
     if hasattr(model.config, "export_model_type") and model.config.export_model_type is not None:
@@ -644,7 +716,7 @@ def export_from_model(
     if task is not None and task != "auto":
         task = TasksManager.map_from_synonym(task)
     else:
-        if library_name == "kokoro":
+        if library_name in ("kokoro", "qwen3_tts"):
             task = "text-to-audio"
         else:
             try:
@@ -730,6 +802,12 @@ def export_from_model(
             model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
         )
 
+    if library_name == "qwen3_tts":
+        custom_architecture = True
+        custom_export_configs, fn_get_submodels = _get_qwen3_tts_submodels_fn_and_export_configs(
+            model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
+        )
+
     if library_name == "diffusers":
         export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
         stateful_submodels = False
@@ -767,6 +845,9 @@ def export_from_model(
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
     elif library_name == "kokoro":
         _save_kokoro_config_and_assets(model, output)
+        files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
+    elif library_name == "qwen3_tts":
+        _save_qwen3_tts_config_and_assets(model, output)
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
     elif library_name != "diffusers":
         if is_transformers_version("<", "5"):
@@ -1107,6 +1188,12 @@ def _get_submodels_and_export_configs(
     if not stateful and getattr(export_config, "eagle3_vlm", False):
         stateful_per_model = [True] * len(models_for_export)
 
+    # Qwen3-TTS is exported under "text-to-audio", which the task check does not treat as stateful,
+    # yet its two decoder stacks keep their KV cache in OpenVINO state: the runtime drives that state
+    # rather than passing the cache in and out. The rest of the pipeline carries no cache.
+    if library_name == "qwen3_tts":
+        stateful_per_model = [name in ("talker_model", "code_predictor_model") for name in models_for_export]
+
     return export_config, models_for_export, stateful_per_model
 
 
@@ -1330,12 +1417,15 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
         exporter=exporter,
         library_name="diffusers",
         task="feature-extraction",
-        model_type="gemma3-text-encoder",
+        model_type="ltx2-text-encoder",
     )
+    # The 2.0 and 2.3 text encoder configs are identical, so the packing decision comes from the
+    # transformer. LTX-2.0 keeps one output per layer, as its published IRs already have.
     export_config = export_config_constructor(
         text_encoder.config,
         int_dtype=int_dtype,
         float_dtype=float_dtype,
+        pack_hidden_states=is_ltx2_3_transformer_config(pipeline.transformer.config),
     )
     export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["text_encoder"] = (text_encoder, export_config)
@@ -1432,15 +1522,11 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
             audio_vae_decoder.register_to_config(latents_std_data=pipeline.audio_vae.latents_std.tolist())
         models_for_export["audio_vae_decoder"] = (audio_vae_decoder, audio_vae_export_config)
 
-        # Vocoder
+        # Vocoder. `LTX2VocoderPatcher` renames the input to `hidden_states` and applies the
+        # int32-safe LTX-2.3 trim, and restores the original forward on exit, so unlike the VAEs
+        # above this needs no deep copy.
         if hasattr(pipeline, "vocoder") and pipeline.vocoder is not None:
             vocoder = pipeline.vocoder
-            orig_vocoder_forward = vocoder.forward
-
-            def vocoder_forward(hidden_states):
-                return {"sample": orig_vocoder_forward(hidden_states)}
-
-            vocoder.forward = vocoder_forward
             vocoder_config_constructor = TasksManager.get_exporter_config_constructor(
                 model=vocoder,
                 exporter=exporter,
