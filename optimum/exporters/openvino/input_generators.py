@@ -17,8 +17,11 @@ from typing import Optional, Tuple
 
 import torch
 
-from optimum.exporters.openvino.utils import GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE, GRANITEMOEHYBRID_MAMBA_LAYER_TYPE, is_ltx2_3_transformer_config
-from optimum.exporters.openvino.utils import 
+from optimum.exporters.openvino.utils import (
+    GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
+    GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
+    is_ltx2_3_transformer_config,
+)
 from optimum.intel.utils.import_utils import is_diffusers_version
 from optimum.utils import (
     DEFAULT_DUMMY_SHAPES,

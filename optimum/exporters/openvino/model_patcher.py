@@ -62,7 +62,11 @@ from optimum.exporters.openvino.patching_utils import (
     postprocess_past_key_values,
     preprocess_past_key_values,
 )
-from optimum.exporters.openvino.utils import GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE, GRANITEMOEHYBRID_MAMBA_LAYER_TYPE, is_ltx2_3_transformer_config
+from optimum.exporters.openvino.utils import (
+    GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
+    GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
+    is_ltx2_3_transformer_config,
+)
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
     is_openvino_version,

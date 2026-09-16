@@ -226,7 +226,11 @@ from optimum.exporters.openvino.model_patcher import (
     ZImageTransformerModelPatcher,
     _get_model_attribute,
 )
-from optimum.exporters.openvino.utils import GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE, GRANITEMOEHYBRID_MAMBA_LAYER_TYPE, is_ltx2_3_transformer_config
+from optimum.exporters.openvino.utils import (
+    GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
+    GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
+    is_ltx2_3_transformer_config,
+)
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_diffusers_available,
