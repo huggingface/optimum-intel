@@ -360,6 +360,13 @@ _GENAI_VLM_UNSUPPORTED_ARCHITECTURES = (
     "mistral3",
 )
 
+# Gemma 4 version requirements for OpenVINO GenaAI are documented at:
+# https://openvinotoolkit.github.io/openvino.genai/docs/supported-models/#vision-language-models-vlms
+if not (is_transformers_version(">=", "5.5") and is_transformers_version("<", "5.6")):
+    _GENAI_VLM_UNSUPPORTED_ARCHITECTURES += ("gemma4", "gemma4_moe")
+if not (is_transformers_version(">=", "5.10") and is_transformers_version("<", "5.11")):
+    _GENAI_VLM_UNSUPPORTED_ARCHITECTURES += ("gemma4_unified",)
+
 
 class VLMPipelineTestCase(unittest.TestCase):
     GENAI_UNSUPPORTED_ARCHITECTURES = _GENAI_VLM_UNSUPPORTED_ARCHITECTURES
@@ -494,12 +501,20 @@ class VLMPipelineTestCase(unittest.TestCase):
                     self, transformers_ids, transformers_top_k, optimum_ids, "Transformers", "Optimum"
                 )
 
-            # apply_chat_template is set to True because it is also set in preprocess_inputs()
+            # Match preprocess_inputs(): models without a chat template need the image token in the prompt.
+            # preprocess_inputs() checks the processor's chat template (not the tokenizer's), since newer
+            # transformers versions no longer always mirror it onto the tokenizer.
+            apply_chat_template = getattr(processor, "chat_template", None) is not None
+            genai_prompt = prompt
+            if not apply_chat_template:
+                image_token = getattr(processor, "image_token", "<|image|>")
+                if image_token not in genai_prompt:
+                    genai_prompt = f"{image_token}{genai_prompt}"
             genai_output = genai_model.generate(
-                prompt,
+                genai_prompt,
                 images=[ov.Tensor(np.array(image))],
                 ignore_eos=True,
-                apply_chat_template=True,
+                apply_chat_template=apply_chat_template,
                 **self.GEN_KWARGS,
             ).texts[0]
         finally:
