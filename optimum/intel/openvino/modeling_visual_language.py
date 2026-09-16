@@ -7931,9 +7931,7 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
                 single = pixel_values[idx : idx + 1, :, :height, :width]
                 single_features = self.vision_embeddings(single).last_hidden_state
                 single_features = (
-                    torch.from_numpy(single_features)
-                    if isinstance(single_features, np.ndarray)
-                    else single_features
+                    torch.from_numpy(single_features) if isinstance(single_features, np.ndarray) else single_features
                 )
                 features.append(single_features.reshape(-1, single_features.shape[-1]))
             return torch.cat(features, dim=0)
@@ -7957,7 +7955,9 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
             )
 
         special_image_mask = input_ids == image_token_id
-        image_features = image_features.view(-1, image_features.shape[-1]).to(inputs_embeds.device, inputs_embeds.dtype)
+        image_features = image_features.view(-1, image_features.shape[-1]).to(
+            inputs_embeds.device, inputs_embeds.dtype
+        )
         num_image_tokens = special_image_mask.sum().item()
         num_image_features = image_features.shape[0]
         if num_image_tokens != num_image_features:

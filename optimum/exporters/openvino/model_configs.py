@@ -148,6 +148,7 @@ from optimum.exporters.openvino.model_patcher import (
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
     KokoroModelPatcher,
+    LegacyMistral3ImageEmbeddingModelPatcher,
     Lfm2ModelPatcher,
     Lfm2MoeModelPatcher,
     Llama4ImageEmbeddingsModelPatcher,
@@ -164,10 +165,9 @@ from optimum.exporters.openvino.model_patcher import (
     MiniCPMModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
-    LegacyMistral3ImageEmbeddingModelPatcher,
     Mistral3ImageEmbeddingModelPatcher,
-    Mistral3MultiModalProjectorPatcher,
     Mistral3LanguageModelPatcher,
+    Mistral3MultiModalProjectorPatcher,
     MistralModelPatcher,
     MixtralModelPatcher,
     ModelPatcher,
@@ -2198,7 +2198,7 @@ class Mistral3MultiModalProjectorOpenVINOConfig(OpenVINOConfig):
 
 
 @register_in_tasks_manager("mistral3", *["image-text-to-text"], library_name="transformers")
-class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
+class Mistral3LegacyOpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Mistral3ConfigBehavior]
 
@@ -5973,7 +5973,10 @@ class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
             if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
                 model_type = "mistral"
             return get_vlm_text_generation_config(
-                model_type, self._orig_config.text_config, self.int_dtype, self.float_dtype,
+                model_type,
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
                 model_patcher=Mistral3LanguageModelPatcher,
             )
 

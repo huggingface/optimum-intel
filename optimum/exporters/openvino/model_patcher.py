@@ -3040,7 +3040,6 @@ def maira_vision_embed_forward(self, pixel_values):
     return self.get_image_features(pixel_values, vision_feature_layer, vision_feature_select_strategy)
 
 
-
 def _mistral3_vision_embed_forward(self, pixel_values):
     """
     Full vision pipeline for Mistral3 export: vision_tower + multi_modal_projector.
@@ -3113,7 +3112,7 @@ def _mistral3_vision_embed_forward(self, pixel_values):
 class Mistral3ImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
-        config: "OnnxConfig",
+        config: Any,
         model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
