@@ -883,6 +883,15 @@ class MistralModelPatcher(OVDecoderModelPatcher):
 
 
 SUPPORT_SDPA = is_torch_version(">", "2.1.0")
+SUPPORT_GROUPED_MM = is_torch_version(">=", "2.10.0")
+
+
+def grouped_mm_warning():
+    logger.warning(
+        "The current version of torch doesn't support grouped torch.nn.functional.grouped_mm,"
+        "which results in a non optimized MoE block in the exported model."
+        "Install torch >= 2.10.0 for the better model performance."
+    )
 
 
 # TODO: why
@@ -8248,8 +8257,11 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
                 _granite_moe_parallel_experts_forward, sparse_moe_layer.output_linear
             )
 
-            sparse_moe_layer._orig_forward = sparse_moe_layer.forward
-            sparse_moe_layer.forward = types.MethodType(_granite_moe_experts_forward, sparse_moe_layer)
+            if SUPPORT_GROUPED_MM:
+                sparse_moe_layer._orig_forward = sparse_moe_layer.forward
+                sparse_moe_layer.forward = types.MethodType(_granite_moe_experts_forward, sparse_moe_layer)
+            else:
+                grouped_mm_warning()
 
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
@@ -8289,7 +8301,8 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             sparse_moe_layer.router.forward = sparse_moe_layer.router._orig_forward
             sparse_moe_layer.input_linear.forward = sparse_moe_layer.input_linear._orig_forward
             sparse_moe_layer.output_linear.forward = sparse_moe_layer.output_linear._orig_forward
-            sparse_moe_layer.forward = sparse_moe_layer._orig_forward
+            if SUPPORT_GROUPED_MM:
+                sparse_moe_layer.forward = sparse_moe_layer._orig_forward
 
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
