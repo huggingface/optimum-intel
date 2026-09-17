@@ -64,6 +64,8 @@ from optimum.exporters.openvino.input_generators import (
     DummyQwen3OmniMoeLMInputGenerator,
     DummyQwen3OmniMoeProjectionInputGenerator,
     DummyQwen3OmniMoeVisionInputGenerator,
+    DummyQwen3TTSComponentInputGenerator,
+    DummyQwen3TTSDecoderStackInputGenerator,
     DummyQwen3VLLMInputGenerator,
     DummyQwen3VLVisionEmbedInputGenerator,
     DummyQwenImageResolutionInputGenerator,
@@ -158,6 +160,7 @@ from optimum.exporters.openvino.model_patcher import (
     LTX2ConnectorsPatcher,
     LTX2TextEncoderPatcher,
     LTX2TransformerPatcher,
+    LTX2VocoderPatcher,
     MairaImageEmbeddingModelPatcher,
     MambaPatcher,
     MiniCPM3Patcher,
@@ -202,6 +205,10 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3OmniMoeLanguageModelPatcher,
     Qwen3OmniMoeTalkerLanguageModelPatcher,
     Qwen3OmniMoeVisionMergerPatcher,
+    Qwen3TTSCodecPatcher,
+    Qwen3TTSDecoderStackPatcher,
+    Qwen3TTSEmbeddingPatcher,
+    Qwen3TTSSpeakerEncoderPatcher,
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
     QwenImageTextEncoderModelPatcher,
@@ -219,11 +226,11 @@ from optimum.exporters.openvino.model_patcher import (
     ZImageTransformerModelPatcher,
     _get_model_attribute,
 )
+from optimum.exporters.openvino.utils import is_ltx2_3_transformer_config
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_diffusers_available,
     is_diffusers_version,
-    is_openvino_version,
     is_transformers_version,
 )
 from optimum.utils.input_generators import (
@@ -282,15 +289,6 @@ COMMON_TEXT2TEXT_GENERATION_TASKS = [
 
 
 logger = logging.getLogger(__name__)
-
-
-def _warn_potential_accuracy_issue_ov_2026_1(model_type: str, min_transformers_version: Optional[str] = None):
-    # Fix CVS-185350: OpenVINO 2026.1.0 inference results mismatch
-    if not is_openvino_version(">=", "2026.1.0"):
-        return
-    if min_transformers_version is not None and not is_transformers_version(">=", min_transformers_version):
-        return
-    logger.warning(f"Model type '{model_type}' may have potential accuracy issues with OpenVINO >= 2026.1.0.")
 
 
 def init_model_configs():
@@ -1313,10 +1311,6 @@ class XGLMConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     )
     _MODEL_PATCHER = OVDecoderModelPatcher
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _warn_potential_accuracy_issue_ov_2026_1("xglm")
-
 
 @register_in_tasks_manager("aquila", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class AquilaMOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
@@ -2054,8 +2048,6 @@ class BaseVLMOpenVINOConfig(OpenVINOConfig):
 
 @register_in_tasks_manager("llava", *["image-text-to-text"], library_name="transformers")
 class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
-    _OV_2026_1_MODEL_TYPE = "llava"
-
     def __init__(
         self,
         config: "PretrainedConfig",
@@ -2077,7 +2069,6 @@ class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
-        _warn_potential_accuracy_issue_ov_2026_1(self._OV_2026_1_MODEL_TYPE, min_transformers_version="5.0")
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
@@ -2093,7 +2084,7 @@ class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
 
 @register_in_tasks_manager("llava_next", *["image-text-to-text"], library_name="transformers")
 class LlavaNextOpenVINOConfig(LlavaOpenVINOConfig):
-    _OV_2026_1_MODEL_TYPE = "llava_next"
+    pass
 
 
 class LLavaMultimodalProjectorOpenVINOConfig(OpenVINOConfig):
@@ -2666,7 +2657,12 @@ class UNetOpenVINOConfig(VisionOpenVINOConfig):
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         dummy_inputs = super().generate_dummy_inputs(framework=framework, **kwargs)
-        dummy_inputs["encoder_hidden_states"] = dummy_inputs["encoder_hidden_states"][0]
+        # The seq2seq generators hand back a `(tensor, None, None)` tuple, so only the first element
+        # is the encoder hidden states. Generators that already return a plain
+        # `[batch, sequence, embed_dim]` tensor must be left alone -- indexing one would silently
+        # strip the batch axis and export a rank-2 input.
+        if isinstance(dummy_inputs["encoder_hidden_states"], (tuple, list)):
+            dummy_inputs["encoder_hidden_states"] = dummy_inputs["encoder_hidden_states"][0]
 
         if getattr(self._normalized_config, "addition_embed_type", None) == "text_time":
             dummy_inputs["added_cond_kwargs"] = {
@@ -2764,8 +2760,19 @@ class Qwen3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
         return values
 
 
-@register_in_tasks_manager("gemma3-text-encoder", *["feature-extraction"], library_name="diffusers")
-class Gemma3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+@register_in_tasks_manager("ltx2-text-encoder", *["feature-extraction"], library_name="diffusers")
+class LTX2TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+    """
+    LTX-2's use of the Gemma-3 text encoder, for both 2.0 and 2.3.
+
+    The single `prompt_embeds` output is the per-layer hidden states packed and norm-fixed in the
+    graph by `LTX2TextEncoderPatcher`. LTX-2.0 used to export one output per layer and pack them on
+    the host; that contract loses the text tower's final norm on transformers >= 5, leaving the last
+    of the 49 stacked slots at |max| 6.6e5 instead of 1.6e2 and corrupting the whole text
+    conditioning. IRs already published with the per-layer layout still load, see
+    `_OVLTX2Base._get_gemma_prompt_embeds`.
+    """
+
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         allow_new=True,
         vocab_size="text_config.vocab_size",
@@ -2783,11 +2790,19 @@ class Gemma3TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        outputs = {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
-        num_layers = getattr(self._normalized_config, "num_hidden_layers", 48)
-        for i in range(num_layers + 1):
-            outputs[f"hidden_states.{i}"] = {0: "batch_size", 1: "sequence_length"}
-        return outputs
+        # The patcher returns the hidden states already stacked and flattened into the connectors'
+        # `text_encoder_hidden_states` layout, so there is a single output and the layer count does
+        # not appear here. The last dimension is `(num_layers + 1) * hidden_size`, left dynamic
+        # because the export declares no static shape for it.
+        return {"prompt_embeds": {0: "batch_size", 1: "sequence_length"}}
+
+    @property
+    def values_override(self) -> Optional[Dict[str, Any]]:
+        # The packed output is built out of the per-layer hidden states, which only exist if the
+        # model is asked for them, same as `Qwen3TextEncoderOpenVINOConfig`.
+        values = super().values_override or {}
+        values.update({"output_hidden_states": True, "return_dict": True, "use_cache": False})
+        return values
 
 
 @register_in_tasks_manager("sana-transformer", *["semantic-segmentation"], library_name="diffusers")
@@ -3187,15 +3202,23 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
         vocab_size="attention_head_dim",
         allow_new=True,
     )
+    # `generate_dummy_inputs` keeps the FIRST generator that claims a given input name, so
+    # LTX2TransformerDummyInputGenerator must stay ahead of the generic ones: it is the only one
+    # that knows the per-modality text embedding widths (LTX-2.3) vs the shared
+    # `caption_channels` width (LTX-2.0). It covers every input except `timestep`.
     DUMMY_INPUT_GENERATOR_CLASSES = (
         LTX2TransformerDummyInputGenerator,
-        DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator,
         DummySanaTimestepInputGenerator,
     )
 
     @property
     def inputs(self):
-        return {
+        # `cross_modality_gate` and `stg_perturbation_mask` carry the guidance modes the pipeline
+        # otherwise selects with Python flags (`isolate_modalities`, `spatio_temporal_guidance_blocks`),
+        # which a static graph cannot branch on. STG only exists for checkpoints with perturbable
+        # blocks, so its mask is exported only then. The gate is exported only for LTX-2.3, to keep
+        # LTX-2.0's published IRs unchanged -- 2.0 can isolate modalities too, it just cannot here.
+        inputs = {
             "hidden_states": {0: "batch_size", 1: "video_sequence_length"},
             "audio_hidden_states": {0: "batch_size", 1: "audio_sequence_length"},
             "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
@@ -3212,6 +3235,11 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
             "video_coords": {0: "batch_size", 2: "video_sequence_length"},
             "audio_coords": {0: "batch_size", 2: "audio_sequence_length"},
         }
+        if is_ltx2_3_transformer_config(self._normalized_config.config):
+            inputs["cross_modality_gate"] = {}
+        if getattr(self._normalized_config.config, "perturbed_attn", False):
+            inputs["stg_perturbation_mask"] = {}
+        return inputs
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
@@ -3241,6 +3269,7 @@ class LTX2AudioVaeDecoderOpenVINOConfig(VaeDecoderOpenVINOConfig):
 @register_in_tasks_manager("ltx2-vocoder", *["semantic-segmentation"], library_name="diffusers")
 class LTX2VocoderOpenVINOConfig(VaeDecoderOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (LTX2VocoderDummyInputGenerator,)
+    _MODEL_PATCHER = LTX2VocoderPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -3268,7 +3297,6 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in MiniCPMVConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = ()
-    MODEL_TYPE = "minicpmv"
 
     def __init__(
         self,
@@ -3294,7 +3322,6 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == MiniCPMVConfigBehavior.RESAMPLER:
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMVResampleInputGenerator,)
         self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
-        _warn_potential_accuracy_issue_ov_2026_1(self.MODEL_TYPE)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -3408,7 +3435,6 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
 class MiniCPMOOpenVINOConfig(MiniCPMVOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
     MAX_TRANSFORMERS_VERSION = "4.51.3"
-    MODEL_TYPE = "minicpmo"
 
 
 class Phi3VisionConfigBehavior(str, enum.Enum):
@@ -5846,10 +5872,6 @@ class BlenderbotSmallOpenVINOConfig(BartOpenVINOConfig):
 class PegasusOpenVINOConfig(BartOpenVINOConfig):
     _MODEL_PATCHER = OVSeq2SeqModelPatcher
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _warn_potential_accuracy_issue_ov_2026_1("pegasus")
-
 
 @register_in_tasks_manager(
     "marian",
@@ -6055,10 +6077,6 @@ class Llama4TextOpenVINOConfig(LlamaOpenVINOConfig):
 class Llama4OpenVINOConfig(GotOCR2OpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _warn_potential_accuracy_issue_ov_2026_1("llama4")
-
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
@@ -6207,10 +6225,6 @@ class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
     # MIN_TRANSFORMERS_VERSION = "5.2.0"
     _MODEL_PATCHER = Zamba2ModelPatcher
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _warn_potential_accuracy_issue_ov_2026_1("zamba2")
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
@@ -6363,10 +6377,6 @@ class ASTOpenVINOConfig(OpenVINOConfig):
 class AfmoeOpenVINOConfig(LlamaOpenVINOConfig):
     _MODEL_PATCHER = AfmoeModelPatcher
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _warn_potential_accuracy_issue_ov_2026_1("afmoe")
-
 
 @register_in_tasks_manager("olmo2", *COMMON_TEXT_GENERATION_TASKS, library_name="transformers")
 class Olmo2OOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
@@ -6378,10 +6388,6 @@ class Olmo2OOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 @register_in_tasks_manager("opt", *[*COMMON_TEXT_GENERATION_TASKS, "text-classification", "question-answering"])
 class OPTOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _warn_potential_accuracy_issue_ov_2026_1("opt")
 
 
 @register_in_tasks_manager(
@@ -7794,3 +7800,222 @@ class ZImageTextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
         return {
             "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
         }
+
+
+class Qwen3TTSDecoderStackOpenVINOConfig(OpenVINOConfig):
+    """OpenVINO export configuration for a Qwen3-TTS decoder stack.
+
+    Used for both autoregressive stacks - the 28-layer talker and the 5-layer code predictor -
+    which share the same layer topology and therefore the same graph signature; only the
+    ``num_hidden_layers`` of the config passed in differs.
+
+    Conversion is performed through the standard ``export`` -> ``export_pytorch`` ->
+    ``convert_model`` pipeline. :class:`Qwen3TTSDecoderStackPatcher` rewrites the forward to take
+    the key/value cache explicitly, and the standard stateful transformation then turns that cache
+    into OpenVINO state - adding ``beam_idx`` - so the exported IR carries none of it as inputs or
+    outputs.
+    """
+
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3TTSDecoderStackInputGenerator,)
+    _MODEL_PATCHER = Qwen3TTSDecoderStackPatcher
+    # `qwen-tts` pins `transformers==4.57.3`, the only version its modeling code is released against.
+    MIN_TRANSFORMERS_VERSION = "4.57.3"
+    MAX_TRANSFORMERS_VERSION = "4.57.3"
+
+    # Rows of the ``position_ids`` input: interleaved m-RoPE carries three position streams,
+    # plain 1D RoPE a single one (see the code predictor's config).
+    POSITION_IDS_ROWS = 3
+
+    # Inputs that follow the cache in the forward signature (the code predictor's ``step``).
+    EXTRA_INPUT_NAMES = ()
+
+    @property
+    def num_layers(self) -> int:
+        return self._normalized_config.num_layers
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        inputs = {
+            "inputs_embeds": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 2: "sequence_length", 3: "kv_length"},
+            "position_ids": {1: "batch_size", 2: "sequence_length"},
+        }
+        # One pair per layer, under the naming the stateful transformation looks for.
+        for layer in range(self.num_layers):
+            inputs[f"past_key_values.{layer}.key"] = {0: "batch_size", 2: "past_length"}
+            inputs[f"past_key_values.{layer}.value"] = {0: "batch_size", 2: "past_length"}
+        return inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        # The output head is folded into the stack, so the graph emits logits directly.
+        outputs = {
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+            "logits": {0: "batch_size", 1: "sequence_length"},
+        }
+        for layer in range(self.num_layers):
+            outputs[f"present.{layer}.key"] = {0: "batch_size", 2: "kv_length"}
+            outputs[f"present.{layer}.value"] = {0: "batch_size", 2: "kv_length"}
+        return outputs
+
+    # Width of `inputs_embeds` when it differs from this stack's hidden size; set by the
+    # exporter for the code predictor, which is fed embeddings in the talker's width.
+    input_hidden_size = None
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        kwargs.setdefault("position_ids_rows", self.POSITION_IDS_ROWS)
+        if self.input_hidden_size is not None:
+            kwargs.setdefault("input_hidden_size", self.input_hidden_size)
+        generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](self.task, self._normalized_config, **kwargs)
+
+        def dummy(name):
+            return generator.generate(
+                name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
+            )
+
+        # Keyed by forward parameter, not by graph input: the cache is one nested argument that
+        # the exporter flattens back into the `past_key_values.<i>.<key|value>` inputs above.
+        dummy_inputs = {name: dummy(name) for name in ("inputs_embeds", "attention_mask", "position_ids")}
+        dummy_inputs["past_key_values"] = [(dummy("past_key"), dummy("past_value")) for _ in range(self.num_layers)]
+        for name in self.EXTRA_INPUT_NAMES:
+            dummy_inputs[name] = dummy(name)
+        return dummy_inputs
+
+
+class Qwen3TTSSteppedDecoderStackOpenVINOConfig(Qwen3TTSDecoderStackOpenVINOConfig):
+    """Decoder stack whose folded output head is chosen by a runtime depth index.
+
+    Used for the code predictor, whose ``lm_head`` is one linear per residual depth: the
+    stacked weights live in the same graph as the decoder layers, gathered with ``step``.
+
+    The cache is made stateful the same way as the talker's, ``beam_idx`` included, even though
+    this stack never reorders it - its cache covers the inner steps of a single talker frame and
+    is reset at the start of the next one, and the runtime feeds identity indices. The ``Gather``
+    through ``beam_idx`` is what the CPU plugin's stateful SDPA fusion matches on: without it the
+    five attention blocks are decomposed into plain ``MatMul``/``Softmax`` and the cache stays in
+    generic memory nodes, while with it they compile into fused ``ScaledDotProductAttention``
+    nodes that own the cache, as the talker's do. GPU fuses either form.
+    """
+
+    POSITION_IDS_ROWS = 1
+    EXTRA_INPUT_NAMES = ("step",)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = super().inputs
+        common_inputs["position_ids"] = {0: "batch_size", 1: "sequence_length"}
+        return {**common_inputs, "step": {}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        # Only the talker's hidden states are consumed (they seed each frame's code predictor
+        # prompt); this stack's are not, so its graph returns logits alone.
+        outputs = super().outputs
+        outputs.pop("last_hidden_state")
+        return outputs
+
+
+class Qwen3TTSComponentOpenVINOConfig(OpenVINOConfig):
+    """Base export configuration for the Qwen3-TTS components outside the decoder stacks."""
+
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3TTSComponentInputGenerator,)
+    MIN_TRANSFORMERS_VERSION = Qwen3TTSDecoderStackOpenVINOConfig.MIN_TRANSFORMERS_VERSION
+    MAX_TRANSFORMERS_VERSION = Qwen3TTSDecoderStackOpenVINOConfig.MAX_TRANSFORMERS_VERSION
+
+    # Name of the config field holding the vocabulary of an embedding table, which differs per
+    # table (the talker's text vocabulary vs its codec vocabulary). Subclasses point it there.
+    VOCAB_SIZE_ATTR: Optional[str] = None
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        if self.VOCAB_SIZE_ATTR is not None:
+            kwargs.setdefault("vocab_size", getattr(self._config, self.VOCAB_SIZE_ATTR))
+        generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](self.task, self._normalized_config, **kwargs)
+        return {
+            name: generator.generate(name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype)
+            for name in self.inputs
+        }
+
+
+class Qwen3TTSEmbeddingOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
+    """Export configuration for one Qwen3-TTS embedding table (token ids -> hidden states)."""
+
+    _MODEL_PATCHER = Qwen3TTSEmbeddingPatcher
+    VOCAB_SIZE_ATTR = "vocab_size"
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"input_ids": {0: "batch_size", 1: "sequence_length"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"embeddings": {0: "batch_size", 1: "sequence_length"}}
+
+
+class Qwen3TTSTextEmbeddingOpenVINOConfig(Qwen3TTSEmbeddingOpenVINOConfig):
+    """Export configuration for the talker's text table, with ``text_projection`` baked in."""
+
+    VOCAB_SIZE_ATTR = "text_vocab_size"
+
+
+class Qwen3TTSSteppedEmbeddingOpenVINOConfig(Qwen3TTSEmbeddingOpenVINOConfig):
+    """Export configuration for the code predictor's per-depth tables, stacked."""
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {**super().inputs, "step": {}}
+
+
+class Qwen3TTSSpeakerEncoderOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
+    """OpenVINO export configuration for the Qwen3-TTS ECAPA-TDNN speaker encoder.
+
+    Runs once per reference audio in voice-clone mode and produces the x-vector that is
+    prefilled into the talker.
+    """
+
+    _MODEL_PATCHER = Qwen3TTSSpeakerEncoderPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"mel_features": {0: "batch_size", 1: "mel_frames"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"speaker_embedding": {0: "batch_size"}}
+
+
+class Qwen3TTSCodecEncoderOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
+    """OpenVINO export configuration for the Qwen3-TTS codec (``speech_tokenizer``) encoder.
+
+    Turns the reference waveform into the residual code streams that seed in-context
+    voice cloning.
+    """
+
+    _MODEL_PATCHER = Qwen3TTSCodecPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"input_values": {0: "batch_size", 2: "audio_length"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"audio_codes": {0: "batch_size", 2: "code_frames"}}
+
+
+class Qwen3TTSCodecDecoderOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
+    """OpenVINO export configuration for the Qwen3-TTS codec (``speech_tokenizer``) decoder.
+
+    The vocoder that turns the generated code frames into the 24 kHz waveform, i.e. the
+    Qwen3-TTS counterpart of the Qwen3-Omni ``code2wav`` submodel.
+    """
+
+    _MODEL_PATCHER = Qwen3TTSCodecPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"audio_codes": {0: "batch_size", 2: "code_frames"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"waveform": {0: "batch_size", 2: "audio_length"}}

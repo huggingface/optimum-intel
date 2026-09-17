@@ -2303,8 +2303,18 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
         if image is not None:
             conversation[0]["content"].insert(0, {"type": "image"})
 
-        prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+        prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+
+        # switch off add_bos_token if chat template already includes it
+        orig_add_bos_token = processor.tokenizer.add_bos_token
+        if "bos_token" in processor.tokenizer.chat_template:
+            processor.tokenizer.add_bos_token = False
+
         inputs = processor(images=image, text=prompt, return_tensors="pt")
+
+        # recover add_bos_token flag in tokenizer
+        processor.tokenizer.add_bos_token = orig_add_bos_token
+
         return inputs
 
 
@@ -3346,9 +3356,12 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
             wpos_ids = wpos_ids.flatten()
             pos_ids.append(torch.stack([hpos_ids, wpos_ids], dim=-1).repeat(t, 1))
         pos_ids = torch.cat(pos_ids, dim=0)
-        max_grid_size = grid_thw[:, 1:].max()
-        rotary_pos_emb_full = self._rotary_pos_emb(max_grid_size)
-        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+        if is_transformers_version(">=", "5.9"):
+            rotary_pos_emb = self._rotary_pos_emb(pos_ids)
+        else:
+            max_grid_size = grid_thw[:, 1:].max()
+            rotary_pos_emb_full = self._rotary_pos_emb(max_grid_size)
+            rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
         return rotary_pos_emb
 
     def get_multimodal_embeddings(
@@ -4474,9 +4487,13 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
             )
             pos_ids.append(torch.stack([hpos_ids, wpos_ids], dim=-1).repeat(t, 1))
         pos_ids = torch.cat(pos_ids, dim=0)
-        max_grid_size = grid_thw[:, 1:].max()
-        rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
-        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+        if is_transformers_version(">=", "5.9"):
+            rotary_pos_emb = self.rotary_pos_emb(pos_ids)
+        else:
+            max_grid_size = grid_thw[:, 1:].max()
+            rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
+            rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+
         return rotary_pos_emb
 
     def get_vision_embeddings(self, pixel_values, grid_thw, **kwargs):
