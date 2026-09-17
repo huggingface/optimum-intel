@@ -32,7 +32,7 @@ INSTALL_REQUIRE = [
     "transformers>=4.51,<5.11",
     "setuptools",
     "huggingface-hub>=0.23.2,<2.0",
-    "nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v330",
+    "nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v340",
     "openvino>=2026.0",
     "openvino-tokenizers>=2026.0",
     "requests>=2.33,<3.0",
@@ -75,9 +75,9 @@ TESTS_REQUIRE = [
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 
 EXTRAS_REQUIRE = {
-    "nncf": ["nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v330"],
+    "nncf": ["nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v340"],
     "openvino": [
-        "nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v330",
+        "nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v340",
         "openvino>=2026.0",
         "openvino-tokenizers>=2026.0",
     ],
