@@ -357,6 +357,7 @@ HUB_MODEL_NAMES = {
     "qwen3_vl": "optimum-intel-internal-testing/tiny-random-qwen3-vl",
     "qwen3_vl_embedding": "optimum-intel-internal-testing/tiny-random-qwen3-vl-embedding",
     "qwen3_omni_moe": "optimum-intel-internal-testing/tiny-random-qwen3-omni",
+    "qwen3_tts": "optimum-intel-internal-testing/tiny-random-qwen3-tts",
     "qwen3_next": "optimum-intel-internal-testing/tiny-random-qwen3-next",
     "qwen3_5": "optimum-intel-internal-testing/tiny-random-qwen3.5",
     "qwen3_5_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-mtp",
@@ -423,6 +424,7 @@ HUB_MODEL_NAMES = {
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "qwenimage": "optimum-intel-internal-testing/tiny-random-qwen-image",
     "ltx2": "optimum-intel-internal-testing/tiny-random-ltx2",
+    "ltx2.3": "optimum-intel-internal-testing/tiny-random-ltx2.3",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
     "qwen3_eagle3_target": "Qwen/Qwen3-1.7B",
@@ -676,11 +678,22 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder": 64,
     },
     "ltx2": {
-        "transformer": 34,
-        "vae_decoder": 28,
-        "vae_encoder": 28,
-        "text_encoder": 64,
-        "connectors": 10,
+        "transformer": 108,
+        "vae_decoder": 26,
+        "vae_encoder": 0,
+        "text_encoder": 30,
+        "connectors": 26,
+        "audio_vae_decoder": 20,
+        "vocoder": 74,
+    },
+    "ltx2.3": {
+        "transformer": 124,
+        "vae_decoder": 32,
+        "vae_encoder": 0,
+        "text_encoder": 30,
+        "connectors": 32,
+        "audio_vae_decoder": 20,
+        "vocoder": 440,
     },
     "sam": {
         "vision_encoder": 150,
@@ -693,6 +706,18 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vocoder": 80,
     },
     "kokoro": {"model": 352},
+    # Weight compression covers the language-model side only; the codec and the speaker encoder
+    # are deliberately left in floating point (see _QWEN3_TTS_COMPRESSIBLE_OV_IR_NAMES).
+    "qwen3_tts": {
+        "talker_model": 30,
+        "code_predictor_model": 16,
+        "text_embeddings": 2,
+        "talker_embeddings": 2,
+        "code_predictor_embeddings": 2,
+        "speaker_encoder": 0,
+        "codec_encoder": 0,
+        "codec_decoder": 0,
+    },
     "clip": {"model": 130},
     "mamba": {"model": 324 if is_transformers_version("==", "5.0") else 322},
     "falcon_mamba": {"model": 164 if is_transformers_version("==", "5.0") else 162},
@@ -953,6 +978,9 @@ TEST_NAME_TO_MODEL_TYPE = {
     "gpt_oss_mxfp4": "gpt_oss",
     "llama_awq": "llama",
     "llava_next_mistral": "llava_next",
+    "ltx-video": "ltx-video-transformer",
+    "ltx2": "ltx2-video-transformer",
+    "ltx2.3": "ltx2-video-transformer",
     "mistral-nemo": "mistral",
     "mixtral_awq": "mixtral",
     "nanollava_vision_tower": "siglip",
@@ -976,8 +1004,9 @@ TEST_NAME_TO_MODEL_TYPE = {
     "wav2vec2-hf": "wav2vec2",
     # The architecture lists are filtered against the exporter's registered model types,
     # which for diffusers are components ("z-image-transformer") rather than pipeline names
-    # ("z-image"). Map the test name onto its transformer component so the z-image entries
-    # in test_export.py / test_exporters_cli.py are collected instead of silently deselected.
+    # ("z-image"). Map the test name onto its transformer component so the z-image and ltx
+    # entries in test_export.py / test_exporters_cli.py are collected instead of silently
+    # deselected.
     "z-image": "z-image-transformer",
 }
 
