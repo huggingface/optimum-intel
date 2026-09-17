@@ -1584,6 +1584,9 @@ class OVModelQwenImage21Transformer(OVPipelinePart):
     """
 
     _IMG_TOKENS_PER_SLOT = 4
+    # The host inputs are invariant across a generation, so only a couple of distinct keys are ever live
+    # (one per CFG pass). Cap the cache to bound memory across successive generations.
+    _HOST_CACHE_MAX = 4
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1592,6 +1595,9 @@ class OVModelQwenImage21Transformer(OVPipelinePart):
 
         axes_dims_rope = list(getattr(self.config, "axes_dims_rope", (16, 56, 56)))
         self._rope = QwenImage21Rope(theta=10000, axes_dim=axes_dims_rope)
+        # Caches the step-invariant host inputs (cos/sin/gather_idx/attn_mask/modulation_mask) keyed on the
+        # generation-fixed geometry so the O(seq^2) mask is built once, not per denoising step.
+        self._host_inputs_cache = {}
         # The exported graph is cache-free; expose a block list only so the diffusers pipeline can query
         # `len(self.transformer.transformer_blocks)` and a no-op `cache_context`.
         self.transformer_blocks = [None] * int(getattr(self.config, "num_layers", 0))
@@ -1675,6 +1681,34 @@ class OVModelQwenImage21Transformer(OVPipelinePart):
 
         return cos, sin, gather_idx, attn_mask, target_token_mask
 
+    @staticmethod
+    def _mask_key(mask):
+        if mask is None:
+            return None
+        m = mask.detach().to("cpu").contiguous()
+        return (tuple(m.shape), m.numpy().tobytes())
+
+    def _get_host_inputs(self, hidden_states, encoder_hidden_states, img_shapes, img_mask, ehs_mask):
+        # The host inputs depend only on the generation-fixed geometry (block shapes, image/text masks,
+        # batch size and prompt length), not on the timestep or latent values, so build them once per
+        # distinct key and reuse across every denoising step and both CFG passes.
+        key = (
+            tuple(tuple(int(v) for v in block) for block in img_shapes[0]),
+            self._mask_key(img_mask),
+            self._mask_key(ehs_mask),
+            int(hidden_states.shape[0]),
+            int(encoder_hidden_states.shape[1]),
+        )
+        cached = self._host_inputs_cache.get(key)
+        if cached is None:
+            cached = self._build_host_inputs(
+                hidden_states, encoder_hidden_states, img_shapes, img_mask, ehs_mask
+            )
+            if len(self._host_inputs_cache) >= self._HOST_CACHE_MAX:
+                self._host_inputs_cache.pop(next(iter(self._host_inputs_cache)))
+            self._host_inputs_cache[key] = cached
+        return cached
+
     def forward(
         self,
         hidden_states: torch.FloatTensor,
@@ -1697,7 +1731,7 @@ class OVModelQwenImage21Transformer(OVPipelinePart):
         encoder_hidden_states = torch.as_tensor(encoder_hidden_states).to(torch.float32)
         timestep = torch.as_tensor(timestep).to(torch.float32)
 
-        cos, sin, gather_idx, attn_mask, modulation_mask = self._build_host_inputs(
+        cos, sin, gather_idx, attn_mask, modulation_mask = self._get_host_inputs(
             hidden_states, encoder_hidden_states, img_shapes, img_mask, encoder_hidden_states_mask
         )
 
