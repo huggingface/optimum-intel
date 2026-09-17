@@ -1851,7 +1851,12 @@ def get_qwen_image21_models_for_export(pipeline, exporter, int_dtype, float_dtyp
     # equals the pipeline's `outputs.hidden_states[-1]`).
     text_encoder = getattr(pipeline, "text_encoder", None)
     if text_encoder is not None:
+        pipeline_text_encoder_class = text_encoder.__class__.__name__
         text_encoder = text_encoder.model.language_model
+        # `_class_name` is not written by `transformers` configs (only diffusers ones); set it on the saved
+        # sub-config (the language model config) so `text_encoder/config.json` carries it like the
+        # transformer/vae, matching the `model_index.json` component class.
+        text_encoder.config._class_name = pipeline_text_encoder_class
         text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
             model=text_encoder,
             exporter=exporter,
@@ -1941,6 +1946,7 @@ def get_qwen_image21_models_for_export(pipeline, exporter, int_dtype, float_dtyp
         # Vision tower. Consumes host-precomputed grid-derived tensors (bilinear gather indices/weights and
         # rotary cos/sin) so the sequence length stays dynamic; returns merged image embeds + DeepStack.
         vision_model = full_text_encoder.model.visual
+        vision_model.config._class_name = vision_model.__class__.__name__
         vision_config_constructor = TasksManager.get_exporter_config_constructor(
             model=vision_model,
             exporter=exporter,
@@ -1958,6 +1964,7 @@ def get_qwen_image21_models_for_export(pipeline, exporter, int_dtype, float_dtyp
         # `inputs_embeds`, 3D M-RoPE `position_ids` and a dense DeepStack tensor. The top-level Qwen3-VL
         # config is passed because the dummy generator needs both `text_config` and `vision_config`.
         i2i_text_encoder = full_text_encoder.model.language_model
+        i2i_text_encoder.config._class_name = full_text_encoder.__class__.__name__
         # The i2i text graph builds the image-pad mask internally from `input_ids`; stash the image token id
         # on the language model's own config where the patcher can read it.
         i2i_text_encoder.config._qwenimage21_image_token_id = full_text_encoder.config.image_token_id
