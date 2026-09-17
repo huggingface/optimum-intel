@@ -5671,7 +5671,6 @@ def gemma4_text_attention_forward(
     hidden_states: torch.Tensor,
     position_embeddings: torch.Tensor,
     attention_mask: Optional[torch.Tensor],
-    shared_kv_states: Optional[Dict[str, Tuple[torch.Tensor, torch.Tensor]]] = None,
     past_key_values: Optional[Cache] = None,
     cache_position: Optional[torch.LongTensor] = None,
     **kwargs,
@@ -5679,6 +5678,7 @@ def gemma4_text_attention_forward(
     from transformers.models.gemma4.modeling_gemma4 import apply_rotary_pos_emb as apply_rotary_pos_emb_gemma4
 
     # since transformers >= v5.8 (PR #45788) `shared_kv_states` dict passed and `kv_shared_layer_index` removed
+    shared_kv_states = kwargs.pop("shared_kv_states", None)
     legacy_shared_kv_states = is_transformers_version("<", "5.8")
 
     input_shape = hidden_states.shape[:-1]
