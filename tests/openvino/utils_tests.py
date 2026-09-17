@@ -484,7 +484,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "albert": {"model": 84},
     "vit": {"model": 64},
     "blenderbot": {"model": 70 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 72},
-    "cohere2": {"model": 30},
+    "cohere2": {"model": 32},
     "gpt2": {"model": 44},
     "granitemoehybrid": {"model": 70 if is_transformers_version(">=", "5.13") else 118},
     "wav2vec2": {"model": 34},
@@ -658,7 +658,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 13,
         "vision_embeddings_pos_model": 1,
         "audio_encoder_model": 18,
-        "talker_model": 25,
+        "talker_model": 26,
         "talker_text_embeddings_model": 1,
         "talker_projections_model": 4,
         "code_predictor_model": 16,
@@ -750,7 +750,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "gemma4_moe": {
         "lm_model": 48,
         "text_embeddings_model": 1,
-        "vision_embeddings_model": 10 if is_transformers_version("<", "5.10") else 11,
+        "vision_embeddings_model": 10 if is_transformers_version("<", "5.10") else 12,
         "text_embeddings_per_layer_model": 0,
     },
     "smollm3": {"model": 30},
@@ -762,8 +762,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "ouro": {"model": 34},
     "qwen3_asr": {
         "encoder": 36,
-        "decoder": 30,
-        "decoder_with_past": 30,
+        "decoder": 32,
+        "decoder_with_past": 32,
     },
     "fun_asr": {
         "encoder": 46,
