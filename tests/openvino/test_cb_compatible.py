@@ -31,6 +31,10 @@ from optimum.intel.utils.import_utils import is_qwen_tts_available
 # are checked: submodels without a key/value cache - encoders, embedding tables, a codec - have no
 # state to page, and the transformation rejects them by design.
 ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
+    "qwen3_asr": {
+        "task": "automatic-speech-recognition",
+        "submodels": ("language_model",),
+    },
     "qwen3_tts": {
         "task": "text-to-audio",
         "submodels": ("talker_model", "code_predictor_model"),
