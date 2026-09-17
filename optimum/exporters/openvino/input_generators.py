@@ -389,6 +389,17 @@ class AquilaDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         ]
 
 
+def _get_config_attr_for_layer_type(config, layer_types, layer_type, attr_name, default=None):
+    # some attributes (num_key_value_heads, head_dim) can differ between layer types
+    # (sliding vs full attention)
+    if hasattr(config, "per_layer_config") and layer_type in layer_types:
+        return getattr(config.per_layer_config[layer_types.index(layer_type)], attr_name, default)
+    try:
+        return getattr(config, attr_name, default)
+    except Exception:
+        return default
+
+
 class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
         self,
@@ -408,17 +419,28 @@ class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             random_batch_size_range=random_batch_size_range,
             random_sequence_length_range=random_sequence_length_range,
         )
-        self.num_key_value_heads = normalized_config.num_key_value_heads
-        self.head_dim = normalized_config.head_dim
-        self.global_head_dim = getattr(normalized_config.config, "global_head_dim", self.head_dim)
-        self.layer_types = normalized_config.config.layer_types
-        self.num_kv_shared_layers = normalized_config.config.num_kv_shared_layers
-        self.sliding_window = normalized_config.config.sliding_window
-        # Full-attention layers use fewer KV heads than sliding-attention layers (e.g. 2 vs 8 for 26B-A4B)
-        self.num_global_key_value_heads = (
-            getattr(normalized_config.config, "num_global_key_value_heads", None) or self.num_key_value_heads
+        config = normalized_config.config
+        self.layer_types = config.layer_types
+        self.num_key_value_heads = _get_config_attr_for_layer_type(
+            config, self.layer_types, "sliding_attention", "num_key_value_heads"
         )
-        self.model_type = normalized_config.config.model_type
+        if self.num_key_value_heads is None:
+            self.num_key_value_heads = normalized_config.num_key_value_heads
+        self.head_dim = _get_config_attr_for_layer_type(config, self.layer_types, "sliding_attention", "head_dim")
+        if self.head_dim is None:
+            self.head_dim = normalized_config.head_dim
+        self.global_head_dim = _get_config_attr_for_layer_type(
+            config, self.layer_types, "full_attention", "global_head_dim"
+        ) or _get_config_attr_for_layer_type(config, self.layer_types, "full_attention", "head_dim", self.head_dim)
+        self.num_kv_shared_layers = config.num_kv_shared_layers
+        self.sliding_window = config.sliding_window
+        # Full-attention layers use fewer KV heads than sliding-attention layers (e.g. 2 vs 8 for 26B-A4B)
+        self.num_global_key_value_heads = _get_config_attr_for_layer_type(
+            config, self.layer_types, "full_attention", "num_global_key_value_heads", None
+        ) or _get_config_attr_for_layer_type(
+            config, self.layer_types, "full_attention", "num_key_value_heads", self.num_key_value_heads
+        )
+        self.model_type = config.model_type
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         # some layers do not produce their own KV-cache, they use the shared KV-cache

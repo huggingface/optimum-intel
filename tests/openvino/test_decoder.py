@@ -296,6 +296,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "gemma4_unified_text",
             "qwen3_omni_moe_text",
             "qwen3_omni_moe_talker_text",
+            "muse_glimmer_text",
         }
 
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
