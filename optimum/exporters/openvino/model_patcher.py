@@ -5679,7 +5679,6 @@ def gemma4_text_attention_forward(
     from transformers.models.gemma4.modeling_gemma4 import apply_rotary_pos_emb as apply_rotary_pos_emb_gemma4
 
     # since transformers >= v5.8 (PR #45788) `shared_kv_states` dict passed and `kv_shared_layer_index` removed
-    shared_kv_states = kwargs.pop("shared_kv_states", None)
     legacy_shared_kv_states = is_transformers_version("<", "5.8")
 
     input_shape = hidden_states.shape[:-1]
