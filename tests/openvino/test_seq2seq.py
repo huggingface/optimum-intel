@@ -850,12 +850,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             set_seed(SEED)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**transformers_inputs)
-            # The tiny pre-quantized Qwen3.5 checkpoint produces NaNs at the same positions in
-            # both runtimes. Compare those positions as equal while retaining the usual tolerance
-            # check for every finite logit.
-            equal_nan = model_arch == "qwen3_5_compressed_tensors"
             self.assertTrue(
-                torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=4e-3, equal_nan=equal_nan),
+                torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=4e-3),
                 f"Max abs diff {(torch.abs(ov_outputs.logits - transformers_outputs.logits).max())}",
             )
 
