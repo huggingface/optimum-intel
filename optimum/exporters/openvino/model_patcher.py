@@ -10734,6 +10734,9 @@ class Qwen3_5MoeMTPModelPatcher(Qwen3_5MTPModelPatcher):
                 sparse_moe_block.forward = sparse_moe_block._orig_forward
 
 
+# Qwen3ASRForConditionalGeneration only exposes generate(), so the base patcher has no forward to wrap.
+# Route the language export through thinker.model/lm_head and make its KV cache traceable.
+# Original model: https://github.com/QwenLM/Qwen3-ASR/blob/c17a131fe028b2e428b6e80a33d30bb4fa57b8df/qwen_asr/core/transformers_backend/modeling_qwen3_asr.py#L1311-L1362
 class Qwen3ASRLanguageModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
