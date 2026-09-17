@@ -36,7 +36,7 @@ from optimum.exporters.openvino.model_configs import (
     LTX2TextEncoderOpenVINOConfig,
     Qwen3OmniMoeConfigBehavior,
 )
-from optimum.exporters.openvino.model_patcher import LTX2PackedTextEncoderPatcher, LTX2TextEncoderPatcher
+from optimum.exporters.openvino.model_patcher import LTX2TextEncoderPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVFlux2KleinPipeline,
@@ -481,12 +481,10 @@ class LTX2ExportContractTest(unittest.TestCase):
             MODEL_NAMES[model_arch], export=True, compile=False, device=OPENVINO_DEVICE
         )
 
+        # Both versions pack in the graph: the per-layer layout drops the text tower's final norm on
+        # transformers >= 5, which corrupts the last of the stacked slots.
         text_encoder_outputs = {name for output in pipeline.text_encoder.model.outputs for name in output.names}
-        if is_ltx2_3:
-            self.assertEqual(text_encoder_outputs, {"prompt_embeds"})
-        else:
-            self.assertNotIn("prompt_embeds", text_encoder_outputs)
-            self.assertIn("hidden_states.0", text_encoder_outputs)
+        self.assertEqual(text_encoder_outputs, {"prompt_embeds"})
 
         # Read the transformer back from disk rather than taking it off the pipeline, so what is
         # pinned is what the export writes rather than whatever loading made of it.
@@ -498,25 +496,15 @@ class LTX2ExportContractTest(unittest.TestCase):
             ov.Type.f32 if is_ltx2_3 else ov.Type.i64,
         )
 
-    def test_text_encoder_pack_hidden_states(self):
-        # The 2.0 and 2.3 text encoder configs are identical, so this flag is the only thing keeping
-        # the two contracts apart. Its default has to stay the LTX-2.0 one.
+    def test_text_encoder_packs_hidden_states(self):
+        # One contract for both LTX-2 versions: nothing in the text encoder config tells them apart,
+        # and the per-layer layout the config used to offer loses the text tower's final norm on
+        # transformers >= 5.
         from transformers import Gemma3Config
 
-        config = Gemma3Config()
-
-        for export_config in [
-            LTX2TextEncoderOpenVINOConfig(config),
-            LTX2TextEncoderOpenVINOConfig(config, pack_hidden_states=False),
-        ]:
-            self.assertFalse(export_config.pack_hidden_states)
-            self.assertNotIn("prompt_embeds", export_config.outputs)
-            self.assertIn("hidden_states.0", export_config.outputs)
-            self.assertIs(export_config._select_text_encoder_patcher(), LTX2TextEncoderPatcher)
-
-        export_config = LTX2TextEncoderOpenVINOConfig(config, pack_hidden_states=True)
+        export_config = LTX2TextEncoderOpenVINOConfig(Gemma3Config())
         self.assertEqual(set(export_config.outputs), {"prompt_embeds"})
-        self.assertIs(export_config._select_text_encoder_patcher(), LTX2PackedTextEncoderPatcher)
+        self.assertIs(export_config._MODEL_PATCHER, LTX2TextEncoderPatcher)
 
 
 class CustomExportModelTest(unittest.TestCase):
