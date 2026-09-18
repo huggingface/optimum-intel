@@ -50,6 +50,8 @@ from optimum.exporters.openvino.input_generators import (
     DummyGemma4UnifiedVisionInputGenerator,
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
+    DummyLfm2VlMultiModalProjectorInputGenerator,
+    DummyLfm2VlVisionEmbeddingsInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMVImageInputGenerator,
     DummyMiniCPMVResampleInputGenerator,
@@ -152,6 +154,7 @@ from optimum.exporters.openvino.model_patcher import (
     KokoroModelPatcher,
     Lfm2ModelPatcher,
     Lfm2MoeModelPatcher,
+    Lfm2VlVisionEmbeddingsModelPatcher,
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
     LlavaImageEmbeddingModelPatcher,
@@ -5689,6 +5692,159 @@ class Idefics3OpenVINOConfig(BaseVLMOpenVINOConfig):
 @register_in_tasks_manager("smolvlm", *["image-text-to-text"], library_name="transformers")
 class SmolVLMOpenVINOConfig(Idefics3OpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
+
+
+class Lfm2VlConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    TEXT_EMBEDDINGS = "text_embeddings"
+    MULTI_MODAL_PROJECTOR = "multi_modal_projector"
+
+
+class Lfm2VlMultiModalProjectorOpenVINOConfig(OpenVINOConfig):
+    # Exports `Lfm2VlMultiModalProjector` (pixel-unshuffle + optional layer norm + MLP). Its forward is
+    # tracing friendly as-is, so no model patcher is required. Adopted from
+    # https://github.com/huggingface/transformers/blob/v5.8.1/src/transformers/models/lfm2_vl/modeling_lfm2_vl.py#L56-L63
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm2VlMultiModalProjectorInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"image_features": {0: "batch_size", 1: "height", 2: "width"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"hidden_states": {0: "batch_size", 1: "height", 2: "width"}}
+
+
+class _Lfm2VlLanguageModelForExport(torch.nn.Module):
+    # LFM2-VL stores the text decoder as a bare `Lfm2Model` (`model.language_model`) and keeps
+    # the tied `lm_head` at the top level of `Lfm2VlForConditionalGeneration`. This thin wrapper
+    # re-exposes them with the exact `Lfm2ForCausalLM` interface (`.model` decoder + `.lm_head`
+    # producing logits), so the shared `Lfm2ModelPatcher` can be reused unchanged for the
+    # LANGUAGE behaviour instead of duplicating its conv-cache handling.
+    def __init__(self, vl_model):
+        super().__init__()
+        self.model = vl_model.model.language_model
+        self.lm_head = vl_model.lm_head
+        self.config = vl_model.model.language_model.config
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        past_key_values=None,
+        inputs_embeds=None,
+        use_cache=None,
+        **kwargs,
+    ):
+        from transformers.modeling_outputs import CausalLMOutputWithPast
+
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+        )
+        logits = self.lm_head(outputs.last_hidden_state)
+        return CausalLMOutputWithPast(logits=logits, past_key_values=outputs.past_key_values)
+
+
+@register_in_tasks_manager("lfm2_vl", *["image-text-to-text"], library_name="transformers")
+class Lfm2VlOpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "5.8.0"
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in Lfm2VlConfigBehavior]
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: Lfm2VlConfigBehavior = Lfm2VlConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            behavior=behavior,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == Lfm2VlConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+        self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm2VlVisionEmbeddingsInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != Lfm2VlConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {
+            "pixel_values": {0: "batch_size", 1: "num_patches"},
+            "pixel_attention_mask": {0: "batch_size", 1: "num_patches"},
+            "pos_emb_interp": {0: "batch_size", 1: "num_patches"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != Lfm2VlConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"last_hidden_state": {0: "batch_size", 1: "num_patches"}}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, Lfm2VlConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, Lfm2VlConfigBehavior):
+            behavior = Lfm2VlConfigBehavior(behavior)
+
+        if behavior == Lfm2VlConfigBehavior.MULTI_MODAL_PROJECTOR:
+            return Lfm2VlMultiModalProjectorOpenVINOConfig(
+                self._orig_config.vision_config,
+                task="feature-extraction",
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+
+        return super().with_behavior(behavior)
+
+    def get_model_for_behavior(self, model, behavior: Union[str, Lfm2VlConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Lfm2VlConfigBehavior):
+            behavior = Lfm2VlConfigBehavior(behavior)
+
+        if behavior == Lfm2VlConfigBehavior.LANGUAGE:
+            return _Lfm2VlLanguageModelForExport(model)
+
+        if behavior == Lfm2VlConfigBehavior.VISION_EMBEDDINGS:
+            # The siglip2 naflex vision tower resizes its positional embeddings through an in-graph
+            # `pos_emb_interp @ position_embedding.weight` matmul. When the source weights are 16-bit
+            # (this checkpoint is bfloat16), OpenVINO's `__make_16bit_traceable` folds that weight's
+            # transpose to zeros during conversion, silently destroying the positional embeddings and
+            # every image feature. Export the vision tower in float32 (paired with
+            # `_disable_fp16_compression` at save time) so the traced graph stays numerically correct;
+            # this is the vision encoder only and does not affect the fp16 language model.
+            return model.model.vision_tower.to(torch.float32)
+
+        if behavior == Lfm2VlConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.model.language_model.get_input_embeddings()
+            text_embedding.config = model.model.language_model.config
+            return text_embedding
+
+        if behavior == Lfm2VlConfigBehavior.MULTI_MODAL_PROJECTOR:
+            return model.model.multi_modal_projector
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != Lfm2VlConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return Lfm2VlVisionEmbeddingsModelPatcher(self, model, model_kwargs)
 
 
 @register_in_tasks_manager(

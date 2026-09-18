@@ -3042,6 +3042,10 @@ def maira_vision_embed_forward(self, pixel_values):
 
 
 class LlavaImageEmbeddingModelPatcher(ModelPatcher):
+    # Patched forward used to export only the vision-embedding submodel. Subclasses that reuse the
+    # same enter/exit restoration logic only need to override this attribute with their own forward.
+    _vision_embed_forward = staticmethod(llava_vision_embed_forward)
+
     def __init__(
         self,
         config: "OpenVINOConfig",
@@ -3049,7 +3053,7 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
-        model.forward = types.MethodType(llava_vision_embed_forward, model)
+        model.forward = types.MethodType(self._vision_embed_forward, model)
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -7766,21 +7770,35 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers.models.lfm2.modeling_lfm2 import Lfm2HybridConvCache
+        import transformers.models.lfm2.modeling_lfm2 as _lfm2_modeling
 
         super().__init__(config, model, model_kwargs)
 
-        # This cache wrapper class serves for following purposes:
+        # transformers < 5.10 exposes a dedicated `Lfm2HybridConvCache`. Starting with
+        # transformers 5.10 that class was removed and lfm2 relies on the generic
+        # `DynamicCache` (conv states are stored as regular cache layers). We select the
+        # correct base cache dynamically so the export keeps working across the whole
+        # supported transformers range (>=4.51,<5.11).
+        _has_lfm2_hybrid_cache = hasattr(_lfm2_modeling, "Lfm2HybridConvCache")
+        if _has_lfm2_hybrid_cache:
+            _WrapCacheBase = _lfm2_modeling.Lfm2HybridConvCache
+        else:
+            from transformers.cache_utils import DynamicCache as _WrapCacheBase
+
+        # This cache wrapper serves the following purposes:
         # 1. Wraps KV-cache and conv_state to allow model instantiation from tensor lists.
         # 2. Removes the unused cache items that the source model contains.
-        # For this reason cache items re-indexing is required.
-        class Lfm2HybridConvCacheWrap(Lfm2HybridConvCache):
-            def __init__(self, config, max_batch_size: int, conv_cache, key_cache, value_cache):
-                # Call parent constructor with all required arguments
-                super().__init__(config=config, max_batch_size=max_batch_size)
+        # For this reason cache items re-indexing is required. The behavioural methods
+        # (`update`/`get_seq_length`) are shared through a mixin so that both the legacy
+        # `Lfm2HybridConvCache` base and the newer `DynamicCache` base reuse the exact
+        # same logic.
+        class _Lfm2CacheWrapMixin:
+            def _init_wrap(self, config, conv_cache, key_cache, value_cache):
                 self.key_cache = key_cache
                 self.value_cache = value_cache
                 self.conv_cache = conv_cache
+                self.layer_types = list(config.layer_types)
+                self.first_attention_layer = self.layer_types.index("full_attention")
                 self.conv_layer_idx_mapping = {}
                 self.attention_layer_idx_mapping = {}
                 conv_layer_idx = 0
@@ -7836,6 +7854,37 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
                     return 0
                 return self.key_cache[layer_idx].shape[-2]
 
+        if _has_lfm2_hybrid_cache:
+
+            class Lfm2HybridConvCacheWrap(_Lfm2CacheWrapMixin, _WrapCacheBase):
+                def __init__(self, config, max_batch_size: int, conv_cache, key_cache, value_cache):
+                    # Call parent constructor with all required arguments
+                    _WrapCacheBase.__init__(self, config=config, max_batch_size=max_batch_size)
+                    self._init_wrap(config, conv_cache, key_cache, value_cache)
+
+        else:
+
+            class Lfm2HybridConvCacheWrap(_Lfm2CacheWrapMixin, _WrapCacheBase):
+                # transformers >= 5.10: `DynamicCache` no longer provides the hybrid-cache
+                # helpers required by the masking utils for a wrapped tensor-list cache, so
+                # we implement the minimal contract used during tracing/export here.
+                def __init__(self, config, max_batch_size: int, conv_cache, key_cache, value_cache):
+                    _WrapCacheBase.__init__(self, config=config)
+                    self._init_wrap(config, conv_cache, key_cache, value_cache)
+
+                def get_mask_sizes(self, query_length: int, layer_idx: int = 0) -> tuple[int, int]:
+                    kv_offset = 0
+                    kv_length = self.get_seq_length() + query_length
+                    return kv_length, kv_offset
+
+                @property
+                def is_sliding(self) -> list:
+                    return [False] * len(self.layer_types)
+
+                @property
+                def is_compileable(self) -> bool:
+                    return False
+
         def patched_forward(
             input_ids: Optional[torch.LongTensor] = None,
             attention_mask: Optional[torch.Tensor] = None,
@@ -7874,6 +7923,8 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
             causal_lm_output = self.model_orig_forward(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
+                position_ids=position_ids,
+                inputs_embeds=inputs_embeds,
                 past_key_values=wrapped_cache_params,
                 use_cache=use_cache,
             )
@@ -7926,6 +7977,45 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
             else:
                 continue
             conv_layer.slow_forward = conv_layer._orig_forward
+
+
+# Traceable replacement of `Siglip2VisionModel.forward` used for the LFM2-VL vision tower export.
+# The only non-traceable part of the original forward is
+# `Siglip2VisionEmbeddings.resize_positional_embeddings`, which loops over the batch and calls
+# `F.interpolate` with data-dependent `spatial_shapes` sizes. Because that resize is a *linear*
+# operation on the learned positional-embedding table, it is replaced here with a matmul against a
+# precomputed `pos_emb_interp` matrix (built in the runtime, see
+# `_OVLfm2VlForCausalLM.get_vision_embeddings`). This keeps the exported graph free of dynamic
+# `F.interpolate` sizes while reproducing the reference positional embeddings exactly.
+# Adapted from https://github.com/huggingface/transformers/blob/v5.8.1/src/transformers/models/siglip2/modeling_siglip2.py#L526-L583
+def lfm2_vl_vision_embeddings_forward(self, pixel_values, pixel_attention_mask, pos_emb_interp):
+    target_dtype = self.embeddings.patch_embedding.weight.dtype
+    patch_embeds = self.embeddings.patch_embedding(pixel_values.to(target_dtype))
+    positional_embeddings = torch.matmul(
+        pos_emb_interp.to(patch_embeds.dtype), self.embeddings.position_embedding.weight
+    )
+    hidden_states = patch_embeds + positional_embeddings
+
+    # The naflex vision tower masks padded patches with a bidirectional padding mask. Building it via
+    # `transformers.masking_utils.create_bidirectional_mask` yields a *boolean* SDPA mask, which the
+    # exported OpenVINO `ScaledDotProductAttention` op does not reproduce faithfully (padded keys leak
+    # into the valid patches). Construct the equivalent additive float mask directly so the graph stays
+    # numerically identical to the reference for any padding pattern.
+    # Use the float16 minimum (not the traced float32 minimum) as the masked value: the graph is traced
+    # in float32 but the exported weights are compressed to float16, and a float32 `finfo.min` constant
+    # (~-3.4e38) overflows to `-inf` in float16, poisoning the softmax and corrupting every valid patch.
+    # `finfo(float16).min` (-65504) is representable in both precisions and still fully masks padded keys.
+    min_value = torch.finfo(torch.float16).min
+    encoder_attention_mask = (1.0 - pixel_attention_mask[:, None, None, :].to(hidden_states.dtype)) * min_value
+    encoder_outputs = self.encoder(inputs_embeds=hidden_states, attention_mask=encoder_attention_mask)
+    last_hidden_state = self.post_layernorm(encoder_outputs.last_hidden_state)
+    return last_hidden_state
+
+
+class Lfm2VlVisionEmbeddingsModelPatcher(LlavaImageEmbeddingModelPatcher):
+    # Reuses LlavaImageEmbeddingModelPatcher's enter/exit forward save-restore logic; only the patched
+    # vision-embedding forward differs (dynamic-shape-free positional embeddings + additive padding mask).
+    _vision_embed_forward = staticmethod(lfm2_vl_vision_embeddings_forward)
 
 
 # Copied from https://github.com/huggingface/transformers/blob/v4.56.0/src/transformers/models/gpt_oss/modeling_gpt_oss.py#L81

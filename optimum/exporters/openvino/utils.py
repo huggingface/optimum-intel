@@ -480,6 +480,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "gemma4_unified",
     "idefics3",
     "smolvlm",
+    "lfm2_vl",
     "phi4mm",
     "phi4_multimodal",
     "llama4",

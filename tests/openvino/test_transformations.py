@@ -344,6 +344,34 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
+    # LFM2-VL exports its text decoder as a bare `lfm2` model, so its language sub-model exercises the
+    # same RoPE/SDPA fusion pipeline as the standalone `lfm2` entry above. The two decompression toggles
+    # listed for `lfm2` are omitted here because the tiny fixture is stored in float32 (no weight
+    # compression), so they are reported as not-applied for this fixture.
+    "lfm2_vl": {
+        "model_class": "OVModelForVisualCausalLM",
+        "convert": [
+            "SDPAFusion",
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "MakeStateful",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "DecompressionHandling",
+            "TransposeMatMul",
+            "TSShapeOfForward",
+        ],
+        "compile": [
+            "ConvertMatMulToFC",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "Snippets",
+            "Tokenization",
+        ],
+    },
 }
 
 if is_transformers_version(">=", "5.0.0"):
