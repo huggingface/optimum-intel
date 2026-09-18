@@ -1191,6 +1191,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "gemma4", False),
         (OVModelForVisualCausalLM, "gemma4_moe", False),
         (OVModelForVisualCausalLM, "deepseek_ocr2", False),
+        (OVModelForVisualCausalLM, "unlimited_ocr", True),
         (OVModelForVisualCausalLM, "mistral3", False),
     ]
 
