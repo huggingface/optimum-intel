@@ -3735,21 +3735,22 @@ class QwenImage21TransformerModelPatcher(ModelPatcher):
         self._processor_cls.__call__ = self._orig_processor_call
 
 
-# The VAE RMS norm is `F.normalize(x)`, i.e. x / sqrt(sum(x^2)) over channels. With f16 inference the sum of squares
-# overflows (activations of ~360 over 768 channels give ~1e8 > 65504), the norm becomes inf and the normalized values
-# collapse to 0; diffusers avoids it by upcasting to f32. `F.normalize` is invariant to a positive per-position scale,
-# so x is divided by its channel-wise max |x| first: mathematically identical, and the sum of squares stays small.
+# The VAE RMS norm is `F.normalize(x) * sqrt(C)` over channels. Traced as is, its ReduceL2 overflows with f16
+# inference (x^2 for activations of ~360 exceeds 65504), the norm becomes inf and the normalized values collapse to 0;
+# diffusers avoids it by upcasting to f32. The same math is x * rsqrt(mean(x^2)): written over the last axis, OpenVINO
+# fuses it into the RMS op, whose kernel accumulates in f32, so it no longer overflows (and runs faster).
 # Original code: https://github.com/huggingface/diffusers/blob/344d6e7300716ff245d5941bc1fe3e95ad8cd1c3/src/diffusers/models/autoencoders/autoencoder_kl_qwenimage21.py#L209-L217
-def _qwenimage21_vae_rms_norm_forward(self, x):
-    dim = 1 if self.channel_first else -1
-    x = x / x.abs().amax(dim=dim, keepdim=True).clamp_min(1e-4)
-    return F.normalize(x, dim=dim) * self.scale * self.gamma + self.bias
+def _qwenimage21_vae_rms_norm_forward(self, x, eps=1e-12):
+    x = x.movedim(1, -1) if self.channel_first else x
+    x = x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + eps) * self.gamma.reshape(-1)
+    x = x.movedim(-1, 1) if self.channel_first else x
+    return x + self.bias
 
 
 # The VAE upsamples with mode="nearest-exact", which the OpenVINO PyTorch frontend cannot convert
 # (aten::_upsample_nearest_exact2d). "nearest" gives the same result for the integer scale factor of 2 used here.
 # Original code: https://github.com/huggingface/diffusers/blob/344d6e7300716ff245d5941bc1fe3e95ad8cd1c3/src/diffusers/models/autoencoders/autoencoder_kl_qwenimage21.py#L262 and https://github.com/huggingface/diffusers/blob/344d6e7300716ff245d5941bc1fe3e95ad8cd1c3/src/diffusers/models/autoencoders/autoencoder_kl_qwenimage21.py#L267
-# Also swaps in the f16-safe RMS norm above.
+# Also swaps in the f16-safe, fusable RMS norm above.
 class QwenImage21VaeModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
