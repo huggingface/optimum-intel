@@ -376,6 +376,7 @@ HUB_MODEL_NAMES = {
     "sam": "optimum-intel-internal-testing/sam-vit-tiny-random",
     "smollm3": "optimum-intel-internal-testing/tiny-random-smollm3",
     "smolvlm": "optimum-intel-internal-testing/tiny-random-smolvlm2",
+    "spark2_5": "bharqav/tiny-random-spark2_5",
     "speecht5": "optimum-intel-internal-testing/tiny-random-SpeechT5ForTextToSpeech",
     "speech_to_text": "optimum-intel-internal-testing/tiny-random-Speech2TextModel",
     "squeezebert": "optimum-intel-internal-testing/tiny-random-squeezebert",
@@ -803,6 +804,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_vl_eagle3",
     "qwen3_asr",
     "fun_asr",
+    "spark2_5",
     "videochat_flash_qwen",
 )
 
