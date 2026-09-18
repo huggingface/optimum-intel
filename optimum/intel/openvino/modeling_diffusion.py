@@ -2937,10 +2937,13 @@ class OVQwenImage21Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, 
                 "<image1><|vision_start|><|image_pad|><|vision_end|>", replace
             )
             prompts.append(template.format(t))
-        for img in image:
-            if not isinstance(img, PILImage.Image):
-                img = PILImage.fromarray(img)
-            condition_pil_list.append(img)
+        # Each prompt's template repeats the `<|image_pad|>` placeholders, so the processor needs one set of images
+        # per prompt, in the order the placeholders appear.
+        for _ in prompt:
+            for img in image:
+                if not isinstance(img, PILImage.Image):
+                    img = PILImage.fromarray(img)
+                condition_pil_list.append(img)
 
         model_inputs = self.processor(text=prompts, images=condition_pil_list, padding=True, return_tensors="pt").to(
             device
