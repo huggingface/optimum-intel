@@ -602,6 +602,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "mistral3",
         "muse_glimmer",
         "deepseek_ocr2",
+        "lfm2_vl",
     ]
     SUPPORT_VIDEO = [
         "llava_next_video",
@@ -677,6 +678,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "qwen3_5_moe_mtp",
             "gemma4_unified",
             "muse_glimmer",
+            "lfm2_vl",
         ]:
             from transformers import AutoModelForImageTextToText
 

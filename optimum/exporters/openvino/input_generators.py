@@ -591,6 +591,92 @@ class DummyMistral3MultiModalProjectorInputGenerator(DummyLLavaMultiModalProject
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
 
+class DummyLfm2VlVisionEmbeddingsInputGenerator(DummyInputGenerator):
+    # `pos_emb_interp` is a precomputed (batch, num_patches, num_source_patches) linear-interpolation
+    # matrix that reproduces the naflex `Siglip2VisionEmbeddings.resize_positional_embeddings` result as
+    # a matmul with the learned positional-embedding table, so the graph stays free of data-dependent
+    # `F.interpolate` sizes (see model_patcher.lfm2_vl_vision_embeddings_forward).
+    SUPPORTED_INPUT_NAMES = ["pixel_values", "pixel_attention_mask", "pos_emb_interp"]
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        config = getattr(normalized_config, "config", normalized_config)
+        self.hidden_size = normalized_config.hidden_size
+        self.patch_size = config.patch_size
+        self.num_channels = getattr(config, "num_channels", 3)
+        self.num_source_patches = config.num_patches
+        # dummy padded patch-sequence length; exported as a dynamic axis
+        self.num_patches = config.num_patches
+
+    def generate(
+        self,
+        input_name: str,
+        framework: str = "pt",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+    ):
+        if input_name == "pixel_values":
+            patch_dim = self.num_channels * self.patch_size**2
+            shape = [self.batch_size, self.num_patches, patch_dim]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "pixel_attention_mask":
+            # The mask must contain padded (0) positions during tracing. With an all-valid mask,
+            # `create_bidirectional_mask` short-circuits to `None` (bidirectional skip) and the
+            # padding-masking subgraph is never captured, which would let padded patches leak into
+            # attention at runtime. Emit a mask with real padding so the masking path is traced as a
+            # function of `pixel_attention_mask`.
+            import numpy as np
+
+            mask = np.ones((self.batch_size, self.num_patches), dtype=np.int64)
+            # Mark the second half of the patch sequence as padding for every image in the batch.
+            mask[:, self.num_patches // 2 :] = 0
+            if framework == "pt":
+                import torch
+
+                return torch.tensor(mask, dtype=torch.int64)
+            return mask
+        shape = [self.batch_size, self.num_patches, self.num_source_patches]
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
+class DummyLfm2VlMultiModalProjectorInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ["image_features"]
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        self.task = task
+        config = getattr(normalized_config, "config", normalized_config)
+        self.hidden_size = normalized_config.hidden_size
+        self.downsample_factor = getattr(config, "downsample_factor", 2)
+        # small grid divisible by the downsample factor; height/width are exported as dynamic axes
+        self.height = 4 * self.downsample_factor
+        self.width = 4 * self.downsample_factor
+
+    def generate(
+        self,
+        input_name: str,
+        framework: str = "pt",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+    ):
+        shape = [1, self.height, self.width, self.hidden_size]
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
 class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
     SUPPORTED_INPUT_NAMES = ["pooled_projections"]
 
