@@ -421,6 +421,7 @@ HUB_MODEL_NAMES = {
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "qwenimage": "optimum-intel-internal-testing/tiny-random-qwen-image",
+    "qwenimage21": "optimum-intel-internal-testing/tiny-random-qwen-image-2.1",
     "ltx2": "optimum-intel-internal-testing/tiny-random-ltx2",
     "ltx2.3": "optimum-intel-internal-testing/tiny-random-ltx2.3",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
@@ -991,6 +992,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     # entries in test_export.py / test_exporters_cli.py are collected instead of silently
     # deselected.
     "z-image": "z-image-transformer",
+    "qwenimage21": "qwenimage21-transformer",
 }
 
 

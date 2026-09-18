@@ -1842,8 +1842,6 @@ def get_qwen_image_models_for_export(pipeline, exporter, int_dtype, float_dtype)
 
 
 def get_qwen_image21_models_for_export(pipeline, exporter, int_dtype, float_dtype):
-    import torch
-
     models_for_export = {}
 
     # Text encoder: QwenImage2.1 uses a Qwen3-VL model that is run text-only for the t2i prompt embeddings.

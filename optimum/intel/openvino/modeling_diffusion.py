@@ -1611,9 +1611,7 @@ class OVModelQwenImage21Transformer(OVPipelinePart):
         image_positions = image_pad_mask.nonzero(as_tuple=True)[0]
         block_lengths = [int(np.prod(shape)) for shape in img_shapes]
         image_ids = torch.full_like(image_pad_mask, -1, dtype=torch.long)
-        block_ids = torch.repeat_interleave(
-            torch.arange(len(block_lengths)), torch.tensor(block_lengths)
-        )
+        block_ids = torch.repeat_interleave(torch.arange(len(block_lengths)), torch.tensor(block_lengths))
         image_ids[image_positions] = block_ids
         target_token_mask = torch.zeros_like(image_pad_mask)
         target_token_mask[image_positions[-block_lengths[-1] :]] = True
@@ -1701,9 +1699,7 @@ class OVModelQwenImage21Transformer(OVPipelinePart):
         )
         cached = self._host_inputs_cache.get(key)
         if cached is None:
-            cached = self._build_host_inputs(
-                hidden_states, encoder_hidden_states, img_shapes, img_mask, ehs_mask
-            )
+            cached = self._build_host_inputs(hidden_states, encoder_hidden_states, img_shapes, img_mask, ehs_mask)
             if len(self._host_inputs_cache) >= self._HOST_CACHE_MAX:
                 self._host_inputs_cache.pop(next(iter(self._host_inputs_cache)))
             self._host_inputs_cache[key] = cached
@@ -2920,9 +2916,7 @@ class OVQwenImage21Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, 
         encoder_attention_mask = torch.stack(
             [torch.cat([u, u.new_zeros(max_seq_len - u.size(0))]) for u in attn_mask_list]
         )
-        image_pad_mask = torch.stack(
-            [torch.cat([u, u.new_zeros(max_seq_len - u.size(0))]) for u in image_pad_mask]
-        )
+        image_pad_mask = torch.stack([torch.cat([u, u.new_zeros(max_seq_len - u.size(0))]) for u in image_pad_mask])
 
         return prompt_embeds, encoder_attention_mask, image_pad_mask
 
@@ -2948,9 +2942,9 @@ class OVQwenImage21Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, 
                 img = PILImage.fromarray(img)
             condition_pil_list.append(img)
 
-        model_inputs = self.processor(
-            text=prompts, images=condition_pil_list, padding=True, return_tensors="pt"
-        ).to(device)
+        model_inputs = self.processor(text=prompts, images=condition_pil_list, padding=True, return_tensors="pt").to(
+            device
+        )
         input_ids = model_inputs.input_ids
         attention_mask = model_inputs.attention_mask
         pixel_values = model_inputs.pixel_values.float()
@@ -2987,9 +2981,7 @@ class OVQwenImage21Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, 
         cfg = self.vision_encoder.config
         sms = cfg.spatial_merge_size
         num_grid_per_side = int(cfg.num_position_embeddings**0.5)
-        bilinear_indices, bilinear_weights = get_vision_bilinear_indices_and_weights(
-            grid_thw, num_grid_per_side, sms
-        )
+        bilinear_indices, bilinear_weights = get_vision_bilinear_indices_and_weights(grid_thw, num_grid_per_side, sms)
         position_ids = get_vision_position_ids(grid_thw, sms)
         head_dim = cfg.hidden_size // cfg.num_heads
         dim = head_dim // 2
@@ -3047,12 +3039,33 @@ class OVQwenImage21Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, 
 
         return position_ids
 
-
     def __call__(self, *args, **kwargs):
         # The exported transformer graph is a cache-free single pass, so force KV caching off. The wrapper
         # recomputes the full joint sequence every step (numerically identical to the cached path).
         kwargs["use_kv_cache"] = False
-        return QwenImage21Pipeline.__call__(self, *args, **kwargs)
+        # Go through OVDiffusionPipeline.__call__ like the other pipelines: it converts numpy generators and
+        # applies a statically reshaped pipeline's height/width before calling QwenImage21Pipeline.__call__.
+        return OVDiffusionPipeline.__call__(self, *args, **kwargs)
+
+
+class OVQwenImage21Img2ImgPipeline(OVQwenImage21Pipeline):
+    """
+    Image-to-image (image editing) counterpart of `OVQwenImage21Pipeline`. diffusers serves both tasks with the single
+    `QwenImage21Pipeline`, which edits when a condition `image` is passed, so this pipeline shares the exported
+    submodels and the inference code and only requires that image.
+    """
+
+    main_input_name = "image"
+    export_feature = "image-to-image"
+
+    def __call__(self, *args, **kwargs):
+        # `image` follows `prompt` in QwenImage21Pipeline.__call__
+        image = kwargs.get("image", args[1] if len(args) > 1 else None)
+        if image is None:
+            raise ValueError(
+                "`image` is required for image-to-image generation. Use `OVQwenImage21Pipeline` for text-to-image."
+            )
+        return super().__call__(*args, **kwargs)
 
 
 class _OVZImageTransformerAdapter:
@@ -3381,8 +3394,11 @@ if is_diffusers_version(">=", "0.35.0"):
     OV_TEXT2IMAGE_PIPELINES_MAPPING["qwenimage"] = OVQwenImagePipeline
 
 if QwenImage21Pipeline is not object:
-    SUPPORTED_OV_PIPELINES.append(OVQwenImage21Pipeline)
+    # Both classes wrap the same diffusers QwenImage21Pipeline; the text-to-image one comes first so that it is the
+    # default resolved from `model_index.json` (e.g. by OVDiffusionPipeline.from_pretrained).
+    SUPPORTED_OV_PIPELINES.extend([OVQwenImage21Pipeline, OVQwenImage21Img2ImgPipeline])
     OV_TEXT2IMAGE_PIPELINES_MAPPING["qwenimage21"] = OVQwenImage21Pipeline
+    OV_IMAGE2IMAGE_PIPELINES_MAPPING["qwenimage21"] = OVQwenImage21Img2ImgPipeline
 
 if is_diffusers_version(">=", "0.37.0"):
     SUPPORTED_OV_PIPELINES.append(OVFlux2KleinPipeline)

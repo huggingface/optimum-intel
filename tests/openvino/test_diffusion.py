@@ -30,6 +30,7 @@ from diffusers.utils import load_image
 from parameterized import parameterized
 from utils_tests import HUB_MODEL_NAMES, MODEL_NAMES, OPENVINO_DEVICE, SEED
 
+from optimum.exporters.openvino import main_export
 from optimum.intel.openvino import (
     OVDiffusionPipeline,
     OVPipelineForImage2Image,
@@ -114,6 +115,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     if is_diffusers_version(">=", "0.35.0"):
         SUPPORTED_ARCHITECTURES.extend(["qwenimage"])
 
+    if is_diffusers_version(">=", "0.41.0.dev0"):
+        SUPPORTED_ARCHITECTURES.extend(["qwenimage21"])
+
     if is_transformers_version("<", "5") or is_diffusers_version(">=", "0.37"):
         SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
 
@@ -133,6 +137,10 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         if model_type == "sana-sprint":
             inputs["num_inference_steps"] = 2
 
+        if model_type == "qwenimage21":
+            # QwenImage21Pipeline has no guidance-distilled `guidance_scale` (it uses `true_cfg_scale`)
+            inputs.pop("guidance_scale")
+
         return inputs
 
     @require_diffusers
@@ -146,13 +154,21 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_ov_pipeline_class_dispatch(self, model_arch: str):
         auto_cls = self.AUTOMODEL_CLASS if "sana" not in model_arch else DiffusionPipeline
+        if model_arch == "qwenimage21":
+            auto_cls = DiffusionPipeline
         auto_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
 
         auto_pipeline = DiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch])
-        ov_pipeline = OVDiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+        if model_arch == "qwenimage21":
+            # the export task cannot be inferred for QwenImage21Pipeline, so it is exported with an explicit task
+            with TemporaryDirectory() as tmpdirname:
+                main_export(MODEL_NAMES[model_arch], output=tmpdirname, task=self.TASK)
+                ov_pipeline = OVDiffusionPipeline.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
+        else:
+            ov_pipeline = OVDiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
 
@@ -160,6 +176,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_num_images_per_prompt(self, model_arch: str):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+        # Qwen-Image-2.1's VAE decodes RGBA images
+        image_channels = 4 if model_arch == "qwenimage21" else 3
 
         for batch_size in [1, 3]:
             for height in [64, 128]:
@@ -169,7 +187,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
                             height=height, width=width, batch_size=batch_size, model_type=model_arch
                         )
                         outputs = pipeline(**inputs, num_images_per_prompt=num_images_per_prompt).images
-                        self.assertEqual(outputs.shape, (batch_size * num_images_per_prompt, height, width, 3))
+                        self.assertEqual(
+                            outputs.shape, (batch_size * num_images_per_prompt, height, width, image_channels)
+                        )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -178,6 +198,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
         auto_cls = self.AUTOMODEL_CLASS if "sana" not in model_arch else DiffusionPipeline
+        if model_arch == "qwenimage21":
+            auto_cls = DiffusionPipeline
         model_kwargs = (
             {"torch_dtype": torch.float32}
             if is_transformers_version(">=", "5") and model_arch == "stable-diffusion-3"
@@ -246,6 +268,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         height, width, batch_size = 128, 64, 1
+        # Qwen-Image-2.1's VAE decodes RGBA images
+        image_channels = 4 if model_arch == "qwenimage21" else 3
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
         if "sana" in model_arch:
             inputs["use_resolution_binning"] = False
@@ -256,13 +280,19 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             if output_type == "pil":
                 self.assertEqual((len(outputs), outputs[0].height, outputs[0].width), (batch_size, height, width))
             elif output_type == "np":
-                self.assertEqual(outputs.shape, (batch_size, height, width, 3))
+                self.assertEqual(outputs.shape, (batch_size, height, width, image_channels))
             elif output_type == "pt":
-                self.assertEqual(outputs.shape, (batch_size, 3, height, width))
+                self.assertEqual(outputs.shape, (batch_size, image_channels, height, width))
             else:
                 if model_arch in ["flux", "qwenimage"]:
                     packed_height = height // pipeline.vae_scale_factor // 2
                     packed_width = width // pipeline.vae_scale_factor // 2
+                    channels = pipeline.transformer.config.in_channels
+                    self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
+                elif model_arch == "qwenimage21":
+                    # Qwen-Image-2.1 consumes latents unpatched: one token per 16x16 pixel tile
+                    packed_height = height // pipeline.vae_scale_factor
+                    packed_width = width // pipeline.vae_scale_factor
                     channels = pipeline.transformer.config.in_channels
                     self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
                 else:
@@ -462,6 +492,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         ):
             if model_arch != "qwenimage":
                 expected_batch *= 2
+        if model_arch == "qwenimage21":
+            # the Qwen-Image-2.1 transformer is kept dynamic on reshape, so its batch stays unset
+            expected_batch = -1
         self.assertEqual(
             ov_pipeline.batch_size,
             expected_batch,
