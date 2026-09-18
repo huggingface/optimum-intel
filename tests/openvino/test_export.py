@@ -118,6 +118,7 @@ class ExportModelTest(unittest.TestCase):
         "cohere2": OVModelForCausalLM,
         "granitemoehybrid": OVModelForCausalLM,
         "smollm3": OVModelForCausalLM,
+        "spark2_5": OVModelForCausalLM,
         "hunyuan_v1_dense": OVModelForCausalLM,
         "qwen3": OVModelForFeatureExtraction,
         "zamba2": OVModelForCausalLM,
