@@ -700,6 +700,12 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         model_save_path = Path(model_save_dir.name)
         variant = kwargs.pop("variant", None)
 
+        task = cls.export_feature
+        if task is None and config.get("_class_name") == "QwenImage21Pipeline":
+            # QwenImage21Pipeline is missing from the diffusers AutoPipeline mappings, so the export task cannot be
+            # inferred for it: export it for the task of its default OpenVINO pipeline (text-to-image)
+            task = OVQwenImage21Pipeline.export_feature
+
         main_export(
             model_name_or_path=model_id,
             output=model_save_path,
@@ -707,7 +713,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             no_post_process=True,
             revision=revision,
             cache_dir=cache_dir,
-            task=cls.export_feature,
+            task=task,
             token=token,
             local_files_only=local_files_only,
             force_download=force_download,

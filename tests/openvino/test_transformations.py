@@ -350,8 +350,7 @@ if is_diffusers_version(">=", "0.35.0"):
 # layout, so its transformer RoPE fuses through the same GPT-NeoX matcher.
 if is_diffusers_version(">=", "0.41.0.dev0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["qwenimage21"] = {
-        # the export task cannot be inferred for QwenImage21Pipeline, the text-to-image class sets it explicitly
-        "model_class": "OVQwenImage21Pipeline",
+        "model_class": "OVDiffusionPipeline",
         "convert": [],
         "compile": [
             "RoPEFusionGPTNEOX",

@@ -30,7 +30,6 @@ from diffusers.utils import load_image
 from parameterized import parameterized
 from utils_tests import HUB_MODEL_NAMES, MODEL_NAMES, OPENVINO_DEVICE, SEED
 
-from optimum.exporters.openvino import main_export
 from optimum.intel.openvino import (
     OVDiffusionPipeline,
     OVPipelineForImage2Image,
@@ -162,13 +161,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
 
         auto_pipeline = DiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch])
-        if model_arch == "qwenimage21":
-            # the export task cannot be inferred for QwenImage21Pipeline, so it is exported with an explicit task
-            with TemporaryDirectory() as tmpdirname:
-                main_export(MODEL_NAMES[model_arch], output=tmpdirname, task=self.TASK)
-                ov_pipeline = OVDiffusionPipeline.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
-        else:
-            ov_pipeline = OVDiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+        ov_pipeline = OVDiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
 
