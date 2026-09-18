@@ -2880,15 +2880,13 @@ class OVQwenImage21Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, 
         # additionally runs the Qwen3-VL vision tower and feeds the language model with `input_ids` and the
         # vision `image_embeds` (embedded + scattered inside the graph), 3D M-RoPE `position_ids` and a dense
         # DeepStack tensor. All grid-derived tensors and the rotary position ids are precomputed on the host.
-        import random
-
         device = device or self._execution_device
         prompt = [prompt] if isinstance(prompt, str) else prompt
         is_t2i = image is None
 
         if is_t2i:
             prompts = [self.prompt_template_t2i.format(t) for t in prompt]
-            drop_idx = self._drop_idx_t2i
+            drop_idx = self._drop_idx
             model_inputs = self.processor(text=prompts, padding=True, return_tensors="pt").to(device)
             encoder_outputs = self.text_encoder(
                 input_ids=model_inputs.input_ids,
@@ -2903,7 +2901,7 @@ class OVQwenImage21Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, 
                     "Please re-export the model with a recent optimum-intel version."
                 )
             hidden_states, model_inputs = self._get_qwen_i2i_hidden_states(prompt, image, device)
-            drop_idx = self._drop_idx_ti2i
+            drop_idx = self._drop_idx
 
         split_hidden_states = list(self._extract_masked_hidden(hidden_states, model_inputs.attention_mask))
         split_hidden_states = [e[drop_idx:] for e in split_hidden_states]
@@ -2932,20 +2930,17 @@ class OVQwenImage21Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, 
         # Host-side reproduction of the Qwen3-VL forward for image-to-image, replacing the vision tower and
         # language model with their exported OpenVINO graphs. Returns the last hidden state and the processor
         # inputs (for the shared post-processing above). Assumes a single condition image (Qwen-Image edit).
-        import random
-
         from PIL import Image as PILImage
 
         prompts = []
         condition_pil_list = []
         for t in prompt:
             n_imgs = len(image)
-            replace = "Picture 1: <|vision_start|><|image_pad|><|vision_end|>"
+            replace = "<image1><|vision_start|><|image_pad|><|vision_end|>"
             for i in range(2, n_imgs + 1):
-                replace += f" Picture {i}: <|vision_start|><|image_pad|><|vision_end|>"
+                replace += f" <image{i}><|vision_start|><|image_pad|><|vision_end|>"
             template = self.prompt_template_ti2i.replace(
-                "Picture 1: <|vision_start|><|image_pad|><|vision_end|>",
-                replace.replace("Picture ", random.choice(self.ref_token_list)),
+                "<image1><|vision_start|><|image_pad|><|vision_end|>", replace
             )
             prompts.append(template.format(t))
         for img in image:
