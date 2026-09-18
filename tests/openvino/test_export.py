@@ -106,7 +106,6 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-3": OVStableDiffusion3Pipeline,
         "flux": OVFluxPipeline,
         "qwenimage": OVQwenImagePipeline,
-        "qwenimage21": OVQwenImage21Pipeline,
         "ltx-video": OVLTXPipeline,
         "ltx2": OVLTX2Pipeline,
         "ltx2.3": OVLTX2Pipeline,
@@ -143,6 +142,9 @@ class ExportModelTest(unittest.TestCase):
         "muse_glimmer": OVModelForVisualCausalLM,
         "deepseek_ocr2": OVModelForVisualCausalLM,
     }
+
+    if is_diffusers_version(">=", "0.41.0.dev0"):
+        SUPPORTED_ARCHITECTURES["qwenimage21"] = OVQwenImage21Pipeline
 
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = {
