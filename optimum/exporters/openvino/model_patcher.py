@@ -3597,7 +3597,6 @@ class QwenImage21I2ITextEncoderModelPatcher(ModelPatcher):
         self._model._deepstack_process = self._orig_deepstack
 
 
-
 # subgraph is recognized by OpenVINO's `RoPEFusion` matcher and collapsed into the dedicated
 # `ov::op::internal::RoPE` operation at compile time. Same de-interleave convention as QwenImage.
 # Original code: transformer_qwenimage21.py `apply_rotary_emb_qwen(use_real=False)`.
