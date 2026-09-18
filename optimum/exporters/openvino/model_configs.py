@@ -210,6 +210,7 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
     QwenImage21I2ITextEncoderModelPatcher,
+    QwenImage21TextEncoderModelPatcher,
     QwenImage21TransformerModelPatcher,
     QwenImage21VaeModelPatcher,
     QwenImage21VisionModelPatcher,
@@ -3218,10 +3219,10 @@ class QwenImage21TransformerOpenVINOConfig(UNetOpenVINOConfig):
 @register_in_tasks_manager("qwenimage21-text-encoder", *["feature-extraction"], library_name="diffusers")
 class QwenImage21TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
     # QwenImage2.1 uses a Qwen3-VL model run text-only for the prompt embeddings. Only the language model
-    # (`text_encoder.model.language_model`, a `Qwen3VLTextModel`) is exported; its `last_hidden_state`
-    # equals the pipeline's `outputs.hidden_states[-1]`. The patcher forces SDPA and installs the
-    # vmap-free mask so the traced attention fuses and stays numerically consistent under OpenVINO.
-    _MODEL_PATCHER = QwenImageTextEncoderModelPatcher
+    # (`text_encoder.model.language_model`, a `Qwen3VLTextModel`) is exported. The patcher drops the final
+    # norm (the pipeline reads the pre-norm hidden state), forces SDPA and installs the vmap-free mask so the
+    # traced attention fuses and stays numerically consistent under OpenVINO.
+    _MODEL_PATCHER = QwenImage21TextEncoderModelPatcher
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator,)
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 

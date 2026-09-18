@@ -1845,8 +1845,8 @@ def get_qwen_image21_models_for_export(pipeline, exporter, int_dtype, float_dtyp
     models_for_export = {}
 
     # Text encoder: QwenImage2.1 uses a Qwen3-VL model that is run text-only for the t2i prompt embeddings.
-    # Only the language model part is required to reproduce the prompt embeddings (its `last_hidden_state`
-    # equals the pipeline's `outputs.hidden_states[-1]`).
+    # Only the language model part is required to reproduce the prompt embeddings: the pipeline reads the last
+    # decoder layer's output before the final norm, which the patcher exports as `last_hidden_state`.
     text_encoder = getattr(pipeline, "text_encoder", None)
     if text_encoder is not None:
         pipeline_text_encoder_class = text_encoder.__class__.__name__
