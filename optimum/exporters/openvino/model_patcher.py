@@ -3492,12 +3492,9 @@ class QwenImageTextEncoderModelPatcher(ModelPatcher):
 
 
 # --- QwenImage2.1 image-to-image text encoder (Qwen3-VL vision tower + language model) ---------------
-# The vision tower processes the condition image. Its eager attention splits Q/K/V by `cu_seqlens`
-# (variable-length packing). For a single condition image `cu_seqlens` has exactly one segment, so the
-# reference is one full-attention pass; replacing the split with a single `scaled_dot_product_attention`
-# removes the data-dependent `torch.split`/`.tolist()` and keeps the sequence length dynamic while
-# fusing to a `ScaledDotProductAttention`. All grid-derived tensors (bilinear gather indices/weights and
-# the rotary cos/sin) are precomputed on the host and passed in as graph inputs.
+# The eager vision attention splits Q/K/V per image by `cu_seqlens` with `.tolist()`, which does not trace. A single
+# condition image is one segment, so one full `scaled_dot_product_attention` is equivalent and stays dynamic in seq.
+# Original code: https://github.com/huggingface/transformers/blob/v5.10.4/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L202-L267
 def _qwenimage21_vision_attn(attn, hidden_states, cos, sin):
     from transformers.models.qwen3_vl.modeling_qwen3_vl import apply_rotary_pos_emb_vision
 
@@ -3514,6 +3511,10 @@ def _qwenimage21_vision_attn(attn, hidden_states, cos, sin):
     return attn.proj(attn_output)
 
 
+# The original forward derives the position-embedding gather and the rotary table from `grid_thw` through helpers
+# that loop over `grid_thw.tolist()`, which bakes the image size into the graph. Those grid-derived tensors are computed on the host
+# (OVQwenImage21Pipeline) and passed in as graph inputs instead.
+# Original code: https://github.com/huggingface/transformers/blob/v5.10.4/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L679-L732
 def _qwenimage21_vision_forward(self, pixel_values, bilinear_indices, bilinear_weights, cos, sin):
     hidden_states = self.patch_embed(pixel_values)
     pos_embeds = (self.pos_embed(bilinear_indices) * bilinear_weights[:, :, None]).sum(0)
@@ -3529,6 +3530,7 @@ def _qwenimage21_vision_forward(self, pixel_values, bilinear_indices, bilinear_w
     return (merged, *deepstack_features)
 
 
+# Swaps in `_qwenimage21_vision_forward`, which takes the host-precomputed grid tensors as inputs.
 class QwenImage21VisionModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
@@ -3541,18 +3543,19 @@ class QwenImage21VisionModelPatcher(ModelPatcher):
         del self._model._orig_forward
 
 
-# The i2i language graph consumes host-precomputed `inputs_embeds` (with the vision embeds already
-# scattered), 3D M-RoPE `position_ids`, and the DeepStack visual features as a dense additive tensor of
-# shape [num_deepstack_layers, batch, seq, hidden]. `_deepstack_process` (a boolean-mask scatter-add in
-# the eager model) is replaced with a plain add of the dense slice, which traces without data-dependent
-# indexing. The same SDPA + vmap-free mask patch as the t2i text encoder keeps attention fusable.
+# DeepStack adds the visual features at the image-token positions through a boolean-mask index (`visual_pos_masks`),
+# a data-dependent shape. The host scatters them into a dense [num_layers, batch, seq, hidden] tensor instead, so a
+# plain add is equivalent.
+# Original code: https://github.com/huggingface/transformers/blob/v5.10.4/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L850-L858
 def _qwenimage21_dense_deepstack(self, hidden_states, visual_pos_masks, visual_embeds):
     return hidden_states + visual_embeds.to(hidden_states.dtype)
 
 
+# The language model alone only takes `inputs_embeds`; the token embedding and the vision-embeds scatter live in the
+# parent Qwen3VLModel. They are moved into this graph so the host needs no embedding weights, and it takes the 3D
+# M-RoPE `position_ids` (computed on the host) and the dense DeepStack tensor as inputs.
+# Original code: https://github.com/huggingface/transformers/blob/v5.10.4/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L1189-L1204 and https://github.com/huggingface/transformers/blob/v5.10.4/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L765-L848
 def _qwenimage21_i2i_text_forward(self, input_ids, image_embeds, attention_mask, position_ids, deepstack_dense):
-    # Embed the tokens and scatter the vision embeds into the image-pad positions inside the graph so the
-    # host does not need the embedding weights (masked_scatter converts cleanly and stays dynamic in seq).
     inputs_embeds = self.embed_tokens(input_ids)
     image_mask = (input_ids == self._image_token_id).unsqueeze(-1).expand_as(inputs_embeds)
     inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds.to(inputs_embeds.dtype))
@@ -3573,12 +3576,10 @@ def _qwenimage21_i2i_text_forward(self, input_ids, image_embeds, attention_mask,
 class QwenImage21I2ITextEncoderModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
-        self._model.config._orig_attn_implementation = self._model.config._attn_implementation
-        self._model.config._attn_implementation = "sdpa"
         if is_transformers_version(">=", "4.53"):
+            # the vmap-based sdpa mask traces to a boolean mask that gives unmatching outputs in OpenVINO
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
-        # `model_kwargs["image_token_id"]` is stashed on the config by the exporter so the traced forward
-        # can build the image-pad mask.
+        # the image token id is stashed on the config by the exporter so the traced forward can build the image mask
         self._model._image_token_id = self._model.config._qwenimage21_image_token_id
         self._model._orig_forward = self._model.forward
         self._model.forward = types.MethodType(_qwenimage21_i2i_text_forward, self._model)
@@ -3587,8 +3588,6 @@ class QwenImage21I2ITextEncoderModelPatcher(ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        self._model.config._attn_implementation = self._model.config._orig_attn_implementation
-        del self._model.config._orig_attn_implementation
         if is_transformers_version(">=", "4.53"):
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
         self._model.forward = self._model._orig_forward
@@ -3597,9 +3596,9 @@ class QwenImage21I2ITextEncoderModelPatcher(ModelPatcher):
         self._model._deepstack_process = self._orig_deepstack
 
 
-# subgraph is recognized by OpenVINO's `RoPEFusion` matcher and collapsed into the dedicated
-# `ov::op::internal::RoPE` operation at compile time. Same de-interleave convention as QwenImage.
-# Original code: transformer_qwenimage21.py `apply_rotary_emb_qwen(use_real=False)`.
+# The original rotary embedding multiplies complex numbers, which OpenVINO cannot convert. This real-valued form is
+# written so the subgraph matches OpenVINO's `RoPEFusion` and is fused into `ov::op::internal::RoPE` at compile time.
+# Original code: https://github.com/huggingface/diffusers/blob/344d6e7300716ff245d5941bc1fe3e95ad8cd1c3/src/diffusers/models/transformers/transformer_qwenimage21.py#L88-L133
 def _qwenimage21_apply_rotary_emb(x, cos, sin):
     # x: [batch, seq, heads, head_dim]; cos/sin: [1, seq, 1, head_dim] with the half-width table
     # duplicated onto both halves. QwenImage21 rotates *interleaved* pairs (dims 2j, 2j+1); the fixed
@@ -3617,10 +3616,10 @@ def _qwenimage21_apply_rotary_emb(x, cos, sin):
     return (xp * cos + rot * sin).type_as(x)
 
 
-# Patched attention processor (QwenImage21SDPAAttnProcessor / QwenImage21FlexAttnProcessor) that consumes
-# precomputed real rotary embeddings (cos, sin) and a dense block-causal attention mask instead of the
-# complex rotary + flex/multi-pass KV-cache orchestration, so the single-pass graph can be traced for
-# OpenVINO with a fusable `ScaledDotProductAttention`.
+# The attention processors take a complex rotary table and run the block-causal attention as flex attention or as
+# several passes over data-dependent segments, neither of which traces. This single-pass version takes the real
+# (cos, sin) table and a dense additive block-causal mask, and fuses to `ScaledDotProductAttention`.
+# Original code: https://github.com/huggingface/diffusers/blob/344d6e7300716ff245d5941bc1fe3e95ad8cd1c3/src/diffusers/models/transformers/transformer_qwenimage21.py#L474-L548 (QwenImage21AttnProcessor) and https://github.com/huggingface/diffusers/blob/344d6e7300716ff245d5941bc1fe3e95ad8cd1c3/src/diffusers/models/transformers/transformer_qwenimage21.py#L392-L459
 def _qwenimage21_attn_processor_call(
     self,
     attn,
@@ -3650,15 +3649,14 @@ def _qwenimage21_attn_processor_call(
     return attn.to_out[1](hidden_states)
 
 
-# Patched QwenImage21Transformer2DModel forward. The original forward builds a data-dependent joint
-# sequence (scatter + dynamic repeat_interleave + python loops over `img_shapes`), a complex rotary
-# embedding and a KV-cache/flex/multi-pass attention that cannot be traced. Here every data-dependent
-# tensor is precomputed on the host and passed in as a graph input, leaving pure tensor algebra:
-#   - `gather_idx` assembles the joint sequence from cat([txt, img]) with a single index_select
-#     (replaces `joint_hidden_states[:, image_pad_mask] = hidden_states`).
-#   - `cos`/`sin` are the real-valued rotary table (replaces the complex `self.pos_embed`).
-#   - `attn_mask` is the additive dense block-causal mask (replaces flex/multi-pass orchestration).
-#   - `modulation_mask` is `target_token_mask` (selects the per-token modulation row).
+# The original forward assembles the joint text/image sequence with a boolean-mask scatter and Python loops over
+# `img_shapes`, builds a complex rotary table and drives a KV cache, none of which traces. Every data-dependent tensor
+# is computed on the host (OVModelQwenImage21Transformer) and passed in as a graph input:
+#   - `gather_idx` builds the joint sequence from cat([txt, img]) with one index_select;
+#   - `cos`/`sin` are the real-valued rotary table;
+#   - `attn_mask` is the dense additive block-causal mask;
+#   - `modulation_mask` is `target_token_mask`, which picks each token's modulation row.
+# Original code: https://github.com/huggingface/diffusers/blob/344d6e7300716ff245d5941bc1fe3e95ad8cd1c3/src/diffusers/models/transformers/transformer_qwenimage21.py#L847-L1018
 def _qwenimage21_transformer_forward(
     self,
     hidden_states,
@@ -3695,6 +3693,7 @@ def _qwenimage21_transformer_forward(
     return self.proj_out(joint)
 
 
+# Swaps in `_qwenimage21_transformer_forward` and the single-pass attention processor call.
 class QwenImage21TransformerModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
@@ -3714,13 +3713,14 @@ class QwenImage21TransformerModelPatcher(ModelPatcher):
         self._processor_cls.__call__ = self._orig_processor_call
 
 
+# The VAE upsamples with mode="nearest-exact", which the OpenVINO PyTorch frontend cannot convert
+# (aten::_upsample_nearest_exact2d). "nearest" gives the same result for the integer scale factor of 2 used here.
+# Original code: https://github.com/huggingface/diffusers/blob/344d6e7300716ff245d5941bc1fe3e95ad8cd1c3/src/diffusers/models/autoencoders/autoencoder_kl_qwenimage21.py#L262 and https://github.com/huggingface/diffusers/blob/344d6e7300716ff245d5941bc1fe3e95ad8cd1c3/src/diffusers/models/autoencoders/autoencoder_kl_qwenimage21.py#L267
 class QwenImage21VaeModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
         from diffusers.models.autoencoders.autoencoder_kl_qwenimage21 import QwenImage21Upsample
 
-        # OpenVINO has no "nearest-exact" upsampling op; "nearest" is identical for the integer
-        # scale factor of 2 used here.
         self._patched_upsamplers = []
         for module in self._model.modules():
             if isinstance(module, QwenImage21Upsample) and getattr(module, "mode", None) == "nearest-exact":
