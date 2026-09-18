@@ -3491,22 +3491,6 @@ class QwenImageTextEncoderModelPatcher(ModelPatcher):
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
 
 
-# QwenImage2.1 reads the last decoder layer's output *before* the language model's final RMSNorm: the diffusers
-# pipeline registers a forward hook returning the norm's input (transformers >= 5 ties `hidden_states[-1]` to the
-# normalized `last_hidden_state`). The exported graphs return `last_hidden_state`, so the norm is swapped for an
-# identity while tracing.
-class QwenImage21TextEncoderModelPatcher(QwenImageTextEncoderModelPatcher):
-    def __enter__(self):
-        super().__enter__()
-        self._orig_norm = self._model.norm
-        self._model.norm = torch.nn.Identity()
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-        self._model.norm = self._orig_norm
-        del self._orig_norm
-
-
 # --- QwenImage2.1 image-to-image text encoder (Qwen3-VL vision tower + language model) ---------------
 # The vision tower processes the condition image. Its eager attention splits Q/K/V by `cu_seqlens`
 # (variable-length packing). For a single condition image `cu_seqlens` has exactly one segment, so the
@@ -3600,9 +3584,6 @@ class QwenImage21I2ITextEncoderModelPatcher(ModelPatcher):
         self._model.forward = types.MethodType(_qwenimage21_i2i_text_forward, self._model)
         self._orig_deepstack = self._model._deepstack_process
         self._model._deepstack_process = types.MethodType(_qwenimage21_dense_deepstack, self._model)
-        # Pre-norm hidden state, as for the t2i text encoder (see QwenImage21TextEncoderModelPatcher).
-        self._orig_norm = self._model.norm
-        self._model.norm = torch.nn.Identity()
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -3614,8 +3595,6 @@ class QwenImage21I2ITextEncoderModelPatcher(ModelPatcher):
         del self._model._orig_forward
         del self._model._image_token_id
         self._model._deepstack_process = self._orig_deepstack
-        self._model.norm = self._orig_norm
-        del self._orig_norm
 
 
 

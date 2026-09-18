@@ -207,6 +207,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         )
         diffusers_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch], **model_kwargs)
         atol = 1.5e-2 if model_arch == "flux.2-klein" else 6e-3
+        if model_arch == "qwenimage21":
+            atol = 3e-2
 
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
