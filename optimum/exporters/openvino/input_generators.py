@@ -2428,7 +2428,6 @@ class DummyQwenImage21VisionInputGenerator(DummyInputGenerator):
         self,
         task: str,
         normalized_config: NormalizedConfig,
-        batch_size: int = 1,
         **kwargs,
     ):
         self.task = task
@@ -2501,7 +2500,7 @@ class DummyQwenImage21I2ITextInputGenerator(DummyInputGenerator):
         self,
         task: str,
         normalized_config: NormalizedConfig,
-        batch_size: int = 1,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
         sequence_length: int = 16,
         **kwargs,
     ):
