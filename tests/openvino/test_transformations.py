@@ -351,10 +351,27 @@ if is_diffusers_version(">=", "0.35.0"):
 if is_diffusers_version(">=", "0.41.0.dev0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["qwenimage21"] = {
         "model_class": "OVDiffusionPipeline",
-        "convert": [],
+        "convert": [
+            "CommonFusions",
+            "ConstantFolding",
+            "MOC",
+            "MultiplyFusions",
+            "ReshapeOptimizations",
+            "SDPAFusion",
+            "ShapeOfConstFolding",
+            "SharedOpOptimization",
+            "SmartReshape",
+        ],
         "compile": [
-            "RoPEFusionGPTNEOX",
+            "CommonDecompositions",
+            "CommonOptimizations",
+            "FullyConnectedBiasFusion",
+            "FuseTransposeBrgemm",
+            "RMSFusion",
             "RoPEFusion",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "SDPASubgraphFusion",
         ],
     }
 
