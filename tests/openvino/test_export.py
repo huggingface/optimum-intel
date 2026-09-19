@@ -147,6 +147,7 @@ class ExportModelTest(unittest.TestCase):
         "qwen3_omni_moe": OVModelForMultimodalLM,
         "muse_glimmer": OVModelForVisualCausalLM,
         "deepseek_ocr2": OVModelForVisualCausalLM,
+        "deepseek_v3": OVModelForCausalLM,
     }
 
     if is_diffusers_version(">=", "0.41.0.dev0"):

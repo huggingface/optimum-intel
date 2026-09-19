@@ -100,6 +100,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "minicpm3",
         "arctic",
         "deepseek",
+        "deepseek_v3",
         ## not supporter after v5
         "llama4",
         "bitnet",
@@ -213,6 +214,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "minicpm3": 6,
         "phimoe": 2,
         "deepseek": 2,
+        "deepseek_v3": 2,
         "opt_gptq": 12,
         "mixtral_awq": 2,
         "gemma3_text": 2,
