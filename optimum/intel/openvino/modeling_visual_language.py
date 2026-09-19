@@ -39,7 +39,20 @@ from transformers import (
 )
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLModel
-from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLModel, VisionRotaryEmbedding
+from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLModel
+
+try:
+    from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
+except ImportError:
+    # Newer transformers renamed the Qwen2-VL vision RoPE class and changed
+    # its interface. Qwen2-VL vision support on such versions needs a dedicated
+    # port, so fail loudly at first use instead of at import time.
+    class VisionRotaryEmbedding:
+        def __init__(self, *args, **kwargs):
+            raise ImportError(
+                "Qwen2-VL vision RoPE (VisionRotaryEmbedding) is not available "
+                "in the installed transformers version."
+            )
 from transformers.utils import ModelOutput
 
 from optimum.exporters.openvino import main_export
@@ -4230,7 +4243,10 @@ if is_transformers_version(">=", "4.57"):
     _OVQwen3VLForCausalLM.get_placeholder_mask = Qwen3VLModel.get_placeholder_mask
     _OVQwen3VLForCausalLM.get_rope_index = Qwen3VLModel.get_rope_index
     _OVQwen3VLForCausalLM.get_video_features = Qwen3VLModel.get_video_features
-    _OVQwen3VLForCausalLM.rot_pos_emb = Qwen3VLVisionModel.rot_pos_emb
+    # Qwen3VLVisionModel.rot_pos_emb was removed in newer transformers. Fall
+    # back to None so the module stays importable; Qwen3-VL vision inference
+    # on such versions needs a dedicated port.
+    _OVQwen3VLForCausalLM.rot_pos_emb = getattr(Qwen3VLVisionModel, "rot_pos_emb", None)
     _OVQwen3VLForCausalLM.get_vision_position_ids = getattr(Qwen3VLModel, "get_vision_position_ids", None)
 
 
@@ -7772,7 +7788,10 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
 if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.get_placeholder_mask = Qwen3_5Model.get_placeholder_mask
     _OVQwen3_5ForCausalLM.get_rope_index = Qwen3_5Model.get_rope_index
-    _OVQwen3_5ForCausalLM.rot_pos_emb = Qwen3_5VisionModel.rot_pos_emb
+    # Qwen3_5VisionModel.rot_pos_emb was removed in newer transformers. Fall
+    # back to None so the module stays importable; Qwen3.5 vision inference
+    # on such versions needs a dedicated port.
+    _OVQwen3_5ForCausalLM.rot_pos_emb = getattr(Qwen3_5VisionModel, "rot_pos_emb", None)
 
 
 class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
