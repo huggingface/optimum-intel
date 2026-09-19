@@ -608,7 +608,10 @@ def main_export(
             # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)
             task_model_loading = task
             if library_name == "transformers":
-                has_remote_code = hasattr(config, "auto_map")
+                # An empty ``auto_map`` (present but with no entries) is not remote code: native
+                # transformers VLMs such as lfm2_vl ship one and must still load through
+                # AutoModelForImageTextToText rather than the remote-code text-generation path.
+                has_remote_code = bool(getattr(config, "auto_map", None))
                 if has_remote_code and trust_remote_code and task == "image-text-to-text":
                     task_model_loading = "text-generation"
 

@@ -344,6 +344,32 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
+    "lfm2_vl": {
+        # The LFM2-VL language sub-model is the same hybrid conv/attention ``lfm2``
+        # backbone, so the RoPE/SDPA fusions applied to its attention layers match the
+        # text-only ``lfm2`` entry above; it is exported through OVModelForVisualCausalLM.
+        "model_class": "OVModelForVisualCausalLM",
+        "convert": [
+            "SDPAFusion",
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "MakeStateful",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "DecompressionHandling",
+            "TransposeMatMul",
+            "TSShapeOfForward",
+        ],
+        "compile": [
+            "ConvertMatMulToFC",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToSwishCPU",
+            "Snippets",
+            "Tokenization",
+        ],
+    },
 }
 
 if is_transformers_version(">=", "5.0.0"):

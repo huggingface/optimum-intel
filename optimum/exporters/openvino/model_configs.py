@@ -50,6 +50,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyGemma4UnifiedVisionInputGenerator,
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
+    DummyLfm2VlVisionInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMVImageInputGenerator,
     DummyMiniCPMVResampleInputGenerator,
@@ -156,6 +157,7 @@ from optimum.exporters.openvino.model_patcher import (
     KokoroModelPatcher,
     Lfm2ModelPatcher,
     Lfm2MoeModelPatcher,
+    Lfm2VlVisionEmbeddingsModelPatcher,
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
     LlavaImageEmbeddingModelPatcher,
@@ -6336,6 +6338,64 @@ class LFM2OpenVINOConfig(MambaOpenVINOConfig):
         if self.use_past_in_inputs:
             self.add_past_key_values(common_inputs, direction="inputs")
         return common_inputs
+
+
+@register_in_tasks_manager("lfm2_vl", *["image-text-to-text"], library_name="transformers")
+class Lfm2VlOpenVINOConfig(MuseGlimmerOpenVINOConfig):
+    """Multi-part OpenVINO export config for the native LFM2-VL VLM.
+
+    Splits the model into three IR files: the language model (the hybrid conv/attention
+    ``lfm2`` stack, consuming merged ``inputs_embeds``), the token-embedding table and
+    the vision stack (naflex Siglip2 tower -> multimodal projector). The nested
+    ``text_config`` (``lfm2``) drives the standard language / text-embeddings parts via
+    the base ``with_behavior``; only the vision part is customised for the flattened-patch
+    naflex inputs.
+
+    Reuses the native-VLM ``__init__`` (nested ``vision_config`` swap for the vision
+    behavior) and the variable-token ``outputs`` contract from
+    :class:`MuseGlimmerOpenVINOConfig`; only the naflex-specific vision ``inputs``,
+    behavior model selection and vision patcher differ.
+    """
+
+    MIN_TRANSFORMERS_VERSION = "5.0.0"
+    MAX_TRANSFORMERS_VERSION = "5.11.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm2VlVisionInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        # A single image's already-flattened valid patches, the antialias-bilinear
+        # positional resample kernel (computed at runtime, no model weight involved) and
+        # the image grid. All grid-derived reshapes are traceable tensor arithmetic, so
+        # the graph stays resolution-agnostic.
+        return {
+            "pixel_values": {1: "num_patches"},
+            "pos_resample_kernel": {0: "num_patches"},
+            "spatial_shapes": {},
+        }
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
+            return model.model
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.model.language_model.get_input_embeddings()
+            text_embedding.config = model.model.language_model.config
+            return text_embedding
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return Lfm2VlVisionEmbeddingsModelPatcher(self, model, model_kwargs)
 
 
 @register_in_tasks_manager(

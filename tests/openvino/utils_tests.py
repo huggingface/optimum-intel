@@ -194,6 +194,73 @@ def _create_tiny_mistral3_model():
     return str(output_dir)
 
 
+def _create_tiny_lfm2_vl_model():
+    """Create a tiny, architecture-faithful random ``lfm2_vl`` (LFM2-VL) model.
+
+    Preserves ``model_type``/``architectures``, the ``lfm2`` hybrid conv/attention text
+    backbone, the naflex ``siglip2`` vision tower, the multimodal projector and every
+    special/image-token contract. Only scale parameters are reduced; original weights are
+    never loaded (only the small config/processor assets are downloaded).
+    """
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_lfm2_vl"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+
+    if config_file.exists() and weights_file.exists():
+        return str(output_dir)
+
+    from transformers import AutoConfig, AutoModelForImageTextToText, AutoProcessor
+
+    model_id = "LiquidAI/LFM2.5-VL-3B"
+
+    torch.manual_seed(SEED)
+
+    config = AutoConfig.from_pretrained(model_id)
+
+    # ---- Text backbone (lfm2 hybrid conv/attention) ----
+    tc = config.text_config
+    tc.hidden_size = 64
+    tc.conv_dim = 64
+    tc.intermediate_size = 256
+    tc.num_attention_heads = 4
+    tc.num_heads = 4
+    tc.num_key_value_heads = 2
+    # Preserve the hybrid conv/full_attention pattern but shrink depth.
+    tc.layer_types = ["conv", "conv", "full_attention", "conv"]
+    tc.num_hidden_layers = len(tc.layer_types)
+    tc.max_position_embeddings = 2048
+    # Larger init so random-weight greedy decoding does not collapse to a single token.
+    tc.initializer_range = 0.1
+    # Keep vocab_size: special/image token ids must stay valid.
+    assert tc.vocab_size > config.image_token_id
+
+    # ---- Vision tower (siglip2 naflex) ----
+    vc = config.vision_config
+    vc.hidden_size = 64
+    vc.intermediate_size = 128
+    vc.num_attention_heads = 2
+    vc.num_hidden_layers = 2
+    # patch_size / num_channels / num_patches kept to preserve preprocessing.
+
+    # ---- Projector ----
+    config.projector_hidden_size = 128
+
+    for subconfig in (config, tc, vc):
+        subconfig.dtype = "float32"
+        if hasattr(subconfig, "torch_dtype"):
+            subconfig.torch_dtype = "float32"
+
+    model = AutoModelForImageTextToText.from_config(config).float().eval()
+    processor = AutoProcessor.from_pretrained(model_id)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    model.save_pretrained(output_dir, safe_serialization=True)
+    processor.save_pretrained(output_dir)
+
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -294,6 +361,7 @@ HUB_MODEL_NAMES = {
     "levit": "optimum-intel-internal-testing/tiny-random-LevitModel",
     "lfm2": "optimum-intel-internal-testing/tiny-random-lfm2",
     "lfm2_moe": "optimum-intel-internal-testing/tiny-random-lfm2-moe",
+    "lfm2_vl": _create_tiny_lfm2_vl_model(),
     "longt5": "optimum-intel-internal-testing/tiny-random-longt5",
     "llama": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
     "llama_awq": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
@@ -603,6 +671,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 32,
         "vision_embeddings_tiles_model": 32,
     },
+    "lfm2_vl": {
+        "lm_model": 52,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 16,
+    },
     "qwen3_vl": {
         "lm_model": 30,
         "text_embeddings_model": 1,
@@ -827,6 +900,7 @@ ARCH_TO_MODEL_CLASS = {
     "gemma4_moe": "OVModelForVisualCausalLM",
     "gemma4_unified": "OVModelForVisualCausalLM",
     "muse_glimmer": "OVModelForVisualCausalLM",
+    "lfm2_vl": "OVModelForVisualCausalLM",
     "qwen3_omni_moe": "OVModelForMultimodalLM",
     "stable-diffusion": "OVDiffusionPipeline",
     "whisper": "OVModelForSpeechSeq2Seq",
