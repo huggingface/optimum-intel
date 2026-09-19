@@ -127,6 +127,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("inpainting", "flux-fill"),
         ("text-to-image", "sana"),
         ("text-to-video", "ltx-video"),
+        ("text-to-video", "ltx-video-0.9.1"),
         ("text-to-video", "ltx2"),
         ("image-to-video", "ltx2"),
         ("text-to-video", "ltx2.3"),
@@ -205,6 +206,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "mistral3": 2,
         "sana": 2,
         "ltx-video": 2,
+        "ltx-video-0.9.1": 2,
         "ltx2": 2,
         "ltx2.3": 2,
         "sam": 0,  # no tokenizer
