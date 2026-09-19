@@ -1122,6 +1122,103 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
             self.assertIn("Please use `OVSentenceTransformer`", str(context.exception))
 
 
+class OVModelForGuardIntegrationTest(unittest.TestCase):
+    """Qwen3Guard replaces the language modeling head of Qwen3 by four token classification heads,
+    so it is a `feature-extraction` model whose output is several tensors instead of a single
+    `last_hidden_state`, and which is exported with a KV cache to be scored token by token."""
+
+    SUPPORTED_ARCHITECTURES = ("qwen3_guard",)
+    OUTPUT_NAMES = (
+        "risk_level_logits",
+        "category_logits",
+        "query_risk_level_logits",
+        "query_category_logits",
+    )
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForFeatureExtraction.from_pretrained(
+            model_id,
+            export=True,
+            trust_remote_code=True,
+            ov_config=F32_CONFIG,
+            device=OPENVINO_DEVICE,
+        )
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        self.assertFalse(ov_model.stateful)
+
+        transformers_model = AutoModel.from_pretrained(model_id, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens, use_cache=False)
+
+        for input_type in ["pt", "np"]:
+            tokens = tokenizer("This is a sample input", return_tensors=input_type)
+            ov_outputs = ov_model(**tokens)
+            self.assertNotIn("last_hidden_state", ov_outputs)
+            for name in self.OUTPUT_NAMES:
+                self.assertIn(name, ov_outputs)
+                self.assertIsInstance(ov_outputs[name], TENSOR_ALIAS_TO_TYPE[input_type])
+                self.assertTrue(
+                    torch.allclose(torch.Tensor(ov_outputs[name]), getattr(transformers_outputs, name), atol=1e-4),
+                    f"{name} differs from the reference",
+                )
+
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_stateful_streaming(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForFeatureExtraction.from_pretrained(
+            model_id,
+            export=True,
+            task="feature-extraction-with-past",
+            trust_remote_code=True,
+            ov_config=F32_CONFIG,
+            device=OPENVINO_DEVICE,
+        )
+        self.assertTrue(ov_model.stateful)
+
+        transformers_model = AutoModel.from_pretrained(model_id, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        input_ids = tokenizer("This is a sample input", return_tensors="pt").input_ids
+        prefix_length = input_ids.shape[1] - 2
+
+        # score the prefix once, then feed the remaining tokens one at a time against the KV cache
+        outputs = ov_model(input_ids=input_ids[:, :prefix_length])
+        streamed = [outputs]
+        for index in range(prefix_length, input_ids.shape[1]):
+            outputs = ov_model(input_ids=input_ids[:, index : index + 1], past_key_values=outputs.past_key_values)
+            streamed.append(outputs)
+
+        for offset, ov_outputs in enumerate(streamed):
+            with torch.no_grad():
+                transformers_outputs = transformers_model(
+                    input_ids=input_ids[:, : prefix_length + offset], use_cache=False
+                )
+            for name in self.OUTPUT_NAMES:
+                self.assertTrue(
+                    torch.allclose(
+                        torch.Tensor(ov_outputs[name][:, -1]), getattr(transformers_outputs, name)[:, -1], atol=1e-4
+                    ),
+                    f"{name} differs from the reference at step {offset}",
+                )
+
+        # omitting `past_key_values` must start a new sequence instead of continuing the previous one
+        restarted = ov_model(input_ids=input_ids[:, :prefix_length])
+        self.assertTrue(torch.allclose(restarted.risk_level_logits, streamed[0].risk_level_logits, atol=1e-5))
+
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "albert",
