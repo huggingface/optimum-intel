@@ -884,6 +884,15 @@ class MistralModelPatcher(OVDecoderModelPatcher):
 
 
 SUPPORT_SDPA = is_torch_version(">", "2.1.0")
+SUPPORT_GROUPED_MM = is_torch_version(">=", "2.10.0")
+
+
+def grouped_mm_warning():
+    logger.warning(
+        "The current version of torch doesn't support grouped torch.nn.functional.grouped_mm,"
+        "which results in a non optimized MoE block in the exported model."
+        "Install torch >= 2.10.0 for the better model performance."
+    )
 
 
 # TODO: why
@@ -5404,6 +5413,60 @@ def _granite_moe_parallel_experts_forward(self, inputs, expert_size):
     return results
 
 
+# Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/granitemoe/modeling_granitemoe.py#L250
+def _granite_moe_experts_forward(self, layer_input):
+    bsz, length, emb_size = layer_input.size()
+    layer_input = layer_input.reshape(-1, emb_size)
+
+    _, batch_index, batch_gates, expert_size, _ = self.router(layer_input)
+
+    expert_size = torch.tensor(expert_size, dtype=torch.int32)
+
+    offs = torch.cumsum(
+        expert_size,
+        dim=0,
+        dtype=torch.int32,
+    )
+
+    expert_inputs = layer_input[batch_index]
+
+    hidden_states = torch._grouped_mm(
+        expert_inputs,
+        self.input_linear.weight.transpose(1, 2),
+        offs=offs,
+    )
+
+    x, gate = hidden_states.chunk(2, dim=-1)
+    hidden_states = self.activation(x) * gate
+
+    expert_outputs = torch._grouped_mm(
+        hidden_states,
+        self.output_linear.weight.transpose(1, 2),
+        offs=offs,
+    )
+    expert_outputs = expert_outputs * batch_gates[:, None]
+
+    layer_output = torch.zeros(
+        (bsz * length, self.input_size),
+        dtype=expert_outputs.dtype,
+        device=expert_outputs.device,
+    )
+
+    layer_output.index_add_(
+        0,
+        batch_index,
+        expert_outputs,
+    )
+
+    layer_output = layer_output.view(
+        bsz,
+        length,
+        self.input_size,
+    )
+
+    return layer_output
+
+
 class GraniteMoEModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
@@ -8482,6 +8545,12 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
                 _granite_moe_parallel_experts_forward, sparse_moe_layer.output_linear
             )
 
+            if SUPPORT_GROUPED_MM:
+                sparse_moe_layer._orig_forward = sparse_moe_layer.forward
+                sparse_moe_layer.forward = types.MethodType(_granite_moe_experts_forward, sparse_moe_layer)
+            else:
+                grouped_mm_warning()
+
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
@@ -8520,6 +8589,8 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             sparse_moe_layer.router.forward = sparse_moe_layer.router._orig_forward
             sparse_moe_layer.input_linear.forward = sparse_moe_layer.input_linear._orig_forward
             sparse_moe_layer.output_linear.forward = sparse_moe_layer.output_linear._orig_forward
+            if SUPPORT_GROUPED_MM:
+                sparse_moe_layer.forward = sparse_moe_layer._orig_forward
 
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
