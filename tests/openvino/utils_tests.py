@@ -436,6 +436,17 @@ HUB_MODEL_NAMES = {
 }
 
 
+def _is_valid_snapshot(path: str) -> bool:
+    if not os.path.isdir(path):
+        return False
+    for root, _, files in os.walk(path):
+        for name in files:
+            file_path = os.path.join(root, name)
+            if os.path.islink(file_path) and not os.path.exists(file_path):
+                return False
+    return True
+
+
 def _resolve_cached_model_paths(model_names: dict) -> dict:
     try:
         if not os.path.exists(constants.HF_HUB_CACHE):
@@ -446,7 +457,11 @@ def _resolve_cached_model_paths(model_names: dict) -> dict:
             for repo in scan_cache_dir().repos
             if repo.revisions
         }
-        return {k: repo_id_to_local_paths.get(v, v) for k, v in model_names.items()}
+        resolved = {}
+        for k, v in model_names.items():
+            local_path = repo_id_to_local_paths.get(v)
+            resolved[k] = local_path if local_path and _is_valid_snapshot(local_path) else v
+        return resolved
     except Exception:
         return model_names
 

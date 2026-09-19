@@ -108,6 +108,10 @@ def main() -> None:
         f"{', '.join(name_of.get(r, r) for r in sorted(in_downloaded_not_in_cache))}"
     )
 
+    if failed or in_downloaded_not_in_cache:
+        broken = failed + [name_of.get(r, r) for r in sorted(in_downloaded_not_in_cache)]
+        print(f"{len(broken)} model(s) failed or ended up corrupted: {', '.join(broken)}")
+
 
 if __name__ == "__main__":
     main()
