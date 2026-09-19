@@ -16,7 +16,7 @@ import subprocess
 import unittest
 from pathlib import Path
 from typing import Dict
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from parameterized import parameterized
 from transformers import (
@@ -25,6 +25,8 @@ from transformers import (
     AutoModelForZeroShotImageClassification,
     AutoProcessor,
     AutoTokenizer,
+    PreTrainedTokenizerFast,
+    T5Tokenizer,
 )
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
@@ -78,7 +80,11 @@ from optimum.intel.openvino.configuration import (
     _DEFAULT_IGNORED_SCOPE_CONFIGS,
     _DEFAULT_INT8_FQ_CONFIGS,
 )
-from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
+from optimum.intel.openvino.utils import (
+    _HEAD_TO_AUTOMODELS,
+    TemporaryDirectory,
+    maybe_convert_tokenizer_to_fast,
+)
 from optimum.intel.utils.import_utils import (
     compare_versions,
     is_openvino_tokenizers_available,
@@ -998,6 +1004,19 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             if task.startswith("text-generation") and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0"):
                 self.assertIn("Set tokenizer padding side to left", output)
+
+    def test_slow_t5_tokenizer_is_converted_to_fast(self):
+        slow_tokenizer = Mock(spec=T5Tokenizer)
+        fast_tokenizer = Mock(spec=PreTrainedTokenizerFast)
+        tokenizer_path = Path("tokenizer")
+
+        with patch(
+            "optimum.intel.openvino.utils.AutoTokenizer.from_pretrained", return_value=fast_tokenizer
+        ) as from_pretrained:
+            converted_tokenizer = maybe_convert_tokenizer_to_fast(slow_tokenizer, tokenizer_path)
+
+        self.assertIs(converted_tokenizer, fast_tokenizer)
+        from_pretrained.assert_called_once_with(tokenizer_path)
 
     @parameterized.expand(TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS)
     @unittest.skipIf(not is_openvino_tokenizers_available(), reason="test required openvino tokenizers")
