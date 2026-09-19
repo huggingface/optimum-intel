@@ -1474,6 +1474,7 @@ class Gemma4TextOpenVINOConfig(Gemma3TextOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Gemma4DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Gemma4DummyPastKeyValuesGenerator
     MIN_TRANSFORMERS_VERSION = "5.5"
+    MAX_TRANSFORMERS_VERSION = "999"
 
     def add_past_key_values(self, inputs_or_outputs: dict[str, dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
@@ -7339,7 +7340,7 @@ class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
     DUMMY_PKV_GENERATOR_CLASS = Qwen3_5DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     MIN_TRANSFORMERS_VERSION = "5.2.0"
-    MAX_TRANSFORMERS_VERSION = "5.2.99"
+    MAX_TRANSFORMERS_VERSION = "999"
     _MODEL_PATCHER = Qwen3_5ModelPatcher
 
     @property
@@ -7421,7 +7422,7 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
     ]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
     MIN_TRANSFORMERS_VERSION = "5.2.0"
-    MAX_TRANSFORMERS_VERSION = "5.2.99"
+    MAX_TRANSFORMERS_VERSION = "999"
 
     def __init__(
         self,
