@@ -155,6 +155,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
         ("image-text-to-text", "mistral3"),
+        ("image-text-to-text", "ministral3"),
         ("text-to-image", "z-image"),
         ("image-text-to-text", "muse_glimmer"),
     ]
@@ -203,6 +204,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "lfm2_moe": 2,
         "llava": 2,
         "mistral3": 2,
+        "ministral3": 2,
         "sana": 2,
         "ltx-video": 2,
         "ltx2": 2,
