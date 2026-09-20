@@ -1388,13 +1388,7 @@ class MistralOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 
 @register_in_tasks_manager(
     "ministral3",
-    *[
-        "feature-extraction",
-        "feature-extraction-with-past",
-        "text-generation",
-        "text-generation-with-past",
-        "text-classification",
-    ],
+    "text-generation-with-past",
     library_name="transformers",
 )
 class Ministral3OpenVINOConfig(MistralOpenVINOConfig):
