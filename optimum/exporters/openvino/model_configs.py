@@ -55,6 +55,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyMiniCPMVResampleInputGenerator,
     DummyMistral3MultiModalProjectorInputGenerator,
     DummyMuseGlimmerVisionInputGenerator,
+    DummyPaddleOCRVLVisionEmbedInputGenerator,
     DummyPhi3VisionProjectionInputGenerator,
     DummyQwen2VLLMInputGenerator,
     DummyQwen2VLVisionEmbedInputGenerator,
@@ -181,6 +182,8 @@ from optimum.exporters.openvino.model_patcher import (
     MuseGlimmerVisionEmbeddingsModelPatcher,
     OVDecoderModelPatcher,
     OVSeq2SeqModelPatcher,
+    PaddleOCRVLVisionEmbeddingsPatcher,
+    PaddleOCRVLVisionEmbMergerPatcher,
     Phi3ModelPatcher,
     Phi3VisionImageEmbeddingsPatcher,
     Phi4MMAudioEncoderPatcher,
@@ -592,6 +595,26 @@ class Qwen3VLTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         common_inputs["visual_pos_masks"] = {0: "batch_size", 1: "sequence_length"}
         common_inputs["deepstack_visual_embeds"] = {0: "num_layers", 1: "visual_seqlen"}
         return common_inputs
+
+
+@register_in_tasks_manager(
+    "paddleocr_vl_text",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class PaddleOCRVLTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    # PaddleOCR-VL text decoder is a Llama/Qwen2-style GQA decoder with multimodal RoPE (M-RoPE).
+    # 3D `position_ids` are supplied by the multimodal wrapper; the M-RoPE combination itself runs
+    # inside the traced graph, so only a standard decoder export config with a GQA-aware KV-cache
+    # generator is needed here.
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLLMInputGenerator, GemmaDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = OVDecoderModelPatcher
+    MIN_TRANSFORMERS_VERSION = "5.10.0"
 
 
 @register_in_tasks_manager(
@@ -4287,6 +4310,148 @@ class Qwen3VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
                 "qwen3_vl_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
             ).outputs
         raise Exception("Unknown Qwen3VL behavior type.")
+
+
+@register_in_tasks_manager("paddleocr_vl", *["image-text-to-text"], library_name="transformers")
+class PaddleOCRVLOpenVINOConfig(BaseVLMOpenVINOConfig):
+    # PaddleOCR-VL is a Qwen2-VL-style multimodal LLM: a NaViT/SigLIP-like vision encoder feeding an
+    # M-RoPE Llama-style text decoder. It reuses the shared Qwen VL behavior enum (language,
+    # text_embeddings, vision_embeddings, vision_embeddings_merger, vision_embeddings_pos) but has its
+    # own vision submodels (Conv2d patch embed + interpolated position table + encoder/projector merger).
+    SUPPORTED_BEHAVIORS = [behavior.value for behavior in QwenVLConfigBehavior if behavior.value not in ("mtp",)]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyPaddleOCRVLVisionEmbedInputGenerator,)
+    MIN_TRANSFORMERS_VERSION = "5.10.0"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: QwenVLConfigBehavior = QwenVLConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior in (
+            QwenVLConfigBehavior.VISION_EMBEDDINGS,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS_POS,
+        ) and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, QwenVLConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
+
+        if behavior == QwenVLConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
+            vision_embeddings = model.model.visual.vision_model.embeddings
+            vision_embeddings.config = model.config.vision_config
+            return vision_embeddings
+
+        if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
+            pos_embeddings = model.model.visual.vision_model.embeddings.position_embedding
+            pos_embeddings.config = model.config.vision_config
+            return pos_embeddings
+
+        if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            vision_merger = model.model
+            vision_merger.config = model.config.vision_config
+            return vision_merger
+
+        if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.model.language_model.embed_tokens
+            text_embedding.config = model.config
+            return text_embedding
+
+    def with_behavior(
+        self,
+        behavior: Union[str, QwenVLConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
+
+        if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "paddleocr_vl_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == QwenVLConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "paddleocr_vl_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Qwen2VLLanguageModelPatcher,
+                dummy_input_generator=DummyQwen2VLLMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+            )
+
+        if behavior in (
+            QwenVLConfigBehavior.VISION_EMBEDDINGS,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS_POS,
+        ):
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
+            return PaddleOCRVLVisionEmbeddingsPatcher(self, model, model_kwargs)
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
+            return InputEmbeddingPatcher(self, model, model_kwargs)
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            return PaddleOCRVLVisionEmbMergerPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
+            return {"pixel_values": {0: "num_patches"}}
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_POS:
+            return {"input": {0: "sequence_length"}}
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            return {
+                "hidden_states": {0: "sequence_length"},
+                "attention_mask": {1: "sequence_length", 2: "sequence_length"},
+                "rotary_pos_emb": {0: "sequence_length"},
+                "merge_index": {0: "sequence_length"},
+            }
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior in (
+            QwenVLConfigBehavior.VISION_EMBEDDINGS,
+            QwenVLConfigBehavior.VISION_EMBEDDINGS_POS,
+        ):
+            return {"last_hidden_state": {0: "seq_len"}}
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            return {"last_hidden_state": {0: "merged_seq_len"}}
+        return {}
 
 
 class Qwen3OmniMoeConfigBehavior(str, enum.Enum):

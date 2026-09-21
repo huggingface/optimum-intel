@@ -194,6 +194,53 @@ def _create_tiny_mistral3_model():
     return str(output_dir)
 
 
+def _create_tiny_paddleocr_vl_model():
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_paddleocr_vl"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+
+    if config_file.exists() and weights_file.exists():
+        return str(output_dir)
+
+    from transformers import AutoConfig, AutoModelForImageTextToText, AutoProcessor
+
+    model_id = "PaddlePaddle/PaddleOCR-VL-1.5"
+
+    torch.manual_seed(SEED)
+
+    config = AutoConfig.from_pretrained(model_id)
+
+    # Text decoder (Ernie-style GQA). Keep head_dim=128 so mrope_section [16,24,24]
+    # keeps summing to head_dim // 2 == 64, and keep the large vocab so the image /
+    # video / vision special-token ids stay in range.
+    config.text_config.num_hidden_layers = 2
+    config.text_config.hidden_size = 64
+    config.text_config.intermediate_size = 128
+    config.text_config.num_attention_heads = 2
+    config.text_config.num_key_value_heads = 1
+
+    # Vision encoder (SigLIP/NaViT-style). Keep patch_size (14) and spatial_merge_size (2).
+    config.vision_config.num_hidden_layers = 2
+    config.vision_config.hidden_size = 128
+    config.vision_config.intermediate_size = 256
+    config.vision_config.num_attention_heads = 8
+    config.vision_config.image_size = 224
+
+    for subconfig in (config, config.text_config, config.vision_config):
+        subconfig.dtype = "float32"
+        subconfig.torch_dtype = "float32"
+
+    model = AutoModelForImageTextToText.from_config(config).float().eval()
+    processor = AutoProcessor.from_pretrained(model_id)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    model.save_pretrained(output_dir, safe_serialization=True)
+    processor.save_pretrained(output_dir)
+
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -337,6 +384,7 @@ HUB_MODEL_NAMES = {
     "pegasus": "optimum-intel-internal-testing/tiny-random-pegasus",
     "perceiver_text": "optimum-intel-internal-testing/tiny-random-language_perceiver",
     "perceiver_vision": "optimum-intel-internal-testing/tiny-random-vision_perceiver_conv",
+    "paddleocr_vl": _create_tiny_paddleocr_vl_model(),
     "persimmon": "optimum-intel-internal-testing/tiny-random-PersimmonForCausalLM",
     "pix2struct": "optimum-intel-internal-testing/pix2struct-tiny-random",
     "phi": "optimum-intel-internal-testing/tiny-random-PhiForCausalLM",
@@ -608,6 +656,13 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 1,
         "vision_embeddings_merger_model": 32,
+        "vision_embeddings_pos_model": 1,
+    },
+    "paddleocr_vl": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 14,
         "vision_embeddings_pos_model": 1,
     },
     "qwen3_vl_embedding": {
