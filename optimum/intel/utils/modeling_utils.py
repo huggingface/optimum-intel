@@ -209,12 +209,16 @@ def _infer_library_from_model_name_or_path(
     cache_dir: str = HUGGINGFACE_HUB_CACHE,
     token: Optional[Union[bool, str]] = None,
 ):
+    from optimum.exporters.openvino.seedvr import is_seedvr2_model
+
     from ..openvino.modeling_funasr import _is_funasr_model
 
     all_files, _ = TasksManager.get_model_files(
         model_name_or_path, subfolder=subfolder, cache_dir=cache_dir, revision=revision, token=token
     )
-    if "open_clip_config.json" in all_files or "open_clip_pytorch_model.bin" in all_files:
+    if is_seedvr2_model(model_name_or_path, all_files):
+        library_name = "seedvr"
+    elif "open_clip_config.json" in all_files or "open_clip_pytorch_model.bin" in all_files:
         library_name = "open_clip"
     elif _is_kokoro_model(model_name_or_path, all_files, cache_dir=cache_dir, token=token):
         library_name = "kokoro"
@@ -242,6 +246,8 @@ def _infer_library_from_model_or_model_class(
         library_name = "kokoro"
     elif model.__module__.startswith("funasr") or getattr(model, "_funasr_model", False):
         library_name = "funasr"
+    elif getattr(model, "_seedvr_model", False):
+        library_name = "seedvr"
     elif getattr(model, "_qwen3_tts_model", False):
         library_name = "qwen3_tts"
     elif model.__module__.startswith("optimum"):

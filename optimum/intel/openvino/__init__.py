@@ -112,6 +112,7 @@ if is_diffusers_available():
         OVLTX2Pipeline,
         OVLTXImageToVideoPipeline,
         OVLTXPipeline,
+        OVSeedVR2Pipeline,
         OVPipelineForImage2Image,
         OVPipelineForImage2Video,
         OVPipelineForInpainting,

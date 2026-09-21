@@ -52,7 +52,7 @@ from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.utils import validate_hf_hub_args
 from openvino import Core
 from openvino._offline_transformations import compress_model_transformation
-from transformers import CLIPImageProcessor, CLIPTokenizer
+from transformers import CLIPImageProcessor, CLIPTokenizer, PretrainedConfig
 from transformers.modeling_outputs import ModelOutput
 from transformers.utils import http_user_agent
 
@@ -68,7 +68,7 @@ from ...exporters.openvino import main_export
 from ..utils.import_utils import is_diffusers_version
 from .configuration import OVConfig, OVQuantizationConfigBase, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
-from .modeling_base import OVBaseModel, OVModelHostMixin
+from .modeling_base import OVBaseModel, OVModelHostMixin, OVModelPart
 from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_TO_PT_TYPE,
@@ -160,6 +160,9 @@ DIFFUSION_MODEL_TEXT_ENCODER_I2I_SUBFOLDER = "text_encoder_i2i"
 DIFFUSION_MODEL_CONNECTORS_SUBFOLDER = "connectors"
 DIFFUSION_MODEL_AUDIO_VAE_DECODER_SUBFOLDER = "audio_vae_decoder"
 DIFFUSION_MODEL_VOCODER_SUBFOLDER = "vocoder"
+SEEDVR2_NADIT_OV_NAME = "openvino_seedvr2_nadit.xml"
+SEEDVR2_VAE_ENCODER_OV_NAME = "openvino_seedvr2_vae_encoder.xml"
+SEEDVR2_VAE_DECODER_OV_NAME = "openvino_seedvr2_vae_decoder.xml"
 
 core = Core()
 
@@ -1292,9 +1295,6 @@ class OVPipelinePart(OVModelHostMixin, ConfigMixin, CacheMixin):
     @abstractmethod
     def forward(self, *args, **kwargs):
         raise NotImplementedError
-
-    def __call__(self, *args, **kwargs):
-        return self.forward(*args, **kwargs)
 
     def modules(self):
         return []
@@ -2820,6 +2820,607 @@ class OVLTX2ImageToVideoPipeline(_OVLTX2Base, LTX2ImageToVideoPipeline):
         return models_paths
 
 
+class OVSeedVR2NaDiT(OVModelPart):
+    def forward(self, vid, txt, vid_shape, txt_shape, timestep):
+        self.compile()
+
+        inputs = {
+            "vid": self._to_numpy(vid, np.float32),
+            "txt": self._to_numpy(txt, np.float32),
+            "vid_shape": self._to_numpy(vid_shape, np.int64),
+            "txt_shape": self._to_numpy(txt_shape, np.int64),
+            "timestep": self._to_numpy(timestep, np.float32),
+        }
+        outputs = self.request(inputs)
+        return torch.from_numpy(outputs[self.output_names["vid_sample"]])
+
+    @staticmethod
+    def _to_numpy(value, dtype):
+        if isinstance(value, torch.Tensor):
+            value = value.detach().cpu().numpy()
+        return np.ascontiguousarray(value, dtype=dtype)
+
+
+class OVSeedVR2VAEEncoder(OVModelPart):
+    def forward(self, sample):
+        self.compile()
+        outputs = self.request({"sample": OVSeedVR2NaDiT._to_numpy(sample, np.float32)})
+        return torch.from_numpy(outputs[self.output_names["latent_sample"]])
+
+
+class OVSeedVR2VAEDecoder(OVModelPart):
+    def forward(self, latent_sample):
+        self.compile()
+        outputs = self.request({"latent_sample": OVSeedVR2NaDiT._to_numpy(latent_sample, np.float32)})
+        return torch.from_numpy(outputs[self.output_names["sample"]])
+
+
+class OVSeedVR2Pipeline(OVModelHostMixin):
+    """OpenVINO runtime wrapper for the exported SeedVR2 NaDiT component.
+
+    SeedVR2 is a custom ``seedvr`` video restoration runtime, not a Diffusers pipeline. This
+    class loads and runs the exported NaDiT IR. If VAE encoder/decoder IRs are present, it
+    also exposes the SeedVR latent encode/decode helpers used by the restoration loop.
+    """
+
+    main_input_name = "video"
+    export_feature = "semantic-segmentation"
+    config_name = "config.json"
+    _library_name = "seedvr"
+
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        return {
+            "seedvr2_nadit": SEEDVR2_NADIT_OV_NAME,
+            "seedvr2_vae_encoder": SEEDVR2_VAE_ENCODER_OV_NAME,
+            "seedvr2_vae_decoder": SEEDVR2_VAE_DECODER_OV_NAME,
+        }
+
+    @property
+    def _ov_model_names(self) -> List[str]:
+        names = ["seedvr2_nadit"]
+        if self.seedvr2_vae_encoder is not None:
+            names.append("seedvr2_vae_encoder")
+        if self.seedvr2_vae_decoder is not None:
+            names.append("seedvr2_vae_decoder")
+        return names
+
+    @property
+    def _component_names(self) -> List[str]:
+        names = ["nadit"]
+        if hasattr(self, "vae_encoder"):
+            names.append("vae_encoder")
+        if hasattr(self, "vae_decoder"):
+            names.append("vae_decoder")
+        return names
+
+    def __init__(
+        self,
+        seedvr2_nadit: openvino.Model,
+        seedvr2_vae_encoder: Optional[openvino.Model] = None,
+        seedvr2_vae_decoder: Optional[openvino.Model] = None,
+        config: Optional[PretrainedConfig] = None,
+        device: str = "CPU",
+        compile: bool = True,
+        compile_only: bool = False,
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        batch_size: int = -1,
+        sequence_length: int = -1,
+        num_frames: int = -1,
+        height: int = -1,
+        width: int = -1,
+        **kwargs,
+    ):
+        self.config = config or PretrainedConfig(model_type="seedvr2")
+        self.model_save_dir = model_save_dir
+        self._device = device.upper()
+        self.is_dynamic = dynamic_shapes
+        self.ov_config = {} if ov_config is None else {**ov_config}
+        self._compile_only = compile_only
+        self.seedvr2_nadit = seedvr2_nadit
+        self.seedvr2_vae_encoder = seedvr2_vae_encoder
+        self.seedvr2_vae_decoder = seedvr2_vae_decoder
+        self._static_sequence_length = sequence_length if sequence_length > 0 else None
+        self.vae_spatial_compression_ratio = getattr(self.config, "spatial_downsample_factor", 8)
+        self.vae_scaling_factor = getattr(self.config, "seedvr_vae_scaling_factor", 0.9152)
+        if not self._compile_only and all(value > 0 for value in (batch_size, sequence_length, num_frames, height, width)):
+            self.reshape(batch_size, sequence_length, num_frames, height, width)
+        self.nadit = OVSeedVR2NaDiT(self.seedvr2_nadit, self, model_name="seedvr2_nadit")
+        if self.seedvr2_vae_encoder is not None:
+            self.vae_encoder = OVSeedVR2VAEEncoder(self.seedvr2_vae_encoder, self, model_name="seedvr2_vae_encoder")
+        if self.seedvr2_vae_decoder is not None:
+            self.vae_decoder = OVSeedVR2VAEDecoder(self.seedvr2_vae_decoder, self, model_name="seedvr2_vae_decoder")
+        if compile:
+            self.compile()
+
+    @classmethod
+    @validate_hf_hub_args
+    def from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        export: bool = False,
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        local_files_only: bool = False,
+        compile: bool = True,
+        device: str = "CPU",
+        model_loading_kwargs: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ):
+        model_path = Path(model_id)
+        model_save_dir = None
+        if not model_path.is_dir() or not (model_path / SEEDVR2_NADIT_OV_NAME).is_file():
+            if not export:
+                raise ValueError(
+                    f"{cls.__name__} expects an exported SeedVR2 OpenVINO directory containing "
+                    f"`{SEEDVR2_NADIT_OV_NAME}`. Pass `export=True` to export a raw SeedVR2 checkpoint first."
+                )
+            model_save_dir = TemporaryDirectory()
+            model_path = Path(model_save_dir.name)
+            main_export(
+                model_name_or_path=str(model_id),
+                output=model_path,
+                task=cls.export_feature,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
+                local_files_only=local_files_only,
+                force_download=force_download,
+                library_name=cls._library_name,
+                model_loading_kwargs=model_loading_kwargs,
+                stateful=False,
+                convert_tokenizer=False,
+                **{key: value for key, value in kwargs.items() if key in {"batch_size", "sequence_length", "num_frames", "height", "width"}},
+            )
+        else:
+            model_path = Path(model_id)
+
+        try:
+            config = PretrainedConfig.from_pretrained(model_path)
+        except Exception:
+            config = PretrainedConfig(model_type="seedvr2")
+
+        seedvr2_nadit = cls.load_model(model_path / SEEDVR2_NADIT_OV_NAME)
+        seedvr2_vae_encoder = cls.load_model(model_path / SEEDVR2_VAE_ENCODER_OV_NAME) if (model_path / SEEDVR2_VAE_ENCODER_OV_NAME).is_file() else None
+        seedvr2_vae_decoder = cls.load_model(model_path / SEEDVR2_VAE_DECODER_OV_NAME) if (model_path / SEEDVR2_VAE_DECODER_OV_NAME).is_file() else None
+        return cls(
+            seedvr2_nadit=seedvr2_nadit,
+            seedvr2_vae_encoder=seedvr2_vae_encoder,
+            seedvr2_vae_decoder=seedvr2_vae_decoder,
+            config=config,
+            device=device,
+            compile=compile,
+            model_save_dir=model_save_dir or model_path,
+            **kwargs,
+        )
+
+    @staticmethod
+    def load_model(file_name: Union[str, Path]) -> openvino.Model:
+        return core.read_model(Path(file_name).resolve(), Path(file_name).with_suffix(".bin").resolve())
+
+    def reshape(self, batch_size: int, sequence_length: int, num_frames: int, height: int, width: int):
+        if self._compile_only:
+            raise ValueError("`reshape()` is not supported with `compile_only` mode.")
+        shapes = {
+            "vid": [batch_size * num_frames * height * width, 33],
+            "txt": [batch_size * sequence_length, 5120],
+            "vid_shape": [batch_size, 3],
+            "txt_shape": [batch_size, 1],
+            "timestep": [batch_size],
+        }
+        self.seedvr2_nadit.reshape(shapes)
+        if self.seedvr2_vae_encoder is not None:
+            self.seedvr2_vae_encoder.reshape({"sample": [batch_size, 3, (num_frames - 1) * 4 + 1, height * 8, width * 8]})
+        if self.seedvr2_vae_decoder is not None:
+            self.seedvr2_vae_decoder.reshape({"latent_sample": [batch_size, 16, num_frames, height, width]})
+        self.is_dynamic = False
+        self.clear_requests()
+        return self
+
+    def compile(self):
+        self.nadit.compile()
+        if hasattr(self, "vae_encoder"):
+            self.vae_encoder.compile()
+        if hasattr(self, "vae_decoder"):
+            self.vae_decoder.compile()
+
+    def clear_requests(self):
+        if hasattr(self, "nadit"):
+            self.nadit.clear_requests()
+        if hasattr(self, "vae_encoder"):
+            self.vae_encoder.clear_requests()
+        if hasattr(self, "vae_decoder"):
+            self.vae_decoder.clear_requests()
+
+    def to(self, device: str):
+        if isinstance(device, str):
+            self._device = device.upper()
+            self.clear_requests()
+        return self
+
+    def __call__(self, *args, **kwargs):
+        if "vid" in kwargs or (len(args) >= 5 and "video" not in kwargs):
+            return self.forward(*args, **kwargs)
+        return self.generate(*args, **kwargs)
+
+    def generate(
+        self,
+        video,
+        text_pos_embeds,
+        text_neg_embeds,
+        num_inference_steps: int = 1,
+        guidance_scale: float = 1.0,
+        guidance_rescale: float = 0.0,
+        generator: Optional[torch.Generator] = None,
+        noise: Optional[torch.Tensor] = None,
+        output_type: str = "pt",
+        return_dict: bool = True,
+    ):
+        if not hasattr(self, "vae_encoder") or not hasattr(self, "vae_decoder"):
+            raise ValueError(
+                "SeedVR2 tensor generation requires VAE encoder and decoder IRs. Re-export with "
+                "`model_loading_kwargs={'export_vae': True}` or `--seedvr-export-vae`."
+            )
+
+        video = torch.as_tensor(video, dtype=torch.float32)
+        if video.ndim == 4:
+            video = video.unsqueeze(0)
+        if video.ndim != 5:
+            raise ValueError("`video` must be a tensor with shape [B, C, T, H, W] or [C, T, H, W].")
+        if video.shape[2] > 1 and (video.shape[2] - 1) % 4 != 0:
+            padding = 4 - ((video.shape[2] - 1) % 4)
+            video = torch.cat([video, video[:, :, -1:].repeat(1, 1, padding, 1, 1)], dim=2)
+
+        cond_latents = self.encode_video(video, scale=True, channel_last=True)
+        batch_size, num_frames, latent_height, latent_width, latent_channels = cond_latents.shape
+        latent_shapes = torch.tensor([[num_frames, latent_height, latent_width]] * batch_size, dtype=torch.long)
+
+        text_pos, text_pos_shapes = self._prepare_text_embeddings(
+            text_pos_embeds, batch_size, self._static_sequence_length
+        )
+        text_neg, text_neg_shapes = self._prepare_text_embeddings(
+            text_neg_embeds, batch_size, self._static_sequence_length
+        )
+
+        if noise is None:
+            noise = torch.randn(cond_latents.shape, generator=generator, dtype=cond_latents.dtype)
+        else:
+            noise = torch.as_tensor(noise, dtype=cond_latents.dtype)
+            if tuple(noise.shape) != tuple(cond_latents.shape):
+                raise ValueError(f"`noise` must have shape {tuple(cond_latents.shape)}, got {tuple(noise.shape)}.")
+
+        conditions = self._flatten_channel_last(self._get_sr_condition(cond_latents))
+        latents = self._flatten_channel_last(noise)
+
+        timesteps = self._uniform_trailing_timesteps(num_inference_steps)
+        for timestep, next_timestep in zip(timesteps[:-1], timesteps[1:]):
+            pred = self.classifier_free_guidance(
+                latents,
+                conditions,
+                text_pos,
+                text_neg,
+                latent_shapes,
+                text_pos_shapes,
+                text_neg_shapes,
+                timestep.repeat(batch_size),
+                guidance_scale=guidance_scale,
+                guidance_rescale=guidance_rescale,
+            )
+            latents = self._seedvr_euler_step(pred, latents, timestep, next_timestep)
+
+        endpoint_timestep = timesteps[-1]
+        pred = self.classifier_free_guidance(
+            latents,
+            conditions,
+            text_pos,
+            text_neg,
+            latent_shapes,
+            text_pos_shapes,
+            text_neg_shapes,
+            endpoint_timestep.repeat(batch_size),
+            guidance_scale=guidance_scale,
+            guidance_rescale=guidance_rescale,
+        )
+        latents = self._seedvr_endpoint(pred, latents, endpoint_timestep)
+        latents = self._unflatten_channel_last(latents, latent_shapes, latent_channels)
+        samples = self.decode_latents(latents, scale=True, channel_last=True)
+
+        if output_type == "np":
+            samples = samples.detach().cpu().numpy()
+        elif output_type != "pt":
+            raise ValueError("`output_type` must be either 'pt' or 'np'.")
+
+        if return_dict:
+            return ModelOutput(samples=samples, images=samples, latents=latents)
+        return (samples, latents)
+
+    def forward(self, vid, txt, vid_shape, txt_shape, timestep, return_dict: bool = True):
+        vid_sample = self.nadit(vid=vid, txt=txt, vid_shape=vid_shape, txt_shape=txt_shape, timestep=timestep)
+        if return_dict:
+            return ModelOutput(vid_sample=vid_sample)
+        return (vid_sample,)
+
+    @staticmethod
+    def _flatten_channel_last(latents: torch.Tensor) -> torch.Tensor:
+        return latents.reshape(-1, latents.shape[-1]).contiguous()
+
+    @staticmethod
+    def _unflatten_channel_last(latents: torch.Tensor, latent_shapes: torch.LongTensor, channels: int) -> torch.Tensor:
+        latents = torch.as_tensor(latents)
+        samples = []
+        offset = 0
+        for shape in latent_shapes.tolist():
+            length = int(np.prod(shape))
+            samples.append(latents[offset : offset + length].reshape(*shape, channels))
+            offset += length
+        return torch.stack(samples, dim=0)
+
+    @staticmethod
+    def _get_sr_condition(cond_latents: torch.Tensor) -> torch.Tensor:
+        cond = torch.zeros(*cond_latents.shape[:-1], cond_latents.shape[-1] + 1, dtype=cond_latents.dtype)
+        cond[..., :-1] = cond_latents
+        cond[..., -1:] = 1.0
+        return cond
+
+    @staticmethod
+    def _prepare_text_embeddings(
+        text_embeds, batch_size: int, sequence_length: Optional[int] = None
+    ) -> Tuple[torch.Tensor, torch.LongTensor]:
+        text_embeds = torch.as_tensor(text_embeds, dtype=torch.float32)
+        if text_embeds.ndim == 2:
+            text_embeds = text_embeds.unsqueeze(0)
+        if text_embeds.ndim != 3:
+            raise ValueError("Text embeddings must have shape [L, C] or [B, L, C].")
+        if text_embeds.shape[0] == 1 and batch_size > 1:
+            text_embeds = text_embeds.expand(batch_size, -1, -1).contiguous()
+        if text_embeds.shape[0] != batch_size:
+            raise ValueError(f"Text embedding batch size must be 1 or {batch_size}, got {text_embeds.shape[0]}.")
+        if sequence_length is not None:
+            if text_embeds.shape[1] > sequence_length:
+                text_embeds = text_embeds[:, :sequence_length]
+            elif text_embeds.shape[1] < sequence_length:
+                padding = text_embeds.new_zeros(text_embeds.shape[0], sequence_length - text_embeds.shape[1], text_embeds.shape[2])
+                text_embeds = torch.cat([text_embeds, padding], dim=1)
+        shapes = torch.tensor([[text_embeds.shape[1]]] * batch_size, dtype=torch.long)
+        return text_embeds.reshape(-1, text_embeds.shape[-1]).contiguous(), shapes
+
+    @staticmethod
+    def _uniform_trailing_timesteps(num_inference_steps: int, T: float = 1000.0, shift: float = 1.0) -> torch.Tensor:
+        timesteps = torch.arange(1.0, 0.0, -1.0 / num_inference_steps)
+        timesteps = shift * timesteps / (1 + (shift - 1) * timesteps)
+        return timesteps * T
+
+    @staticmethod
+    def _schedule_a(timestep: torch.Tensor, T: float = 1000.0) -> torch.Tensor:
+        return 1 - timestep / T
+
+    @staticmethod
+    def _schedule_b(timestep: torch.Tensor, T: float = 1000.0) -> torch.Tensor:
+        return timestep / T
+
+    def _seedvr_euler_step(
+        self, pred: torch.Tensor, x_t: torch.Tensor, timestep: torch.Tensor, next_timestep: torch.Tensor
+    ) -> torch.Tensor:
+        timestep = timestep.reshape([1] * x_t.ndim)
+        next_timestep = next_timestep.reshape([1] * x_t.ndim)
+        a_t = self._schedule_a(timestep)
+        b_t = self._schedule_b(timestep)
+        pred_x_0 = (x_t - b_t * pred) / (a_t + b_t)
+        pred_x_T = (x_t + a_t * pred) / (a_t + b_t)
+        next_timestep = next_timestep.clamp(0, 1000.0)
+        return self._schedule_a(next_timestep) * pred_x_0 + self._schedule_b(next_timestep) * pred_x_T
+
+    def _seedvr_endpoint(self, pred: torch.Tensor, x_t: torch.Tensor, timestep: torch.Tensor) -> torch.Tensor:
+        timestep = timestep.reshape([1] * x_t.ndim)
+        a_t = self._schedule_a(timestep)
+        b_t = self._schedule_b(timestep)
+        return (x_t - b_t * pred) / (a_t + b_t)
+
+    def encode_video(self, sample, scale: bool = True, channel_last: bool = True):
+        if not hasattr(self, "vae_encoder"):
+            raise ValueError("This OVSeedVR2Pipeline was loaded without a VAE encoder IR.")
+        latent = self.vae_encoder(sample)
+        if scale:
+            latent = latent * self.vae_scaling_factor
+        if channel_last:
+            latent = latent.permute(0, 2, 3, 4, 1).contiguous()
+        return latent
+
+    def decode_latents(self, latent_sample, scale: bool = True, channel_last: bool = True):
+        if not hasattr(self, "vae_decoder"):
+            raise ValueError("This OVSeedVR2Pipeline was loaded without a VAE decoder IR.")
+        latent_sample = torch.as_tensor(latent_sample)
+        if channel_last:
+            latent_sample = latent_sample.permute(0, 4, 1, 2, 3).contiguous()
+        if scale:
+            latent_sample = latent_sample / self.vae_scaling_factor
+        return self.vae_decoder(latent_sample)
+
+    def classifier_free_guidance(
+        self,
+        latents,
+        conditions,
+        text_pos_embeds,
+        text_neg_embeds,
+        latent_shapes,
+        text_pos_shapes,
+        text_neg_shapes,
+        timestep,
+        guidance_scale: float = 1.0,
+        guidance_rescale: float = 0.0,
+    ):
+        latents = torch.as_tensor(latents)
+        conditions = torch.as_tensor(conditions)
+        timestep = torch.as_tensor(timestep).reshape(-1)
+        vid = torch.cat([latents, conditions], dim=-1)
+        positive = self.forward(vid, text_pos_embeds, latent_shapes, text_pos_shapes, timestep).vid_sample
+        if guidance_scale == 1.0:
+            return positive
+        negative = self.forward(vid, text_neg_embeds, latent_shapes, text_neg_shapes, timestep).vid_sample
+        guided = negative + guidance_scale * (positive - negative)
+        if guidance_rescale:
+            positive_std = positive.std(dim=tuple(range(1, positive.ndim)), keepdim=True)
+            guided_std = guided.std(dim=tuple(range(1, guided.ndim)), keepdim=True)
+            rescaled = guided * (positive_std / guided_std.clamp_min(1e-6))
+            guided = guidance_rescale * rescaled + (1 - guidance_rescale) * guided
+        return guided
+
+    def load_prompt_embeddings(
+        self,
+        positive_path: Optional[Union[str, Path]] = None,
+        negative_path: Optional[Union[str, Path]] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        search_dirs = []
+        if self.model_save_dir is not None:
+            search_dirs.append(Path(self.model_save_dir))
+        for env_name in ("SEEDVR_SOURCE_PATH", "SEEDVR2_SOURCE_PATH"):
+            env_path = os.environ.get(env_name)
+            if env_path:
+                search_dirs.append(Path(env_path))
+
+        def resolve(path, name):
+            if path is not None:
+                path = Path(path)
+                if path.is_file():
+                    return path
+            for directory in search_dirs:
+                candidate = directory / name
+                if candidate.is_file():
+                    return candidate
+            raise FileNotFoundError(
+                f"Could not find `{name}`. The selected SeedVR2 repository may not bundle default prompt "
+                "embeddings, which is the case for `numz/SeedVR2_comfyUI`. Pass explicit positive/negative "
+                "embedding paths or place `pos_emb.pt` and `neg_emb.pt` next to the exported model."
+            )
+
+        positive = torch.load(resolve(positive_path, "pos_emb.pt"), map_location="cpu")
+        negative = torch.load(resolve(negative_path, "neg_emb.pt"), map_location="cpu")
+        return positive.to(torch.float32), negative.to(torch.float32)
+
+    @staticmethod
+    def load_video(path: Union[str, Path], max_frames: Optional[int] = None) -> Tuple[torch.Tensor, Optional[float]]:
+        from torchvision.io import read_image
+
+        path = Path(path)
+        image_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
+        if path.suffix.lower() in image_exts:
+            return read_image(str(path)).unsqueeze(0).to(torch.float32) / 255.0, None
+
+        try:
+            from torchvision.io import read_video
+        except ImportError as exception:
+            try:
+                import imageio.v3 as iio
+            except ImportError:
+                raise ImportError(
+                    "Reading video files requires either torchvision video I/O or imageio/imageio-ffmpeg. "
+                    "Pass a preloaded video tensor to `generate(...)`, use an image input, or install "
+                    "`imageio imageio-ffmpeg`."
+                ) from exception
+
+            frames = iio.imread(path)
+            if max_frames is not None:
+                frames = frames[:max_frames]
+            metadata = iio.immeta(path, exclude_applied=False)
+            fps = metadata.get("fps") or metadata.get("duration")
+            if isinstance(fps, (int, float)) and fps > 0 and metadata.get("fps") is None:
+                fps = frames.shape[0] / fps
+            video = torch.from_numpy(np.asarray(frames)).permute(0, 3, 1, 2).to(torch.float32) / 255.0
+            return video, fps if isinstance(fps, (int, float)) else None
+
+        video, _, info = read_video(str(path), output_format="TCHW")
+        if max_frames is not None:
+            video = video[:max_frames]
+        return video.to(torch.float32) / 255.0, info.get("video_fps")
+
+    @staticmethod
+    def preprocess_video(video: torch.Tensor, res_h: int = 720, res_w: int = 1280) -> torch.Tensor:
+        import torch.nn.functional as F
+
+        video = torch.as_tensor(video, dtype=torch.float32)
+        if video.ndim != 4:
+            raise ValueError("`video` must have shape [T, C, H, W] before preprocessing.")
+        height, width = video.shape[-2:]
+        scale = float((res_h * res_w) / (height * width)) ** 0.5
+        resized_height = max(1, round(height * scale))
+        resized_width = max(1, round(width * scale))
+        video = F.interpolate(video, size=(resized_height, resized_width), mode="area")
+        video = video.clamp(0.0, 1.0)
+        cropped_height = resized_height - (resized_height % 16)
+        cropped_width = resized_width - (resized_width % 16)
+        top = (resized_height - cropped_height) // 2
+        left = (resized_width - cropped_width) // 2
+        video = video[..., top : top + cropped_height, left : left + cropped_width]
+        video = (video - 0.5) / 0.5
+        return video.permute(1, 0, 2, 3).unsqueeze(0).contiguous()
+
+    @staticmethod
+    def postprocess_samples(samples: torch.Tensor) -> torch.Tensor:
+        samples = torch.as_tensor(samples)
+        if samples.ndim == 4:
+            samples = samples.unsqueeze(2)
+        samples = samples.permute(0, 2, 1, 3, 4).contiguous()
+        return samples.clip(-1, 1).mul(0.5).add(0.5).mul(255).round().to(torch.uint8)
+
+    @staticmethod
+    def save_output(samples: torch.Tensor, output_path: Union[str, Path], fps: Optional[float] = None):
+        from torchvision.io import write_jpeg, write_png
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        samples = OVSeedVR2Pipeline.postprocess_samples(samples)[0]
+        image_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
+        if samples.shape[0] == 1 and output_path.suffix.lower() in image_exts:
+            image = samples[0]
+            if output_path.suffix.lower() in {".jpg", ".jpeg"}:
+                write_jpeg(image, str(output_path))
+            else:
+                write_png(image, str(output_path))
+            return output_path
+
+        video = samples.permute(0, 2, 3, 1).cpu()
+        try:
+            from torchvision.io import write_video
+        except ImportError as exception:
+            try:
+                import imageio.v3 as iio
+            except ImportError:
+                raise ImportError(
+                    "Writing video files requires either torchvision video I/O or imageio/imageio-ffmpeg. "
+                    "Use an image output for single-frame samples, save the returned tensor with another backend, "
+                    "or install `imageio imageio-ffmpeg`."
+                ) from exception
+
+            iio.imwrite(output_path, video.numpy(), fps=fps or 24)
+            return output_path
+        write_video(str(output_path), video, fps=fps or 24)
+        return output_path
+
+    def run(
+        self,
+        input_path: Union[str, Path],
+        output_path: Optional[Union[str, Path]] = None,
+        positive_embedding_path: Optional[Union[str, Path]] = None,
+        negative_embedding_path: Optional[Union[str, Path]] = None,
+        max_frames: Optional[int] = None,
+        res_h: int = 720,
+        res_w: int = 1280,
+        out_fps: Optional[float] = None,
+        **generate_kwargs,
+    ):
+        positive, negative = self.load_prompt_embeddings(positive_embedding_path, negative_embedding_path)
+        video, fps = self.load_video(input_path, max_frames=max_frames)
+        video = self.preprocess_video(video, res_h=res_h, res_w=res_w)
+        outputs = self.generate(video=video, text_pos_embeds=positive, text_neg_embeds=negative, **generate_kwargs)
+        if output_path is not None:
+            self.save_output(outputs.samples, output_path, fps=out_fps or fps)
+        return outputs
+
+
 class OVQwenImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, QwenImagePipeline):
     main_input_name = "prompt"
     export_feature = "text-to-image"
@@ -2834,7 +3435,6 @@ class OVQwenImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, Qw
         # Mirror diffusers.QwenImagePipeline._get_qwen_prompt_embeds, but the OpenVINO text encoder directly
         # outputs the last hidden state (equivalent to `hidden_states[-1]` of the original Qwen2.5-VL model).
         device = device or self._execution_device
-        dtype = dtype or torch.float32
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
 
@@ -3354,6 +3954,10 @@ OV_INPAINT_PIPELINES_MAPPING = OrderedDict(
 OV_TEXT2VIDEO_PIPELINES_MAPPING = OrderedDict()
 OV_IMAGE2VIDEO_PIPELINES_MAPPING = OrderedDict()
 
+# SeedVR2 is intentionally not mapped here: the upstream model is a custom `seedvr` runtime
+# (`ByteDance-Seed/SeedVR2-3B` / `-7B`) using a `NaDiT` implementation with custom video
+# condition/latent flow. It does not match a stock Diffusers video pipeline family, so the
+# Optimum OpenVINO video registry must add a dedicated pipeline adapter before export works.
 if is_diffusers_version(">=", "0.32"):
     OV_TEXT2VIDEO_PIPELINES_MAPPING["ltx-video"] = OVLTXPipeline
     OV_IMAGE2VIDEO_PIPELINES_MAPPING["ltx-video"] = OVLTXImageToVideoPipeline
@@ -3365,6 +3969,10 @@ if is_diffusers_version(">=", "0.38.0"):
     OV_IMAGE2VIDEO_PIPELINES_MAPPING["ltx2"] = OVLTX2ImageToVideoPipeline
     SUPPORTED_OV_PIPELINES.append(OVLTX2Pipeline)
     SUPPORTED_OV_PIPELINES.append(OVLTX2ImageToVideoPipeline)
+
+OV_TEXT2VIDEO_PIPELINES_MAPPING["seedvr"] = OVSeedVR2Pipeline
+OV_TEXT2VIDEO_PIPELINES_MAPPING["seedvr2"] = OVSeedVR2Pipeline
+SUPPORTED_OV_PIPELINES.append(OVSeedVR2Pipeline)
 
 if is_diffusers_version(">=", "0.29.0"):
     SUPPORTED_OV_PIPELINES.extend(

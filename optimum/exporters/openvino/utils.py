@@ -724,6 +724,7 @@ SKIP_CHECK_TRACE_MODELS = (
     "esm",
     "levit",
     "llama4",
+    "seedvr2",
 )
 
 

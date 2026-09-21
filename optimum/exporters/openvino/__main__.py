@@ -91,6 +91,8 @@ def infer_task(
     if task == "auto":
         if library_name == "open_clip":
             task = "zero-shot-image-classification"
+        elif library_name == "seedvr":
+            task = "semantic-segmentation"
         elif library_name in ("kokoro", "qwen3_tts"):
             task = "text-to-audio"
         elif library_name == "funasr":
@@ -588,6 +590,19 @@ def main_export(
             from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
 
             model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+        elif library_name == "seedvr":
+            from optimum.exporters.openvino.seedvr import load_seedvr2_nadit_model
+
+            seedvr_loading_kwargs = dict(loading_kwargs)
+            model = load_seedvr2_nadit_model(
+                model_name_or_path,
+                cache_dir=cache_dir,
+                revision=revision,
+                token=token,
+                local_files_only=local_files_only,
+                force_download=force_download,
+                **seedvr_loading_kwargs,
+            )
         elif library_name == "qwen3_tts":
             # Without an explicit request the checkpoint's own precision is kept, so the IRs
             # come out at the precision the model was published in rather than upcast. A

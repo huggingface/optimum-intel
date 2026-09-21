@@ -885,6 +885,101 @@ class LTXTransformerDummyInputGenerator(DummyVisionInputGenerator):
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
+class SeedVR2NaDiTDummyInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("vid", "txt", "vid_shape", "txt_shape", "timestep")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        num_frames: int = 1,
+        height: int = 4,
+        width: int = 4,
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.num_frames = num_frames
+        self.height = height
+        self.width = width
+        self.vid_in_channels = getattr(normalized_config.config, "vid_in_channels", 33)
+        self.txt_in_dim = getattr(normalized_config.config, "txt_in_dim", 5120)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        import torch
+
+        if input_name == "vid":
+            seq_len = self.batch_size * self.num_frames * self.height * self.width
+            return self.random_float_tensor([seq_len, self.vid_in_channels], framework=framework, dtype=float_dtype)
+        if input_name == "txt":
+            return self.random_float_tensor(
+                [self.batch_size * self.sequence_length, self.txt_in_dim], framework=framework, dtype=float_dtype
+            )
+        if input_name == "vid_shape":
+            return torch.tensor([[self.num_frames, self.height, self.width]] * self.batch_size, dtype=torch.long)
+        if input_name == "txt_shape":
+            return torch.tensor([[self.sequence_length]] * self.batch_size, dtype=torch.long)
+        if input_name == "timestep":
+            return self.random_float_tensor([self.batch_size], framework=framework, dtype=float_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class SeedVR2VAEDummyInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("sample", "latent_sample")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_frames: int = 1,
+        height: int = 90,
+        width: int = 160,
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        self.batch_size = batch_size
+        self.num_frames = num_frames
+        self.height = height
+        self.width = width
+        self.in_channels = getattr(normalized_config.config, "in_channels", 3)
+        self.latent_channels = getattr(normalized_config.config, "latent_channels", 16)
+        self.spatial_downsample_factor = getattr(normalized_config.config, "spatial_downsample_factor", 8)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "sample":
+            sample_num_frames = (self.num_frames - 1) * 4 + 1
+            return self.random_float_tensor(
+                [
+                    self.batch_size,
+                    self.in_channels,
+                    sample_num_frames,
+                    self.height * self.spatial_downsample_factor,
+                    self.width * self.spatial_downsample_factor,
+                ],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "latent_sample":
+            return self.random_float_tensor(
+                [
+                    self.batch_size,
+                    self.latent_channels,
+                    self.num_frames,
+                    self.height,
+                    self.width,
+                ],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
 class LTX2VaeDummyInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("pixel_values", "pixel_mask", "sample", "latent_sample", "timestep")
 

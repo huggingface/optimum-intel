@@ -112,6 +112,8 @@ from optimum.exporters.openvino.input_generators import (
     Qwen3NextDummyPastKeyValuesGenerator,
     QwenDummyPastKeyValuesGenerator,
     QwenImage21VaeDummyInputGenerator,
+    SeedVR2NaDiTDummyInputGenerator,
+    SeedVR2VAEDummyInputGenerator,
     Zamba2DummyPastKeyValuesGenerator,
 )
 from optimum.exporters.openvino.model_patcher import (
@@ -223,6 +225,7 @@ from optimum.exporters.openvino.model_patcher import (
     QwenImageTransformerModelPatcher,
     QwenImageVaeModelPatcher,
     QwenModelPatcher,
+    SeedVR2NaDiTModelPatcher,
     SAMModelPatcher,
     SanaTextEncoderModelPatcher,
     SentenceTransformersTransformerPatcher,
@@ -400,6 +403,11 @@ def init_model_configs():
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS.setdefault("inpainting", {})
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["inpainting"]["z-image"] = "ZImageInpaintPipeline"
     if is_diffusers_available():
+        # SeedVR2 is shipped under the custom `seedvr` library and uses a custom NaDiT-based
+        # video-restoration runtime (`ByteDance-Seed/SeedVR2-3B` and `...-7B`). The upstream
+        # configs expose `NaDiT` with custom video/latent conditioning, not a standard
+        # Diffusers `Pipeline` subclass. Its transformer core is registered below as
+        # `seedvr2`/`seedvr2-nadit`; do not route the raw Hub repos through Diffusers loaders.
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS.setdefault("text-to-video", {})
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx-video"] = "LTXPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx2"] = "LTX2Pipeline"
@@ -3029,6 +3037,64 @@ class LTXVideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
         return {
             "out_sample": {0: "batch_size", 1: "video_sequence_length"},
         }
+
+
+@register_in_tasks_manager("seedvr2-nadit", *["semantic-segmentation"], library_name="transformers")
+@register_in_tasks_manager("seedvr2", *["semantic-segmentation"], library_name="transformers")
+class SeedVR2NaDiTOpenVINOConfig(OpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        vid_in_channels="vid_in_channels",
+        txt_in_dim="txt_in_dim",
+        allow_new=True,
+    )
+    DUMMY_INPUT_GENERATOR_CLASSES = (SeedVR2NaDiTDummyInputGenerator,)
+    _MODEL_PATCHER = SeedVR2NaDiTModelPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "vid": {0: "video_sequence_length"},
+            "txt": {0: "text_sequence_length"},
+            "vid_shape": {0: "batch_size"},
+            "txt_shape": {0: "batch_size"},
+            "timestep": {0: "batch_size"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "vid_sample": {0: "video_sequence_length"},
+        }
+
+
+@register_in_tasks_manager("seedvr2-vae-encoder", *["semantic-segmentation"], library_name="transformers")
+class SeedVR2VAEEncoderOpenVINOConfig(OpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        in_channels="in_channels",
+        latent_channels="latent_channels",
+        spatial_downsample_factor="spatial_downsample_factor",
+        allow_new=True,
+    )
+    DUMMY_INPUT_GENERATOR_CLASSES = (SeedVR2VAEDummyInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"}}
+
+
+@register_in_tasks_manager("seedvr2-vae-decoder", *["semantic-segmentation"], library_name="transformers")
+class SeedVR2VAEDecoderOpenVINOConfig(SeedVR2VAEEncoderOpenVINOConfig):
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"}}
 
 
 @register_in_tasks_manager("qwenimage-transformer", *["semantic-segmentation"], library_name="diffusers")

@@ -85,9 +85,38 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--library",
         type=str,
-        choices=["transformers", "diffusers", "timm", "sentence_transformers", "open_clip", "kokoro"],
+        choices=["transformers", "diffusers", "timm", "sentence_transformers", "open_clip", "kokoro", "seedvr"],
         default=None,
         help="The library used to load the model before export. If not provided, will attempt to infer the local checkpoint's library",
+    )
+    optional_group.add_argument(
+        "--seedvr-source-path",
+        type=str,
+        default=None,
+        help=(
+            "Path to the SeedVR source checkout. Required for SeedVR2 raw checkpoint conversion unless "
+            "SEEDVR_SOURCE_PATH is set or a sibling SeedVR checkout can be found."
+        ),
+    )
+    optional_group.add_argument(
+        "--seedvr-checkpoint-filename",
+        type=str,
+        default=None,
+        help=(
+            "SeedVR2 checkpoint file to export, for example `seedvr2_ema_3b_fp16.safetensors`. "
+            "Required for repositories that contain multiple SeedVR2 variants."
+        ),
+    )
+    optional_group.add_argument(
+        "--seedvr-export-vae",
+        action="store_true",
+        help="Also export the SeedVR2 VAE encoder and decoder components.",
+    )
+    optional_group.add_argument(
+        "--seedvr-vae-checkpoint-filename",
+        type=str,
+        default=None,
+        help="SeedVR2 VAE checkpoint file to export, for example `ema_vae_fp16.safetensors`.",
     )
     optional_group.add_argument(
         "--cache_dir",
@@ -479,6 +508,23 @@ class OVExportCommand(BaseOptimumCLICommand):
                 convert_tokenizer=not self.args.disable_convert_tokenizer,
                 library_name=library_name,
                 variant=self.args.variant,
+                model_loading_kwargs=(
+                    {
+                        key: value
+                        for key, value in {
+                            "seedvr_source_path": self.args.seedvr_source_path,
+                            "checkpoint_filename": self.args.seedvr_checkpoint_filename,
+                            "export_vae": self.args.seedvr_export_vae or None,
+                            "vae_checkpoint_filename": self.args.seedvr_vae_checkpoint_filename,
+                        }.items()
+                        if value is not None
+                    }
+                    if self.args.seedvr_source_path is not None
+                    or self.args.seedvr_checkpoint_filename is not None
+                    or self.args.seedvr_export_vae
+                    or self.args.seedvr_vae_checkpoint_filename is not None
+                    else None
+                ),
                 model_kwargs=self.args.model_kwargs,
                 # **input_shapes,
             )

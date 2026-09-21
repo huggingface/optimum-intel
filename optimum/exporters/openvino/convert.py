@@ -48,6 +48,7 @@ from optimum.exporters.openvino.utils import (
     save_preprocessors,
     set_simplified_chat_template,
 )
+from optimum.exporters.openvino.seedvr import get_seedvr2_models_for_export, save_seedvr2_config_and_assets
 from optimum.exporters.tasks import TasksManager
 from optimum.exporters.utils import (
     DECODER_NAME,
@@ -697,7 +698,7 @@ def export_from_model(
         )
 
     library_name = _infer_library_from_model_or_model_class(model)
-    if library_name not in ("open_clip", "kokoro", "qwen3_tts", "funasr"):
+    if library_name not in ("open_clip", "kokoro", "qwen3_tts", "funasr", "seedvr"):
         TasksManager.standardize_model_attributes(model, library_name=library_name)
 
     if hasattr(model.config, "export_model_type") and model.config.export_model_type is not None:
@@ -788,6 +789,10 @@ def export_from_model(
         input_shapes[input_name] = (
             kwargs_shapes[input_name] if input_name in kwargs_shapes else DEFAULT_DUMMY_SHAPES[input_name]
         )
+    if library_name == "seedvr":
+        for input_name in ("height", "width", "num_frames"):
+            if input_name in kwargs_shapes:
+                input_shapes[input_name] = kwargs_shapes[input_name]
 
     if library_name == "open_clip":
         custom_architecture = True
@@ -807,9 +812,15 @@ def export_from_model(
             model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
         )
 
+    if library_name == "seedvr":
+        export_config, models_and_export_configs, stateful_submodels = get_seedvr2_models_for_export(model, task=task)
+        custom_architecture = True
+
     if library_name == "diffusers":
         export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
         stateful_submodels = False
+    elif library_name == "seedvr":
+        pass
     elif stateful and is_encoder_decoder and not custom_architecture:
         export_config, models_and_export_configs = _get_encoder_decoder_stateful_models_for_export(
             model=model, task=task, preprocessors=preprocessors, library_name=library_name, _variant="default"
@@ -847,6 +858,9 @@ def export_from_model(
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
     elif library_name == "qwen3_tts":
         _save_qwen3_tts_config_and_assets(model, output)
+        files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
+    elif library_name == "seedvr":
+        save_seedvr2_config_and_assets(model, output)
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
     elif library_name != "diffusers":
         if is_transformers_version("<", "5"):

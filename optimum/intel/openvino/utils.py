@@ -152,6 +152,8 @@ _HEAD_TO_AUTOMODELS = {
     "automatic-speech-recognition-with-past": "OVModelForSpeechSeq2Seq",
     "ltx-video": "OVLTXPipeline",
     "ltx2": "OVLTX2Pipeline",
+    "seedvr": "OVSeedVR2Pipeline",
+    "seedvr2": "OVSeedVR2Pipeline",
     "z-image": "OVZImagePipeline",
     "text-to-video": "OVPipelineForText2Video",
     "image-to-video": "OVPipelineForImage2Video",
