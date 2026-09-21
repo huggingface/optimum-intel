@@ -147,6 +147,7 @@ class ExportModelTest(unittest.TestCase):
         "qwen3_omni_moe": OVModelForMultimodalLM,
         "muse_glimmer": OVModelForVisualCausalLM,
         "deepseek_ocr2": OVModelForVisualCausalLM,
+        "unlimited_ocr": OVModelForVisualCausalLM,
     }
 
     if is_diffusers_version(">=", "0.41.0.dev0"):
@@ -244,6 +245,13 @@ class ExportModelTest(unittest.TestCase):
             # rotary embedding. The CLI export backfills it; mirror that here for the direct model load.
             loading_kwargs["config"] = _ensure_qwen3_omni_rope_scaling(AutoConfig.from_pretrained(model_name))
             model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(model_name, **loading_kwargs)
+        elif model_type == "unlimited_ocr":
+            # ``unlimited-ocr`` remote code only registers ``AutoModel`` (not
+            # ``AutoModelForImageTextToText``), matching the ``load_with_automodel`` path used by the
+            # OpenVINO exporter in ``optimum/exporters/openvino/__main__.py``.
+            from transformers import AutoModel
+
+            model = AutoModel.from_pretrained(model_name, **loading_kwargs)
         else:
             model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
 
