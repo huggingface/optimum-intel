@@ -657,6 +657,16 @@ _DEFAULT_INT8_FQ_CONFIGS = {
 # Default quantization ignored scope configs. For each model id it is a dict of `{ov_model_name: ignored_scope}`.
 # For possible values of `ov_model_name` please take a look at `_ov_model_names` property of corresponding OVModel class.
 _DEFAULT_IGNORED_SCOPE_CONFIGS = {
+    "Qwen/Qwen3-ASR-0.6B": {
+        "decoder": {
+            "patterns": [".*rotary_emb.*"],
+        },
+    },
+    "Qwen/Qwen3-ASR-1.7B": {
+        "decoder": {
+            "patterns": [".*rotary_emb.*"],
+        },
+    },
     "Qwen/Qwen3-Embedding-0.6B": {
         "model": {
             "names": [
