@@ -87,6 +87,8 @@ def test_seedvr2_ada_modulation_patch_is_gpu_safe_and_equivalent():
             idx = self.layers.index(layer)
             emb = emb.reshape(emb.shape[0], self.dim, len(self.layers), 3)[..., idx, :]
             emb = expand_dims(emb, 1, hid.ndim + 1)
+            if hid_len is not None:
+                emb = torch.cat([element.repeat(int(length), *([1] * element.ndim)) for element, length in zip(emb, hid_len)])
             shiftA, scaleA, gateA = emb.unbind(-1)
             if mode == "in":
                 return hid * (scaleA + getattr(self, f"{layer}_scale")) + (shiftA + getattr(self, f"{layer}_shift"))
@@ -110,14 +112,16 @@ def test_seedvr2_ada_modulation_patch_is_gpu_safe_and_equivalent():
         with torch.no_grad():
             for layer, mode, shape in cases:
                 hid, emb = torch.randn(*shape), torch.randn(1, 48)
-                probes.append((hid, emb, layer, mode))
-                expected.append(ada(hid.clone(), emb, layer=layer, mode=mode))
+                hid_len = torch.tensor([shape[0]]) if len(shape) == 2 else None
+                cache = lambda _key, fn: fn()
+                probes.append((hid, emb, layer, mode, hid_len))
+                expected.append(ada(hid.clone(), emb, layer=layer, mode=mode, cache=cache, hid_len=hid_len))
 
         _patch_seedvr_ada_modulation("_seedvr_ada_test")
 
         with torch.no_grad():
-            for (hid, emb, layer, mode), exp in zip(probes, expected):
-                got = ada(hid.clone(), emb, layer=layer, mode=mode)
+            for (hid, emb, layer, mode, hid_len), exp in zip(probes, expected):
+                got = ada(hid.clone(), emb, layer=layer, mode=mode, cache=cache, hid_len=hid_len)
                 assert got.shape == exp.shape, (layer, mode)
                 assert torch.allclose(exp, got, atol=1e-6), (layer, mode)
     finally:

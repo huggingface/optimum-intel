@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import sys
 import unittest
 from pathlib import Path
 
@@ -31,12 +32,14 @@ from utils_tests import (
 )
 
 from optimum.exporters.openvino import export_from_model, main_export
+from optimum.exporters.openvino.convert import export
 from optimum.exporters.openvino.model_configs import (
     BertOpenVINOConfig,
     LTX2TextEncoderOpenVINOConfig,
     Qwen3OmniMoeConfigBehavior,
+    SeedVR2NaDiTOpenVINOConfig,
 )
-from optimum.exporters.openvino.model_patcher import LTX2TextEncoderPatcher
+from optimum.exporters.openvino.model_patcher import LTX2TextEncoderPatcher, SeedVR2NaDiTModelPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVFlux2KleinPipeline,
@@ -45,6 +48,7 @@ from optimum.intel import (
     OVLTX2Pipeline,
     OVLTXPipeline,
     OVModelForAudioClassification,
+    OVSeedVR2Pipeline,
     OVModelForCausalLM,
     OVModelForCustomTasks,
     OVModelForFeatureExtraction,
@@ -181,6 +185,144 @@ class ExportModelTest(unittest.TestCase):
     }
 
     GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
+
+    def test_seedvr2_explicitly_rejected(self):
+        with self.assertRaisesRegex(ValueError, "exported SeedVR2 OpenVINO directory.*export=True"):
+            OVSeedVR2Pipeline.from_pretrained("dummy-seedvr-checkpoint")
+
+    def test_seedvr2_nadit_export_config(self):
+        class TinySeedVR2NaDiT(torch.nn.Module):
+            def __init__(self, config):
+                super().__init__()
+                self.config = config
+                self.proj = torch.nn.Linear(4, 2)
+
+            def forward(self, vid, txt, vid_shape, txt_shape, timestep, disable_cache=False):
+                return type("NaDiTOutput", (), {"vid_sample": self.proj(vid)})()
+
+        config = AutoConfig.for_model("bert")
+        config.model_type = "seedvr2"
+        config.vid_in_channels = 4
+        config.txt_in_dim = 8
+        ov_config = SeedVR2NaDiTOpenVINOConfig(config, task="semantic-segmentation")
+
+        dummy_inputs = ov_config.generate_dummy_inputs(
+            framework="pt", batch_size=1, sequence_length=3, num_frames=1, height=2, width=2
+        )
+
+        self.assertEqual(set(dummy_inputs), {"vid", "txt", "vid_shape", "txt_shape", "timestep"})
+        self.assertEqual(tuple(dummy_inputs["vid"].shape), (4, 4))
+        self.assertEqual(tuple(dummy_inputs["txt"].shape), (3, 8))
+
+        model = TinySeedVR2NaDiT(config)
+        patcher = SeedVR2NaDiTModelPatcher(ov_config, model)
+        with patcher:
+            outputs = patcher._model(**dummy_inputs)
+        self.assertEqual(set(outputs), {"vid_sample"})
+        self.assertEqual(tuple(outputs["vid_sample"].shape), (4, 2))
+
+        with TemporaryDirectory() as tmpdirname:
+            input_names, output_names, _ = export(
+                model,
+                ov_config,
+                Path(tmpdirname) / "openvino_model.xml",
+                input_shapes={"batch_size": 1, "sequence_length": 3, "num_frames": 1, "height": 2, "width": 2},
+                stateful=False,
+                library_name="transformers",
+            )
+            self.assertEqual(input_names, ["vid", "txt", "vid_shape", "txt_shape", "timestep"])
+            self.assertEqual(output_names, ["vid_sample"])
+            self.assertTrue((Path(tmpdirname) / "openvino_model.xml").exists())
+
+        with TemporaryDirectory() as tmpdirname:
+            export(
+                model,
+                ov_config,
+                Path(tmpdirname) / "openvino_seedvr2_nadit.xml",
+                input_shapes={"batch_size": 1, "sequence_length": 3, "num_frames": 1, "height": 2, "width": 2},
+                stateful=False,
+                library_name="transformers",
+            )
+            config.save_pretrained(tmpdirname)
+            pipeline = OVSeedVR2Pipeline.from_pretrained(tmpdirname, compile=True, device=OPENVINO_DEVICE)
+            outputs = pipeline(**dummy_inputs)
+
+            self.assertEqual(tuple(outputs.vid_sample.shape), (4, 2))
+            cfg_outputs = pipeline.classifier_free_guidance(
+                latents=dummy_inputs["vid"][:, :2],
+                conditions=dummy_inputs["vid"][:, :2],
+                text_pos_embeds=dummy_inputs["txt"],
+                text_neg_embeds=dummy_inputs["txt"],
+                latent_shapes=dummy_inputs["vid_shape"],
+                text_pos_shapes=dummy_inputs["txt_shape"],
+                text_neg_shapes=dummy_inputs["txt_shape"],
+                timestep=dummy_inputs["timestep"],
+                guidance_scale=1.5,
+            )
+            self.assertEqual(tuple(cfg_outputs.shape), (4, 2))
+
+    def test_seedvr2_main_export_from_raw_checkpoint(self):
+        source = """
+import torch
+from torch import nn
+
+
+class NaDiTOutput:
+    def __init__(self, vid_sample):
+        self.vid_sample = vid_sample
+
+
+class NaDiT(nn.Module):
+    def __init__(self, vid_in_channels, txt_in_dim, **kwargs):
+        super().__init__()
+        self.proj = nn.Linear(vid_in_channels, 2)
+
+    def set_gradient_checkpointing(self, enable):
+        self.gradient_checkpointing = enable
+
+    def forward(self, vid, txt, vid_shape, txt_shape, timestep, disable_cache=False):
+        return NaDiTOutput(self.proj(vid))
+"""
+        with TemporaryDirectory() as tmpdirname:
+            root = Path(tmpdirname)
+            seedvr_source = root / "SeedVR"
+            repo = root / "SeedVR2-3B"
+            output = root / "ov"
+            (seedvr_source / "models" / "dit_v2").mkdir(parents=True)
+            (seedvr_source / "models" / "__init__.py").write_text("", encoding="utf-8")
+            (seedvr_source / "models" / "dit_v2" / "__init__.py").write_text("", encoding="utf-8")
+            (seedvr_source / "common").mkdir()
+            (seedvr_source / "common" / "__init__.py").write_text("", encoding="utf-8")
+            (seedvr_source / "models" / "dit_v2" / "nadit.py").write_text(source, encoding="utf-8")
+
+            repo.mkdir()
+            sys.path.insert(0, str(seedvr_source))
+            try:
+                from models.dit_v2.nadit import NaDiT
+
+                model = NaDiT(vid_in_channels=33, txt_in_dim=5120)
+                torch.save(model.state_dict(), repo / "seedvr2_ema_3b.pth")
+            finally:
+                sys.path.remove(str(seedvr_source))
+                sys.modules.pop("models.dit_v2.nadit", None)
+                sys.modules.pop("models.dit_v2", None)
+                sys.modules.pop("models", None)
+
+            main_export(
+                str(repo),
+                output,
+                library_name="seedvr",
+                model_loading_kwargs={"seedvr_source_path": str(seedvr_source)},
+                stateful=False,
+                convert_tokenizer=False,
+                batch_size=1,
+                sequence_length=3,
+                num_frames=1,
+            )
+
+            self.assertTrue((output / "openvino_seedvr2_nadit.xml").exists())
+            self.assertTrue((output / "config.json").exists())
+            self.assertTrue((output / "seedvr2_export_config.json").exists())
 
     def _openvino_export(
         self,

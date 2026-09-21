@@ -118,6 +118,11 @@ def parse_args_openvino(parser: "ArgumentParser"):
         default=None,
         help="SeedVR2 VAE checkpoint file to export, for example `ema_vae_fp16.safetensors`.",
     )
+    optional_group.add_argument("--batch-size", type=int, default=None, help="SeedVR2 export batch size.")
+    optional_group.add_argument("--sequence-length", type=int, default=None, help="SeedVR2 text sequence length.")
+    optional_group.add_argument("--num-frames", type=int, default=None, help="SeedVR2 latent video frame count.")
+    optional_group.add_argument("--height", type=int, default=None, help="SeedVR2 latent frame height.")
+    optional_group.add_argument("--width", type=int, default=None, help="SeedVR2 latent frame width.")
     optional_group.add_argument(
         "--cache_dir",
         type=str,
@@ -494,7 +499,17 @@ class OVExportCommand(BaseOptimumCLICommand):
             output = Path(self.args.output)
 
         try:
-            # TODO : add input shapes
+            input_shapes = {
+                name.replace("-", "_"): value
+                for name, value in {
+                    "batch_size": self.args.batch_size,
+                    "sequence_length": self.args.sequence_length,
+                    "num_frames": self.args.num_frames,
+                    "height": self.args.height,
+                    "width": self.args.width,
+                }.items()
+                if value is not None
+            }
             main_export(
                 model_name_or_path=self.args.model,
                 output=output,
@@ -526,7 +541,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                     else None
                 ),
                 model_kwargs=self.args.model_kwargs,
-                # **input_shapes,
+                **input_shapes,
             )
             if apply_main_quantize:
                 _main_quantize(

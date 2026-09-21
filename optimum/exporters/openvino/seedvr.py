@@ -365,12 +365,12 @@ def _resolve_checkpoint_path(
 ) -> Path:
     model_path = Path(model_name_or_path)
     if model_path.is_file():
-        return model_path
+        return model_path.resolve()
     if model_path.is_dir():
         candidates = [model_path / checkpoint_filename, model_path / "ckpts" / checkpoint_filename]
         for candidate in candidates:
             if candidate.is_file():
-                return candidate
+                return candidate.resolve()
         raise FileNotFoundError(f"Could not find `{checkpoint_filename}` in `{model_path}` or `{model_path / 'ckpts'}`.")
 
     return Path(
@@ -438,14 +438,14 @@ def _as_python_int(value):
 
 
 def _patch_seedvr_ada_modulation(modulation_module_name: str):
-    """Rewrite ``AdaSingle.forward`` to gather modulation components from the flat emb.
+    """Rewrite ``AdaSingle.forward`` to gather modulation components from the flat embedding.
 
     SeedVR2's ada modulation reshapes ``emb`` to ``[b, dim, layers, 3]`` and unbinds the
     inner size-3 axis. The OpenVINO GPU plugin miscomputes that ``reshape -> select ->
-    Tile -> inner-axis Split`` pattern whenever a large downstream MatMul is present,
-    corrupting the whole NaDiT output on GPU while CPU stays correct. Reading each
-    component directly from the flat emb with ``index_select`` (indices ``d*(l*3)+idx*3+c``)
-    is numerically identical and traces to a GPU-safe ``Gather``.
+    Tile -> inner-axis Split`` pattern when a large downstream MatMul is present. Gather
+    the components before expanding them over tokens. For a single-sample export, retain
+    SeedVR2's cache reuse but leave cached values as ``[1, dim]`` so downstream arithmetic
+    broadcasts them without emitting GPU-problematic ``Tile`` nodes.
     """
     try:
         modulation_module = importlib.import_module(modulation_module_name)
@@ -462,13 +462,15 @@ def _patch_seedvr_ada_modulation(modulation_module_name: str):
         dim = self.dim
         base = torch.arange(dim, device=emb.device, dtype=torch.long) * (num_layers * 3) + idx * 3
 
-        # Gather each component straight from the flat emb and broadcast over the token grid.
-        # The per-sample ``hid_len`` repeat is intentionally dropped: it traces to a batch
-        # unbind Split that re-triggers the GPU miscompute, and for the single-video export the
-        # timestep embedding is identical across tokens, so broadcasting is numerically equal.
         def component(offset):
             comp = emb.index_select(-1, base + offset)  # [b, dim]
-            return expand_dims(comp, 1, hid.ndim)
+            comp = expand_dims(comp, 1, hid.ndim)
+            if hid_len is not None:
+                comp = cache(
+                    f"emb_repeat_{idx}_{branch_tag}_{offset}",
+                    lambda: comp,
+                )
+            return comp
 
         shiftA, scaleA, gateA = component(0), component(1), component(2)
         shiftB = getattr(self, f"{layer}_shift", None)
@@ -519,6 +521,9 @@ def load_seedvr2_nadit_model(
     torch_dtype: Optional[Union[str, torch.dtype]] = None,
     **kwargs,
 ):
+    local_model_path = Path(model_name_or_path)
+    if local_model_path.exists():
+        model_name_or_path = local_model_path.resolve()
     variant = _detect_variant(model_name_or_path, checkpoint_filename)
     variant_config = SEEDVR2_VARIANT_CONFIGS[variant]
     checkpoint_filename = checkpoint_filename or variant_config["checkpoint_filename"]
