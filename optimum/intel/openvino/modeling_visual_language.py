@@ -57,7 +57,6 @@ from optimum.intel.openvino.utils import (
 )
 from optimum.intel.utils.import_utils import is_transformers_version
 
-
 if is_transformers_version(">=", "4.57"):
     from transformers.models.qwen3_omni_moe.processing_qwen3_omni_moe import _get_feat_extract_output_lengths
     from transformers.models.qwen3_vl.modeling_qwen3_vl import (
@@ -5599,9 +5598,7 @@ class _OVGemma4ForCausalLM(_OVGemma3ForCausalLM):
             audio_embeds, audio_output_mask = self.audio_embeddings(
                 {"input_features": audio_input_features, "input_features_mask": audio_attention_mask}
             )
-            audio_embeds = (
-                torch.from_numpy(audio_embeds) if isinstance(audio_embeds, np.ndarray) else audio_embeds
-            )
+            audio_embeds = torch.from_numpy(audio_embeds) if isinstance(audio_embeds, np.ndarray) else audio_embeds
             audio_output_mask = (
                 torch.from_numpy(audio_output_mask) if isinstance(audio_output_mask, np.ndarray) else audio_output_mask
             )
@@ -5860,9 +5857,7 @@ class _OVGemma4UnifiedForCausalLM(_OVGemma3ForCausalLM):
 
             inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
             audio_embeds = self.audio_embeddings(audio_input_features)
-            audio_embeds = (
-                torch.from_numpy(audio_embeds) if isinstance(audio_embeds, np.ndarray) else audio_embeds
-            )
+            audio_embeds = torch.from_numpy(audio_embeds) if isinstance(audio_embeds, np.ndarray) else audio_embeds
             audio_attention_mask = (
                 torch.from_numpy(audio_attention_mask)
                 if isinstance(audio_attention_mask, np.ndarray)
