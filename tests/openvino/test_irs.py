@@ -6,15 +6,18 @@ regressions when upgrading transformers or other dependencies.
 """
 
 import json
+import os
 
 # Import test utilities to get model mappings
 import sys
+import time
 from pathlib import Path
 from pathlib import Path as PathlibPath
 from typing import Dict, List, Optional
 
 import pytest
 from huggingface_hub import snapshot_download
+from huggingface_hub.errors import HFValidationError, RepositoryNotFoundError, RevisionNotFoundError
 from openvino import Core, Model
 
 from optimum.intel import (
@@ -42,6 +45,7 @@ from optimum.intel import (
     OVModelForVisualCausalLM,
     OVModelForZeroShotImageClassification,
     OVModelOpenCLIPForZeroShotImageClassification,
+    OVQwenImage21Pipeline,
     OVSamModel,
     OVSanaPipeline,
     OVStableDiffusion3Pipeline,
@@ -82,6 +86,7 @@ CLASS_NAME_TO_CLASS = {
     "OVModelForVisualCausalLM": OVModelForVisualCausalLM,
     "OVModelForZeroShotImageClassification": OVModelForZeroShotImageClassification,
     "OVModelOpenCLIPForZeroShotImageClassification": OVModelOpenCLIPForZeroShotImageClassification,
+    "OVQwenImage21Pipeline": OVQwenImage21Pipeline,
     "OVSamModel": OVSamModel,
     "OVSanaPipeline": OVSanaPipeline,
     "OVStableDiffusion3Pipeline": OVStableDiffusion3Pipeline,
@@ -248,6 +253,8 @@ ADDITIONAL_ARCH_MAPPINGS = {
     "latent-consistency": "OVLatentConsistencyModelPipeline",
     "ltx-video": "OVLTXPipeline",
     "ltx2": "OVLTX2Pipeline",
+    "ltx2.3": "OVLTX2Pipeline",
+    "qwenimage21": "OVQwenImage21Pipeline",
     "sana": "OVSanaPipeline",
     "sana-sprint": "OVSanaPipeline",
     "stable-diffusion-3": "OVStableDiffusion3Pipeline",
@@ -259,6 +266,22 @@ ADDITIONAL_ARCH_MAPPINGS = {
 }
 
 
+# Extra `from_pretrained` arguments needed at export time by some models, keyed by architecture.
+# The reference IRs on the `ov` branch are generated with the exact same arguments, so any change
+# here must be mirrored by regenerating the affected references.
+_EXTRA_EXPORT_KWARGS_BY_ARCH = {
+    # SpeechT5 is a text-to-speech model whose export needs an explicit vocoder. For text-to-audio
+    # models the remaining `from_pretrained` kwargs are forwarded to `main_export` as `model_kwargs`.
+    "speecht5": {"vocoder": "fxmarty/speecht5-hifigan-tiny"},
+    # This fixture only ships weights under a non-default variant.
+    "stable-diffusion-with-custom-variant": {"variant": "custom"},
+}
+
+EXPORT_KWARGS = {
+    HUB_MODEL_NAMES[arch]: kwargs for arch, kwargs in _EXTRA_EXPORT_KWARGS_BY_ARCH.items() if arch in HUB_MODEL_NAMES
+}
+
+
 # Generate test parameters: (model_id, model_class) for all models that don't need trust_remote_code
 def _generate_test_params():
     """Generate test parameters from utils_tests mappings and test_export mappings."""
@@ -266,6 +289,17 @@ def _generate_test_params():
     for arch, model_id in HUB_MODEL_NAMES.items():
         # Skip models that need trust_remote_code
         if arch in REMOTE_CODE_MODELS:
+            continue
+
+        if arch in {  # multimodal models that also need trust_remote_code, but are not in REMOTE_CODE_MODELS
+            "internvl_chat",
+            "llava-qwen2",
+            "maira2",
+            "minicpmo",
+            "minicpmv",
+            "phi3_v",
+            "phi4mm",
+        }:
             continue
 
         if arch in {  # seq2seq models
@@ -319,6 +353,13 @@ def _generate_test_params():
         if arch in {  # max transformers 5.4.0 required
             "lfm2",
             "lfm2_moe",
+        }:
+            continue
+
+        if arch in {
+            "bart",
+            "donut",
+            "kokoro",
         }:
             continue
 
@@ -425,6 +466,86 @@ def compare_models(model_one: Model, model_two: Model, compare_names: bool = Tru
     return result
 
 
+DOWNLOAD_ATTEMPTS = 4
+DOWNLOAD_BACKOFF = 5  # seconds, doubled after every failed attempt
+
+
+def download_reference_ir(model_id: str) -> Optional[Path]:
+    """
+    Fetch the reference IRs from a model's `ov` branch.
+
+    Returns None when the model is not on the Hub at all, which is the only legitimate reason to
+    skip it. Everything else (429, 5xx, timeouts) is retried and then raised: a flaky Hub must not
+    silently turn this suite into a green no-op.
+    """
+    # Some fixtures are generated on the fly into a local directory (see `_create_tiny_kokoro_model`
+    # in utils_tests.py), so their "model id" is a filesystem path with no Hub reference behind it.
+    if os.path.isdir(model_id):
+        return None
+
+    delay = DOWNLOAD_BACKOFF
+    last_error = None
+
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            return Path(snapshot_download(repo_id=model_id, revision="ov", repo_type="model"))
+        except (RepositoryNotFoundError, RevisionNotFoundError, HFValidationError):
+            return None
+        except Exception as error:
+            last_error = error
+            if attempt < DOWNLOAD_ATTEMPTS:
+                print(
+                    f"[IR-DEBUG] {model_id}: reference download attempt {attempt}/{DOWNLOAD_ATTEMPTS} "
+                    f"failed ({type(error).__name__}: {error}), retrying in {delay}s"
+                )
+                time.sleep(delay)
+                delay *= 2
+
+    raise RuntimeError(
+        f"Failed to download reference IRs from {model_id} (ov branch) after {DOWNLOAD_ATTEMPTS} "
+        f"attempts. The revision exists, so this is a transport/rate-limit problem rather than a "
+        f"missing reference: {type(last_error).__name__}: {last_error}"
+    ) from last_error
+
+
+# Models actually compared against their reference, and models whose reference does not exist at
+# all. `enforce_ir_coverage` uses both to make sure the suite cannot pass while silently skipping.
+COMPARED_MODELS = set()
+MODELS_WITHOUT_REFERENCE = set()
+MIN_COVERAGE_RATIO = 0.9
+
+
+@pytest.fixture(scope="session", autouse=True)
+def enforce_ir_coverage(request):
+    """Fail the session if too few of the selected models were really compared."""
+    yield
+
+    selected = {
+        item.callspec.params["model_id"]
+        for item in request.session.items
+        if "test_ir_stability" in item.nodeid and hasattr(item, "callspec")
+    }
+    comparable = selected - MODELS_WITHOUT_REFERENCE
+    compared = selected & COMPARED_MODELS
+
+    if not comparable:
+        return
+
+    print(
+        f"[IR-DEBUG] coverage: compared {len(compared)}/{len(comparable)} models that have an `ov` "
+        f"reference ({len(selected & MODELS_WITHOUT_REFERENCE)} of {len(selected)} selected models "
+        f"have none)"
+    )
+
+    if len(compared) < MIN_COVERAGE_RATIO * len(comparable):
+        missing = sorted(comparable - compared)
+        raise AssertionError(
+            f"Only {len(compared)}/{len(comparable)} models with an `ov` reference were compared, "
+            f"below the {MIN_COVERAGE_RATIO:.0%} floor. IR drift in the models below went "
+            f"unchecked, so this run proves nothing:\n  " + "\n  ".join(missing)
+        )
+
+
 def load_reference_metadata(ref_dir: Path) -> Optional[Dict]:
     """Load metadata about reference IR generation."""
     metadata_path = ref_dir / "metadata.json"
@@ -434,17 +555,22 @@ def load_reference_metadata(ref_dir: Path) -> Optional[Dict]:
     return None
 
 
+# Tokenizer IRs are produced by openvino-tokenizers rather than by the model export, so they are
+# not part of what this suite guards and are not present in the references.
+NON_MODEL_IR_STEMS = ("openvino_tokenizer", "openvino_detokenizer")
+
+
 def find_ir_files(directory: Path) -> List[Path]:
     """
     Find all OpenVINO IR XML files in directory and subdirectories.
-    Handles both standard naming (openvino_model.xml) and component naming
-    (openvino_language_model.xml, openvino_vision_embeddings_model.xml, etc.)
+    Handles standard naming (openvino_model.xml), component naming with a `_model` suffix
+    (openvino_language_model.xml, openvino_vision_embeddings_model.xml, ...) and component naming
+    without one (openvino_vision_encoder.xml for SAM, openvino_model_text.xml for OpenCLIP).
     Returns list of paths relative to the directory.
     """
     ir_files = []
-    # Match both openvino_model.xml and openvino_*_model.xml patterns
     for xml_file in directory.rglob("openvino*.xml"):
-        if xml_file.name.startswith("openvino") and xml_file.name.endswith("_model.xml"):
+        if xml_file.stem not in NON_MODEL_IR_STEMS:
             # Get relative path from directory
             rel_path = xml_file.relative_to(directory)
             ir_files.append(rel_path)
@@ -462,16 +588,11 @@ class TestIRStability:
         """Test that exported IR matches reference IR."""
 
         # Download reference IRs from HuggingFace (ov branch)
-        try:
-            ref_ir_dir = Path(
-                snapshot_download(
-                    repo_id=model_id,
-                    revision="ov",
-                    repo_type="model",
-                )
-            )
-        except Exception as e:
-            pytest.skip(f"Failed to download reference IRs from {model_id} (ov branch): {e}")
+        ref_ir_dir = download_reference_ir(model_id)
+
+        if ref_ir_dir is None:
+            MODELS_WITHOUT_REFERENCE.add(model_id)
+            pytest.skip(f"No reference IRs for {model_id}: not on the Hub, or no `ov` revision")
 
         if not ref_ir_dir.exists():
             pytest.skip(f"Reference IR directory not found for {model_id}")
@@ -497,7 +618,7 @@ class TestIRStability:
             pytest.skip(f"No openvino_model.xml files found in {ref_ir_dir}")
 
         # Export new IR
-        model = model_class.from_pretrained(model_id, export=True)
+        model = model_class.from_pretrained(model_id, export=True, **EXPORT_KWARGS.get(model_id, {}))
         new_ir_dir = tmp_path / "new_ir"
         model.save_pretrained(new_ir_dir)
 
@@ -517,13 +638,26 @@ class TestIRStability:
                 f"  Extra components: {extra or 'none'}"
             )
 
+        # The loop below reads each reference file's counterpart by name, so a renamed or dropped
+        # component has to be reported here rather than surfacing as a read_model error.
+        missing_files = sorted(str(f) for f in set(ref_ir_files) - set(new_ir_files))
+        if missing_files:
+            pytest.fail(
+                f"IR files present in the reference but missing from the new export for {model_id}:\n  "
+                + "\n  ".join(missing_files)
+            )
+
+        COMPARED_MODELS.add(model_id)
+
         # Initialize OpenVINO Core for loading models
         core = Core()
 
         # Compare each component's IR using OpenVINO's compare_models
         all_differences = {}
         for ref_ir_file in ref_ir_files:
-            component_name = str(ref_ir_file.parent) if str(ref_ir_file.parent) != "." else "root"
+            # Keyed by the full relative path: models such as SAM keep several components side by
+            # side at the root, and keying by directory alone would let one overwrite the other.
+            component_name = str(ref_ir_file)
 
             ref_ir_path = ref_ir_dir / ref_ir_file
             new_ir_path = new_ir_dir / ref_ir_file

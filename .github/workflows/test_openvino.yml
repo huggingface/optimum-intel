@@ -42,9 +42,6 @@ jobs:
             "*irs*",
           ]
         transformers-version: ["4.57.6", "latest"]
-        exclude:
-          - test-pattern: "*irs*"
-            transformers-version: "4.57.6"
 
     runs-on: ubuntu-22.04
 
@@ -100,9 +97,17 @@ jobs:
         run: |
           python tests/scripts/login_with_ci_token.py
 
-      - name: Test with Pytest
+      - if: ${{ matrix.test-pattern != '*irs*' }}
+        name: Test with Pytest
         run: |
           pytest tests/openvino/${{ matrix.test-pattern }} -k "not (qwen3_asr or fun_asr)" --durations=0
+
+      # The IR tests skip whenever a model has no reference IRs on its `ov` branch, so `-rs` is
+      # added here to report the reason behind every skip instead of a bare `s`.
+      - if: ${{ matrix.test-pattern == '*irs*' }}
+        name: Test with Pytest
+        run: |
+          pytest tests/openvino/${{ matrix.test-pattern }} -k "not (qwen3_asr or fun_asr)" --durations=0 -rs
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Install Nightly OpenVINO
