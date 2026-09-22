@@ -9001,14 +9001,8 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
         )
 
 
-class Qwen3DSparkDraftModel(Qwen3DFlashDraftModel):
-    """DeepSpec Qwen3 DSpark draft backbone."""
-
-    pass
-
-
 # adopted from https://github.com/deepseek-ai/DeepSpec/blob/main/deepspec/modeling/dspark/qwen3/modeling.py#L201
-class Qwen3DSparkForCausalLM(Qwen3DSparkDraftModel, GenerationMixin):
+class Qwen3DSparkForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
     """DeepSpec Qwen3 DSpark draft head exported as embeddings-in / hidden-states-out.
 
     Unlike z-lab DFlash, DeepSpec does not prune the first (seed) hidden state.
