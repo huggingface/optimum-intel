@@ -937,6 +937,19 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
                 tokenizer = getattr(model, tokenizer_name, None)
                 if tokenizer:
                     export_tokenizer(tokenizer, output / tokenizer_name, task=task)
+            # Some diffusion pipelines (e.g. QwenImage2.1) register a `processor` instead of a bare
+            # `tokenizer`; its tokenizer files are saved under the `processor` subfolder, so the OV
+            # tokenizer/detokenizer IRs must be written there too.
+            processor = getattr(model, "processor", None)
+            processor_tokenizer = getattr(processor, "tokenizer", None) if processor is not None else None
+            if processor_tokenizer is not None:
+                processor_chat_template = getattr(processor, "chat_template", None)
+                export_tokenizer(
+                    processor_tokenizer,
+                    output / "processor",
+                    task=task,
+                    processor_chat_template=processor_chat_template,
+                )
     else:
         logger.warning("Tokenizer won't be converted.")
 

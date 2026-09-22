@@ -40,10 +40,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.10"
 
@@ -95,3 +95,12 @@ jobs:
         run: |
           uv pip install "transformers>=5.15,<5.16"
           pytest tests/openvino/${{ matrix.test-pattern }} -k "muse_glimmer" --durations=0
+
+      # QwenImage21Pipeline is only available in diffusers main. test_diffusion is not matched by the matrix
+      # test-pattern glob, so run the Qwen-Image-2.1 diffusion, export and transformation tests explicitly and only once.
+      - name: Qwen-Image-2.1 Validation
+        if: ${{ matrix.test-pattern == '*export*' }}
+        run: |
+          uv pip install "transformers>=5.10,<5.11" "diffusers @ git+https://github.com/huggingface/diffusers.git@main"
+          pytest tests/openvino/test_diffusion.py tests/openvino/test_export.py tests/openvino/test_transformations.py -k "qwenimage21" --durations=0
+
