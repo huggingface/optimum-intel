@@ -68,6 +68,9 @@ TEXTUAL_INVERSION_EMBEDDING_KEY = "self.text_model.embeddings.token_embedding.we
 TEXTUAL_INVERSION_EMBEDDING_KEYS = [
     "self.text_model.embeddings.token_embedding.weight",
     "self.model.text_model.embeddings.token_embedding.weight",
+    # `CLIPTextTransformer` was removed since transformers v5.6
+    "self.embeddings.token_embedding.weight",
+    "self.model.embeddings.token_embedding.weight",
 ]
 
 OV_TO_NP_TYPE = {
@@ -149,6 +152,9 @@ _HEAD_TO_AUTOMODELS = {
     "automatic-speech-recognition-with-past": "OVModelForSpeechSeq2Seq",
     "ltx-video": "OVLTXPipeline",
     "ltx2": "OVLTX2Pipeline",
+    "z-image": "OVZImagePipeline",
+    "text-to-video": "OVPipelineForText2Video",
+    "image-to-video": "OVPipelineForImage2Video",
     "text-to-audio": "OVModelForTextToSpeechSeq2Seq",
 }
 

@@ -142,6 +142,11 @@ except OptionalDependencyNotAvailable:
             "OVFluxFillPipeline",
             "OVSanaPipeline",
             "OVQwenImagePipeline",
+            "OVQwenImage21Pipeline",
+            "OVQwenImage21Img2ImgPipeline",
+            "OVZImagePipeline",
+            "OVZImageImg2ImgPipeline",
+            "OVZImageInpaintPipeline",
             "OVPipelineForImage2Image",
             "OVPipelineForImage2Video",
             "OVPipelineForText2Image",
@@ -175,6 +180,11 @@ else:
             "OVFluxFillPipeline",
             "OVSanaPipeline",
             "OVQwenImagePipeline",
+            "OVQwenImage21Pipeline",
+            "OVQwenImage21Img2ImgPipeline",
+            "OVZImagePipeline",
+            "OVZImageImg2ImgPipeline",
+            "OVZImageInpaintPipeline",
             "OVPipelineForImage2Image",
             "OVPipelineForImage2Video",
             "OVPipelineForText2Image",
@@ -260,6 +270,8 @@ if TYPE_CHECKING:
             OVPipelineForImage2Video,
             OVPipelineForInpainting,
             OVPipelineForText2Image,
+            OVQwenImage21Img2ImgPipeline,
+            OVQwenImage21Pipeline,
             OVQwenImagePipeline,
             OVSanaPipeline,
             OVSanaSprintPipeline,
@@ -272,6 +284,9 @@ if TYPE_CHECKING:
             OVStableDiffusionXLImg2ImgPipeline,
             OVStableDiffusionXLInpaintPipeline,
             OVStableDiffusionXLPipeline,
+            OVZImageImg2ImgPipeline,
+            OVZImageInpaintPipeline,
+            OVZImagePipeline,
         )
     else:
         from .openvino import (
@@ -285,6 +300,8 @@ if TYPE_CHECKING:
             OVPipelineForImage2Video,
             OVPipelineForInpainting,
             OVPipelineForText2Image,
+            OVQwenImage21Img2ImgPipeline,
+            OVQwenImage21Pipeline,
             OVQwenImagePipeline,
             OVSanaPipeline,
             OVSanaSprintPipeline,
@@ -297,6 +314,9 @@ if TYPE_CHECKING:
             OVStableDiffusionXLImg2ImgPipeline,
             OVStableDiffusionXLInpaintPipeline,
             OVStableDiffusionXLPipeline,
+            OVZImageImg2ImgPipeline,
+            OVZImageInpaintPipeline,
+            OVZImagePipeline,
         )
 
     try:

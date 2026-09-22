@@ -117,6 +117,8 @@ if is_diffusers_available():
         OVPipelineForInpainting,
         OVPipelineForText2Image,
         OVPipelineForText2Video,
+        OVQwenImage21Img2ImgPipeline,
+        OVQwenImage21Pipeline,
         OVQwenImagePipeline,
         OVSanaPipeline,
         OVSanaSprintPipeline,
@@ -129,6 +131,9 @@ if is_diffusers_available():
         OVStableDiffusionXLImg2ImgPipeline,
         OVStableDiffusionXLInpaintPipeline,
         OVStableDiffusionXLPipeline,
+        OVZImageImg2ImgPipeline,
+        OVZImageInpaintPipeline,
+        OVZImagePipeline,
     )
 
 

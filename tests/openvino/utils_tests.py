@@ -144,6 +144,56 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+def _create_tiny_mistral3_model():
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_mistral3"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+
+    if config_file.exists() and weights_file.exists():
+        return str(output_dir)
+
+    from transformers import AutoConfig, AutoModelForImageTextToText, AutoProcessor
+
+    model_id = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
+
+    torch.manual_seed(SEED)
+
+    config = AutoConfig.from_pretrained(model_id)
+
+    config.tie_word_embeddings = False
+    config.text_config.tie_word_embeddings = False
+
+    config.text_config.num_hidden_layers = 2
+    config.text_config.hidden_size = 64
+    config.text_config.intermediate_size = 128
+    config.text_config.num_attention_heads = 4
+    config.text_config.num_key_value_heads = 2
+    config.text_config.head_dim = 16
+    config.text_config.max_position_embeddings = 512
+
+    config.vision_config.num_hidden_layers = 2
+    config.vision_config.hidden_size = 64
+    config.vision_config.intermediate_size = 128
+    config.vision_config.num_attention_heads = 4
+    config.vision_config.head_dim = 16
+    config.vision_config.image_size = 56
+
+    for subconfig in (config, config.text_config, config.vision_config):
+        subconfig.dtype = "float32"
+        subconfig.torch_dtype = "float32"
+
+    model = AutoModelForImageTextToText.from_config(config).float().eval()
+    processor = AutoProcessor.from_pretrained(model_id)
+    processor.image_processor.size = {"longest_edge": 56}
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    model.save_pretrained(output_dir, safe_serialization=True)
+    processor.save_pretrained(output_dir)
+
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -210,6 +260,7 @@ HUB_MODEL_NAMES = {
     "gemma3n": "optimum-intel-internal-testing/tiny-random-gemma3n",
     "gemma3n_text": "optimum-intel-internal-testing/tiny-random-gemma3n-text",
     "gemma4": "optimum-intel-internal-testing/tiny-random-gemma4",
+    "gemma4_dflash": "optimum-intel-internal-testing/tiny-random-gemma4-dflash",
     "gemma4_moe": "optimum-intel-internal-testing/tiny-random-gemma4-moe",
     "gemma4_unified": "optimum-intel-internal-testing/tiny-random-gemma4-unified",
     "falcon": "optimum-intel-internal-testing/really-tiny-falcon-testing",
@@ -266,6 +317,7 @@ HUB_MODEL_NAMES = {
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
     "mistral-nemo": "optimum-intel-internal-testing/tiny-random-mistral-nemo",
+    "mistral3": _create_tiny_mistral3_model(),
     "mixtral": "optimum-intel-internal-testing/tiny-mixtral",
     "mixtral_awq": "optimum-intel-internal-testing/tiny-mixtral-AWQ-4bit",
     "mobilebert": "optimum-intel-internal-testing/tiny-random-MobileBertModel",
@@ -304,9 +356,14 @@ HUB_MODEL_NAMES = {
     "qwen3_vl": "optimum-intel-internal-testing/tiny-random-qwen3-vl",
     "qwen3_vl_embedding": "optimum-intel-internal-testing/tiny-random-qwen3-vl-embedding",
     "qwen3_omni_moe": "optimum-intel-internal-testing/tiny-random-qwen3-omni",
+    "qwen3_tts": "optimum-intel-internal-testing/tiny-random-qwen3-tts",
     "qwen3_next": "optimum-intel-internal-testing/tiny-random-qwen3-next",
     "qwen3_5": "optimum-intel-internal-testing/tiny-random-qwen3.5",
+    "qwen3_5_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-mtp",
+    "qwen3_5_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-dflash",
     "qwen3_5_moe": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
+    "qwen3_5_moe_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-mtp",
+    "qwen3_5_moe_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-dflash",
     "qwen3_asr": "optimum-intel-internal-testing/tiny-random-qwen3-asr",
     "qwen3_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
     "fun_asr": "optimum-intel-internal-testing/tiny-random-fun-asr",
@@ -365,11 +422,16 @@ HUB_MODEL_NAMES = {
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "qwenimage": "optimum-intel-internal-testing/tiny-random-qwen-image",
+    "qwenimage21": "optimum-intel-internal-testing/tiny-random-qwen-image-2.1",
     "ltx2": "optimum-intel-internal-testing/tiny-random-ltx2",
+    "ltx2.3": "optimum-intel-internal-testing/tiny-random-ltx2.3",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
+    "qwen3_eagle3_target": "Qwen/Qwen3-1.7B",
     "flux.2-klein": "optimum-intel-internal-testing/tiny-random-flux.2-klein",
+    "z-image": "optimum-intel-internal-testing/tiny-random-z-image",
     "qwen3_vl_eagle3": "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
+    "qwen3_vl_eagle3_target": "optimum-intel-internal-testing/tiny-random-qwen3-vl-layer10",
     "videochat_flash_qwen": "optimum-intel-internal-testing/tiny-videochat-flash-qwen",
 }
 
@@ -391,23 +453,29 @@ def _resolve_cached_model_paths(model_names: dict) -> dict:
 
 MODEL_NAMES = _resolve_cached_model_paths(HUB_MODEL_NAMES)
 
-EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7B")}
+EAGLE3_MODELS = {"qwen3_eagle3": ("qwen3_eagle3", "qwen3_eagle3_target")}
 
 DFLASH_MODELS = {
-    "qwen3_dflash": (
-        "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
-        "optimum-intel-internal-testing/tiny-random-qwen3",
-    )
+    "qwen3_dflash": ("qwen3_dflash", "qwen3"),
+}
+
+DFLASH_VLM_MODELS = {
+    "qwen3_5_dflash": ("qwen3_5_dflash", "qwen3_5"),
+    "qwen3_5_moe_dflash": ("qwen3_5_moe_dflash", "qwen3_5_moe"),
+    "gemma4_dflash": ("gemma4_dflash", "gemma4"),
 }
 
 # VLM-based Eagle3 draft models (AngelSlim Eagle3LlamaForCausalLM architecture).
 # These use Qwen3-VL MRoPE and target VLM models for speculative decoding.
-# Only used in the decoder test (not genai, since the VLM target needs image-text-to-text export).
 EAGLE3_VLM_MODELS = {
-    "qwen3_vl_eagle3": (
-        "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
-        "optimum-intel-internal-testing/tiny-random-qwen3-vl-layer10",
-    ),
+    "qwen3_vl_eagle3": ("qwen3_vl_eagle3", "qwen3_vl_eagle3_target"),
+}
+
+# MTP (Multi-Token Prediction) VLM models: the MTP head is exported inside the model itself
+# (openvino_mtp_model.xml), so the draft and target are the same model directory.
+MTP_VLM_MODELS = {
+    "qwen3_5_mtp": ("qwen3_5_mtp", "qwen3_5_mtp"),
+    "qwen3_5_moe_mtp": ("qwen3_5_moe_mtp", "qwen3_5_moe_mtp"),
 }
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
@@ -417,7 +485,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "albert": {"model": 84},
     "vit": {"model": 64},
     "blenderbot": {"model": 70 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 72},
-    "cohere2": {"model": 30},
+    "cohere2": {"model": 32},
     "gpt2": {"model": 44},
     "granitemoehybrid": {"model": 118},
     "wav2vec2": {"model": 34},
@@ -471,6 +539,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vae_encoder": 44,
         "text_encoder": 394,
     },
+    "z-image": {
+        "transformer": 104,
+        "vae_decoder": 60,
+        "vae_encoder": 44,
+        "text_encoder": 16,
+    },
     "flux-fill": {
         "transformer": 56,
         "vae_decoder": 28,
@@ -511,6 +585,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 15,
     },
+    "mistral3": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 16,
+        "multi_modal_projector_model": 3,
+    },
     "qwen2_vl": {
         "lm_model": 30,
         "text_embeddings_model": 1,
@@ -550,6 +630,14 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_merger_model": 10,
         "vision_embeddings_pos_model": 1,
     },
+    "qwen3_5_mtp": {
+        "lm_model": 70,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 10,
+        "vision_embeddings_pos_model": 1,
+        "mtp_model": 18,
+    },
     "qwen3_5_moe": {
         "lm_model": 110,
         "text_embeddings_model": 1,
@@ -557,13 +645,21 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_merger_model": 10,
         "vision_embeddings_pos_model": 1,
     },
+    "qwen3_5_moe_mtp": {
+        "lm_model": 110,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 10,
+        "vision_embeddings_pos_model": 1,
+        "mtp_model": 28,
+    },
     "qwen3_omni_moe": {
         "lm_model": 34,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 13,
         "vision_embeddings_pos_model": 1,
         "audio_encoder_model": 18,
-        "talker_model": 25,
+        "talker_model": 26,
         "talker_text_embeddings_model": 1,
         "talker_projections_model": 4,
         "code_predictor_model": 16,
@@ -582,11 +678,22 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder": 64,
     },
     "ltx2": {
-        "transformer": 34,
-        "vae_decoder": 28,
-        "vae_encoder": 28,
-        "text_encoder": 64,
-        "connectors": 10,
+        "transformer": 108,
+        "vae_decoder": 26,
+        "vae_encoder": 0,
+        "text_encoder": 30,
+        "connectors": 26,
+        "audio_vae_decoder": 20,
+        "vocoder": 74,
+    },
+    "ltx2.3": {
+        "transformer": 124,
+        "vae_decoder": 32,
+        "vae_encoder": 0,
+        "text_encoder": 30,
+        "connectors": 32,
+        "audio_vae_decoder": 20,
+        "vocoder": 440,
     },
     "sam": {
         "vision_encoder": 150,
@@ -599,6 +706,18 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vocoder": 80,
     },
     "kokoro": {"model": 352},
+    # Weight compression covers the language-model side only; the codec and the speaker encoder
+    # are deliberately left in floating point (see _QWEN3_TTS_COMPRESSIBLE_OV_IR_NAMES).
+    "qwen3_tts": {
+        "talker_model": 30,
+        "code_predictor_model": 16,
+        "text_embeddings": 2,
+        "talker_embeddings": 2,
+        "code_predictor_embeddings": 2,
+        "speaker_encoder": 0,
+        "codec_encoder": 0,
+        "codec_decoder": 0,
+    },
     "clip": {"model": 130},
     "mamba": {"model": 324 if is_transformers_version("==", "5.0") else 322},
     "falcon_mamba": {"model": 164 if is_transformers_version("==", "5.0") else 162},
@@ -626,13 +745,13 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "gemma4": {
         "lm_model": 54,
         "text_embeddings_model": 1,
-        "vision_embeddings_model": 10,
+        "vision_embeddings_model": 10 if is_transformers_version("<", "5.10") else 11,
         "text_embeddings_per_layer_model": 1,
     },
     "gemma4_moe": {
         "lm_model": 48,
         "text_embeddings_model": 1,
-        "vision_embeddings_model": 10,
+        "vision_embeddings_model": 10 if is_transformers_version("<", "5.10") else 12,
         "text_embeddings_per_layer_model": 0,
     },
     "smollm3": {"model": 30},
@@ -644,8 +763,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "ouro": {"model": 34},
     "qwen3_asr": {
         "encoder": 36,
-        "decoder": 30,
-        "decoder_with_past": 30,
+        "decoder": 32,
+        "decoder_with_past": 32,
     },
     "fun_asr": {
         "encoder": 46,
@@ -678,6 +797,9 @@ REMOTE_CODE_MODELS = (
     "minicpm3",
     "deepseek",
     "qwen3_dflash",
+    "qwen3_5_dflash",
+    "qwen3_5_moe_dflash",
+    "gemma4_dflash",
     "qwen3_eagle3",
     "qwen3_vl_eagle3",
     "qwen3_asr",
@@ -848,10 +970,14 @@ TEST_NAME_TO_MODEL_TYPE = {
     "chatglm4": "chatglm",
     "codegen2": "codegen",
     "falcon-40b": "falcon",
+    "gemma4_dflash": "qwen3",
     "gemma4_moe": "gemma4",
     "gpt_oss_mxfp4": "gpt_oss",
     "llama_awq": "llama",
     "llava_next_mistral": "llava_next",
+    "ltx-video": "ltx-video-transformer",
+    "ltx2": "ltx2-video-transformer",
+    "ltx2.3": "ltx2-video-transformer",
     "mistral-nemo": "mistral",
     "mixtral_awq": "mixtral",
     "nanollava_vision_tower": "siglip",
@@ -859,12 +985,27 @@ TEST_NAME_TO_MODEL_TYPE = {
     "opt_gptq": "opt",
     "perceiver_text": "perceiver",
     "perceiver_vision": "perceiver",
+    "qwen3_5_dflash": "qwen3",
+    "qwen3_5_moe_dflash": "qwen3",
+    "qwen3_5_mtp": "qwen3_5",
+    "qwen3_5_moe_mtp": "qwen3_5_moe",
     "qwen3_dflash": "qwen3",
+    "qwen3_eagle3": "llama",
+    "qwen3_eagle3_target": "qwen3",
+    "qwen3_vl_eagle3": "llama",
+    "qwen3_vl_eagle3_target": "qwen3_vl",
     "qwen3_vl_embedding": "qwen3_vl",
     "swin-window": "swin",
     "vit-with-attentions": "vit",
     "vit-with-hidden-states": "vit",
     "wav2vec2-hf": "wav2vec2",
+    # The architecture lists are filtered against the exporter's registered model types,
+    # which for diffusers are components ("z-image-transformer") rather than pipeline names
+    # ("z-image"). Map the test name onto its transformer component so the z-image and ltx
+    # entries in test_export.py / test_exporters_cli.py are collected instead of silently
+    # deselected.
+    "z-image": "z-image-transformer",
+    "qwenimage21": "qwenimage21-transformer",
 }
 
 

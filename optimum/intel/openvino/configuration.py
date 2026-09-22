@@ -448,6 +448,12 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "dataset": "textvqa",
         "scale_estimation": True,
     },
+    "google/gemma-4-12B-it": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "quant_method": OVQuantizationMethod.AWQ,
+    },
     "google/gemma-4-26B-A4B-it": {
         "bits": 4,
         "sym": False,
@@ -479,6 +485,14 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
                 "backup_precision": "int8_sym",
                 "group_size": 64,
             },
+            # The MTP (Multi-Token Prediction) head is a full MoE decoder layer, as
+            # large as a main-model layer, so it is compressed like `lm_model`.
+            "mtp_model": {
+                "bits": 4,
+                "sym": False,
+                "backup_precision": "int8_sym",
+                "group_size": 64,
+            },
             "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
             "vision_embeddings_merger_model": {"bits": 8, "sym": True, "weight_only": True},
         },
@@ -486,6 +500,14 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     "Qwen/Qwen3.6-35B-A3B": {
         "quantization_configs": {
             "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "backup_precision": "int8_sym",
+                "group_size": 64,
+            },
+            # The MTP (Multi-Token Prediction) head is a full MoE decoder layer, as
+            # large as a main-model layer, so it is compressed like `lm_model`.
+            "mtp_model": {
                 "bits": 4,
                 "sym": False,
                 "backup_precision": "int8_sym",
@@ -512,6 +534,14 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
+    "openbmb/MiniCPM5-2B": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "gsm8k",
+        "scale_estimation": True,
+    },
 }
 
 _DEFAULT_8BIT_WQ_CONFIGS = {
@@ -533,6 +563,7 @@ _DEFAULT_4BIT_WQ_CONFIG = {
     "sym": False,
     "group_size": 128,
     "all_layers": None,
+    "group_size_fallback": "ignore",
 }
 
 
@@ -997,8 +1028,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             the statistics path to avoid confusion.
         group_size_fallback (`str`, *optional*):
             Defines the behavior when the specified group size is not compatible with the weight shape. Possible values:
-            - "error": raises an error if the group size is not compatible with the weight shape (default);
-            - "ignore": skips quantization for the layers where the group size is not compatible with the weight shape;
+            - "error": raises an error if the group size is not compatible with the weight shape;
+            - "ignore": skips quantization for the layers where the group size is not compatible with the weight shape (default);
             - "adjust": automatically adjusts the group size to the maximum compatible value for each weight tensor,
                 if there is no valid value greater than or equal to 32, then the node is quantized to the backup precision
                 which is int8_asym by default.
