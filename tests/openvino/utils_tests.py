@@ -297,6 +297,7 @@ HUB_MODEL_NAMES = {
     "longt5": "optimum-intel-internal-testing/tiny-random-longt5",
     "llama": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
     "llama_awq": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
+    "llama_compressed_tensors": "optimum-intel-internal-testing/tiny-random-llama-compressed-tensors",
     "llama4": "optimum-intel-internal-testing/tiny-random-llama4",
     "llava": "optimum-intel-internal-testing/tiny-random-llava",
     "llava_next": "optimum-intel-internal-testing/tiny-random-llava-next",
@@ -359,6 +360,7 @@ HUB_MODEL_NAMES = {
     "qwen3_tts": "optimum-intel-internal-testing/tiny-random-qwen3-tts",
     "qwen3_next": "optimum-intel-internal-testing/tiny-random-qwen3-next",
     "qwen3_5": "optimum-intel-internal-testing/tiny-random-qwen3.5",
+    "qwen3_5_compressed_tensors": "optimum-intel-internal-testing/tiny-random-qwen3.5-compressed-tensors",
     "qwen3_5_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-mtp",
     "qwen3_5_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-dflash",
     "qwen3_5_moe": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
@@ -422,6 +424,7 @@ HUB_MODEL_NAMES = {
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "qwenimage": "optimum-intel-internal-testing/tiny-random-qwen-image",
+    "qwenimage21": "optimum-intel-internal-testing/tiny-random-qwen-image-2.1",
     "ltx2": "optimum-intel-internal-testing/tiny-random-ltx2",
     "ltx2.3": "optimum-intel-internal-testing/tiny-random-ltx2.3",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
@@ -931,6 +934,7 @@ def check_compression_state_per_model(
     models: Dict[str, ov.Model],
     expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
     expected_num_fake_nodes_per_model: Optional[Dict[str, int]] = None,
+    check_kv_cache_precision: bool = True,
 ):
     test_case.assertEqual(len(models), len(expected_num_weight_nodes_per_model))
     actual_num_weights_per_model = {}
@@ -943,7 +947,10 @@ def check_compression_state_per_model(
         actual_num_weights_per_model[ov_model_name] = num_weight_nodes
         actual_num_fake_nodes_per_model[ov_model_name] = num_fake_nodes
 
-        test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+        # Weights compressed by NNCF drop the KV cache precision hint, but models that are
+        # already quantized (e.g. compressed-tensors) keep the default f16 KV cache precision.
+        if check_kv_cache_precision:
+            test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     # Check weight nodes
     test_case.assertEqual(expected_num_weight_nodes_per_model, actual_num_weights_per_model)
@@ -973,6 +980,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "gemma4_moe": "gemma4",
     "gpt_oss_mxfp4": "gpt_oss",
     "llama_awq": "llama",
+    "llama_compressed_tensors": "llama",
     "llava_next_mistral": "llava_next",
     "ltx-video": "ltx-video-transformer",
     "ltx2": "ltx2-video-transformer",
@@ -986,6 +994,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "perceiver_vision": "perceiver",
     "qwen3_5_dflash": "qwen3",
     "qwen3_5_moe_dflash": "qwen3",
+    "qwen3_5_compressed_tensors": "qwen3_5",
     "qwen3_5_mtp": "qwen3_5",
     "qwen3_5_moe_mtp": "qwen3_5_moe",
     "qwen3_dflash": "qwen3",
@@ -1004,6 +1013,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     # entries in test_export.py / test_exporters_cli.py are collected instead of silently
     # deselected.
     "z-image": "z-image-transformer",
+    "qwenimage21": "qwenimage21-transformer",
 }
 
 
