@@ -35,6 +35,7 @@ from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreT
 
 from optimum.intel.utils.import_utils import is_torch_version
 
+
 logger = logging.getLogger(__name__)
 
 OV_XML_FILE_NAME = "openvino_model.xml"

@@ -25,7 +25,6 @@ from optimum.utils import (
     DummyInputGenerator,
     DummyPastKeyValuesGenerator,
     DummySeq2SeqDecoderTextInputGenerator,
-    DummySeq2SeqPastKeyValuesGenerator,
     DummyTextInputGenerator,
     DummyTimestepInputGenerator,
     DummyVisionInputGenerator,

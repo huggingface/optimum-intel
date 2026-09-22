@@ -84,6 +84,7 @@ from .stateful import (
 )
 from .utils_annotations import add_hidden_states_rt_info
 
+
 logger = logging.getLogger(__name__)
 
 if is_torch_available():
