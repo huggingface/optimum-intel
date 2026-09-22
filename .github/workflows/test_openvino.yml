@@ -42,6 +42,11 @@ jobs:
             "*irs*",
           ]
         transformers-version: ["4.57.6", "latest"]
+        exclude:
+          # The reference IRs are generated with the latest transformers, so comparing against a
+          # 4.57.6 export would only report the version difference.
+          - test-pattern: "*irs*"
+            transformers-version: "4.57.6"
 
     runs-on: ubuntu-22.04
 

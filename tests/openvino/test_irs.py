@@ -106,8 +106,6 @@ ADDITIONAL_ARCH_MAPPINGS = {
     "distilbert": "OVModelForQuestionAnswering",
     "hunyuan_v1_dense": "OVModelForCausalLM",
     "kokoro": "OVModelForTextToSpeechSeq2Seq",
-    "mamba": "OVModelForCausalLM",
-    "qwen3_next": "OVModelForCausalLM",
     "roberta": "OVModelForTokenClassification",
     "sam": "OVSamModel",
     "smollm3": "OVModelForCausalLM",
@@ -115,7 +113,6 @@ ADDITIONAL_ARCH_MAPPINGS = {
     "t5": "OVModelForSeq2SeqLM",
     "vit": "OVModelForImageClassification",
     "wav2vec2": "OVModelForAudioClassification",
-    "zamba2": "OVModelForCausalLM",
     # From test_decoder.py - CausalLM models
     "arcee": "OVModelForCausalLM",
     "biogpt": "OVModelForCausalLM",
@@ -124,10 +121,6 @@ ADDITIONAL_ARCH_MAPPINGS = {
     "cohere": "OVModelForCausalLM",
     "falcon": "OVModelForCausalLM",
     "falcon-40b": "OVModelForCausalLM",
-    "gemma": "OVModelForCausalLM",
-    "gemma2": "OVModelForCausalLM",
-    "gemma3_text": "OVModelForCausalLM",
-    "glm": "OVModelForCausalLM",
     "glm4": "OVModelForCausalLM",
     "gpt_bigcode": "OVModelForCausalLM",
     "gpt_neo": "OVModelForCausalLM",
@@ -155,9 +148,7 @@ ADDITIONAL_ARCH_MAPPINGS = {
     "blenderbot-small": "OVModelForSeq2SeqLM",
     "longt5": "OVModelForSeq2SeqLM",
     "m2m_100": "OVModelForSeq2SeqLM",
-    "marian": "OVModelForSeq2SeqLM",
     "mbart": "OVModelForSeq2SeqLM",
-    "mt5": "OVModelForSeq2SeqLM",
     # Vision models - ImageClassification
     "audio-spectrogram-transformer": "OVModelForAudioClassification",
     "beit": "OVModelForImageClassification",
@@ -181,11 +172,9 @@ ADDITIONAL_ARCH_MAPPINGS = {
     "bge": "OVModelForFeatureExtraction",
     "camembert": "OVModelForMaskedLM",
     "convbert": "OVModelForSequenceClassification",
-    "data2vec-text": "OVModelForFeatureExtraction",
     "deberta": "OVModelForMaskedLM",
     "deberta-v2": "OVModelForMaskedLM",
     "esm": "OVModelForMaskedLM",
-    "flaubert": "OVModelForMaskedLM",
     "ibert": "OVModelForMaskedLM",
     "mobilebert": "OVModelForMaskedLM",
     "mpnet": "OVModelForFeatureExtraction",
@@ -196,7 +185,6 @@ ADDITIONAL_ARCH_MAPPINGS = {
     "squeezebert": "OVModelForMaskedLM",
     "st-bert": "OVModelForFeatureExtraction",
     "st-mpnet": "OVModelForFeatureExtraction",
-    "xlm": "OVModelForMaskedLM",
     "xlm-roberta": "OVModelForMaskedLM",
     # Audio models
     "data2vec-audio": "OVModelForAudioClassification",
@@ -213,37 +201,25 @@ ADDITIONAL_ARCH_MAPPINGS = {
     "bitnet": "OVModelForCausalLM",
     "cohere2": "OVModelForCausalLM",
     "dbrx": "OVModelForCausalLM",
-    "falcon_mamba": "OVModelForCausalLM",
     "gemma3": "OVModelForVisualCausalLM",
-    "gemma3n_text": "OVModelForCausalLM",
-    "granitemoehybrid": "OVModelForCausalLM",
     "olmo": "OVModelForCausalLM",
     "olmo2": "OVModelForCausalLM",
     "opt125m": "OVModelForCausalLM",
     "phimoe": "OVModelForCausalLM",
-    "qwen3_5": "OVModelForVisualCausalLM",
     # Vision-Language / Multimodal models
     "donut": "OVModelForVision2Seq",
     "gemma3n": "OVModelForVisualCausalLM",
     "gemma4": "OVModelForVisualCausalLM",
-    "got_ocr2": "OVModelForVisualCausalLM",
-    "idefics3": "OVModelForVisualCausalLM",
     "internvl_chat": "OVModelForVisualCausalLM",
     "llava-qwen2": "OVModelForVisualCausalLM",
     "llava_next": "OVModelForVisualCausalLM",
     "llava_next_mistral": "OVModelForVisualCausalLM",
-    "llava_next_video": "OVModelForVisualCausalLM",
     "maira2": "OVModelForVisualCausalLM",
     "minicpmo": "OVModelForVisualCausalLM",
     "minicpmv": "OVModelForVisualCausalLM",
     "phi3_v": "OVModelForVisualCausalLM",
     "phi4mm": "OVModelForVisualCausalLM",
     "pix2struct": "OVModelForPix2Struct",
-    "qwen2_5_vl": "OVModelForVisualCausalLM",
-    "qwen2_vl": "OVModelForVisualCausalLM",
-    "qwen3_vl": "OVModelForVisualCausalLM",
-    "qwen3_vl_embedding": "OVModelForFeatureExtraction",
-    "smolvlm": "OVModelForVisualCausalLM",
     "trocr": "OVModelForVision2Seq",
     "vision-encoder-decoder": "OVModelForVision2Seq",
     # Diffusion pipelines
@@ -312,54 +288,14 @@ def _generate_test_params():
         }:
             continue
 
-        if arch in {  # 4.57.6 models
-            "data2vec-text",
-            "got_ocr2",
-            "flaubert",
-            "idefics3",
-            "zamba2",
-            "qwen3_next",
-            "xlm",
-            "qwen2_vl",
-            "qwen2_5_vl",
-            "qwen3_vl",
-            "qwen3_vl_embedding",
-            "llava_next_video",
-            "marian",
-            "mt5",
-            "smolvlm",
-        }:
-            continue
-
-        if arch in {  # max transformers 5.0 required
-            "gemma",
-            "gemma2",
-            "gemma3_text",
-            "gemma3n_text",
-            "glm",
-        }:
-            continue
-
-        if arch == "qwen3_5":  # max transformers 5.2.* required
-            continue
-
-        if arch in {  # max transformers 5.3.0 required
-            "falcon_mamba",
-            "granitemoehybrid",
-            "mamba",
-        }:
-            continue
-
-        if arch in {  # max transformers 5.4.0 required
-            "lfm2",
-            "lfm2_moe",
-        }:
-            continue
-
         if arch in {
             "bart",
             "donut",
             "kokoro",
+            # Not mapped here, but `ARCH_TO_MODEL_CLASS` supplies a class for them, so they need
+            # naming to stay out of the suite.
+            "lfm2",
+            "lfm2_moe",
         }:
             continue
 
