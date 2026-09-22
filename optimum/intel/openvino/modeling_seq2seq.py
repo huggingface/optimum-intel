@@ -1546,12 +1546,6 @@ class _OVModelForQwen3ASR(OVModelForSpeechSeq2Seq):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        if kwargs.get("stateful") is False or kwargs.get("use_cache") is False or not model_has_state(language_model):
-            raise ValueError(
-                "The Qwen3-ASR runtime requires a stateful language model and `use_cache=True`. "
-                "Re-export with `stateful=True` and load with `use_cache=True`. "
-                "Stateless language graphs must be used with an external-cache runtime."
-            )
         config.is_encoder_decoder = False
         self.config = config
         self.name_or_path = getattr(config, "name_or_path", None)
