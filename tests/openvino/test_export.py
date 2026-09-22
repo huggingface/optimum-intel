@@ -556,6 +556,8 @@ class LTXVideoExportContractTest(unittest.TestCase):
             self.assertEqual(tuple(decoder_inputs["latent_sample"].shape[2:]), (2, 64, 64))
             self.assertEqual("timestep" in decoder_inputs, config.timestep_conditioning)
             if config.timestep_conditioning:
+                self.assertEqual(tuple(decoder_inputs["timestep"].shape), (2,))
+                self.assertEqual(decoder_inputs["timestep"].dtype, torch.float32)
                 self.assertEqual(decoder_config.inputs["timestep"], {0: "batch_size"})
 
 

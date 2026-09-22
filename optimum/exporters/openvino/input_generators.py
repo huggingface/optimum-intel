@@ -829,8 +829,8 @@ class LTXVaeDummyInputGenerator(DummyVisionInputGenerator):
             num_frames = self.sample_num_frames if input_name == "sample" else self.num_frames
             return self.random_float_tensor([self.batch_size, self.num_channels, num_frames, self.height, self.width])
         if input_name == "timestep":
-            return self.random_int_tensor(
-                [self.batch_size], max_value=20, min_value=1, framework=framework, dtype=int_dtype
+            return self.random_float_tensor(
+                [self.batch_size], max_value=20, min_value=1, framework=framework, dtype="fp32"
             )
 
         return super().generate(input_name, framework, int_dtype, float_dtype)
