@@ -295,6 +295,12 @@ HUB_MODEL_NAMES = {
     "lfm2": "optimum-intel-internal-testing/tiny-random-lfm2",
     "lfm2_moe": "optimum-intel-internal-testing/tiny-random-lfm2-moe",
     "longt5": "optimum-intel-internal-testing/tiny-random-longt5",
+    # NOTE: this checkpoint's generation_config.json has pad_token_id=-1, which a
+    # strict transformers GenerationConfig.validate() rejects on save_pretrained().
+    # Avoid it in any test path that re-saves the PT model (e.g. the `_name_or_path`
+    # override used by `test_exporters_cli_with_default_config`); use a different
+    # architecture's tiny checkpoint there instead (see the
+    # humain-ai/ALLaM-7B-Instruct-preview entry in DEFAULT_CONFIG_TEST_CONFIGURATIONS).
     "llama": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
     "llama_awq": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
     "llama_compressed_tensors": "optimum-intel-internal-testing/tiny-random-llama-compressed-tensors",

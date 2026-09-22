@@ -546,16 +546,19 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         # Overrides the generic data-free/ratio=1.0 default that this bilingual
         # (Arabic+English), 64k-vocab model inherited from meta-llama/Llama-2-7b-chat-hf.
         # That default under-performed the 0.9 WWB similarity gate on all three devices
-        # (CPU 0.8814, GPU.0 0.8442, GPU.1 0.8331); calibrated AWQ with ratio=0.8 keeps
-        # the most sensitive ~20% of layers (embedding/lm_head with the 64k vocab) at
-        # int8 instead of forcing them to int4.
+        # (CPU 0.8814, GPU.0 0.8442, GPU.1 0.8331). A first calibration attempt
+        # (ratio=0.8, AWQ, scale_estimation) improved but still fell short of the gate
+        # (GPU.0 0.8619). Lowering ratio to 0.6 (keeps ~45% of layers at int8 instead of
+        # ~20%) and adding LoRA correction on top of AWQ + scale estimation clears the
+        # gate on all three devices: CPU 0.9409, GPU.0 0.9368, GPU.1 0.9290.
         "bits": 4,
         "sym": True,
         "group_size": 128,
-        "ratio": 0.8,
+        "ratio": 0.6,
         "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
         "scale_estimation": True,
+        "lora_correction": True,
     },
 }
 

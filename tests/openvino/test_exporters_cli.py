@@ -1367,6 +1367,21 @@ class OVCLIExportTestCase(unittest.TestCase):
             {"model": 0},
         ),
         (
+            # Reuses the tiny-random-falcon-40b checkpoint (like the bloomz-560m case
+            # above) rather than the tiny-random-LlamaForCausalLM one: the latter's
+            # generation_config.json has an invalid pad_token_id=-1 that a strict
+            # transformers GenerationConfig.validate() rejects on save_pretrained() —
+            # a pre-existing fixture issue unrelated to this config, out of scope here.
+            "falcon-40b",
+            "humain-ai/ALLaM-7B-Instruct-preview",
+            AutoModelForCausalLM,
+            OVModelForCausalLM,
+            "--task text-generation-with-past --weight-format int4",
+            _DEFAULT_4BIT_WQ_CONFIGS,
+            {"model": {"int8": 26, "int4": 4}},
+            {"model": 0},
+        ),
+        (
             "clip",
             "hf-tiny-model-private/tiny-random-CLIPModel",
             AutoModelForZeroShotImageClassification,
