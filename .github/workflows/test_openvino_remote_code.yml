@@ -112,5 +112,5 @@ jobs:
       - if: ${{ matrix.test-pattern == '*export*' }}
         name: Test DFlash
         run: |
-          uv pip install transformers==5.2.0
+          uv pip install transformers==5.15
           pytest tests/openvino/test_dflash.py --durations=0
