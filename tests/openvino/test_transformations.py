@@ -382,6 +382,35 @@ if is_diffusers_version(">=", "0.35.0"):
         ],
     }
 
+# Qwen-Image-2.1 rotates interleaved pairs; the exported graph de-interleaves them into the same rotate-half
+# layout, so its transformer RoPE fuses through the same GPT-NeoX matcher.
+if is_diffusers_version(">=", "0.41.0.dev0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["qwenimage21"] = {
+        "model_class": "OVDiffusionPipeline",
+        "convert": [
+            "CommonFusions",
+            "ConstantFolding",
+            "MOC",
+            "MultiplyFusions",
+            "ReshapeOptimizations",
+            "SDPAFusion",
+            "ShapeOfConstFolding",
+            "SharedOpOptimization",
+            "SmartReshape",
+        ],
+        "compile": [
+            "CommonDecompositions",
+            "CommonOptimizations",
+            "FullyConnectedBiasFusion",
+            "FuseTransposeBrgemm",
+            "RMSFusion",
+            "RoPEFusion",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "SDPASubgraphFusion",
+        ],
+    }
+
 
 if is_diffusers_version(">=", "0.38.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["ltx2"] = {

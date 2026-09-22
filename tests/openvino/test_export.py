@@ -60,6 +60,7 @@ from optimum.intel import (
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
     OVModelForZeroShotImageClassification,
+    OVQwenImage21Pipeline,
     OVQwenImagePipeline,
     OVSamModel,
     OVStableDiffusion3Pipeline,
@@ -148,6 +149,9 @@ class ExportModelTest(unittest.TestCase):
         "deepseek_ocr2": OVModelForVisualCausalLM,
     }
 
+    if is_diffusers_version(">=", "0.41.0.dev0"):
+        SUPPORTED_ARCHITECTURES["qwenimage21"] = OVQwenImage21Pipeline
+
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = {
         model_type: model_cls
@@ -169,6 +173,7 @@ class ExportModelTest(unittest.TestCase):
         "flux": {"text_encoder_2": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "flux.2-klein": {"transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "z-image": {"text_encoder": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
+        "qwenimage21": {"text_encoder": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "stable-diffusion-xl-refiner": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "ltx-video": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "ltx2": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
