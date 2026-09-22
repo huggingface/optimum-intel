@@ -542,6 +542,21 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "dataset": "gsm8k",
         "scale_estimation": True,
     },
+    "humain-ai/ALLaM-7B-Instruct-preview": {
+        # Overrides the generic data-free/ratio=1.0 default that this bilingual
+        # (Arabic+English), 64k-vocab model inherited from meta-llama/Llama-2-7b-chat-hf.
+        # That default under-performed the 0.9 WWB similarity gate on all three devices
+        # (CPU 0.8814, GPU.0 0.8442, GPU.1 0.8331); calibrated AWQ with ratio=0.8 keeps
+        # the most sensitive ~20% of layers (embedding/lm_head with the 64k vocab) at
+        # int8 instead of forcing them to int4.
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 0.8,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
 }
 
 _DEFAULT_8BIT_WQ_CONFIGS = {
