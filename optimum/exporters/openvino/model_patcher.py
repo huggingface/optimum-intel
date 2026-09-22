@@ -5304,6 +5304,10 @@ class CommonImageEmbeddingsModelPatcher(ModelPatcher):
             # we should be able to specify pooler_output as output_name, not supported here as pooler_output key does not exist
             if is_transformers_version(">=", "5") and hasattr(outputs, "pooler_output"):
                 outputs = outputs.pooler_output
+                # Some models (like gemma4) split pooler_output per-image into a tuple/list of variable-length tensors
+                # Concatenate them back into a single tensor so the traced graph exposes exactly one output
+                if isinstance(outputs, (tuple, list)):
+                    outputs = torch.cat(outputs, dim=0)
 
             output_names = list(config.outputs.keys())
             return {output_names[0]: outputs}
