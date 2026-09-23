@@ -110,7 +110,6 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
         "compile": [
             "ConvertMatMulToFC",
             "ConvertToCPUSpecificOpset",
-            "ConvertToPowerStatic",
             "ConvertToSwishCPU",
             "Snippets",
             "Tokenization",
