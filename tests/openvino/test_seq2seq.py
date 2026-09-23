@@ -750,7 +750,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             # Qwen3OmniMoeForConditionalGeneration has a custom generate() interface incompatible with this flow
             self.skipTest("qwen3_omni_moe comparison tested via dedicated test methods")
 
-        if model_arch == "gemma4":
+        if model_arch == "gemma4" and is_openvino_version("<", "2026.5"):
             self.skipTest("gemma4 is causing segfault CVS-193103")
 
         def compare_outputs(inputs, ov_model, transformers_model, generation_config):
@@ -1003,7 +1003,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_generate_utils(self, model_arch):
-        if model_arch == "gemma4":
+        if model_arch == "gemma4" and is_openvino_version("<", "2026.5"):
             self.skipTest("gemma4 is causing segfault CVS-193103")
         model_id = MODEL_NAMES[model_arch]
         trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
