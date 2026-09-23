@@ -65,7 +65,7 @@ jobs:
       - name: Restore HF models cache
         id: hf-cache-restore
         if: env.HF_TOKEN == ''
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/huggingface/hub
           key: hf-models
