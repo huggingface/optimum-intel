@@ -1402,7 +1402,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             if not is_model_type_transformers_compatible(model_type)
         }
         if is_transformers_version(">=", "5"):
-            expected.update({"llama4", "llava_next_video", "minicpmv", "internvl_chat", "exaone4"})
+            expected.update({"llama4", "llava_next_video", "minicpmv", "exaone4"})
+        expected.update({"internvl_chat"})
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.LOAD_IN_4_BITS_SCOPE}
@@ -2022,7 +2023,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
         ),
     ]
 
-    if is_transformers_version("<", "5"):
+    if is_transformers_version("<", "4.57.6"):
         PIPELINE_QUANTIZATION_SCOPE.append(
             (
                 OVModelForVisualCausalLM,

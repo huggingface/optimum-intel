@@ -2306,7 +2306,8 @@ class MairaOpenVINOConfig(LlavaOpenVINOConfig):
 
 @register_in_tasks_manager("internvl_chat", *["image-text-to-text"], library_name="transformers")
 class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
-    MAX_TRANSFORMERS_VERSION = "4.57.6"
+    MIN_TRANSFORMERS_VERSION = "4.53.3"
+    MAX_TRANSFORMERS_VERSION = "4.53.3"
 
     def __init__(
         self,
@@ -2347,7 +2348,11 @@ class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
             model_type = self._orig_config.llm_config.model_type
             return get_vlm_text_embeddings_config(
-                model_type, self._orig_config.llm_config, self.int_dtype, self.float_dtype
+                model_type,
+                self._orig_config.llm_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
             )
 
         if behavior == VLMConfigBehavior.LANGUAGE:
@@ -2358,6 +2363,7 @@ class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
                 self.int_dtype,
                 self.float_dtype,
                 InternVL2ChatLangModelPatcher,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
             )
 
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
