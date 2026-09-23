@@ -963,7 +963,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             if not is_model_type_transformers_compatible(model_type)
         }
         if is_transformers_version(">=", "5"):
-            expected.update({"videochat_flash_qwen", "llama4", "llava_next_video", "minicpmv", "internvl_chat"})
+            expected.update({"videochat_flash_qwen", "llama4", "llava_next_video", "minicpmv"})
+        expected.update({"internvl_chat"})
 
         # qwen3_5_compressed_tensors is available with OpenVINO >= 2026.3 and compressed-tensors.
         # Qwen3_5OpenVINOConfig only supports transformers 5.2.0-5.2.99, so outside that narrow

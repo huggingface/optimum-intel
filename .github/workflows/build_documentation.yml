@@ -22,14 +22,14 @@ jobs:
       PR_CLONE_URL: ${{ github.event.pull_request.head.repo.clone_url }}
 
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "20"
           cache-dependency-path: "kit/package-lock.json"
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
@@ -57,7 +57,7 @@ jobs:
       - name: Make documentation
         shell: bash
         run: |
-          make doc BUILD_DIR=./build_dir VERSION=${{ env.VERSION }}
+          make doc BUILD_DIR=./build_dir VERSION=${VERSION}
           cd build_dir
           mv ./optimum.intel ./optimum-intel
           cd ..
