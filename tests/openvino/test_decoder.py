@@ -76,6 +76,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neox_japanese",
         "xglm",
         "gemma",
+        "spark2_5",
         "stablelm",
         "starcoder2",
         "cohere",
@@ -426,7 +427,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
-        atol = 3e-3 if model_arch in ["minicpm", "qwen2-moe", "gemma3n_text"] else 1e-4
+        # spark2_5: hybrid interleaved sliding/full attention + dual RoPE base, 36 layers at real model scale.
+        # Forced-fp32 export verified mathematically exact (~1e-7) on 8- and 16-layer test fixtures; this atol
+        # covers default bf16 CPU inference precision, extrapolated from measured 8L/16L diffs (0.0055/0.0078)
+        # to 36L (~0.0136) with a 2x safety margin, since we have not measured the real 36-layer checkpoint directly.
+        atol = (
+            3e-2
+            if model_arch == "spark2_5"
+            else (3e-3 if model_arch in ["minicpm", "qwen2-moe", "gemma3n_text"] else 1e-4)
+        )
         # quantized models have different logits value range
         if "awq" not in model_arch and "gptq" not in model_arch:
             self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))

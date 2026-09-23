@@ -379,6 +379,7 @@ HUB_MODEL_NAMES = {
     "sam": "optimum-intel-internal-testing/sam-vit-tiny-random",
     "smollm3": "optimum-intel-internal-testing/tiny-random-smollm3",
     "smolvlm": "optimum-intel-internal-testing/tiny-random-smolvlm2",
+    "spark2_5": "bharqav/tiny-random-spark2_5",
     "speecht5": "optimum-intel-internal-testing/tiny-random-SpeechT5ForTextToSpeech",
     "speech_to_text": "optimum-intel-internal-testing/tiny-random-Speech2TextModel",
     "squeezebert": "optimum-intel-internal-testing/tiny-random-squeezebert",
@@ -439,6 +440,43 @@ HUB_MODEL_NAMES = {
 }
 
 
+REMOTE_CODE_MODELS = (
+    "chatglm",
+    "minicpm",
+    "baichuan2",
+    "baichuan2-13b",
+    "jais",
+    "qwen",
+    "internlm2",
+    "orion",
+    "aquila",
+    "aquila2",
+    "xverse",
+    "internlm",
+    "codegen2",
+    "arctic",
+    "chatglm4",
+    "exaone",
+    "exaone4",
+    "decilm",
+    "minicpm3",
+    "deepseek",
+    "qwen3_dflash",
+    "qwen3_5_dflash",
+    "qwen3_5_moe_dflash",
+    "gemma4_dflash",
+    "qwen3_eagle3",
+    "qwen3_vl_eagle3",
+    "qwen3_asr",
+    "fun_asr",
+    "spark2_5",
+    "videochat_flash_qwen",
+)
+
+if is_transformers_version("<", "5"):
+    REMOTE_CODE_MODELS += ("afmoe", "ouro")
+
+
 def _resolve_cached_model_paths(model_names: dict) -> dict:
     try:
         if not os.path.exists(constants.HF_HUB_CACHE):
@@ -449,7 +487,10 @@ def _resolve_cached_model_paths(model_names: dict) -> dict:
             for repo in scan_cache_dir().repos
             if repo.revisions
         }
-        return {k: repo_id_to_local_paths.get(v, v) for k, v in model_names.items()}
+        return {
+            k: v if k in REMOTE_CODE_MODELS else repo_id_to_local_paths.get(v, v)
+            for k, v in model_names.items()
+        }
     except Exception:
         return model_names
 
@@ -765,6 +806,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 3,
     },
     "ouro": {"model": 34},
+    "spark2_5": {"model": 98},
     "qwen3_asr": {
         "encoder": 36,
         "decoder": 32,
@@ -779,40 +821,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
 
-REMOTE_CODE_MODELS = (
-    "chatglm",
-    "minicpm",
-    "baichuan2",
-    "baichuan2-13b",
-    "jais",
-    "qwen",
-    "internlm2",
-    "orion",
-    "aquila",
-    "aquila2",
-    "xverse",
-    "internlm",
-    "codegen2",
-    "arctic",
-    "chatglm4",
-    "exaone",
-    "exaone4",
-    "decilm",
-    "minicpm3",
-    "deepseek",
-    "qwen3_dflash",
-    "qwen3_5_dflash",
-    "qwen3_5_moe_dflash",
-    "gemma4_dflash",
-    "qwen3_eagle3",
-    "qwen3_vl_eagle3",
-    "qwen3_asr",
-    "fun_asr",
-    "videochat_flash_qwen",
-)
 
-if is_transformers_version("<", "5"):
-    REMOTE_CODE_MODELS += ("afmoe", "ouro")
 
 
 ARCH_TO_MODEL_CLASS = {

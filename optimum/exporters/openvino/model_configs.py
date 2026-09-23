@@ -1533,6 +1533,23 @@ class Gemma3nTextOpenVINOConfig(Gemma4TextOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "5.0"
 
 
+@register_in_tasks_manager(
+    "spark2_5",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class Spark25OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    _MODEL_PATCHER = OVDecoderModelPatcher
+
+
 @register_in_tasks_manager("deci", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class DeciOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
