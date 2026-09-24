@@ -64,7 +64,7 @@ jobs:
       - name: Qwen3.5 Compressed-Tensors Validation
         if: ${{ matrix.test-pattern == '*export*' || matrix.test-pattern == '*seq2seq*' }}
         run: |
-          uv pip install "transformers>=5.15,<5.16" compressed-tensors
+          uv pip install compressed-tensors
           pytest tests/openvino/${{ matrix.test-pattern }} -k qwen3_5_compressed_tensors --durations=0
           uv pip uninstall compressed-tensors
 
