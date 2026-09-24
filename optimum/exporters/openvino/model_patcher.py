@@ -10383,8 +10383,6 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DynamicCache
-
         from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
 
         from ._ov_ops import convert_recurrent_attention_cell
@@ -10400,10 +10398,16 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
             self._text_model = self._model.model
             self._text_config = self._model.model.config
 
-        class Qwen3_5DynamicCacheWrap(Qwen3_5DynamicCache):
+        # https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/qwen3_5/modeling_qwen3_5.py#L68
+        class Qwen3_5DynamicCacheWrap:
+            is_compileable = False
+
             def __init__(self, config, conv_states, recurrent_states, key_cache, value_cache):
-                # Call parent constructor with all required arguments
-                super().__init__(config=config)
+                self.layer_types = config.layer_types
+                self.transformer_layers = [
+                    i for i in range(config.num_hidden_layers) if self.layer_types[i] == "full_attention"
+                ]
+                self.last_linear_layer = len(self.layer_types) - 1 - self.layer_types[::-1].index("linear_attention")
 
                 self.conv_states = conv_states
                 self.recurrent_states = recurrent_states
@@ -10448,11 +10452,30 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
                     return 0
                 return self.key_cache[layer_idx].shape[-2]
 
-            @property
-            def has_previous_state(self):
+            def get_mask_sizes(self, query_length, layer_idx: int) -> tuple[int, int]:
+                """
+                Return a tuple (kv_length, kv_offset) corresponding to the length and offset that will be returned for
+                the given layer at `layer_idx`.
+                The masks are then prepared according to the given lengths (kv_length, kv_offset) and patterns for each layer.
+                """
+                kv_offset = 0
+                if hasattr(query_length, "shape") and len(query_length.shape) > 0:
+                    query_length = query_length.shape[0]
+                past_seen_tokens = self.get_seq_length(layer_idx)
+                kv_length = query_length + past_seen_tokens
+                return kv_length, kv_offset
+
+            def _has_previous_state_impl(self, layer_idx=None):
                 """We have a previous state if the last linear (conv) layer was already updated."""
-                layer_idx = self.linear_attn_mapping[self.last_linear_layer]
-                return self.conv_states[layer_idx] is not None
+                idx = self.linear_attn_mapping[self.last_linear_layer]
+                return self.conv_states[idx] is not None
+
+        # `has_previous_state` is read as a plain attribute (`cache.has_previous_state`) up to transformers 5.4,
+        # and called as a method since v5.5.0
+        if is_transformers_version(">=", "5.5.0"):
+            Qwen3_5DynamicCacheWrap.has_previous_state = Qwen3_5DynamicCacheWrap._has_previous_state_impl
+        else:
+            Qwen3_5DynamicCacheWrap.has_previous_state = property(Qwen3_5DynamicCacheWrap._has_previous_state_impl)
 
         # the patch is needed to include KV-cache, Conv, and SSM states in the inputs and outputs.
         def patched_forward(
