@@ -606,6 +606,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5_moe_mtp",
         "qwen3_omni_moe",
         "mistral3",
+        "ministral3",
         "muse_glimmer",
         "deepseek_ocr2",
     ]
@@ -672,6 +673,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "llava_next",
             "llava_next_mistral",
             "mistral3",
+            "ministral3",
             "qwen2_vl",
             "qwen2_5_vl",
             "got_ocr2",
@@ -744,6 +746,43 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     def test_find_untested_architectures(self):
         self._test_find_untested_architectures()
 
+    def test_ministral3_multi_image_preprocess(self):
+        model_arch = "ministral3"
+        preprocessors = self.get_preprocessors(model_arch)
+        ov_model = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES[model_arch],
+            export=True,
+            compile=False,
+            device=OPENVINO_DEVICE,
+            ov_config=F32_CONFIG,
+        )
+
+        images = [
+            Image.new("RGB", (600, 600), color=(220, 20, 30)),
+            Image.new("RGB", (600, 600), color=(20, 60, 220)),
+        ]
+        inputs = ov_model.preprocess_inputs(
+            **preprocessors,
+            text="Describe both images in order.",
+            image=images,
+        )
+
+        image_token_id = getattr(ov_model.config, "image_token_id", None)
+        if image_token_id is None:
+            image_token_id = ov_model.config.image_token_index
+        num_image_tokens = int((inputs["input_ids"] == image_token_id).sum())
+        image_features = ov_model.get_vision_embeddings(
+            inputs["pixel_values"],
+            input_ids=inputs["input_ids"],
+            image_sizes=inputs.get("image_sizes"),
+        )
+
+        self.assertEqual(inputs["pixel_values"].shape[0], 2)
+        self.assertEqual(num_image_tokens, image_features.shape[0])
+
+        outputs = ov_model.generate(**inputs, max_new_tokens=4, do_sample=False)
+        self.assertEqual(outputs.shape[0], 1)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         if model_arch == "qwen3_omni_moe":
@@ -786,6 +825,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         )
 
         transformers_model.eval()
+        # the tiny mistral3 checkpoint is stored in 16-bit, which clashes with the fp32 pixel_values
+        # produced by the processor; cast the reference model to fp32 so its vision tower runs on CPU
+        if model_arch == "mistral3":
+            transformers_model = transformers_model.float()
         if "internvl_chat" in model_arch:
             tokenizer = AutoTokenizer.from_pretrained(model_id, trast_remote_code=trust_remote_code)
             img_context_token_id = tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")

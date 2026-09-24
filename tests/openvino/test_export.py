@@ -142,6 +142,7 @@ class ExportModelTest(unittest.TestCase):
         "gemma4_unified": OVModelForVisualCausalLM,
         "gemma3n": OVModelForVisualCausalLM,
         "mistral3": OVModelForVisualCausalLM,
+        "ministral3": OVModelForVisualCausalLM,
         "flux.2-klein": OVFlux2KleinPipeline,
         "z-image": OVZImagePipeline,
         "qwen3_omni_moe": OVModelForMultimodalLM,
@@ -338,7 +339,8 @@ class ExportModelTest(unittest.TestCase):
         model_kwargs = None
         if model_type == "speecht5":
             model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
-        self._openvino_export(model_type, model_kwargs=model_kwargs)
+        patch_16bit_model = model_type == "mistral3"
+        self._openvino_export(model_type, model_kwargs=model_kwargs, patch_16bit_model=patch_16bit_model)
 
     @parameterized.expand(GENERATIVE_MODELS)
     def test_export_with_custom_gen_config(self, model_type):

@@ -849,6 +849,16 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "vision_projection_model": {"int8": 2},
             },
         ),
+        (
+            "image-text-to-text",
+            "mistral3",
+            "int4 --group-size 4",
+            {
+                "lm_model": {"int8": 2, "int4": 28},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 19},
+            },
+        ),
     ]
 
     # Pre-quantized compressed-tensors (AWQ pack-quantized) model. It is already quantized, so
