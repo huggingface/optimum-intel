@@ -237,7 +237,7 @@ class Eagle3DummyGenerator(DummyInputGenerator):
         self.batch_size = batch_size
         self.sequence_length = sequence_length
         self.hidden_size = normalized_config.hidden_size
-        dflash_config = getattr(normalized_config.config, "dflash_config", {}) or {}
+        dflash_config = getattr(normalized_config.config, "dflash_config", None) or normalized_config.config.to_dict()
         self.num_hidden_state_layers = len(dflash_config.get("target_layer_ids", [])) or 3
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
@@ -493,6 +493,67 @@ class DummyGemma4UnifiedVisionInputGenerator(DummyVisionInputGenerator):
                 grid = grid[:, : self.num_patches, :]
             return grid.expand(self.batch_size, -1, -1).clone()
         return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyGemma4UnifiedAudioInputGenerator(DummyInputGenerator):
+    """Unified Gemma 4 has no separate audio encoder, so these input features are already audio embeddings;
+    the exported audio model projects them into language-model soft tokens that replace the prompt's audio tokens.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("input_features",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.audio_embed_dim = getattr(normalized_config, "audio_embed_dim", 640)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        return self.random_float_tensor(
+            shape=[self.batch_size, self.sequence_length, self.audio_embed_dim],
+            framework=framework,
+            dtype=float_dtype,
+        )
+
+
+class DummyGemma4AudioInputGenerator(DummyInputGenerator):
+    """Gemma 4 audio preprocessing converts waveforms into padded frame-level acoustic features;
+    ``input_features_mask`` marks the valid, non-padding frames in ``input_features``.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("input_features", "input_features_mask")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        # Roughly one second of audio at the feature extractor's 10 ms hop
+        sequence_length: int = 100,
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.feature_size = getattr(normalized_config, "feature_size", 128)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "input_features_mask":
+            return torch.ones((self.batch_size, self.sequence_length), dtype=torch.bool)
+        return self.random_float_tensor(
+            shape=[self.batch_size, self.sequence_length, self.feature_size],
+            framework=framework,
+            dtype=float_dtype,
+        )
 
 
 class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
@@ -826,6 +887,13 @@ class LTXVaeDummyInputGenerator(DummyVisionInputGenerator):
             return self.random_int_tensor([1], max_value=20, min_value=1, framework=framework, dtype=int_dtype)
 
         return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class QwenImage21VaeDummyInputGenerator(LTXVaeDummyInputGenerator):
+    # QwenImage21's image VAE is run on a single temporal frame; its `_encode`/`_decode` streaming path
+    # assumes num_frames == 1 (the temporal upsampling breaks for num_frames > 1).
+    def __init__(self, *args, num_frames: int = 1, **kwargs):
+        super().__init__(*args, num_frames=num_frames, **kwargs)
 
 
 class LTXTransformerDummyInputGenerator(DummyVisionInputGenerator):
@@ -2335,6 +2403,201 @@ class DummyQwenImageResolutionInputGenerator(DummyInputGenerator):
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         value = self.packed_height if input_name == "height" else self.packed_width
         return self.constant_tensor([], value=value, dtype=getattr(torch, int_dtype), framework=framework)
+
+
+class DummyQwenImage21TransformerInputGenerator(DummyInputGenerator):
+    # QwenImage21's traceable single-pass transformer consumes host-precomputed tensors instead of the
+    # data-dependent joint-sequence assembly / complex rotary / flex attention of the eager model. All
+    # eight inputs must be mutually consistent: a text-to-image layout (text tokens followed by the
+    # target image's latent tokens) is generated, for which the joint gather index is the identity.
+    SUPPORTED_INPUT_NAMES = (
+        "hidden_states",
+        "encoder_hidden_states",
+        "timestep",
+        "cos",
+        "sin",
+        "gather_idx",
+        "attn_mask",
+        "modulation_mask",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"] // 8,
+        height: int = DEFAULT_DUMMY_SHAPES["height"] // 8,
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        cfg = normalized_config.config
+        self.batch_size = batch_size
+        self.text_len = sequence_length
+        self.in_channels = cfg.in_channels
+        self.context_in_dim = cfg.context_in_dim
+        self.head_dim = cfg.attention_head_dim
+        # target image latent tokens (patch_size == 1, unpacked), 2x downsampled per axis
+        self.n_lat = (height // 2) * (width // 2)
+        self.seq = self.text_len + self.n_lat
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "hidden_states":
+            return self.random_float_tensor(
+                [self.batch_size, self.n_lat, self.in_channels], framework=framework, dtype=float_dtype
+            )
+        if input_name == "encoder_hidden_states":
+            return self.random_float_tensor(
+                [self.batch_size, self.text_len, self.context_in_dim], framework=framework, dtype=float_dtype
+            )
+        if input_name == "timestep":
+            return self.random_float_tensor([self.batch_size], framework=framework, dtype=float_dtype)
+        if input_name in ("cos", "sin"):
+            return self.random_float_tensor([1, self.seq, 1, self.head_dim], framework=framework, dtype=float_dtype)
+        if input_name == "gather_idx":
+            # text-to-image identity gather: combined = cat([txt, img]) already in joint order
+            return self.constant_tensor(
+                [self.seq], value=0, dtype=getattr(torch, int_dtype), framework=framework
+            ) + torch.arange(self.seq, dtype=getattr(torch, int_dtype))
+        if input_name == "attn_mask":
+            return self.random_float_tensor(
+                [self.batch_size, 1, self.seq, self.seq], framework=framework, dtype=float_dtype
+            )
+        if input_name == "modulation_mask":
+            mask = torch.zeros(self.seq, dtype=torch.bool)
+            mask[self.text_len :] = True
+            return mask
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyQwenImage21VisionInputGenerator(DummyInputGenerator):
+    # QwenImage2.1 image-to-image runs the Qwen3-VL vision tower on the condition image. The traceable
+    # graph consumes host-precomputed, grid-derived tensors (the bilinear position-embedding gather
+    # indices/weights and the rotary cos/sin) instead of recomputing them from `grid_thw` with
+    # `.item()`/`.tolist()`, which keeps the sequence length dynamic. A single small image is generated.
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "bilinear_indices",
+        "bilinear_weights",
+        "cos",
+        "sin",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        cfg = normalized_config.config
+        self.spatial_merge_size = cfg.spatial_merge_size
+        self.patch_size = cfg.patch_size
+        self.temporal_patch_size = cfg.temporal_patch_size
+        self.in_channels = cfg.in_channels
+        self.hidden_size = cfg.hidden_size
+        self.num_heads = cfg.num_heads
+        self.num_grid_per_side = int(cfg.num_position_embeddings**0.5)
+        # A single small image: t=1, h=w=2*spatial_merge_size keeps the trace small yet valid for the
+        # patch-merge downsample.
+        self.grid_t = 1
+        self.grid_h = self.spatial_merge_size * 2
+        self.grid_w = self.spatial_merge_size * 2
+        self.patch_dim = self.in_channels * self.temporal_patch_size * self.patch_size * self.patch_size
+
+    def _grid_derived(self, int_dtype: str):
+        from transformers.vision_utils import (
+            get_vision_bilinear_indices_and_weights,
+            get_vision_position_ids,
+        )
+
+        grid_thw = torch.tensor([[self.grid_t, self.grid_h, self.grid_w]], dtype=DTYPE_MAPPER.pt(int_dtype))
+        bilinear_indices, bilinear_weights = get_vision_bilinear_indices_and_weights(
+            grid_thw, self.num_grid_per_side, self.spatial_merge_size
+        )
+        position_ids = get_vision_position_ids(grid_thw, self.spatial_merge_size)
+        head_dim = self.hidden_size // self.num_heads
+        dim = head_dim // 2
+        inv_freq = 1.0 / (10000.0 ** (torch.arange(0, dim, 2, dtype=torch.float) / dim))
+        rotary = (position_ids.unsqueeze(-1) * inv_freq).flatten(1)
+        seq_len = self.grid_t * self.grid_h * self.grid_w
+        rotary = rotary.reshape(seq_len, -1)
+        emb = torch.cat((rotary, rotary), dim=-1)
+        return bilinear_indices, bilinear_weights, emb.cos(), emb.sin()
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        num_patches = self.grid_t * self.grid_h * self.grid_w
+        if input_name == "pixel_values":
+            return self.random_float_tensor([num_patches, self.patch_dim], framework=framework, dtype=float_dtype)
+        bilinear_indices, bilinear_weights, cos, sin = self._grid_derived(int_dtype)
+        tensor = {
+            "bilinear_indices": bilinear_indices,
+            "bilinear_weights": bilinear_weights.to(DTYPE_MAPPER.pt(float_dtype)),
+            "cos": cos.to(DTYPE_MAPPER.pt(float_dtype)),
+            "sin": sin.to(DTYPE_MAPPER.pt(float_dtype)),
+        }[input_name]
+        if framework != "pt":
+            return tensor.numpy()
+        return tensor
+
+
+class DummyQwenImage21I2ITextInputGenerator(DummyInputGenerator):
+    # QwenImage2.1 image-to-image feeds the Qwen3-VL language model with `input_ids` and the vision
+    # `image_embeds`; the graph does the token embedding and scatters the vision embeds into the image-pad
+    # positions internally, so no embedding weights are needed on the host. It also takes 3D M-RoPE
+    # `position_ids` and the DeepStack visual features as a dense additive tensor (one slice per layer).
+    SUPPORTED_INPUT_NAMES = (
+        "input_ids",
+        "image_embeds",
+        "attention_mask",
+        "position_ids",
+        "deepstack_dense",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = 16,
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        cfg = normalized_config.config
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.hidden_size = cfg.text_config.hidden_size
+        self.vocab_size = cfg.text_config.vocab_size
+        self.image_token_id = cfg.image_token_id
+        self.n_deep = len(cfg.vision_config.deepstack_visual_indexes)
+        # A couple of image-pad tokens so the internal masked-scatter path is exercised.
+        self.num_image_tokens = 2
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        b, s, d = self.batch_size, self.sequence_length, self.hidden_size
+        if input_name == "input_ids":
+            ids = torch.randint(0, self.vocab_size, (b, s), dtype=DTYPE_MAPPER.pt(int_dtype))
+            # place `num_image_tokens` image-pad tokens per batch so masked_scatter has targets
+            ids[:, : self.num_image_tokens] = self.image_token_id
+            if framework != "pt":
+                return ids.numpy()
+            return ids
+        if input_name == "image_embeds":
+            return self.random_float_tensor([b * self.num_image_tokens, d], framework=framework, dtype=float_dtype)
+        if input_name == "attention_mask":
+            return self.constant_tensor([b, s], value=1, dtype=DTYPE_MAPPER.pt(int_dtype), framework=framework)
+        if input_name == "position_ids":
+            pos = torch.arange(s, dtype=DTYPE_MAPPER.pt(int_dtype)).view(1, 1, s).expand(3, b, s).contiguous()
+            if framework != "pt":
+                return pos.numpy()
+            return pos
+        if input_name == "deepstack_dense":
+            return self.random_float_tensor([self.n_deep, b, s, d], framework=framework, dtype=float_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
 class DummyMuseGlimmerVisionInputGenerator(DummyVisionInputGenerator):
