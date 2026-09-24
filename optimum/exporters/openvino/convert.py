@@ -136,6 +136,22 @@ def _set_runtime_options(
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
 
 
+def _keep_submodel_in_full_precision(config: "OpenVINOConfig") -> bool:
+    """Whether a submodel must stay in full precision even for fp16 exports.
+
+    Some vision towers are numerically too sensitive to fp16 weight rounding to be
+    compressed. The only such case today is the LFM2-VL naflex Siglip2 vision tower: its
+    error accumulates across the encoder layers so that fp16 weight storage changes the
+    generated text enough to fail the WWB visual-text accuracy threshold, while the fp16
+    language model (which dominates the artifact size) is unaffected.
+    """
+    orig_config = getattr(config, "_orig_config", None)
+    behavior = getattr(config, "_behavior", None)
+    # ``VLMConfigBehavior`` is a ``str`` enum, so comparing against its string value avoids
+    # importing ``model_configs`` (which would introduce a circular import) here.
+    return getattr(orig_config, "model_type", None) == "lfm2_vl" and behavior == "vision_embeddings"
+
+
 def _save_model(
     model,
     path: str,
@@ -145,6 +161,14 @@ def _save_model(
     source_model=None,
 ):
     compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
+    if compress_to_fp16 and _keep_submodel_in_full_precision(config):
+        # A few vision towers are too sensitive to fp16 weight rounding to be compressed:
+        # the LFM2-VL naflex Siglip2 tower accumulates enough error across its encoder
+        # layers that storing its weights in fp16 measurably changes the generated text
+        # (WWB visual-text similarity drops well below the acceptance threshold even though
+        # inference itself runs at fp32 precision). Keep such submodels in full precision for
+        # fp16 exports; the language model, which dominates the artifact size, stays fp16.
+        compress_to_fp16 = False
     model = _add_version_info_to_model(model, library_name)
 
     runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}

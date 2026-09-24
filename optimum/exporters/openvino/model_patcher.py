@@ -8028,10 +8028,17 @@ def lfm2_short_conv_forward_patched(
     Bx = B * x
 
     if past_key_values is not None:
-        layer_idx = past_key_values.conv_layer_idx_mapping[self.layer_idx]
-        conv_state = past_key_values.conv_cache[layer_idx]
-        conv_out, new_conv_state = ov_causal_conv1d(conv_state, Bx, self.conv.weight, self.conv.bias)
-        past_key_values.conv_cache[layer_idx].copy_(new_conv_state)
+        if hasattr(past_key_values, "conv_cache"):
+            # legacy Lfm2HybridConvCacheWrap (transformers < 5.5)
+            layer_idx = past_key_values.conv_layer_idx_mapping[self.layer_idx]
+            conv_state = past_key_values.conv_cache[layer_idx]
+            conv_out, new_conv_state = ov_causal_conv1d(conv_state, Bx, self.conv.weight, self.conv.bias)
+            past_key_values.conv_cache[layer_idx].copy_(new_conv_state)
+        else:
+            # native DynamicCache (transformers >= 5.5): conv state lives on the per-layer object
+            conv_state = past_key_values.layers[self.layer_idx].conv_states
+            conv_out, new_conv_state = ov_causal_conv1d(conv_state, Bx, self.conv.weight, self.conv.bias)
+            past_key_values.layers[self.layer_idx].conv_states.copy_(new_conv_state)
     else:
         conv_out = self.conv(Bx)[..., :seqlen]
 
@@ -8053,9 +8060,18 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers.models.lfm2.modeling_lfm2 import Lfm2HybridConvCache
-
         super().__init__(config, model, model_kwargs)
+
+        # The lfm2 hybrid conv/attention cache was reworked in transformers 5.5: the dedicated
+        # ``Lfm2HybridConvCache`` container was removed in favor of a generic ``DynamicCache``
+        # whose per-layer objects expose ``conv_states`` (conv layers) and ``keys``/``values``
+        # (attention layers). Use the native cache on recent transformers and keep the legacy
+        # wrapper for older releases so existing (<5.5) exports are unchanged.
+        if is_transformers_version(">=", "5.5"):
+            self._init_native_stateful_forward()
+            return
+
+        from transformers.models.lfm2.modeling_lfm2 import Lfm2HybridConvCache
 
         # This cache wrapper class serves for following purposes:
         # 1. Wraps KV-cache and conv_state to allow model instantiation from tensor lists.
@@ -8160,6 +8176,7 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
 
             causal_lm_output = self.model_orig_forward(
                 input_ids=input_ids,
+                inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
                 past_key_values=wrapped_cache_params,
                 use_cache=use_cache,
@@ -8187,32 +8204,176 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
         self.model_orig_forward = self.orig_forward
         self.orig_forward = patched_forward
 
-    def __enter__(self):
+    def _init_native_stateful_forward(self):
+        # transformers >= 5.5 path: reconstruct a native ``DynamicCache`` from the flat cache
+        # tensors used by the stateful export, run the real forward, then flatten the resulting
+        # per-layer states back into the export's ``present_key_values`` order.
+        from transformers.cache_utils import DynamicCache
+
+        text_config = self.real_config._config
+        layer_types = list(text_config.layer_types)
+        num_conv_layers = layer_types.count("conv")
+
+        def build_cache(cache_params):
+            cache = DynamicCache(config=text_config)
+            attn_idx = 0
+            conv_idx = 0
+            for layer_idx, layer_type in enumerate(layer_types):
+                layer = cache.layers[layer_idx]
+                if layer_type == "conv":
+                    conv_state = cache_params[conv_idx]
+                    layer.conv_states = conv_state
+                    layer.is_conv_states_initialized = True
+                    layer.has_previous_state = True
+                    layer.dtype, layer.device = conv_state.dtype, conv_state.device
+                    layer.max_batch_size, layer.conv_kernel_size = conv_state.shape[0], conv_state.shape[-1]
+                    conv_idx += 1
+                else:
+                    key_states = cache_params[num_conv_layers + attn_idx * 2]
+                    value_states = cache_params[num_conv_layers + attn_idx * 2 + 1]
+                    layer.keys = key_states
+                    layer.values = value_states
+                    layer.dtype, layer.device = key_states.dtype, key_states.device
+                    layer.is_initialized = True
+                    attn_idx += 1
+            return cache
+
+        def extract_present(cache):
+            present_key_values = []
+            for layer_idx, layer_type in enumerate(layer_types):
+                if layer_type == "conv":
+                    present_key_values.append(cache.layers[layer_idx].conv_states)
+            for layer_idx, layer_type in enumerate(layer_types):
+                if layer_type == "full_attention":
+                    present_key_values.append(cache.layers[layer_idx].keys)
+                    present_key_values.append(cache.layers[layer_idx].values)
+            return present_key_values
+
+        def patched_forward(
+            input_ids=None,
+            attention_mask=None,
+            position_ids=None,
+            cache_params=None,
+            inputs_embeds=None,
+            labels=None,
+            use_cache=None,
+            cache_position=None,
+            logits_to_keep: Union[int, torch.Tensor] = 0,
+        ):
+            use_cache = False
+            wrapped_cache_params = None
+            if cache_params is not None:
+                use_cache = True
+                wrapped_cache_params = build_cache(cache_params)
+
+            causal_lm_output = self.model_orig_forward(
+                input_ids=input_ids,
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                past_key_values=wrapped_cache_params,
+                use_cache=use_cache,
+            )
+            outputs = {"logits": causal_lm_output.logits}
+            if use_cache:
+                outputs["present_key_values"] = extract_present(causal_lm_output.past_key_values)
+            return outputs
+
+        self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+    def _get_short_conv_layers(self):
+        # The short-conv layers live directly under ``model.layers`` for the text-only
+        # ``Lfm2ForCausalLM`` and under ``model.language_model.layers`` when the same
+        # language stack is exported as the LFM2-VL language sub-model, so discover
+        # them by module type instead of a fixed attribute path.
         from transformers.models.lfm2.modeling_lfm2 import Lfm2ShortConv
 
+        return [module for module in self._model.modules() if isinstance(module, Lfm2ShortConv)]
+
+    def __enter__(self):
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
-        for layer in self._model.model.layers:
-            if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2ShortConv):
-                conv_layer = layer.conv
-            else:
-                continue
+        for conv_layer in self._get_short_conv_layers():
             conv_layer._orig_forward = conv_layer.slow_forward
             conv_layer.slow_forward = types.MethodType(lfm2_short_conv_forward_patched, conv_layer)
 
     def __exit__(self, exc_type, exc_value, traceback):
-        from transformers.models.lfm2.modeling_lfm2 import Lfm2ShortConv
-
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
 
-        for layer in self._model.model.layers:
-            if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2ShortConv):
-                conv_layer = layer.conv
-            else:
-                continue
+        for conv_layer in self._get_short_conv_layers():
             conv_layer.slow_forward = conv_layer._orig_forward
+
+
+class Lfm2VlVisionEmbeddingsModelPatcher(ModelPatcher):
+    """Export the LFM2-VL vision stack (naflex Siglip2 tower + projector) as one
+    resolution-agnostic graph.
+
+    The native ``Siglip2VisionEmbeddings`` resizes the learned position embeddings to
+    each image's ``(height, width)`` with an ``F.interpolate(..., antialias=True)`` call
+    inside a per-image Python loop that itemizes ``spatial_shapes`` -- neither is
+    traceable and both bake the resolution. Because that resize is *linear* in the
+    channel dimension, it is expressed here as ``pos_resample_kernel @ position_embedding``
+    where ``pos_resample_kernel`` (the antialias-bilinear interpolation weights, which
+    depend only on the grid geometry, not on any model weight) is computed at runtime and
+    passed in. Everything else -- patch embedding, the encoder over the (already trimmed
+    to valid patches) sequence, the grid reshape from ``spatial_shapes`` and the projector
+    pixel-unshuffle -- is plain traceable tensor arithmetic, so the graph stays exact and
+    resolution-agnostic for a single image per call.
+    """
+
+    def __init__(self, config, model, model_kwargs=None):
+        output_names = list(config.outputs.keys())
+        model.__orig_forward = model.forward
+
+        # The naflex Siglip2 tower accumulates enough error across its encoder layers that
+        # fp16 weight storage / fp16 activation casts noticeably change the projected image
+        # features (the WWB visual-text similarity drops well below the acceptance threshold,
+        # even though inference itself runs at fp32). The LFM2-VL checkpoint is natively fp16,
+        # so upcasting the vision stack to fp32 for the export is lossless and keeps the
+        # exported features numerically identical to the reference model. The matching
+        # ``_keep_submodel_in_full_precision`` guard in ``convert.py`` prevents this submodel
+        # from being re-compressed to fp16 on save. Only the vision stack that this graph
+        # actually traces is upcast; the fp16 language model is exported unchanged.
+        self._orig_vision_dtype = model.vision_tower.embeddings.patch_embedding.weight.dtype
+        if self._orig_vision_dtype != torch.float32:
+            model.vision_tower.float()
+            model.multi_modal_projector.float()
+
+        def image_embed_forward(self, pixel_values, pos_resample_kernel, spatial_shapes):
+            vision_tower = self.vision_tower
+            embeddings = vision_tower.embeddings
+            target_dtype = embeddings.patch_embedding.weight.dtype
+
+            # patch embedding + linearised antialias-bilinear positional resize
+            patch_embeds = embeddings.patch_embedding(pixel_values.to(dtype=target_dtype))
+            resized_pos = pos_resample_kernel.to(target_dtype) @ embeddings.position_embedding.weight
+            hidden_states = patch_embeds + resized_pos.unsqueeze(0)
+
+            # The runtime trims each image to its valid patches, so attention is full
+            # (no padding mask required).
+            encoder_outputs = vision_tower.encoder(inputs_embeds=hidden_states, attention_mask=None)
+            last_hidden_state = vision_tower.post_layernorm(encoder_outputs.last_hidden_state)
+
+            # reshape flat patches back to the image grid and project
+            feature_org_h = spatial_shapes[0, 0]
+            feature_org_w = spatial_shapes[0, 1]
+            feature = last_hidden_state.reshape(1, feature_org_h, feature_org_w, -1)
+            image_embedding = self.multi_modal_projector(feature)
+            image_embedding = image_embedding.reshape(-1, image_embedding.size(-1))
+            return {output_names[0]: image_embedding}
+
+        model.forward = types.MethodType(image_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        if self._orig_vision_dtype != torch.float32:
+            self._model.vision_tower.to(self._orig_vision_dtype)
+            self._model.multi_modal_projector.to(self._orig_vision_dtype)
 
 
 # Copied from https://github.com/huggingface/transformers/blob/v4.56.0/src/transformers/models/gpt_oss/modeling_gpt_oss.py#L81

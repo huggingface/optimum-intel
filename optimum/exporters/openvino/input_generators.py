@@ -2646,6 +2646,58 @@ class DummyMuseGlimmerVisionInputGenerator(DummyVisionInputGenerator):
         raise ValueError(f"Unsupported input name {input_name}")
 
 
+class DummyLfm2VlVisionInputGenerator(DummyVisionInputGenerator):
+    """Dummy input for the LFM2-VL (naflex Siglip2) vision stack.
+
+    The exported vision graph consumes a single image's already-flattened patches
+    ``pixel_values`` ``[1, num_patches, patch_dim]``, a precomputed antialias
+    bilinear resample kernel ``pos_resample_kernel`` ``[num_patches, num_position_embeddings]``
+    (built at runtime without model weights, so the positional-embedding resize stays
+    exact and resolution-agnostic) and ``spatial_shapes`` ``[1, 2]``. It returns the
+    projected per-token features ``[num_out_tokens, text_hidden]``.
+    """
+
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "pos_resample_kernel",
+        "spatial_shapes",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 1,
+        **kwargs,
+    ):
+        self.vision_config = normalized_config.config
+        cfg = self.vision_config
+        self.patch_size = cfg.patch_size
+        self.num_channels = getattr(cfg, "num_channels", 3)
+        self.num_positions = cfg.num_patches
+        # A single small image whose grid is divisible by the projector downsample
+        # factor keeps the trace small yet valid for the pixel-unshuffle merge.
+        downsample_factor = getattr(normalized_config, "downsample_factor", None) or 2
+        self.grid_h = downsample_factor * 2
+        self.grid_w = downsample_factor * 2
+        self.patch_dim = self.num_channels * self.patch_size * self.patch_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        num_patches = self.grid_h * self.grid_w
+        if input_name == "pixel_values":
+            shape = [1, num_patches, self.patch_dim]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "pos_resample_kernel":
+            shape = [num_patches, self.num_positions]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "spatial_shapes":
+            shapes = torch.tensor([[self.grid_h, self.grid_w]], dtype=DTYPE_MAPPER.pt(int_dtype))
+            if framework != "pt":
+                return shapes.numpy()
+            return shapes
+        raise ValueError(f"Unsupported input name {input_name}")
+
+
 class DummyDeepseekOCR2VisionInputGenerator(DummyVisionInputGenerator):
     def __init__(self, task, normalized_config, batch_size=1, num_channels=3, **kwargs):
         super().__init__(

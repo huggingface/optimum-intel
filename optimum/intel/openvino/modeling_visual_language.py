@@ -1187,6 +1187,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         audio_embed_sizes=None,
         audio_attention_mask=None,
         input_mode=None,
+        spatial_shapes=None,
         **kwargs,
     ):
         if pixel_values is None:
@@ -1214,6 +1215,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             audio_embed_sizes=audio_embed_sizes,
             audio_attention_mask=audio_attention_mask,
             input_mode=input_mode,
+            spatial_shapes=spatial_shapes,
             **kwargs,
         )
 
@@ -8005,8 +8007,135 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
         return inputs
 
 
+class _OVLfm2VlForCausalLM(OVModelForVisualCausalLM):
+    """OpenVINO runtime for the native LFM2-VL VLM.
+
+    The vision stack is exported as a single resolution-agnostic graph that consumes one
+    image's already-flattened valid patches ``pixel_values`` ``[1, num_patches, patch_dim]``,
+    the antialias-bilinear positional resample kernel ``pos_resample_kernel``
+    ``[num_patches, num_position_embeddings]`` and ``spatial_shapes`` ``[1, 2]``, returning
+    the projected per-token features ``[num_out_tokens, text_hidden]`` (naflex Siglip2 tower
+    -> multimodal projector). The runtime trims each image to its valid patches (numerically
+    identical to the padded + masked native path), builds the resample kernel without any
+    model weight and scatters the features into the ``<image>`` placeholder positions.
+    """
+
+    def _build_pos_resample_kernel(self, height, width):
+        # The learned position embeddings (a (grid, grid) map) are resized to (height, width)
+        # with F.interpolate(mode="bilinear", antialias=True) in the native model. That resize
+        # is linear in the channel dimension, so it equals K @ position_embedding.weight where
+        # K only depends on the grid geometry. Recover K by interpolating an identity map
+        # (one channel per source position), so no model weight is needed here.
+        num_positions = self.config.vision_config.num_patches
+        side = int(num_positions**0.5)
+        identity = torch.eye(num_positions, dtype=torch.float32).reshape(1, num_positions, side, side)
+        resized = torch.nn.functional.interpolate(
+            identity, size=(int(height), int(width)), mode="bilinear", align_corners=False, antialias=True
+        )
+        return resized.reshape(num_positions, int(height) * int(width)).transpose(0, 1)
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, spatial_shapes=None, **kwargs):
+        # Vision features are only consumed on the prefill step.
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        if pixel_values is None or spatial_shapes is None:
+            return None
+
+        pixel_values = pixel_values if isinstance(pixel_values, torch.Tensor) else torch.as_tensor(pixel_values)
+        pixel_values = pixel_values.to(torch.float32)
+        spatial_shapes = (
+            spatial_shapes if isinstance(spatial_shapes, torch.Tensor) else torch.as_tensor(spatial_shapes)
+        )
+
+        image_features = []
+        for idx in range(pixel_values.shape[0]):
+            height = int(spatial_shapes[idx, 0])
+            width = int(spatial_shapes[idx, 1])
+            num_valid = height * width
+            # Trim the padded packed patches to this image's valid patches; the native
+            # padded + attention-masked encoder gives identical results for valid patches.
+            pv = pixel_values[idx : idx + 1, :num_valid, :]
+            kernel = self._build_pos_resample_kernel(height, width)
+            ss = spatial_shapes[idx : idx + 1].to(torch.int64)
+            feats = self.vision_embeddings(
+                pixel_values=pv, pos_resample_kernel=kernel, spatial_shapes=ss
+            ).last_hidden_state
+            feats = torch.from_numpy(feats) if isinstance(feats, np.ndarray) else feats
+            image_features.append(feats)
+        return torch.cat(image_features, dim=0)
+
+    def get_multimodal_embeddings(
+        self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, spatial_shapes=None, **kwargs
+    ):
+        inputs_embeds = self.get_text_embeddings(input_ids)
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        is_prefill = input_ids is not None and input_ids.shape[1] != 1
+        if is_prefill and pixel_values is not None:
+            image_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, spatial_shapes=spatial_shapes)
+            if image_embeds is not None:
+                image_mask = input_ids == self.config.image_token_id
+                inputs_embeds[image_mask] = image_embeds.to(inputs_embeds.dtype)
+        return inputs_embeds, attention_mask, position_ids
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        image_sizes=None,
+        attention_mask=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            image_sizes=image_sizes,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        # naflex-specific vision inputs the base class does not know about
+        model_inputs["spatial_shapes"] = kwargs.get("spatial_shapes")
+        model_inputs["pixel_attention_mask"] = kwargs.get("pixel_attention_mask")
+        return model_inputs
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+
+        content = []
+        if image is not None:
+            content.append({"type": "image", "image": image})
+        content.append({"type": "text", "text": text})
+        messages = [{"role": "user", "content": content}]
+        inputs = processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
+        return inputs
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "muse_glimmer": _OVMuseGlimmerForCausalLM,
+    "lfm2_vl": _OVLfm2VlForCausalLM,
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
     "llava_next_video": _OVLlavaNextVideoForCausalLM,
