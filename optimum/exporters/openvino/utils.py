@@ -24,17 +24,11 @@ from transformers.utils import is_torch_available
 
 from openvino import Dimension, PartialShape, Symbol
 from openvino.utils.types import get_element_type
-from optimum.exporters.onnx.base import OnnxConfig
+from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import is_safetensors_available
 from optimum.utils import is_diffusers_available
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
-
-
-logger = logging.getLogger(__name__)
-
-
-InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
 
 
 if is_torch_available():
@@ -46,8 +40,68 @@ if is_diffusers_available():
     from diffusers import ModelMixin
 
 
+logger = logging.getLogger(__name__)
+
+
+InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
+
+
 OV_XML_FILE_NAME = "openvino_model.xml"
 _MAX_UNCOMPRESSED_SIZE = 1e9
+
+# Parameter names that LTX-2 stores in fp32 in an otherwise bf16 checkpoint: the AdaLN modulation
+# tables, which are the only F32 tensors upstream ships (194 of 3510 in LTX-2.0, 290 of 4186 in
+# LTX-2.3) and the source of ~96% of the exported transformer's error against fp32 PyTorch. Used by
+# `keep_mixed_precision_parameters` to populate `_keep_in_fp32_modules`, which diffusers matches
+# against each dotted component of a parameter name, so these are leaf names rather than prefixes.
+# LTX-2.0 has only the first four; a name that is absent simply never matches.
+LTX2_FP32_PARAMETERS = (
+    "scale_shift_table",
+    "audio_scale_shift_table",
+    "video_a2v_cross_attn_scale_shift_table",
+    "audio_a2v_cross_attn_scale_shift_table",
+    "prompt_scale_shift_table",
+    "audio_prompt_scale_shift_table",
+)
+
+
+def is_auto_compression_disabled(model: Any) -> bool:
+    """
+    Whether `model` is excluded from the automatic, size-based int8 weight compression that
+    `main_export` applies when no weight format is requested and nncf is installed.
+
+    LTX-2 is the only such family so far: its transformer and text encoder are both far above
+    `_MAX_UNCOMPRESSED_SIZE`, so they would always be compressed, and int8 weights cost too much
+    video quality for a silent default (measured on LTX-2.0: wwb similarity 0.80 for int8 against the
+    fp32 reference). Compression is still applied when asked for explicitly via `--weight-format` /
+    `--quant-mode`.
+
+    Both supported pipelines are listed explicitly: `LTX2ImageToVideoPipeline` does not subclass
+    `LTX2Pipeline`, and they are the only two LTX-2 classes this exporter registers (see
+    `_DIFFUSERS_TASKS_TO_MODEL_MAPPINGS` in `model_configs.py`).
+    """
+    if not is_diffusers_available():
+        return False
+
+    try:
+        from diffusers import LTX2ImageToVideoPipeline, LTX2Pipeline
+    except ImportError:
+        # LTX-2 was added in diffusers 0.38.0.
+        return False
+
+    return isinstance(model, (LTX2Pipeline, LTX2ImageToVideoPipeline))
+
+
+def is_ltx2_3_transformer_config(config: Any) -> bool:
+    """
+    Whether `config` is an LTX-2.3 transformer config rather than an LTX-2.0 one, keyed on the two
+    config values 2.3 introduced. Absent means LTX-2.0, via the diffusers defaults.
+
+    Used to keep the IRs LTX-2.0 already exports byte-identical, not to gate a capability: both
+    architectures support modality isolation. STG is the one real capability gate and checks
+    `perturbed_attn` on its own.
+    """
+    return getattr(config, "perturbed_attn", False) or not getattr(config, "use_prompt_embeddings", True)
 
 
 def is_torch_model(model: Union["PreTrainedModel", "ModelMixin"]):
@@ -87,7 +141,7 @@ def flattenize_inputs(inputs: List[Any]):
 
 
 def _get_input_info(
-    model: Union["PreTrainedModel", "ModelMixin"], config: OnnxConfig, dummy_inputs: Dict[str, Any]
+    model: Union["PreTrainedModel", "ModelMixin"], config: OpenVINOConfig, dummy_inputs: Dict[str, Any]
 ) -> List[InputInfo]:
     sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
     inputs = config.ordered_inputs(model)
@@ -108,12 +162,19 @@ def _get_input_info(
         if name in inputs:
             named_dims = inputs[name]
             for idx, dim_name in named_dims.items():
+                orig_dim_name = dim_name
+                if isinstance(orig_dim_name, tuple):
+                    dim_name, min_value, max_value = dim_name
                 if dim_name in name_to_symbol:
                     symbol = name_to_symbol[dim_name]
                 else:
                     symbol = Symbol()
                     name_to_symbol[dim_name] = symbol
                 dim = Dimension(-1)
+                if isinstance(orig_dim_name, tuple):
+                    dim = Dimension(min_value, max_value)
+                else:
+                    dim = Dimension(-1)
                 dim.set_symbol(symbol)
                 shape[idx] = dim
         info = InputInfo(name=name, shape=shape, type=type, example=example)
@@ -122,7 +183,7 @@ def _get_input_info(
 
 
 def _get_dynamic_shapes_info(
-    model: Union["PreTrainedModel", "ModelMixin"], config: OnnxConfig, dummy_inputs: Dict[str, Any]
+    model: Union["PreTrainedModel", "ModelMixin"], config: OpenVINOConfig, dummy_inputs: Dict[str, Any]
 ) -> List[InputInfo]:
     import torch
 
@@ -241,7 +302,7 @@ def _get_open_clip_submodels_fn_and_export_configs(
     library_name: str = "open_clip",
     task: Optional[str] = None,
     preprocessors: List = None,
-    custom_export_configs: Dict[str, "OnnxConfig"] = None,
+    custom_export_configs: Dict[str, "OpenVINOConfig"] = None,
     fn_get_submodels: Callable = None,
 ):
     custom_export = {}
@@ -283,11 +344,126 @@ def _get_open_clip_submodels_fn_and_export_configs(
     return custom_export, fn_get_submodels
 
 
+def _get_kokoro_submodels_fn_and_export_configs(
+    model,
+    library_name: str = "kokoro",
+    task: Optional[str] = None,
+    preprocessors: List = None,
+    custom_export_configs: Dict[str, "OpenVINOConfig"] = None,
+    fn_get_submodels: Callable = None,
+):
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=model, exporter="openvino", task=task, library_name="kokoro"
+    )
+    kokoro_export_config = export_config_constructor(model.config, task=task)
+    custom_export_configs = {"model": kokoro_export_config}
+
+    def _get_kokoro_submodels(model):
+        return {"model": model}
+
+    fn_get_submodels = _get_kokoro_submodels
+
+    return custom_export_configs, fn_get_submodels
+
+
+def _get_qwen3_tts_submodels_fn_and_export_configs(
+    model,
+    library_name: str = "qwen3_tts",
+    task: Optional[str] = None,
+    preprocessors: List = None,
+    custom_export_configs: Dict[str, "OpenVINOConfig"] = None,
+    fn_get_submodels: Callable = None,
+):
+    # Qwen3-TTS is split into the fewest graphs its call structure allows, so that the export
+    # carries no PyTorch weights at all. The generation orchestration (sampling, m-RoPE index
+    # math, chunking, ICL prompt assembly) stays in PyTorch and drives these graphs:
+    #
+    #   talker_model          28-layer decoder + codec_head, one call per 12.5 Hz frame
+    #   code_predictor_model   5-layer decoder + per-depth lm_head, num_code_groups-1 per frame
+    #   text_embeddings        text token ids -> talker hidden states (projection baked in)
+    #   talker_embeddings      first-codebook ids -> talker hidden states
+    #   code_predictor_embeddings  per-depth residual tables, stacked and picked by step
+    #   speaker_encoder        ECAPA-TDNN, once per reference audio (voice clone)
+    #   codec_encoder          reference waveform -> residual codes (ICL)
+    #   codec_decoder          generated codes -> 24 kHz waveform
+    #
+    # Each output head is folded into the stack it follows, because it is applied to that
+    # stack's hidden states on the same call path. The embedding tables cannot be folded the
+    # same way - they are looked up all over prompt assembly, far from any stack call, and one
+    # OpenVINO graph computes all of its outputs on every call - so each kind of table gets its
+    # own graph, with the code predictor's per-depth tables stacked into one.
+    from optimum.exporters.openvino.model_configs import (
+        Qwen3TTSCodecDecoderOpenVINOConfig,
+        Qwen3TTSCodecEncoderOpenVINOConfig,
+        Qwen3TTSDecoderStackOpenVINOConfig,
+        Qwen3TTSEmbeddingOpenVINOConfig,
+        Qwen3TTSSpeakerEncoderOpenVINOConfig,
+        Qwen3TTSSteppedDecoderStackOpenVINOConfig,
+        Qwen3TTSSteppedEmbeddingOpenVINOConfig,
+        Qwen3TTSTextEmbeddingOpenVINOConfig,
+    )
+
+    talker = model.talker
+    code_predictor = talker.code_predictor
+    codec_model = model.speech_tokenizer.model
+    talker_config = talker.model.config
+    code_predictor_config = code_predictor.model.config
+
+    custom_export_configs = {
+        "talker_model": Qwen3TTSDecoderStackOpenVINOConfig(talker_config, task="feature-extraction"),
+        "code_predictor_model": Qwen3TTSSteppedDecoderStackOpenVINOConfig(
+            code_predictor_config, task="feature-extraction"
+        ),
+        "text_embeddings": Qwen3TTSTextEmbeddingOpenVINOConfig(talker_config, task="feature-extraction"),
+        "talker_embeddings": Qwen3TTSEmbeddingOpenVINOConfig(talker_config, task="feature-extraction"),
+        "code_predictor_embeddings": Qwen3TTSSteppedEmbeddingOpenVINOConfig(
+            code_predictor_config, task="feature-extraction"
+        ),
+        "codec_encoder": Qwen3TTSCodecEncoderOpenVINOConfig(codec_model.config, task="feature-extraction"),
+        "codec_decoder": Qwen3TTSCodecDecoderOpenVINOConfig(
+            codec_model.config.decoder_config, task="feature-extraction"
+        ),
+    }
+
+    def _get_qwen3_tts_submodels(model):
+        # Each graph is traced from the ``qwen_tts`` module that owns it; its patcher replaces the
+        # module's forward for the duration of the export.
+        talker = model.talker
+        codec_model = model.speech_tokenizer.model
+        submodels = {
+            "talker_model": talker,
+            "code_predictor_model": talker.code_predictor,
+            "text_embeddings": talker,
+            "talker_embeddings": talker.model,
+            "code_predictor_embeddings": talker.code_predictor.model,
+            "codec_encoder": codec_model,
+            "codec_decoder": codec_model.decoder,
+        }
+        if model.speaker_encoder is not None:
+            submodels["speaker_encoder"] = model.speaker_encoder
+        return submodels
+
+    # The code predictor is fed embeddings in the talker's width and narrows them itself, so
+    # its graph input is sized by the talker rather than by its own hidden size.
+    custom_export_configs["code_predictor_model"].input_hidden_size = talker_config.hidden_size
+
+    # The speaker encoder only exists on the voice-clone (``base``) variants.
+    if model.speaker_encoder is not None:
+        custom_export_configs["speaker_encoder"] = Qwen3TTSSpeakerEncoderOpenVINOConfig(
+            model.config.speaker_encoder_config, task="feature-extraction"
+        )
+
+    fn_get_submodels = _get_qwen3_tts_submodels
+
+    return custom_export_configs, fn_get_submodels
+
+
 MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llava",
     "llava_next",
     "llava_next_video",
     "llava-qwen2",
+    "mistral3",
     "internvl_chat",
     "maira2",
     "minicpmv",
@@ -295,20 +471,39 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "qwen2_vl",
     "qwen2_5_vl",
     "qwen3_vl",
+    "qwen3_5",
+    "qwen3_5_moe",
     "got_ocr2",
     "gemma3",
+    "gemma3n",
+    "gemma4",
+    "gemma4_unified",
     "idefics3",
     "smolvlm",
     "phi4mm",
     "phi4_multimodal",
     "llama4",
     "minicpmo",
+    "videochat_flash_qwen",
+    "deepseek_ocr2",
+    "qwen3_omni_moe",
+    "muse_glimmer",
 ]
 
-SSM_MODELS = ["mamba", "falcon_mamba", "zamba2", "lfm2", "granitemoehybrid", "qwen3_next"]
 
-# All transformers, diffusers, timm and sentence transformers models that are supported via optimum-onnx OnnxConfigs but that have currently no test
-# TODO: add tests for all models that are compatible and remove support for all others
+SSM_MODELS = [
+    "mamba",
+    "falcon_mamba",
+    "zamba2",
+    "lfm2",
+    "lfm2_moe",
+    "granitemoehybrid",
+    "qwen3_next",
+    "qwen3_5_text",
+    "qwen3_5_moe_text",
+]
+
+# All transformers, diffusers, timm and sentence transformers models that were supported via optimum-onnx OnnxConfigs for which support is now removed
 ONNX_SUPPORTED_ARCHITECTURES = {
     "big_bird",
     "chinese_clip",
@@ -320,7 +515,6 @@ ONNX_SUPPORTED_ARCHITECTURES = {
     "default-timm-config",
     "detr",
     "dinov2",
-    "donut-swin",
     "dpt",
     "efficientnet",
     "encoder-decoder",
@@ -352,13 +546,11 @@ ONNX_SUPPORTED_ARCHITECTURES = {
     "rt_detr",
     "rt_detr_v2",
     "siglip_vision_model",
-    "smollm3",
     "speech_to_text",
     "splinter",
     "swin2sr",
     "swinv2",
     "table-transformer",
-    "trocr",
     "visual_bert",
     "vit_mae",
     "vit_msn",
@@ -379,6 +571,33 @@ def save_config(config, save_dir):
         save_dir.mkdir(exist_ok=True, parents=True)
         output_config_file = Path(save_dir / "config.json")
         config.to_json_file(output_config_file, use_diff=True)
+
+
+def keep_mixed_precision_parameters():
+    """
+    Keep the fp32 parameters of a mixed-precision diffusers checkpoint out of the 16-bit load cast.
+
+    `deduce_diffusers_dtype` reads one dtype off the transformer weights and `from_pretrained`
+    applies it to every floating tensor of every submodel, so the fp32 tensors of a checkpoint that
+    is otherwise 16-bit get rounded. At export time `__make_16bit_traceable` casts everything that
+    is not an `nn.Linear` / `nn.Embedding` / `Conv1D` parameter back to fp32, so those tensors end up
+    as fp32 constants holding needlessly rounded values.
+
+    `_keep_in_fp32_modules` is the diffusers hook for this: it is honoured while the state dict is
+    loaded, before the cast, and by `ModelMixin.to()` afterwards. Setting it leaves the IR layout and
+    size untouched; only the constant values become accurate.
+
+    Only LTX-2 is handled: `LTX2VideoTransformer3DModel` is the transformer of both LTX-2.0 and
+    LTX-2.3, so the class attribute is inert for every other model and no pipeline-level check is
+    needed.
+    """
+    try:
+        from diffusers import LTX2VideoTransformer3DModel
+    except ImportError:
+        return
+
+    if LTX2VideoTransformer3DModel._keep_in_fp32_modules is None:
+        LTX2VideoTransformer3DModel._keep_in_fp32_modules = list(LTX2_FP32_PARAMETERS)
 
 
 def deduce_diffusers_dtype(model_name_or_path, **loading_kwargs):
@@ -444,6 +663,7 @@ def save_preprocessors(
                 processor.save_pretrained(output)
             except Exception as ex:
                 logger.error(f"Saving {type(processor)} failed with {ex}")
+
         # phi4mm does not allow loading chat template in processor, it uses chat_template from tokenizer
         if model_type == "phi4mm" and (Path(output) / "chat_template.json").exists():
             (Path(output) / "chat_template.json").unlink()
@@ -520,6 +740,36 @@ def load_preprocessors(
     preprocessors = maybe_load_preprocessors(
         src_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
     )
+    if model_type == "fun_asr":
+        # FunASR has no root tokenizer; it lives in the bundled Qwen3 LLM subfolder. Load it so that
+        # the OpenVINO tokenizer/detokenizer IR gets exported alongside the model.
+        from transformers import AutoTokenizer, PreTrainedTokenizerBase
+
+        # Drop any spurious tokenizer picked up from the root (e.g. a default empty BertTokenizer),
+        # otherwise maybe_convert_tokenizers would export that broken tokenizer instead of the Qwen3 one.
+        preprocessors = [p for p in preprocessors if not isinstance(p, PreTrainedTokenizerBase)]
+        try:
+            preprocessors.append(
+                AutoTokenizer.from_pretrained(
+                    src_name_or_path, subfolder="Qwen3-0.6B", trust_remote_code=trust_remote_code
+                )
+            )
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to load FunASR Qwen3 tokenizer from subfolder 'Qwen3-0.6B'. "
+                "This tokenizer is required to export OpenVINO tokenizer/detokenizer IR for FunASR."
+            ) from e
+    if model_type == "mistral3" and not preprocessors and not subfolder:
+        # Checkpoints published in Mistral's own format (e.g. Mistral-Small-3.2-24B-Instruct-2506) ship only
+        # tekken.json, which transformers resolves to MistralCommonTokenizer. That class rejects the `subfolder`
+        # argument maybe_load_preprocessors always passes, and the resulting error is swallowed there, so without
+        # this retry the model would be exported without any tokenizer.
+        from transformers import AutoTokenizer
+
+        try:
+            preprocessors.append(AutoTokenizer.from_pretrained(src_name_or_path, trust_remote_code=trust_remote_code))
+        except Exception as ex:
+            logger.warning(f"Tokenizer could not be loaded from {src_name_or_path}, saving failed with {ex}")
     if model_type == "phi4mm":
         # audio feature extractor config overrides image processor config during saving, need to save it explicitly
         try:

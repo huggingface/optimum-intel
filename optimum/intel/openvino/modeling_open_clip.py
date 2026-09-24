@@ -31,16 +31,27 @@ from transformers import (
 from transformers.file_utils import add_start_docstrings
 from transformers.modeling_outputs import ModelOutput
 from transformers.models.clip.modeling_clip import CLIPOutput
-from transformers.utils import is_offline_mode
 
+from optimum.exporters.openvino import main_export
 from optimum.exporters.tasks import TasksManager
+from optimum.intel.openvino.configuration import (
+    OVConfig,
+    OVWeightQuantizationConfig,
+)
+from optimum.intel.openvino.modeling import MODEL_START_DOCSTRING, OVModel
+from optimum.intel.openvino.modeling_base import OVModelHostMixin
+from optimum.intel.openvino.utils import (
+    TemporaryDirectory,
+    classproperty,
+)
+from optimum.intel.utils.import_utils import is_huggingface_hub_version
+from optimum.intel.utils.modeling_utils import _find_files_matching_pattern, _OpenClipForZeroShotImageClassification
 
-from ...exporters.openvino import main_export
-from ..utils.modeling_utils import _find_files_matching_pattern, _OpenClipForZeroShotImageClassification
-from .configuration import OVConfig, OVWeightQuantizationConfig
-from .modeling import MODEL_START_DOCSTRING, OVModel
-from .modeling_base import OVModelHostMixin
-from .utils import TemporaryDirectory, classproperty
+
+if is_huggingface_hub_version(">=", "1.2.1"):
+    from huggingface_hub import is_offline_mode
+else:
+    from transformers.utils import is_offline_mode
 
 
 logger = logging.getLogger(__name__)
@@ -141,6 +152,7 @@ class OVModelOpenCLIPBase(OVModel):
             local_files_only = True
 
         _export = export
+        model_dir = model_id
         try:
             if local_files_only:
                 object_id = model_id.replace("/", "--")
@@ -149,8 +161,6 @@ class OVModelOpenCLIPBase(OVModel):
                 with open(refs_file) as f:
                     revision = f.read()
                 model_dir = os.path.join(cached_model_dir, "snapshots", revision)
-            else:
-                model_dir = model_id
 
             ov_files = _find_files_matching_pattern(
                 model_dir,
@@ -177,10 +187,10 @@ class OVModelOpenCLIPBase(OVModel):
                 f"Could not infer whether the model was already converted or not to the OpenVINO IR, keeping `export={export}`.\n{exception}"
             )
 
-        if isinstance(model_id, Path):
-            model_id = model_id.as_posix()
+        if isinstance(model_dir, Path):
+            model_dir = model_dir.as_posix()
 
-        config_path = config if isinstance(config, (str, os.PathLike)) else model_id
+        config_path = config if isinstance(config, (str, os.PathLike)) else model_dir
         config = cls._load_config(
             config_path,
             revision=revision,
@@ -194,7 +204,7 @@ class OVModelOpenCLIPBase(OVModel):
 
         from_pretrained_method = cls._export if _export else cls._from_pretrained
         return from_pretrained_method(
-            model_id=model_id,
+            model_id=model_dir,
             config=config,
             revision=revision,
             cache_dir=cache_dir,

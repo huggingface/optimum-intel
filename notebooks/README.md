@@ -21,5 +21,3 @@ limitations under the License.
 You can find here a list of the notebooks, leveraging the usage of the Optimum Intel library for different tools and libraries provided by Intel :
 
 * [OpenVINO](https://github.com/huggingface/optimum-intel/tree/main/notebooks/openvino)
-* [Neural Compressor](https://github.com/huggingface/optimum-intel/tree/main/notebooks/neural_compressor)
-* [IPEX](https://github.com/huggingface/optimum-intel/tree/main/notebooks/ipex)

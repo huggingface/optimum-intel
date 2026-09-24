@@ -9,11 +9,26 @@ specific language governing permissions and limitations under the License.
 
 # Export your model
 
-To export a [model](https://huggingface.co/docs/optimum/main/en/intel/openvino/models) hosted on the [Hub](https://huggingface.co/models) you can use our [space](https://huggingface.co/spaces/echarlaix/openvino-export). After conversion, a repository will be pushed under your namespace, this repository can be either public or private.
+Exporting a model converts it to the [OpenVINO IR](https://docs.openvino.ai/2024/documentation/openvino-ir-format.html) format, made of an `.xml` file describing the model topology and a `.bin` file containing the weights, so that it can be loaded and optimized by OpenVINO Runtime.
+
+## Using our space
+
+To export a model hosted on the Hub, you can use [this space](https://huggingface.co/spaces/OpenVINO/export). After conversion, a repository will be pushed under your namespace, which can be either public or private.
+
+<div style="display: flex; justify-content: center;">
+    <iframe
+        src="https://openvino-export.hf.space"
+        style="transform: scale(0.75); transform-origin: top center; margin-bottom: -200px;"
+        frameborder="0"
+        width="850"
+        height="800"
+    ></iframe>
+</div>
+
 
 ## Using the CLI
 
-To export your model to the [OpenVINO IR](https://docs.openvino.ai/2024/documentation/openvino-ir-format.html) format with the CLI :
+To export your model to the OpenVINO IR format with the CLI :
 
 ```bash
 optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B ov_model/
@@ -21,7 +36,7 @@ optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B ov_model/
 
 To export a private model or a model that requires access, you can either run `huggingface-cli login` to log in permanently, or set the environment variable `HF_TOKEN` to a [token](https://huggingface.co/settings/tokens) with access to the model. See the [authentication documentation](https://huggingface.co/docs/huggingface_hub/quick-start#authentication) for more information.
 
-The model argument can either be the model ID of a model hosted on the [Hub](https://huggingface.co/models) or a path to a model hosted locally. For local models, you need to specify the task for which the model should be loaded before export, among the list of the [supported tasks](https://huggingface.co/docs/optimum/main/en/exporters/task_manager).
+The model argument can either be the model ID of a model hosted on the Hub or a path to a model hosted locally. For local models, you need to specify the task for which the model should be loaded before export, among the list of the [supported tasks](https://huggingface.co/docs/optimum/main/en/exporters/task_manager).
 
 ```bash
 optimum-cli export openvino --model local_llama --task text-generation-with-past ov_model/
@@ -54,8 +69,8 @@ Required arguments:
 Optional arguments:
   --task TASK           The task to export the model for. If not specified, the task will be auto-inferred based on
                         the model. Available tasks depend on the model, but are among: ['image-to-image',
-                        'image-segmentation', 'inpainting', 'sentence-similarity', 'text-to-audio', 'image-to-text',
-                        'automatic-speech-recognition', 'token-classification', 'text-to-image', 'audio-classification',
+                        'image-to-video', 'image-segmentation', 'inpainting', 'sentence-similarity', 'text-to-audio', 'image-to-text',
+                        'automatic-speech-recognition', 'token-classification', 'text-to-image', 'text-to-video', 'audio-classification',
                         'feature-extraction', 'semantic-segmentation', 'masked-im', 'audio-xvector',
                         'audio-frame-classification', 'text2text-generation', 'multiple-choice', 'depth-estimation',
                         'image-classification', 'fill-mask', 'zero-shot-object-detection', 'object-detection',
@@ -123,7 +138,7 @@ Optional arguments:
                         ['auto','wikitext2','c4','c4-new','gsm8k']. With 'auto' the dataset will be collected from model's
                         generations. For diffusion models it should be on of ['conceptual_captions',
                         'laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit']. For visual language models
-                        the dataset must be set to 'contextual'. Note: if none of the data-aware compression algorithms
+                        the dataset must be set to 'textvqa' ('contextual' is deprecated). Note: if none of the data-aware compression algorithms
                         are selected and ratio parameter is omitted or equals 1.0, the dataset argument will not have an
                         effect on the resulting model. Note: for text generation task, datasets with English texts such
                         as 'wikitext2','gsm8k','c4' or 'c4-new' usually work fine even for non-English models.
@@ -169,31 +184,7 @@ Optional arguments:
                         and reduces quantization error. Valid only when activations quantization is enabled.
 ```
 
-You can also apply fp16, 8-bit or 4-bit weight-only quantization on the Linear, Convolutional and Embedding layers when exporting your model by setting `--weight-format` to respectively `fp16`, `int8` or `int4`.
-
-Export with INT8 weights compression:
-```bash
-optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B --weight-format int8 ov_model/
-```
-
-Export with INT4 weights compression:
-```bash
-optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B --weight-format int4 ov_model/
-```
-
-Export with INT4 weights compression and data-free AWQ algorithm:
-```bash
-optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B --weight-format int4 --awq ov_model/
-```
-
-Export with INT4 weights compression and data-aware AWQ and Scale Estimation algorithms:
-```bash
-optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B \
-    --weight-format int4 --awq --scale-estimation --dataset wikitext2 ov_model/
-```
-
-For more information on the quantization parameters checkout the [documentation](inference#weight-only-quantization)
-
+You can also apply fp16, 8-bit or 4-bit [weight-only quantization](optimization#weight-only-quantization) on the Linear, Convolutional and Embedding layers when exporting your model by setting `--weight-format` to respectively `fp16`, `int8` or `int4`.
 
 <Tip warning={true}>
 
@@ -201,61 +192,9 @@ Models larger than 1 billion parameters are exported to the OpenVINO format with
 
 </Tip>
 
+Besides weight-only quantization, you can also apply [full model quantization](optimization#full-quantization) including activations by setting `--quant-mode` to preferred precision. This will quantize both weights and activations of Linear, Convolutional and some other layers to selected mode. Please see example below.
 
-Besides weight-only quantization, you can also apply full model quantization including activations by setting `--quant-mode` to preferred precision. This will quantize both weights and activations of Linear, Convolutional and some other layers to selected mode. Please see example below.
-
-```bash
-optimum-cli export openvino -m openai/whisper-large-v3-turbo --quant-mode int8 --dataset librispeech --num-samples 32 --smooth-quant-alpha 0.9 ./whisper-large-v3-turbo
-```
-
-#### Default quantization configs
-
-For some models we maintain a set of default quantization configs ([link](https://github.com/huggingface/optimum-intel/blob/main/optimum/intel/openvino/configuration.py)). To apply a default 4-bit weight-only quantization one should provide `--weight-format int4` without any additional arguments. For int8 weight & activation quantization it should be `--quant-mode int8`. For example:
-
-```bash
-optimum-cli export openvino -m microsoft/Phi-4-mini-instruct --weight-format int4 ./Phi-4-mini-instruct
-```
-
-or
-
-```bash
-optimum-cli export openvino -m openai/clip-vit-base-patch16 --quant-mode int8 ./clip-vit-base-patch16
-```
-
-
-### Decoder models
-
-For models with a decoder, we enable the re-use of past keys and values by default. This allows to avoid recomputing the same intermediate activations at each generation step. To export the model without, you will need to remove the `-with-past` suffix when specifying the task.
-
-| With K-V cache                           | Without K-V cache                    |
-|------------------------------------------|--------------------------------------|
-| `text-generation-with-past`              | `text-generation`                    |
-| `text2text-generation-with-past`         | `text2text-generation`               |
-| `automatic-speech-recognition-with-past` | `automatic-speech-recognition`       |
-
-
-### Diffusion models
-
-When Stable Diffusion models are exported to the OpenVINO format, they are decomposed into different components that are later combined during inference:
-
-* Text encoder(s)
-* U-Net
-* VAE encoder
-* VAE decoder
-
-To export your Stable Diffusion XL model to the OpenVINO IR format with the CLI you can do as follows:
-
-```bash
-optimum-cli export openvino --model stabilityai/stable-diffusion-xl-base-1.0 ov_sdxl/
-```
-
-You can also apply hybrid quantization during model export. For example:
-```bash
-optimum-cli export openvino --model stabilityai/stable-diffusion-xl-base-1.0 \
-    --weight-format int8 --dataset conceptual_captions ov_sdxl/
-```
-
-For more information about hybrid quantization, take a look at this jupyter [notebook](https://github.com/huggingface/optimum-intel/blob/main/notebooks/openvino/stable_diffusion_hybrid_quantization.ipynb).
+For some models we maintain a set of [default quantization configs](https://github.com/huggingface/optimum-intel/blob/main/optimum/intel/openvino/configuration.py). To apply a default 4-bit weight-only quantization one should provide `--weight-format int4` without any additional arguments. For int8 weight & activation quantization it should be `--quant-mode int8`.
 
 ## When loading your model
 
@@ -291,7 +230,9 @@ export_from_model(model, output="ov_model", task="text-generation-with-past")
 
 Once the model is exported, you can now [load your OpenVINO model](inference) by replacing the `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
 
+
 ## Troubleshooting
 
 Some models do not work with the latest transformers release. You may see an error message with a maximum supported version. To export these models, install a transformers version that supports the model, for example `pip install transformers==4.53.3`.
 The supported transformers versions compatible with each optimum-intel release are listed on the [Github releases page](https://github.com/huggingface/optimum-intel/releases/).
+

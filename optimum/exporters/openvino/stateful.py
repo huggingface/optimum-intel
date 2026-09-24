@@ -253,8 +253,12 @@ def insert_state_for_nodes(model: ov.Model, nodes):
     outputs = sum((node.outputs() for node in nodes), [])
     for output in outputs:
         consumers = output.get_target_inputs()
-        # FIXME: get_any_name is not reliable as tensor may not have any names
-        variable_id = output.get_any_name()
+        if output.get_names():
+            variable_id = output.get_any_name()
+        else:
+            variable_id = f"{output.get_node().get_friendly_name()}.{output.get_index()}"
+            # set tensor name when tensor has no name
+            output.get_tensor().set_names({variable_id})
         read_value = ov.opset13.read_value(output, variable_id)
         for consumer in consumers:
             consumer.replace_source_output(read_value.output(0))
@@ -309,6 +313,10 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     if config.is_encoder_decoder and model_has_input_output_name(ov_model, "encoder_hidden_states"):
         return patch_stateful_encoder_decoder(config, ov_model)
     if config.model_type in SSM_MODELS:
+        return patch_stateful_hybrid_ssm(ov_model)
+    # For VLM models, the text sub-model may be SSM-based (e.g. qwen3_5 VLM with qwen3_5_text language model)
+    text_config = getattr(config, "text_config", None)
+    if text_config is not None and getattr(text_config, "model_type", None) in SSM_MODELS:
         return patch_stateful_hybrid_ssm(ov_model)
     return patch_stateful_decoder(config, ov_model)
 

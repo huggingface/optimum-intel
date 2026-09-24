@@ -32,7 +32,6 @@ from openvino import Core, Model, properties
 from openvino import Type as OVType
 from packaging.version import Version
 from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
-from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
 from optimum.intel.utils.import_utils import is_torch_version
 
@@ -69,6 +68,9 @@ TEXTUAL_INVERSION_EMBEDDING_KEY = "self.text_model.embeddings.token_embedding.we
 TEXTUAL_INVERSION_EMBEDDING_KEYS = [
     "self.text_model.embeddings.token_embedding.weight",
     "self.model.text_model.embeddings.token_embedding.weight",
+    # `CLIPTextTransformer` was removed since transformers v5.6
+    "self.embeddings.token_embedding.weight",
+    "self.model.embeddings.token_embedding.weight",
 ]
 
 OV_TO_NP_TYPE = {
@@ -96,6 +98,7 @@ OV_TO_PT_TYPE = {
     "f16": torch.float16,
     "f32": torch.float32,
     "f64": torch.float64,
+    "bf16": torch.bfloat16,
 }
 
 if is_torch_version(">=", "2.4.0"):
@@ -138,6 +141,7 @@ _HEAD_TO_AUTOMODELS = {
     "sam": "OVSamModel",
     "sana": "OVSanaPipeline",
     "flux": "OVFluxPipeline",
+    "flux.2-klein": "OVFlux2KleinPipeline",
     "flux-fill": "OVFluxFillPipeline",
     "pix2struct": "OVModelForPix2Struct",
     "latent-consistency": "OVLatentConsistencyModelPipeline",
@@ -147,6 +151,10 @@ _HEAD_TO_AUTOMODELS = {
     "automatic-speech-recognition": "OVModelForSpeechSeq2Seq",
     "automatic-speech-recognition-with-past": "OVModelForSpeechSeq2Seq",
     "ltx-video": "OVLTXPipeline",
+    "ltx2": "OVLTX2Pipeline",
+    "z-image": "OVZImagePipeline",
+    "text-to-video": "OVPipelineForText2Video",
+    "image-to-video": "OVPipelineForImage2Video",
     "text-to-audio": "OVModelForTextToSpeechSeq2Seq",
 }
 
@@ -189,12 +197,19 @@ PREDEFINED_TEXT_IMAGE_ENCODER_DATASETS = {
 }
 
 PREDEFINED_VISUAL_LM_DATASETS = {
+    # "contextual" deprecated: images now unreachable, "textvqa" should be used instead
     "contextual": {
         "id": "ucla-contextual/contextual_test",
         "split": "test",
         "inputs": {"image_url": "image_url", "instruction": "instruction"},
         "streaming": True,
-    }
+    },
+    "textvqa": {
+        "id": "lmms-lab/textvqa",
+        "split": "validation",
+        "inputs": {"image": "image", "instruction": "question"},
+        "streaming": True,
+    },
 }
 
 PREDEFINED_SPEECH_TO_TEXT_DATASETS = {
@@ -247,18 +262,6 @@ def maybe_convert_tokenizer_to_fast(
             return hf_tokenizer
 
     return hf_tokenizer
-
-
-def use_external_data_format(num_parameters: int) -> bool:
-    """
-    Returns whether or not the model requires using external data format for the ONNX export
-    Args:
-        num_parameters: Number of parameter on the model
-    Returns:
-        True if model.num_parameters() * size_of(float32) >= 2Gb False otherwise
-    """
-
-    return compute_serialized_parameters_size(num_parameters, ParameterFormat.Float) >= EXTERNAL_DATA_FORMAT_SIZE_LIMIT
 
 
 def _is_timm_ov_dir(model_dir):
@@ -322,6 +325,14 @@ def np_to_pt_generators(np_object, device):
         return {k: np_to_pt_generators(v, device) for k, v in np_object.items()}
     else:
         return np_object
+
+
+def ensure_numpy(x):
+    if isinstance(x, torch.Tensor):
+        return x.cpu().numpy()
+    if not isinstance(x, (np.ndarray, type(None))):
+        raise TypeError(f"`x` must be a np.ndarray or torch.Tensor, got {type(x)}")
+    return x
 
 
 def _raise_invalid_batch_size(

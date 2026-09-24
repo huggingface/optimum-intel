@@ -12,19 +12,25 @@ jobs:
 
     steps:
       - shell: bash
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_COMMITS: ${{ toJson(github.event.commits) }}
+          PR_COMMITS: ${{ github.event.pull_request.commits }}
         run: |
-          if [ "${{ github.event_name }}" == "push" ]; then
-            echo "depth=$(($(jq length <<< '${{ toJson(github.event.commits) }}') + 2))" >> $GITHUB_ENV
-            echo "branch=${{ github.ref_name }}" >> $GITHUB_ENV
+          if [ "$EVENT_NAME" == "push" ]; then
+            echo "depth=$(($(jq length <<< "$EVENT_COMMITS") + 2))" >> $GITHUB_ENV
+            printf "branch=%s\n" "$REF_NAME" >> $GITHUB_ENV
           fi
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            echo "depth=$((${{ github.event.pull_request.commits }}+2))" >> $GITHUB_ENV
-            echo "branch=${{ github.event.pull_request.head.ref }}" >> $GITHUB_ENV
+          if [ "$EVENT_NAME" == "pull_request" ]; then
+            echo "depth=$(($PR_COMMITS+2))" >> $GITHUB_ENV
+            printf "branch=%s\n" "$HEAD_REF" >> $GITHUB_ENV
           fi
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{env.branch}}
           fetch-depth: ${{env.depth}}
       - name: Scan for secrets
-        uses: trufflesecurity/trufflehog@main
+        uses: trufflesecurity/trufflehog@363923b901c911a9164f50b6c423f47c15372b1c # v3.97.4

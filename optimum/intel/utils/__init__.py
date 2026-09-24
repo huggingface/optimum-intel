@@ -13,16 +13,11 @@
 #  limitations under the License.
 
 from .import_utils import (
-    IPEX_IMPORT_ERROR,
     OPENVINO_IMPORT_ERROR,
-    _neural_compressor_version,
     _torch_version,
     compare_versions,
     is_accelerate_available,
     is_diffusers_available,
-    is_ipex_available,
-    is_neural_compressor_available,
-    is_neural_compressor_version,
     is_nncf_available,
     is_numa_available,
     is_openvino_available,
