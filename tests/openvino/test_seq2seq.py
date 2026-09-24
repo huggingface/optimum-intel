@@ -608,6 +608,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "mistral3",
         "muse_glimmer",
         "deepseek_ocr2",
+        "paddleocr_vl",
     ]
     if is_openvino_version(">=", "2026.3") and is_compressed_tensors_available():
         SUPPORTED_ARCHITECTURES.append("qwen3_5_compressed_tensors")
@@ -688,6 +689,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "gemma4_unified",
             "gemma4_unified-it",
             "muse_glimmer",
+            "paddleocr_vl",
         ]:
             from transformers import AutoModelForImageTextToText
 

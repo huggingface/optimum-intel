@@ -19,6 +19,7 @@ import json
 import logging
 import math
 import os
+import sys
 import types
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -4825,6 +4826,139 @@ class Qwen3VLVisionEmbMergerPatcher(ModelPatcher):
         for block in self._model.blocks:
             block.forward = block._orig_forward
             block.attn.forward = block.attn._orig_forward
+
+
+class PaddleOCRVLVisionEmbeddingsPatcher(LlavaImageEmbeddingModelPatcher):
+    # Exports only the Conv2d patch embedding of PaddleOCR-VL's vision tower. The grid-dependent
+    # position-embedding interpolation that normally follows in PaddleOCRVisionEmbeddings.forward is
+    # done in Python at runtime (via the separate vision_embeddings_pos submodel), so the traced graph
+    # is a plain conv + flatten that is valid for any number of patches.
+    #
+    # Only the installed traceable forward differs from LlavaImageEmbeddingModelPatcher; the
+    # forward-restore logic in __exit__ is identical, so it is inherited instead of duplicated.
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        def patch_embed_forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+            target_dtype = self.patch_embedding.weight.dtype
+            patch_embeds = self.patch_embedding(pixel_values.to(dtype=target_dtype))
+            return patch_embeds.flatten(-2).squeeze(-1)
+
+        # Store the pristine forward under the exact attribute name that the inherited
+        # LlavaImageEmbeddingModelPatcher.__exit__ restores from (its `self._model.__orig_forward`
+        # is name-mangled to `_LlavaImageEmbeddingModelPatcher__orig_forward`). The custom forward
+        # must be installed before ModelPatcher.__init__ so that patched_forward wraps it.
+        model._LlavaImageEmbeddingModelPatcher__orig_forward = model.forward
+        model.forward = types.MethodType(patch_embed_forward, model)
+        ModelPatcher.__init__(self, config, model, model_kwargs)
+
+
+class PaddleOCRVLVisionEmbMergerPatcher(ModelPatcher):
+    # PaddleOCR-VL vision encoder attention normally splits the sequence by `cu_seqlens` inside a Python
+    # loop (one chunk per image), which is not traceable for a dynamic number of patches. Mirroring the
+    # Qwen2-VL vision approach, we replace it with a single SDPA call driven by a precomputed
+    # block-diagonal `attention_mask`, and pass the vision `rotary_pos_emb` in as an input instead of
+    # recomputing it from a data-dependent grid loop. The projector's spatial 2x2 merge (a per-image
+    # reshape/transpose that depends on the grid) is expressed as a precomputed `merge_index` gather
+    # followed by a static reshape so it traces for any grid.
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def image_embed_forward(
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: torch.Tensor,
+            rotary_pos_emb: torch.Tensor,
+            merge_index: torch.Tensor,
+        ) -> torch.Tensor:
+            emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+            position_embeddings = (emb.cos(), emb.sin())
+            vision_model = self.visual.vision_model
+            for layer in vision_model.encoder.layers:
+                hidden_states = layer(
+                    hidden_states,
+                    attention_mask=attention_mask,
+                    position_embeddings=position_embeddings,
+                )
+            hidden_states = vision_model.post_layernorm(hidden_states)
+
+            projector = self.projector
+            hidden_states = projector.pre_norm(hidden_states)
+            hidden_states = hidden_states.index_select(0, merge_index)
+            merge_unit = projector.merge_kernel_size[0] * projector.merge_kernel_size[1]
+            hidden_states = hidden_states.reshape(-1, merge_unit * hidden_states.shape[-1])
+            hidden_states = projector.linear_1(hidden_states)
+            hidden_states = projector.act(hidden_states)
+            hidden_states = projector.linear_2(hidden_states)
+            return hidden_states
+
+        model.forward = types.MethodType(image_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+        vision_model = self._model.visual.vision_model
+        for layer in vision_model.encoder.layers:
+            layer._orig_forward = layer.forward
+            layer.forward = types.MethodType(_paddleocr_vision_layer_forward, layer)
+            layer.self_attn._orig_forward = layer.self_attn.forward
+            layer.self_attn.forward = types.MethodType(_paddleocr_vision_sdpa_attn_forward, layer.self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        vision_model = self._model.visual.vision_model
+        for layer in vision_model.encoder.layers:
+            layer.forward = layer._orig_forward
+            layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+def _paddleocr_vision_layer_forward(self, hidden_states, attention_mask, position_embeddings):
+    # Traceable replacement of PaddleOCRVisionEncoderLayer.forward: forwards an explicit `attention_mask`
+    # to the attention module instead of the original `cu_seqlens` chunking argument.
+    residual = hidden_states
+    hidden_states = self.layer_norm1(hidden_states)
+    hidden_states, _ = self.self_attn(
+        hidden_states, attention_mask=attention_mask, position_embeddings=position_embeddings
+    )
+    hidden_states = residual + hidden_states
+    residual = hidden_states
+    hidden_states = self.layer_norm2(hidden_states)
+    hidden_states = self.mlp(hidden_states)
+    hidden_states = residual + hidden_states
+    return hidden_states
+
+
+def _paddleocr_vision_sdpa_attn_forward(self, hidden_states, attention_mask, position_embeddings):
+    # Traceable replacement of PaddleOCRVisionAttention.forward: a single SDPA call with a precomputed
+    # block-diagonal `attention_mask` instead of the original per-image `cu_seqlens` split loop.
+    apply_rotary_pos_emb_vision = sys.modules[type(self).__module__].apply_rotary_pos_emb_vision
+    seq_length = hidden_states.shape[0]
+    query_states = self.q_proj(hidden_states).view(seq_length, self.num_heads, self.head_dim)
+    key_states = self.k_proj(hidden_states).view(seq_length, self.num_heads, self.head_dim)
+    value_states = self.v_proj(hidden_states).view(seq_length, self.num_heads, self.head_dim)
+
+    cos, sin = position_embeddings
+    query_states, key_states = apply_rotary_pos_emb_vision(query_states, key_states, cos, sin)
+
+    query_states = query_states.transpose(0, 1).unsqueeze(0)
+    key_states = key_states.transpose(0, 1).unsqueeze(0)
+    value_states = value_states.transpose(0, 1).unsqueeze(0)
+
+    attn_output = F.scaled_dot_product_attention(
+        query_states, key_states, value_states, attention_mask, dropout_p=0.0, scale=self.scaling
+    )
+    attn_output = attn_output.squeeze(0).transpose(0, 1).reshape(seq_length, -1)
+    attn_output = self.out_proj(attn_output)
+    return attn_output, None
 
 
 class Qwen3OmniMoeVisionMergerPatcher(ModelPatcher):

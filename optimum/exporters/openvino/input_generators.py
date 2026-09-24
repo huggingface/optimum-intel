@@ -1559,6 +1559,73 @@ class DummyQwen3VLVisionEmbedInputGenerator(DummyQwen2VLVisionEmbedInputGenerato
             )
 
 
+class DummyPaddleOCRVLVisionEmbedInputGenerator(DummyVisionInputGenerator):
+    # PaddleOCR-VL vision tower is split for export into:
+    #  * vision_embeddings         -> Conv2d patch embedding, consumes `pixel_values` of shape
+    #                                 (num_patches, num_channels, patch_size, patch_size);
+    #  * vision_embeddings_pos     -> nn.Embedding position table, consumes integer `input` indices;
+    #  * vision_embeddings_merger  -> encoder + post-norm + projector, consumes the already patch-embedded
+    #                                 `hidden_states`, a block-diagonal `attention_mask`, the vision
+    #                                 `rotary_pos_emb` and a `merge_index` permutation used by the projector.
+    # The grid-dependent tensors (mask, rotary, merge_index, position interpolation) are computed in Python
+    # at runtime, so tracing sees only fixed-rank tensor inputs.
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "hidden_states",
+        "attention_mask",
+        "rotary_pos_emb",
+        "merge_index",
+        "input",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 1,
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = 420,
+        height: int = 420,
+        **kwargs,
+    ):
+        self.batch_size = batch_size
+        self.height = height
+        self.width = width
+        self.num_channels = num_channels
+        self.patch_size = normalized_config.config.patch_size
+        self.hidden_size = normalized_config.config.hidden_size
+        self.num_heads = normalized_config.config.num_attention_heads
+        self.spatial_merge_size = normalized_config.config.spatial_merge_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        grid_h, grid_w = self.height // self.patch_size, self.width // self.patch_size
+        grid_t = self.batch_size
+        num_patches = grid_t * grid_h * grid_w
+
+        if input_name == "pixel_values":
+            return self.random_float_tensor(
+                [num_patches, self.num_channels, self.patch_size, self.patch_size],
+                framework=framework,
+                dtype=float_dtype,
+            )
+
+        if input_name == "hidden_states":
+            return self.random_float_tensor([num_patches, self.hidden_size], framework=framework, dtype=float_dtype)
+
+        if input_name == "attention_mask":
+            return self.random_mask_tensor([1, num_patches, num_patches], framework=framework, dtype=float_dtype)
+
+        if input_name == "rotary_pos_emb":
+            dim = self.hidden_size // self.num_heads // 2
+            return self.random_float_tensor([num_patches, dim], framework=framework, dtype=float_dtype)
+
+        if input_name == "merge_index":
+            return self.random_int_tensor([num_patches], max_value=num_patches, framework=framework, dtype=int_dtype)
+
+        if input_name == "input":
+            return self.constant_tensor([num_patches], value=0, framework=framework, dtype=DTYPE_MAPPER.pt(int_dtype))
+
+
 class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummySeq2SeqPastKeyValuesGenerator):
     """Custom KV cache generator for Qwen3-ASR with GQA (num_key_value_heads != num_attention_heads).
     Qwen3-ASR has no cross-attention, so only self-attention KV cache is generated (2 per layer)."""

@@ -83,6 +83,16 @@ if is_transformers_version(">=", "5.2"):
     )
 
 
+if is_transformers_version(">=", "5.10"):
+    from transformers.models.paddleocr_vl.modeling_paddleocr_vl import (
+        PaddleOCRVisionRotaryEmbedding,
+        PaddleOCRVLModel,
+    )
+    from transformers.models.paddleocr_vl.modeling_paddleocr_vl import (
+        get_vision_position_ids as paddleocr_get_vision_position_ids,
+    )
+
+
 if TYPE_CHECKING:
     from PIL.Image import Image
     from transformers.image_utils import VideoInput
@@ -4238,6 +4248,234 @@ if is_transformers_version(">=", "4.57"):
     _OVQwen3VLForCausalLM.get_vision_position_ids = getattr(Qwen3VLModel, "get_vision_position_ids", None)
 
 
+class _OVPaddleOCRVLForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos"]
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = None,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        if is_transformers_version("<", "5.10"):
+            raise Exception("PaddleOCR-VL is not supported in transformers versions earlier than 5.10.")
+
+        super().__init__(
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+        self.rope_deltas = None  # cache rope_deltas here
+        vision_config = self.config.vision_config
+        head_dim = vision_config.hidden_size // vision_config.num_attention_heads
+        self._rotary_pos_emb = PaddleOCRVisionRotaryEmbedding(head_dim // 2)
+        self.spatial_merge_size = vision_config.spatial_merge_size
+        self.num_grid_per_side = int((vision_config.image_size // vision_config.patch_size))
+        self._pos_embed_table = None
+
+    # Reuse the transformers reference implementation for M-RoPE 3D position ids and the vision
+    # (row, col) position ids, so decode-time position handling matches the HF model exactly.
+    def get_rope_index(self, *args, **kwargs):
+        return PaddleOCRVLModel.get_rope_index(self, *args, **kwargs)
+
+    def get_vision_position_ids(self, *args, **kwargs):
+        return PaddleOCRVLModel.get_vision_position_ids(self, *args, **kwargs)
+
+    def _get_pos_embed_table(self):
+        # Materialize the full (num_positions, hidden) position-embedding table once by running the
+        # exported nn.Embedding submodel over all position indices; used for grid-dependent bilinear
+        # interpolation performed in Python (mirrors PaddleOCRVisionEmbeddings.interpolate_pos_encoding).
+        if self._pos_embed_table is None:
+            num_positions = self.num_grid_per_side * self.num_grid_per_side
+            idx = torch.arange(num_positions, dtype=torch.int64)
+            self._pos_embed_table = torch.from_numpy(self.vision_embeddings_pos(idx))
+        return self._pos_embed_table
+
+    # Adapted from https://github.com/huggingface/transformers/blob/v5.10.4/src/transformers/models/paddleocr_vl/modeling_paddleocr_vl.py#L569
+    # Runs the same bilinear interpolation of the position-embedding grid, but on the table returned by
+    # the exported position-embedding submodel instead of an in-graph nn.Embedding.
+    def _interpolate_pos_encoding(self, grid_thw):
+        table = self._get_pos_embed_table()
+        dim = table.shape[-1]
+        base = table.reshape(1, self.num_grid_per_side, self.num_grid_per_side, dim).permute(0, 3, 1, 2)
+        pos_embeds = []
+        for t, h, w in grid_thw.tolist():
+            patch_pos_embed = torch.nn.functional.interpolate(
+                base, size=(int(h), int(w)), mode="bilinear", align_corners=False
+            )
+            patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim).squeeze(0)
+            pos_embeds.append(patch_pos_embed.repeat(int(t), 1))
+        return torch.cat(pos_embeds, dim=0)
+
+    def _get_merge_index(self, grid_thw):
+        # Precompute the permutation that turns raw row-major patch order into the projector's spatial
+        # 2x2 merge order, so the projector reshape/transpose becomes a gather + static reshape.
+        merge = self.spatial_merge_size
+        indices = []
+        for t, h, w in grid_thw.tolist():
+            t, h, w = int(t), int(h), int(w)
+            for tt in range(t):
+                for bh in range(h // merge):
+                    for bw in range(w // merge):
+                        for i in range(merge):
+                            for j in range(merge):
+                                indices.append(tt * h * w + (bh * merge + i) * w + (bw * merge + j))
+        return torch.tensor(indices, dtype=torch.int64)
+
+    def get_vision_embeddings(self, pixel_values, grid_thw, **kwargs):
+        hidden_states = torch.from_numpy(self.vision_embeddings(pixel_values)[0])
+        hidden_states = hidden_states + self._interpolate_pos_encoding(grid_thw)
+
+        # (row, col) vision positions with merge_size=1 (PaddleOCR merges in the projector, not the encoder)
+        position_ids = paddleocr_get_vision_position_ids(grid_thw, 1)
+        rotary_pos_emb = self._rotary_pos_emb(position_ids)
+
+        cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
+            dim=0, dtype=torch.int32
+        )
+        cu_seqlens = torch.nn.functional.pad(cu_seqlens, (1, 0), value=0)
+        attention_mask = torch.zeros((1, hidden_states.shape[0], hidden_states.shape[0]), dtype=torch.bool)
+        causal_mask = torch.zeros_like(attention_mask, dtype=torch.float32)
+        for i in range(1, len(cu_seqlens)):
+            attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = True
+        causal_mask.masked_fill_(torch.logical_not(attention_mask), float("-inf"))
+
+        merge_index = self._get_merge_index(grid_thw)
+        image_embeds = self.vision_embeddings_merger(
+            hidden_states,
+            attention_mask=causal_mask,
+            rotary_pos_emb=rotary_pos_emb,
+            merge_index=merge_index,
+        )[0]
+        return image_embeds
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        image_grid_thw=None,
+        cache_position=None,
+        **kwargs,
+    ):
+        inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
+        if pixel_values is not None and input_ids.shape[1] != 1:
+            image_embeds = torch.from_numpy(self.get_vision_embeddings(pixel_values, image_grid_thw))
+            image_mask = input_ids == self.config.image_token_id
+            inputs_embeds[image_mask] = image_embeds.to(inputs_embeds.dtype)
+
+        if (
+            (position_ids is None or position_ids.ndim < 3)
+            and input_ids is not None
+            and (attention_mask is None or attention_mask.ndim == 2)
+        ):
+            if (cache_position is not None and cache_position[0] == 0) or self.rope_deltas is None:
+                mm_token_type_ids = kwargs.get("mm_token_type_ids")
+                if mm_token_type_ids is None:
+                    mm_token_type_ids = torch.zeros_like(input_ids, dtype=torch.int32)
+                    mm_token_type_ids[input_ids == self.config.image_token_id] = 1
+                    mm_token_type_ids[input_ids == self.config.video_token_id] = 2
+                position_ids, rope_deltas = self.get_rope_index(
+                    input_ids,
+                    mm_token_type_ids,
+                    image_grid_thw,
+                    None,
+                    attention_mask,
+                )
+                self.rope_deltas = rope_deltas
+            else:
+                batch_size, seq_length, _ = inputs_embeds.shape
+                delta = cache_position[0] + self.rope_deltas if cache_position is not None else 0
+                position_ids = torch.arange(seq_length, device=inputs_embeds.device)
+                position_ids = position_ids.view(1, -1).expand(batch_size, -1)
+                if cache_position is not None:
+                    delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
+                position_ids = position_ids.add(delta)
+                position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    # Same multimodal generation-input preparation as Qwen2-VL (identical decode contract:
+    # cache_position reconstruction, image-input gating on prefill, 3D M-RoPE position ids).
+    def prepare_inputs_for_generation(self, *args, **kwargs):
+        return _OVQwen2VLForCausalLM.prepare_inputs_for_generation(self, *args, **kwargs)
+
+    def _update_model_kwargs_for_generation(self, outputs, model_kwargs, is_encoder_decoder=False, num_new_tokens=1):
+        model_kwargs = OVModelForVisualCausalLM._update_model_kwargs_for_generation(
+            self,
+            outputs=outputs,
+            model_kwargs=model_kwargs,
+            is_encoder_decoder=is_encoder_decoder,
+            num_new_tokens=num_new_tokens,
+        )
+        if getattr(outputs, "rope_deltas", None) is not None:
+            model_kwargs["rope_deltas"] = outputs.rope_deltas
+        return model_kwargs
+
+    def forward(
+        self,
+        input_ids,
+        pixel_values=None,
+        past_key_values=None,
+        inputs_embeds=None,
+        image_sizes=None,
+        attention_mask=None,
+        position_ids=None,
+        image_bound=None,
+        tgt_sizes=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        rope_deltas=None,
+        **kwargs,
+    ):
+        result = super().forward(
+            input_ids,
+            pixel_values,
+            past_key_values,
+            inputs_embeds,
+            image_sizes,
+            attention_mask,
+            position_ids,
+            image_bound,
+            tgt_sizes,
+            pixel_values_videos,
+            image_grid_thw,
+            video_grid_thw,
+            rope_deltas,
+            **kwargs,
+        )
+        return QWen2VLModelOutputWithPast(
+            logits=result.logits, past_key_values=result.past_key_values, rope_deltas=rope_deltas
+        )
+
+    def generate(self, *args, **kwargs):
+        self.rope_deltas = None
+        # mm_token_type_ids is produced by the PaddleOCR-VL processor but is not consumed by the
+        # OpenVINO generation path (image tokens are located via input_ids == image_token_id).
+        kwargs.pop("mm_token_type_ids", None)
+        return super().generate(*args, **kwargs)
+
+    # The PaddleOCR-VL processor exposes the same chat-template / image+text contract as Qwen2-VL,
+    # so the identical preprocessing is reused instead of duplicated.
+    preprocess_inputs = staticmethod(_OVQwen2VLForCausalLM.preprocess_inputs)
+
+
 class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
     additional_parts = [
         "vision_embeddings_pos",
@@ -8031,6 +8269,8 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "phi4_multimodal": _OVPhi4MMForCausalLM,
     "llama4": _OVLlama4ForCausalLM,
     "qwen3_vl": _OVQwen3VLForCausalLM,
+    "paddleocr_vl": _OVPaddleOCRVLForCausalLM,
+    "paddleocr_vl_text": _OVPaddleOCRVLForCausalLM,
     "qwen3_5": _OVQwen3_5ForCausalLM,
     "qwen3_5_text": _OVQwen3_5ForCausalLM,
     "qwen3_5_moe": _OVQwen3_5ForCausalLM,

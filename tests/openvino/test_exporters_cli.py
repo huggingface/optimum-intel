@@ -159,6 +159,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("image-text-to-text", "mistral3"),
         ("text-to-image", "z-image"),
         ("image-text-to-text", "muse_glimmer"),
+        ("image-text-to-text", "paddleocr_vl"),
     ]
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = [
@@ -205,6 +206,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "lfm2_moe": 2,
         "llava": 2,
         "mistral3": 2,
+        "paddleocr_vl": 2,
         "sana": 2,
         "ltx-video": 2,
         "ltx2": 2,
