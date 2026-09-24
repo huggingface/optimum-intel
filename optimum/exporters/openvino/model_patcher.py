@@ -8328,20 +8328,11 @@ class ParaformerModelPatcher(ModelPatcher):
     """
 
     def __enter__(self):
-        super().__enter__()
-        
-        # Import the export_rebuild_model function from modeling_paraformer
-        try:
-            from .modeling_paraformer import export_rebuild_model
-        except ImportError:
-            logger.warning("Could not import export_rebuild_model from modeling_paraformer")
-            return self
-        
-        # Apply the export modifications
-        max_seq_len = self._config.values.get("max_seq_len", 512)
-        export_rebuild_model(self._model, max_seq_len=max_seq_len, device="cpu", type="onnx")
-        
-        return self
+        from .modeling_paraformer import export_rebuild_model
+
+        max_seq_len = getattr(self._model.config, "max_seq_len", 512)
+        export_rebuild_model(self._model.funasr_model, max_seq_len=max_seq_len, device="cpu", type="onnx")
+        return super().__enter__()
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)

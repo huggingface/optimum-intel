@@ -258,8 +258,7 @@ def _infer_library_from_model_name_or_path(
     if "open_clip_config.json" in all_files or "open_clip_pytorch_model.bin" in all_files:
         library_name = "open_clip"
     elif "am.mvn" in all_files and "config.yaml" in all_files and "tokens.json" in all_files:
-        # Paraformer models have these characteristic files
-        library_name = "paraformer"
+        library_name = "funasr"
     else:
         library_name = TasksManager._infer_library_from_model_name_or_path(
             model_name_or_path=model_name_or_path, cache_dir=cache_dir
@@ -276,6 +275,8 @@ def _infer_library_from_model_or_model_class(
         return library_name
     if model.__module__.startswith("open_clip"):
         library_name = "open_clip"
+    elif model.__module__ == "optimum.exporters.openvino.modeling_paraformer":
+        library_name = "funasr"
     elif model.__module__.startswith("optimum"):
         # for wrapped models like timm in optimum.intel.openvino.modeling_timm
         library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)

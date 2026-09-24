@@ -77,6 +77,7 @@ from optimum.intel import (
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
     OVModelForZeroShotImageClassification,
+    OVParaformerForSpeechSeq2Seq,
     OVModelOpenCLIPForZeroShotImageClassification,
     OVSamModel,
     OVSentenceTransformer,
@@ -122,6 +123,34 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.OV_VLM_MODEL_ID = "katuni4ka/tiny-random-llava-ov"
         self.OV_SAM_MODEL_ID = "katuni4ka/sam-vit-tiny-random-ov"
         self.OV_TEXTSPEECH_MODEL_ID = "optimum-internal-testing/tiny-random-SpeechT5ForTextToSpeech-openvino"
+
+    def test_paraformer_output(self):
+        from optimum.intel.openvino.modeling_speech2text import ParaformerModelOutput
+
+        logits = torch.randn(1, 10, 100)
+        token_num = torch.tensor([10])
+        output = ParaformerModelOutput(logits=logits, token_num=token_num)
+
+        self.assertIs(output.logits, logits)
+        self.assertIs(output.token_num, token_num)
+        self.assertIsNone(output.token_ids)
+
+    def test_paraformer_inference_and_save(self):
+        model_path = os.environ.get("PARAFORMER_TEST_MODEL")
+        if not model_path:
+            self.skipTest("Set PARAFORMER_TEST_MODEL to an exported Paraformer IR directory")
+
+        model = OVParaformerForSpeechSeq2Seq.from_pretrained(model_path, device="CPU")
+        speech = torch.randn(1, 100, 560)
+        lengths = torch.tensor([100], dtype=torch.int32)
+        output = model(speech, lengths)
+        self.assertEqual(output.logits.shape[0], 1)
+        self.assertEqual(output.token_ids.shape[0], 1)
+
+        with TemporaryDirectory() as output_dir:
+            model.save_pretrained(output_dir)
+            reloaded = OVParaformerForSpeechSeq2Seq.from_pretrained(output_dir, device="CPU")
+            self.assertEqual(reloaded(speech, lengths).logits.shape, output.logits.shape)
 
     def test_load_from_hub_and_save_model(self):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)

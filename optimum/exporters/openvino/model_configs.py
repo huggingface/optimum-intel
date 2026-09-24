@@ -5454,51 +5454,17 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
         return dummy_inputs
 
 
-# ============================================================================
-# Paraformer ASR Model Support
-# ============================================================================
-# Registration for FunASR Paraformer models for automatic speech recognition
-# This allows export via: optimum-cli export openvino --model funasr/paraformer-zh
-
-# Import Paraformer model and configuration from modeling_paraformer
 try:
-    from .modeling_paraformer import (
-        ParaformerForASR,
-        ParaformerConfig,
-        _load_paraformer_model,
-    )
-
-    # Register paraformer library with TasksManager
-    if "paraformer" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
-        TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["paraformer"] = {
-            "paraformer": {
-                "automatic-speech-recognition": ("ParaformerForASR",),
-            }
-        }
-
-    # Register model loader for paraformer library
-    if "paraformer" not in TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP:
-        TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP["paraformer"] = {
-            "automatic-speech-recognition": _load_paraformer_model,
-        }
-
-    # Also register as custom class to avoid library import issues
-    TasksManager._CUSTOM_CLASSES[("pt", "paraformer", "automatic-speech-recognition")] = (
-        "optimum.exporters.openvino.modeling_paraformer",
-        "ParaformerForASR",
-    )
-
-    PARAFORMER_AVAILABLE = True
+    import funasr
+    from .modeling_paraformer import ParaformerForASR
 except ImportError:
-    PARAFORMER_AVAILABLE = False
-    logger.debug("Paraformer support not available - modeling_paraformer module not found")
-
-# Import paraformer_plugin to hook into main_export for non-standard library support
-# This is necessary because 'paraformer' is a FunASR library, not a transformers library
-try:
-    from . import paraformer_plugin  # noqa: F401
-except ImportError:
-    pass  # Paraformer dependencies not available
+    logger.debug("Paraformer export requires FunASR and its optional dependencies")
+else:
+    funasr.ParaformerForASR = ParaformerForASR
+    TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES.setdefault("funasr", {})
+    TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP["funasr"] = {
+        "automatic-speech-recognition": "ParaformerForASR",
+    }
 
 
 class ParaformerDummyAudioInputGenerator(DummyInputGenerator):
@@ -5547,7 +5513,7 @@ class ParaformerDummyAudioInputGenerator(DummyInputGenerator):
 @register_in_tasks_manager(
     "paraformer",
     *["automatic-speech-recognition"],
-    library_name="transformers",
+    library_name="funasr",
 )
 class ParaformerOpenVINOConfig(OnnxConfig):
     """

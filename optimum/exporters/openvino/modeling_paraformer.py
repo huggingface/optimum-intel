@@ -2292,7 +2292,8 @@ class ParaformerForASR(PreTrainedModel):
     def forward(self, speech: torch.Tensor, speech_lengths: torch.Tensor):
         """Forward pass through the model."""
         if self.funasr_model is not None:
-            return self.funasr_model(speech, speech_lengths)
+            logits, token_num = self.funasr_model(speech, speech_lengths)
+            return {"logits": logits, "token_num": token_num}
         raise ValueError("FunASR model not loaded")
 
 

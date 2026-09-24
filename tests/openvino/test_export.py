@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import os
 import unittest
 from pathlib import Path
 
@@ -80,7 +81,6 @@ class ExportModelTest(unittest.TestCase):
         "roberta": OVModelForTokenClassification,
         "wav2vec2": OVModelForAudioClassification,
         "whisper": OVModelForSpeechSeq2Seq,
-        "paraformer": OVParaformerForSpeechSeq2Seq,
         "blenderbot": OVModelForFeatureExtraction,
         "stable-diffusion": OVStableDiffusionPipeline,
         "stable-diffusion-xl": OVStableDiffusionXLPipeline,
@@ -127,6 +127,22 @@ class ExportModelTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.update({"qwen3": OVModelForFeatureExtraction})
 
     GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
+
+    @unittest.skipUnless(os.environ.get("RUN_SLOW_EXPORT_TESTS") == "1", "Full Paraformer export is opt-in")
+    def test_paraformer_export(self):
+        from optimum.exporters.openvino.modeling_paraformer import ParaformerForASR
+
+        model = ParaformerForASR.from_pretrained(MODEL_NAMES["paraformer"])
+        with TemporaryDirectory() as output_dir:
+            export_from_model(
+                model=model,
+                output=Path(output_dir),
+                task="automatic-speech-recognition",
+                stateful=False,
+            )
+            self.assertTrue((Path(output_dir) / "openvino_model.xml").is_file())
+            ov_model = OVParaformerForSpeechSeq2Seq.from_pretrained(output_dir, device=OPENVINO_DEVICE)
+            self.assertIsNotNone(ov_model)
 
     def _openvino_export(
         self,

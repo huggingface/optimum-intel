@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import json
+import os
 import subprocess
 import unittest
 from pathlib import Path
@@ -114,7 +115,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-video", "ltx-video"),
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
-        ("automatic-speech-recognition", "paraformer"),
         ("zero-shot-image-classification", "clip"),
     ]
 
@@ -825,6 +825,22 @@ class OVCLIExportTestCase(unittest.TestCase):
             main_export(
                 model_name_or_path=model_name, output=tmpdir, task=task, model_kwargs=model_kwargs, **loading_kwargs
             )
+
+    @unittest.skipUnless(os.environ.get("RUN_SLOW_EXPORT_TESTS") == "1", "Full Paraformer export is opt-in")
+    def test_paraformer_export_cli(self):
+        with TemporaryDirectory() as output_dir:
+            subprocess.run(
+                [
+                    "optimum-cli", "export", "openvino",
+                    "--model", MODEL_NAMES["paraformer"],
+                    "--task", "automatic-speech-recognition",
+                    "--framework", "pt",
+                    str(output_dir),
+                ],
+                check=True,
+            )
+            model = OVParaformerForSpeechSeq2Seq.from_pretrained(output_dir, device="CPU")
+            self.assertIsNotNone(model)
 
     def test_filtered_architectures(cls):
         if is_transformers_version("<", "4.49"):
