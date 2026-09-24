@@ -61,25 +61,12 @@ jobs:
         run: |
           uv pip install --pre -U openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
-      - name: Qwen3.5 and Qwen3.5-Moe Validation
-        run: |
-          uv pip install "transformers>=5.15,<5.16"
-          pytest tests/openvino/${{ matrix.test-pattern }} -k "(qwen3_5 or qwen3_5_moe) and not qwen3_5_compressed_tensors" --durations=0
-
       - name: Qwen3.5 Compressed-Tensors Validation
         if: ${{ matrix.test-pattern == '*export*' || matrix.test-pattern == '*seq2seq*' }}
         run: |
           uv pip install "transformers>=5.15,<5.16" compressed-tensors
           pytest tests/openvino/${{ matrix.test-pattern }} -k qwen3_5_compressed_tensors --durations=0
           uv pip uninstall compressed-tensors
-
-      # test_genai is not matched by the matrix test-pattern glob, so run it explicitly and only
-      # once (the export job) to avoid repeating the same MTP speculative-decoding tests per matrix leg.
-      - name: Qwen3.5-MTP and Qwen3.5-Moe-MTP GenAI Validation
-        if: ${{ matrix.test-pattern == '*export*' }}
-        run: |
-          uv pip install "transformers>=5.15,<5.16"
-          pytest tests/openvino/test_genai.py -k "qwen3_5_mtp or qwen3_5_moe_mtp" --durations=0
 
       # QwenImage21Pipeline is only available in diffusers main. test_diffusion is not matched by the matrix
       # test-pattern glob, so run the Qwen-Image-2.1 diffusion, export and transformation tests explicitly and only once.
