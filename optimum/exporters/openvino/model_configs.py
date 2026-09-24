@@ -490,6 +490,12 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         )
         archs = getattr(config, "architectures", None)
         self.dflash = isinstance(archs, list) and len(archs) > 0 and archs[0] == "DFlashDraftModel"
+        self.is_guard = isinstance(archs, list) and len(archs) > 0 and archs[0] == "Qwen3ForGuardModel"
+        if self.is_guard:
+            self.MIN_TRANSFORMERS_VERSION = "4.55.0"
+            self.MAX_TRANSFORMERS_VERSION = "4.57.6"
+            self.use_past_in_inputs = use_past
+            self.stateful = use_past
         if self.dflash:
             model_type = getattr(config, "model_type", "")
             if model_type != "qwen3":
@@ -521,7 +527,7 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
                 mask_length = "context_length + block_size"
             common_inputs["attention_mask"] = {0: "batch_size", 1: mask_length}
             return common_inputs
-        if self.task in ["feature-extraction"]:
+        if self.task in ["feature-extraction"] and not self.is_guard:
             common_inputs = {
                 "input_ids": {0: "batch_size", 1: "sequence_length"},
                 "attention_mask": {0: "batch_size", 1: "sequence_length"},
@@ -532,6 +538,20 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self.is_guard:
+            # One score per token per head, instead of the single `last_hidden_state` of an embedding model
+            common_outputs = {
+                name: {0: "batch_size", 1: "sequence_length"}
+                for name in (
+                    "risk_level_logits",
+                    "category_logits",
+                    "query_risk_level_logits",
+                    "query_category_logits",
+                )
+            }
+            if self.use_past:
+                self.add_past_key_values(common_outputs, direction="outputs")
+            return common_outputs
         if self.dflash:
             common_outputs = super().outputs
             common_outputs.pop("logits", None)
