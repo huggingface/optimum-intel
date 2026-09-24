@@ -11788,18 +11788,44 @@ class LTX2TransformerPatcher(ModelPatcher):
 # The native MuseGlimmer model already applies rotary embeddings with real-valued
 # cos/sin tensors (``apply_rotary_pos_emb`` / ``apply_rotary_pos_emb_vision``), so
 # unlike the earlier flat trust_remote_code "onyx" model there is no complex-RoPE
-# to work around. The language patcher only rewires the forward to consume
-# ``inputs_embeds`` + a legacy KV tuple for the stateful text-generation export.
+# to work around. Text and vision embedders share a weightless RMS norm; export it
+# in the language model so MuseGlimmer Assistant can consume required raw embeddings.
+# The language patcher rewires the forward to consume ``inputs_embeds`` + a legacy
+# KV tuple for the stateful text-generation export.
 # The vision patcher reimplements the encoder over ``pixel_values`` plus the
 # grid-derived tensors (attention masks, window reordering, rotary position ids,
 # bilinear position gathers and the pixel-shuffle permutation) passed as inputs,
 # so the graph is resolution-agnostic and free of the untraceable grid ops.
 # ------------------------------------------------------------------------------
+class MuseGlimmerTextEmbeddingsModelPatcher(ModelPatcher):
+    """Export the MuseGlimmer token lookup without its output RMS normalization."""
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+
+        def forward(self, input):
+            return torch.nn.Embedding.forward(self, input)
+
+        model.forward = types.MethodType(forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
 class MuseGlimmerVisionEmbeddingsModelPatcher(ModelPatcher):
     """Export the native MuseGlimmer vision stack as one resolution-agnostic graph.
 
-    Reimplements ``vision_tower`` -> ``vision_adapter`` -> ``vision_projection`` ->
-    ``perception_emb_norm`` consuming only ``pixel_values`` and ``image_grid_thw``.
+    Reimplements ``vision_tower`` -> ``vision_adapter`` -> ``vision_projection``
+    consuming only ``pixel_values`` and ``image_grid_thw``. The shared output RMS
+    normalization is exported in the language model after multimodal embeddings are
+    merged.
     All grid-derived tensors (attention masks, rotary position ids, bilinear
     position gathers, pixel-shuffle permutation) are recomputed *inside* the graph
     from ``image_grid_thw`` with pure tensor arithmetic, so no ``.tolist()`` /
@@ -11953,7 +11979,6 @@ class MuseGlimmerVisionEmbeddingsModelPatcher(ModelPatcher):
 
             vision_features = vision_model.vision_adapter(hidden_states)
             vision_features = vision_model.vision_projection(vision_features)
-            vision_features = vision_model.perception_emb_norm(vision_features)
             return {output_names[0]: vision_features}
 
         model.forward = types.MethodType(image_embed_forward, model)
@@ -11965,11 +11990,20 @@ class MuseGlimmerVisionEmbeddingsModelPatcher(ModelPatcher):
 
 
 class MuseGlimmerLanguageModelPatcher(OVDecoderModelPatcher):
-    """Patch the MuseGlimmer language model to consume ``inputs_embeds`` + a legacy
-    KV tuple for the stateful text-generation export (native real-valued RoPE)."""
+    """Export the MuseGlimmer language model with input RMS normalization.
+
+    The split text and vision IRs produce raw embeddings. Their shared, weightless
+    RMS normalization therefore belongs here, after the runtime merges modalities.
+    """
 
     def __init__(self, config, model, model_kwargs=None):
         model.__orig_forward = model.forward
+        try:
+            embedding_norm = model.model.get_input_embeddings().embed_norm
+        except AttributeError as error:
+            raise ValueError(
+                "MuseGlimmer language export requires the input embedding RMS normalization."
+            ) from error
 
         def forward_wrap(
             self,
@@ -11980,6 +12014,8 @@ class MuseGlimmerLanguageModelPatcher(OVDecoderModelPatcher):
             input_ids=None,
             use_cache=True,
         ):
+            if inputs_embeds is not None:
+                inputs_embeds = embedding_norm(inputs_embeds)
             if is_transformers_version("<", "5"):
                 new_past_key_values = DynamicCache.from_legacy_cache(past_key_values)
             else:

@@ -171,6 +171,7 @@ from optimum.exporters.openvino.model_patcher import (
     ModelPatcher,
     MPTModelPatcher,
     MuseGlimmerLanguageModelPatcher,
+    MuseGlimmerTextEmbeddingsModelPatcher,
     MuseGlimmerVisionEmbeddingsModelPatcher,
     OVDecoderModelPatcher,
     OVSeq2SeqModelPatcher,
@@ -2503,12 +2504,11 @@ class MuseGlimmerAssistantOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfi
 class MuseGlimmerOpenVINOConfig(BaseVLMOpenVINOConfig):
     """Multi-part OpenVINO export config for the native MuseGlimmer VLM.
 
-    Splits the model into three IR files: the language model (consumes merged
-    ``inputs_embeds``), the token-embedding table, and the vision stack (vision
-    tower -> adapter -> projection -> perception norm). MuseGlimmer has a nested
-    config (``text_config`` / ``vision_config``), so the standard nested-VLM
-    ``with_behavior`` handles the language / text-embeddings parts; only the vision
-    part is customised for the native flattened-patch + ``image_grid_thw`` inputs.
+    Splits the model into three IR files: a raw token-embedding table, a raw projected
+    vision stack (vision tower -> adapter -> projection), and a language model that
+    normalizes their merged ``inputs_embeds``. MuseGlimmer has a nested config
+    (``text_config`` / ``vision_config``); only its raw text embeddings and flattened
+    vision inputs require custom behavior.
     """
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyMuseGlimmerVisionInputGenerator,)
@@ -2537,6 +2537,19 @@ class MuseGlimmerOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VLMConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        export_config = super().with_behavior(behavior)
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            export_config._MODEL_PATCHER = MuseGlimmerTextEmbeddingsModelPatcher
+            export_config.MIN_TRANSFORMERS_VERSION = self.MIN_TRANSFORMERS_VERSION
+        return export_config
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:

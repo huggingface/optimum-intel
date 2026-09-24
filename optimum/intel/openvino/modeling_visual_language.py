@@ -7777,9 +7777,10 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
     The vision stack is exported as a single graph that consumes flattened patches
     ``pixel_values`` ``[num_patches, patch_dim]`` plus ``image_grid_thw``
     ``[num_images, 3]`` and returns the projected per-token features
-    ``[num_out_tokens, text_hidden]`` (vision tower -> adapter -> projection ->
-    perception norm, with the 2x2 patch merge). Features are scattered into the
-    positions of the ``<image>`` / ``<video>`` tokens in the prompt.
+    ``[num_out_tokens, text_hidden]`` (vision tower -> adapter -> projection, with
+    the 2x2 patch merge). Both embedding IRs return raw features; this class scatters
+    vision features into text features and the language-model IR applies their shared
+    RMS normalization.
     """
 
     def get_experts_implementation(self):
@@ -7826,8 +7827,9 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
         # speculative decoding a continuation step verifies a whole block at once.
         past_key_values = kwargs.get("past_key_values")
         is_prefill = past_key_values is None or self.language_model._get_past_length(past_key_values) == 0
-        # Images and videos share the same vision graph (video_grid_thw plays the role
-        # of image_grid_thw); each modality is scattered into its own placeholder token.
+        # Both component IRs return raw features. Images and videos share the same vision
+        # graph (video_grid_thw plays the role of image_grid_thw); each modality is
+        # scattered into its placeholder token before the language model normalizes rows.
         if is_prefill and pixel_values is not None:
             image_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, image_grid_thw=image_grid_thw)
             if image_embeds is not None:
