@@ -6373,6 +6373,143 @@ class _OVSmolVLForCasualLM(_OVIdefics3ForCausalLM):
         return inputs_embeds, attention_mask, position_ids
 
 
+class _OVLfm2VlForCausalLM(_OVMistral3ForCausalLM):
+    # Reuses `_OVMistral3ForCausalLM.merge_vision_text_embeddings` (masked_scatter on
+    # `self.config.image_token_id`) and its `additional_parts = ["multi_modal_projector"]`. Only the
+    # vision-feature extraction, preprocessing and the propagation of the naflex vision inputs
+    # (`pixel_attention_mask`, `spatial_shapes`) differ from Mistral3.
+    additional_parts = ["multi_modal_projector"]
+
+    def _build_pos_emb_interp(self, spatial_shapes, max_length):
+        # Precompute, per image, the linear-interpolation matrix that reproduces
+        # `Siglip2VisionEmbeddings.resize_positional_embeddings` as a matmul with the learned
+        # positional-embedding table (kept inside the exported vision graph). Because bilinear
+        # interpolation is linear in the source values, applying it to the identity basis yields the
+        # exact interpolation operator, matching the reference resize up to float32 precision.
+        source_size = int(round(self.config.vision_config.num_patches**0.5))
+        num_source_patches = source_size * source_size
+        if not hasattr(self, "_pos_emb_interp_cache"):
+            self._pos_emb_interp_cache = {}
+        mats = []
+        for idx in range(spatial_shapes.shape[0]):
+            height, width = int(spatial_shapes[idx][0]), int(spatial_shapes[idx][1])
+            key = (height, width, int(max_length))
+            interp = self._pos_emb_interp_cache.get(key)
+            if interp is None:
+                identity = torch.eye(num_source_patches, dtype=torch.float32).reshape(
+                    1, num_source_patches, source_size, source_size
+                )
+                resized = torch.nn.functional.interpolate(
+                    identity, size=(height, width), mode="bilinear", align_corners=False, antialias=True
+                )
+                resized = resized.reshape(num_source_patches, height * width).transpose(0, 1)
+                interp = torch.zeros(max_length, num_source_patches, dtype=torch.float32)
+                interp[: height * width] = resized
+                # padded patches are masked out in attention and dropped after unpadding; matching the
+                # reference by filling them with the first resized row keeps the graph numerically identical.
+                interp[height * width :] = resized[0]
+                self._pos_emb_interp_cache[key] = interp
+            mats.append(interp)
+        return torch.stack(mats, dim=0)
+
+    # Adopted from https://github.com/huggingface/transformers/blob/v5.8.1/src/transformers/models/lfm2_vl/modeling_lfm2_vl.py#L160-L204
+    def get_vision_embeddings(
+        self, pixel_values, input_ids=None, pixel_attention_mask=None, spatial_shapes=None, **kwargs
+    ):
+        # Skip vision on cached decode steps.
+        if input_ids is not None and input_ids.shape[1] == 1 and kwargs.get("past_key_values") is not None:
+            return None
+
+        pixel_values = torch.as_tensor(pixel_values)
+        pixel_attention_mask = torch.as_tensor(pixel_attention_mask)
+        spatial_shapes = torch.as_tensor(spatial_shapes)
+
+        max_length = pixel_values.shape[1]
+        pos_emb_interp = self._build_pos_emb_interp(spatial_shapes, max_length)
+
+        last_hidden_state = self.vision_embeddings(
+            pixel_values.to(torch.float32),
+            pixel_attention_mask=pixel_attention_mask,
+            pos_emb_interp=pos_emb_interp,
+        ).last_hidden_state
+        last_hidden_state = (
+            torch.from_numpy(last_hidden_state) if isinstance(last_hidden_state, np.ndarray) else last_hidden_state
+        )
+
+        img_feature_lengths = pixel_attention_mask.sum(dim=1)
+        image_features = []
+        for img_idx in range(last_hidden_state.shape[0]):
+            # unpad the image representation
+            feature = last_hidden_state[img_idx][: img_feature_lengths[img_idx], :].unsqueeze(0)
+            # reshape to original height and width
+            feature_org_h, feature_org_w = int(spatial_shapes[img_idx][0]), int(spatial_shapes[img_idx][1])
+            feature = feature.reshape(1, feature_org_h, feature_org_w, -1)
+            # project the image representation (pixel unshuffle + MLP)
+            img_embedding = self.multi_modal_projector(feature.to(torch.float32))
+            img_embedding = torch.from_numpy(img_embedding) if isinstance(img_embedding, np.ndarray) else img_embedding
+            # flatten here to handle variable length in naflex
+            img_embedding = img_embedding.reshape(-1, img_embedding.shape[-1])
+            image_features.append(img_embedding)
+        return torch.cat(image_features, dim=0)
+
+    def forward(self, input_ids, pixel_values=None, pixel_attention_mask=None, spatial_shapes=None, **kwargs):
+        return super().forward(
+            input_ids,
+            pixel_values=pixel_values,
+            pixel_attention_mask=pixel_attention_mask,
+            spatial_shapes=spatial_shapes,
+            **kwargs,
+        )
+
+    def prepare_inputs_for_generation(
+        self, input_ids, past_key_values=None, inputs_embeds=None, pixel_values=None, attention_mask=None, **kwargs
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        # Carry the extra naflex vision inputs on the prefill step only; drop everything vision-related
+        # on cached decode steps.
+        if past_key_values is None:
+            model_inputs["spatial_shapes"] = kwargs.get("spatial_shapes")
+        else:
+            model_inputs["pixel_values"] = None
+            model_inputs["pixel_attention_mask"] = None
+            model_inputs["spatial_shapes"] = None
+        return model_inputs
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None or audio is not None:
+            raise ValueError("Video/audio inputs are not supported for LFM2-VL")
+
+        content = [{"type": "text", "text": text}]
+        if image is not None:
+            content.insert(0, {"type": "image", "image": image})
+        messages = [{"role": "user", "content": content}]
+        return processor.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
+
+
 class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
     additional_parts = [
         "vision_projection",
@@ -8027,6 +8164,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "gemma4_unified": _OVGemma4UnifiedForCausalLM,
     "idefics3": _OVIdefics3ForCausalLM,
     "smolvlm": _OVSmolVLForCasualLM,
+    "lfm2_vl": _OVLfm2VlForCausalLM,
     "phi4mm": _OVPhi4MMForCausalLM,
     "phi4_multimodal": _OVPhi4MMForCausalLM,
     "llama4": _OVLlama4ForCausalLM,

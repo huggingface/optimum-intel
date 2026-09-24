@@ -194,6 +194,63 @@ def _create_tiny_mistral3_model():
     return str(output_dir)
 
 
+def _create_tiny_lfm2_vl_model():
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_lfm2_vl"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+    cache_marker = output_dir / "tiny_lfm2_vl_v1"
+
+    if config_file.exists() and weights_file.exists() and cache_marker.exists():
+        return str(output_dir)
+
+    from transformers import AutoConfig, AutoModelForImageTextToText, AutoProcessor
+
+    model_id = "LiquidAI/LFM2.5-VL-3B"
+
+    torch.manual_seed(SEED)
+
+    config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+
+    # --- text decoder (lfm2): keep the conv/full_attention hybrid topology and GQA ---
+    config.text_config.hidden_size = 64
+    config.text_config.conv_dim = 64  # coupled to hidden_size
+    config.text_config.block_dim = 64
+    config.text_config.num_attention_heads = 4
+    config.text_config.num_heads = 4
+    config.text_config.num_key_value_heads = 2  # GQA preserved (4 % 2 == 0)
+    config.text_config.intermediate_size = 128
+    config.text_config.layer_types = ["conv", "conv", "full_attention", "conv"]
+    config.text_config.num_hidden_layers = len(config.text_config.layer_types)
+    config.text_config.full_attn_idxs = None
+    # keep the original (large) vocab so the image/special token ids stay valid
+    # a small initializer range collapses greedy decoding, so widen it for the fixture
+    config.text_config.initializer_range = 0.1
+
+    # --- vision tower (siglip2 naflex) ---
+    config.vision_config.hidden_size = 64
+    config.vision_config.intermediate_size = 128
+    config.vision_config.num_attention_heads = 4  # head_dim 16
+    config.vision_config.num_hidden_layers = 2
+    config.vision_config.initializer_range = 0.1
+
+    config.projector_hidden_size = 64
+
+    for subconfig in (config, config.text_config, config.vision_config):
+        subconfig.dtype = "float32"
+        subconfig.torch_dtype = "float32"
+
+    model = AutoModelForImageTextToText.from_config(config, trust_remote_code=True).float().eval()
+    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    model.save_pretrained(output_dir, safe_serialization=True)
+    processor.save_pretrained(output_dir)
+    cache_marker.write_text("tiny_lfm2_vl_v1")
+
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -295,6 +352,7 @@ HUB_MODEL_NAMES = {
     "levit": "optimum-intel-internal-testing/tiny-random-LevitModel",
     "lfm2": "optimum-intel-internal-testing/tiny-random-lfm2",
     "lfm2_moe": "optimum-intel-internal-testing/tiny-random-lfm2-moe",
+    "lfm2_vl": _create_tiny_lfm2_vl_model(),
     "longt5": "optimum-intel-internal-testing/tiny-random-longt5",
     "llama": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
     "llama_awq": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
@@ -595,6 +653,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 16,
         "multi_modal_projector_model": 3,
+    },
+    "lfm2_vl": {
+        "lm_model": 52,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 14,
+        "multi_modal_projector_model": 2,
     },
     "qwen2_vl": {
         "lm_model": 30,

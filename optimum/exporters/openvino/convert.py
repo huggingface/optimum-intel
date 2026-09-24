@@ -134,6 +134,17 @@ def _set_runtime_options(
             and getattr(getattr(sub_export_config, "_orig_config", None), "model_type", None) == "gemma4_unified"
         ):
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
+        # The LFM2-VL (siglip2 naflex) vision tower resizes its positional embeddings via an in-graph
+        # `pos_emb_interp @ position_embedding.weight` matmul. When the whole submodel is compressed to
+        # fp16, the constant-folding of that weight's transpose is silently zeroed out by OpenVINO,
+        # which destroys the positional embeddings and corrupts every image feature (the runtime keeps
+        # computing in fp32, so this is not an fp16 activation-range problem and a scale factor cannot
+        # recover it). Keep this submodel uncompressed so the exported vision features stay correct.
+        if (
+            model_name == "vision_embeddings_model"
+            and getattr(getattr(sub_export_config, "_orig_config", None), "model_type", None) == "lfm2_vl"
+        ):
+            sub_export_config._disable_fp16_compression = True
 
 
 def _save_model(
@@ -145,6 +156,8 @@ def _save_model(
     source_model=None,
 ):
     compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
+    if getattr(config, "_disable_fp16_compression", False):
+        compress_to_fp16 = False
     model = _add_version_info_to_model(model, library_name)
 
     runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}
