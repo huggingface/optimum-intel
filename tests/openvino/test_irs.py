@@ -1,8 +1,30 @@
 """
-Test IR (Intermediate Representation) stability across transformers versions.
+Test OpenVINO IR (Intermediate Representation) stability.
 
-This test compares newly exported OpenVINO IRs against reference IRs to detect
-regressions when upgrading transformers or other dependencies.
+Each model is exported fresh and compared op by op against a reference IR on the `ov` branch of
+the same Hub repo. Drift in any part of the stack fails the test — transformers, optimum-intel,
+or OpenVINO itself, since its frontend translates the PyTorch ops.
+
+To add a model: map the arch in `HUB_MODEL_NAMES` (`utils_tests.py`), make sure it resolves to a
+class via `ARCH_TO_MODEL_CLASS` or `ADDITIONAL_ARCH_MAPPINGS` below (an unmapped arch is silently
+skipped, not an error), add any export kwargs to `_EXTRA_EXPORT_KWARGS_BY_ARCH`, then upload its
+reference IRs. Models needing `trust_remote_code` are excluded and must not be uploaded.
+
+To generate and upload a reference IR — export with the same class and kwargs the test uses, keep
+only the `.xml`/`.bin` plus a `metadata.json` version stamp, and push to `ov` (never `main`):
+
+    model = OVModelForCausalLM.from_pretrained(MODEL_ID, export=True)  # + EXPORT_KWARGS, if any
+    model.save_pretrained("ir")
+    # rm everything under ir/ except *.xml and *.bin, then write ir/metadata.json with
+    # {"model_id", "transformers_version", "optimum_intel_version", "openvino_version",
+    #  "generated_date"} -- the failure message prints these to date a stale reference.
+
+    api = HfApi()
+    api.create_branch(repo_id=MODEL_ID, branch="ov", exist_ok=True)
+    api.upload_folder(folder_path="ir", repo_id=MODEL_ID, revision="ov", delete_patterns="*")
+
+`delete_patterns="*"` is required: a new `ov` branch forks from `main`, so without it the source
+weights stay alongside the IRs.
 """
 
 import json
