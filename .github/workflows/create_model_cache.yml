@@ -8,16 +8,18 @@ on:
         type: boolean
         default: false
 
-permissions:
-  contents: read
-  actions: write  # needed to delete the stale cache entry
 
 env:
   HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
   UV_SYSTEM_PYTHON: true
 
+permissions: {}
+
 jobs:
   create-cache:
+    permissions:
+      actions: write
+      contents: read
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
 
