@@ -25,11 +25,11 @@ import pytest
 import requests
 import torch
 from openvino_genai import (
+    ASRPipeline,
     LLMPipeline,
     SchedulerConfig,
     Text2SpeechPipeline,
     VLMPipeline,
-    WhisperPipeline,
     draft_model,
 )
 from parameterized import parameterized
@@ -78,8 +78,6 @@ if OPENVINO_DEVICE == "NPU":
     TEST_CONFIG = {"CACHE_DIR": ""}
 else:
     TEST_CONFIG = {**F32_CONFIG, "CACHE_DIR": ""}
-if OPENVINO_DEVICE == "CPU":
-    TEST_CONFIG["INFERENCE_NUM_THREADS"] = 1  # TODO, workaround for crashes
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -536,6 +534,7 @@ class VLMPipelineTestCase(unittest.TestCase):
             )
 
 
+@pytest.mark.skipif(is_openvino_version("<", "2026.3"), reason="ASRPipeline requires OpenVINO >= 2026.3.")
 class Speech2TextPipelineTestCase(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = _test_seq2seq.OVModelForSpeechSeq2SeqIntegrationTest.SUPPORTED_ARCHITECTURES
 
@@ -573,7 +572,7 @@ class Speech2TextPipelineTestCase(unittest.TestCase):
                 ov_config=export_ov_config,
             )
 
-            genai_model = WhisperPipeline(self.temp_dir, device=OPENVINO_DEVICE, **TEST_CONFIG)
+            genai_model = ASRPipeline(self.temp_dir, device=OPENVINO_DEVICE, **TEST_CONFIG)
 
             audio = self._get_audio()
             processor = AutoProcessor.from_pretrained(model_id)
@@ -720,7 +719,7 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         ]
     )
 
-    @parameterized.expand(SPECULATIVE_DECODING_MODELS)
+    @parameterized.expand(SPECULATIVE_DECODING_MODELS, skip_on_empty=True)
     def test_compare_outputs(
         self,
         model_arch,
@@ -799,7 +798,7 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         # compare outputs
         self.assertEqual(genai_speculative_output, genai_output)
 
-    @parameterized.expand(SPECULATIVE_DECODING_VLM_MODELS)
+    @parameterized.expand(SPECULATIVE_DECODING_VLM_MODELS, skip_on_empty=True)
     def test_compare_outputs_vlm(
         self,
         model_arch,
