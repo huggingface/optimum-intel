@@ -13021,3 +13021,12 @@ class Qwen3TTSCodecPatcher(OVDecoderModelPatcher):
         for conv_cls, orig in self._orig_extra_padding.items():
             conv_cls._get_extra_padding_for_conv1d = orig
         self._orig_extra_padding = {}
+
+
+class ParaformerModelPatcher(ModelPatcher):
+    def __enter__(self):
+        from .modeling_paraformer import export_rebuild_model
+
+        max_seq_len = getattr(self._model.config, "max_seq_len", 512)
+        export_rebuild_model(self._model.funasr_model, max_seq_len=max_seq_len, device="cpu", type="onnx")
+        return super().__enter__()

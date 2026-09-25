@@ -362,6 +362,7 @@ HUB_MODEL_NAMES = {
     "wav2vec2-hf": "optimum-intel-internal-testing/tiny-random-Wav2Vec2Model",
     "wav2vec2-conformer": "optimum-intel-internal-testing/tiny-random-wav2vec2-conformer",
     "whisper": "optimum-intel-internal-testing/tiny-random-whisper",
+    **({"paraformer": "funasr/paraformer-zh"} if os.environ.get("RUN_SLOW_EXPORT_TESTS") == "1" else {}),
     "xlm": "optimum-intel-internal-testing/tiny-random-xlm",
     "xlm-roberta": "optimum-intel-internal-testing/tiny-random-xlm-roberta",
     "xglm": "optimum-intel-internal-testing/tiny-random-XGLMForCausalLM",

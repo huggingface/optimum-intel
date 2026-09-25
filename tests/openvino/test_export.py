@@ -13,8 +13,10 @@
 # limitations under the License.
 
 
+import os
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import openvino as ov
 import torch
@@ -57,6 +59,7 @@ from optimum.intel import (
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
     OVModelForTextToSpeechSeq2Seq,
+    OVParaformerForSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
     OVModelForZeroShotImageClassification,
@@ -181,6 +184,48 @@ class ExportModelTest(unittest.TestCase):
     }
 
     GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
+
+    def test_paraformer_and_funasr_task_routing(self):
+        from optimum.exporters.openvino.__main__ import infer_task
+
+        with patch.object(TasksManager, "get_model_files", return_value=({"am.mvn", "config.yaml", "tokens.json"}, None)):
+            self.assertEqual(infer_task("auto", "paraformer", library_name="funasr"), "automatic-speech-recognition")
+        with patch.object(TasksManager, "get_model_files", return_value=({"configuration.json", "config.yaml"}, None)):
+            self.assertEqual(
+                infer_task("auto", "fun-asr-nano", library_name="funasr"),
+                "automatic-speech-recognition-with-past",
+            )
+
+    def test_paraformer_and_funasr_model_registration(self):
+        if "funasr" not in TasksManager._LIBRARY_TO_TASKS_TO_MODEL_LOADER_MAP:
+            self.skipTest("FunASR is not installed")
+
+        self.assertEqual(
+            TasksManager.get_model_class_for_task(
+                "automatic-speech-recognition", model_type="paraformer", library="funasr"
+            ).__name__,
+            "ParaformerForASR",
+        )
+        self.assertEqual(
+            TasksManager.get_model_class_for_task("automatic-speech-recognition", library="funasr").__name__,
+            "_FunASRForSpeechSeq2Seq",
+        )
+
+    @unittest.skipUnless(os.environ.get("RUN_SLOW_EXPORT_TESTS") == "1", "Full Paraformer export is opt-in")
+    def test_paraformer_export(self):
+        from optimum.exporters.openvino.modeling_paraformer import ParaformerForASR
+
+        model = ParaformerForASR.from_pretrained(MODEL_NAMES["paraformer"])
+        with TemporaryDirectory() as output_dir:
+            export_from_model(
+                model=model,
+                output=Path(output_dir),
+                task="automatic-speech-recognition",
+                stateful=False,
+            )
+            self.assertTrue((Path(output_dir) / "openvino_model.xml").is_file())
+            ov_model = OVParaformerForSpeechSeq2Seq.from_pretrained(output_dir, device=OPENVINO_DEVICE)
+            self.assertIsNotNone(ov_model)
 
     def _openvino_export(
         self,

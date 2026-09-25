@@ -216,6 +216,7 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3TTSSpeakerEncoderPatcher,
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
+    ParaformerModelPatcher,
     QwenImage21I2ITextEncoderModelPatcher,
     QwenImage21TextEncoderModelPatcher,
     QwenImage21TransformerModelPatcher,
@@ -337,6 +338,18 @@ def init_model_configs():
             }
         except ImportError:
             pass
+
+    try:
+        import funasr
+
+        from .modeling_paraformer import ParaformerForASR
+    except ImportError:
+        logger.debug("Paraformer export requires FunASR and its optional dependencies")
+    else:
+        funasr.ParaformerForASR = ParaformerForASR
+        TasksManager._CUSTOM_CLASSES[("pt", "paraformer", "automatic-speech-recognition")] = (
+            "funasr", "ParaformerForASR"
+        )
 
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "image-text-to-text")] = ("transformers", "AutoModelForCausalLM")
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "automatic-speech-recognition")] = (
@@ -8166,3 +8179,34 @@ class Qwen3TTSCodecDecoderOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {"waveform": {0: "batch_size", 2: "audio_length"}}
+
+
+class ParaformerDummyAudioInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("speech", "speech_lengths")
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "speech":
+            return self.random_float_tensor(shape=(self.batch_size, 30, 560), framework=framework, dtype=float_dtype)
+        if input_name == "speech_lengths":
+            return self.random_int_tensor(shape=(self.batch_size,), max_value=30, min_value=6, framework=framework, dtype="int32")
+        raise ValueError(f"Unsupported input name {input_name}")
+
+
+@register_in_tasks_manager("paraformer", "automatic-speech-recognition", library_name="funasr")
+class ParaformerOpenVINOConfig(OpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (ParaformerDummyAudioInputGenerator,)
+    _MODEL_PATCHER = ParaformerModelPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "speech": {0: "batch_size", 1: "feats_length"},
+            "speech_lengths": {0: "batch_size"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "logits": {0: "batch_size", 1: "logits_length"},
+            "token_num": {0: "batch_size"},
+        }

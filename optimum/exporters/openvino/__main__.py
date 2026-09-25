@@ -58,6 +58,13 @@ from .utils import (
 )
 
 
+def _is_paraformer_checkpoint(model_name_or_path, subfolder="", revision=None, cache_dir=None, token=None):
+    all_files, _ = TasksManager.get_model_files(
+        model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
+    )
+    return {"am.mvn", "config.yaml", "tokens.json"}.issubset(all_files)
+
+
 if is_transformers_version(">=", "4.55"):
     from transformers import Mxfp4Config
 
@@ -94,6 +101,10 @@ def infer_task(
             task = "zero-shot-image-classification"
         elif library_name in ("kokoro", "qwen3_tts"):
             task = "text-to-audio"
+        elif library_name == "funasr" and _is_paraformer_checkpoint(
+            model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
+        ):
+            task = "automatic-speech-recognition"
         elif library_name == "funasr":
             # Use the with-past task so the encoder-decoder export is stateful (KV cache hidden in
             # OpenVINO state). Without the `-with-past` suffix the decoder is exported stateless and
@@ -631,9 +642,16 @@ def main_export(
         elif library_name == "kokoro":
             model = _KokoroForTextToSpeech.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         elif library_name == "funasr":
-            from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
+            if _is_paraformer_checkpoint(
+                model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
+            ):
+                from .modeling_paraformer import ParaformerForASR
 
-            model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+                model = ParaformerForASR.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+            else:
+                from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
+
+                model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         elif library_name == "qwen3_tts":
             # Without an explicit request the checkpoint's own precision is kept, so the IRs
             # come out at the precision the model was published in rather than upcast. A
