@@ -1418,6 +1418,16 @@ class MistralOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 
 
 @register_in_tasks_manager(
+    "ministral3",
+    "text-generation-with-past",
+    library_name="transformers",
+)
+class Ministral3OpenVINOConfig(MistralOpenVINOConfig):
+    # ministral3 is the text-decoder config used inside Mistral3ForConditionalGeneration (Mistral3 VLM family).
+    MIN_TRANSFORMERS_VERSION = "5.0.0"
+
+
+@register_in_tasks_manager(
     "gpt_neox",
     *[
         "feature-extraction",
@@ -2272,6 +2282,14 @@ class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
                 if hasattr(model, "multi_modal_projector")
                 else model.model.multi_modal_projector
             )
+
+        if behavior == Mistral3ConfigBehavior.TEXT_EMBEDDINGS:
+            # newer transformers versions nest the decoder under `model.model.language_model`
+            language_model = getattr(model, "language_model", None) or getattr(model.model, "language_model", None)
+            text_embedding = model.get_input_embeddings()
+            if language_model is not None:
+                text_embedding.config = language_model.config
+            return text_embedding
 
         return super().get_model_for_behavior(model, behavior)
 
