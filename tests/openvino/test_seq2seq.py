@@ -639,6 +639,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     REMOTE_CODE_MODELS = [
         "internvl_chat",
         "minicpmv",
+        "minicpm_v4_5",
         "minicpmo",
         "llava-qwen2",
         "phi3_v",
@@ -926,14 +927,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
         gc.collect()
 
-    def test_minicpmv_temporal_ids_generation(self):
-        # Regression test for MiniCPM-V-4.5 support: its image processor emits an additional
-        # `temporal_ids` model input (all -1 for still images). Previously generate() raised
-        # ValueError("model_kwargs not used: ['temporal_ids']"). The runtime must accept and
-        # safely ignore `temporal_ids` for the image path (the exported resampler adds a zero
-        # temporal position embedding for still images, so results are unchanged).
-        model_arch = "minicpmv"
-        if model_arch not in self.SUPPORTED_ARCHITECTURES:
+    def test_minicpm_v4_5_temporal_ids_generation(self):
+        # MiniCPM-V-4.5's image processor returns temporal_ids for still images.
+        # They must be accepted without changing the output.
+        model_arch = "minicpm_v4_5"
+        if "minicpmv" not in self.SUPPORTED_ARCHITECTURES:
             self.skipTest("minicpmv is not supported by the installed transformers version")
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -948,17 +946,16 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         preprocessors = self.get_preprocessors(model_arch)
         image = self.IMAGE.resize((600, 600))
         inputs = ov_model.preprocess_inputs(**preprocessors, text="What is shown in this image?", image=image)
-
-        # emulate MiniCPM-V-4.5 image processor output: one temporal id (-1) per image slice
-        tgt_sizes = inputs["tgt_sizes"]
-        num_slices = len(tgt_sizes[0]) if isinstance(tgt_sizes, (list, tuple)) else tgt_sizes[0].shape[0]
-        inputs["temporal_ids"] = [[[-1]] * num_slices]
+        self.assertIn("temporal_ids", inputs)
 
         gen_config = GenerationConfig(max_new_tokens=10, min_new_tokens=10, do_sample=False, eos_token_id=None)
         set_seed(SEED)
-        ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
-        # generation must succeed and produce the requested number of new tokens
-        self.assertEqual(ov_outputs.shape[1] - inputs["input_ids"].shape[1], 10)
+        outputs_without_temporal_ids = ov_model.generate(
+            **{key: value for key, value in inputs.items() if key != "temporal_ids"}, generation_config=gen_config
+        )
+        set_seed(SEED)
+        outputs_with_temporal_ids = ov_model.generate(**inputs, generation_config=gen_config)
+        self.assertTrue(torch.equal(outputs_with_temporal_ids, outputs_without_temporal_ids))
 
         del ov_model
         gc.collect()
