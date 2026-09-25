@@ -117,6 +117,14 @@ if _kokoro_available:
     except importlib_metadata.PackageNotFoundError:
         _kokoro_available = False
 
+_qwen_tts_available = importlib.util.find_spec("qwen_tts") is not None
+_qwen_tts_version = "N/A"
+if _qwen_tts_available:
+    try:
+        _qwen_tts_version = importlib_metadata.version("qwen-tts")
+    except importlib_metadata.PackageNotFoundError:
+        _qwen_tts_available = False
+
 _funasr_available = importlib.util.find_spec("funasr") is not None
 _funasr_version = "N/A"
 if _funasr_available:
@@ -168,6 +176,9 @@ if _accelerate_available:
         _accelerate_version = importlib_metadata.version("accelerate")
     except importlib_metadata.PackageNotFoundError:
         _accelerate_available = False
+
+
+_compressed_tensors_available = importlib.util.find_spec("compressed_tensors") is not None
 
 _numa_available = importlib.util.find_spec("numa") is not None
 
@@ -310,6 +321,10 @@ def is_kokoro_available():
     return _kokoro_available
 
 
+def is_qwen_tts_available():
+    return _qwen_tts_available
+
+
 def is_funasr_available():
     return _funasr_available
 
@@ -332,6 +347,10 @@ def is_pillow_available():
 
 def is_accelerate_available():
     return _accelerate_available
+
+
+def is_compressed_tensors_available():
+    return _compressed_tensors_available
 
 
 def is_sentence_transformers_available():

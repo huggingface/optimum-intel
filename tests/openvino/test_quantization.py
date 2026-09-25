@@ -53,6 +53,7 @@ from optimum.intel import (
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
     OVModelForSpeechSeq2Seq,
+    OVModelForTextToSpeechSeq2Seq,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
     OVStableDiffusion3Pipeline,
@@ -81,7 +82,13 @@ from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
 
 from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrationDatasetBuilder
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version, is_nncf_version
+from optimum.exporters.openvino import main_export
+from optimum.intel.utils.import_utils import (
+    is_nncf_version,
+    is_openvino_version,
+    is_qwen_tts_available,
+    is_transformers_version,
+)
 from utils_tests import (
     MODEL_NAMES,
     get_num_quantized_nodes,
@@ -488,7 +495,7 @@ class OVQuantizerTest(unittest.TestCase):
                 "vision_embeddings_model": {"int8": 13},
                 "vision_embeddings_pos_model": {"int8": 1},
                 "audio_encoder_model": {"int8": 18},
-                "talker_model": {"int8": 25},
+                "talker_model": {"int8": 26},
                 "talker_text_embeddings_model": {"int8": 1},
                 "talker_projections_model": {"int8": 4},
                 "code_predictor_model": {"int8": 16},
@@ -1019,7 +1026,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "vision_embeddings_model": {"int8": 13},
                 "vision_embeddings_pos_model": {"int8": 1},
                 "audio_encoder_model": {"int8": 18},
-                "talker_model": {"int8": 25},
+                "talker_model": {"int8": 26},
                 "talker_text_embeddings_model": {"int8": 1},
                 "talker_projections_model": {"int8": 4},
                 "code_predictor_model": {"int8": 16},
@@ -1271,6 +1278,48 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
     ]
 
+    # Qwen3-TTS resolves `quantization_config` itself rather than through the default-config table,
+    # so the configs given here are the ones it applies for these `bits`. Compression is per
+    # component: the language-model side is compressed, the speaker encoder and the codec stay in
+    # floating point, and a 4-bit request reaches only the talker. It needs the `qwen_tts` package.
+    if is_qwen_tts_available():
+        DEFAULT_COMPRESSION_CONFIGURATIONS.extend(
+            [
+                (
+                    OVModelForTextToSpeechSeq2Seq,
+                    "qwen3_tts",
+                    8,
+                    {"bits": 8},
+                    {
+                        "talker_model": {"int8": 30},
+                        "code_predictor_model": {"int8": 16},
+                        "text_embeddings": {"int8": 2},
+                        "talker_embeddings": {"int8": 2},
+                        "code_predictor_embeddings": {"int8": 2},
+                        "speaker_encoder": {},
+                        "codec_encoder": {},
+                        "codec_decoder": {},
+                    },
+                ),
+                (
+                    OVModelForTextToSpeechSeq2Seq,
+                    "qwen3_tts",
+                    4,
+                    {"bits": 4},
+                    {
+                        "talker_model": {"int8": 2, "int4": 28},
+                        "code_predictor_model": {"int8": 16},
+                        "text_embeddings": {"int8": 2},
+                        "talker_embeddings": {"int8": 2},
+                        "code_predictor_embeddings": {"int8": 2},
+                        "speaker_encoder": {},
+                        "codec_encoder": {},
+                        "codec_decoder": {},
+                    },
+                ),
+            ]
+        )
+
     DEFAULT_IGNORED_SCOPE_CONFIGURATIONS = [
         (
             OVModelForCausalLM,
@@ -1354,7 +1403,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             if not is_model_type_transformers_compatible(model_type)
         }
         if is_transformers_version(">=", "5"):
-            expected.update({"llama4", "llava_next_video", "minicpmv", "internvl_chat", "exaone4"})
+            expected.update({"llama4", "llava_next_video", "minicpmv", "exaone4"})
+        expected.update({"internvl_chat"})
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.LOAD_IN_4_BITS_SCOPE}
@@ -1546,7 +1596,13 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
         self.assertEqual(0, num_weight_nodes["int4"])
 
-    @parameterized.expand(DEFAULT_COMPRESSION_CONFIGURATIONS)
+    @parameterized.expand(
+        DEFAULT_COMPRESSION_CONFIGURATIONS,
+        # The first parameter is a model class, which would otherwise leave the index as the only
+        # name; the model type is added so the cases can be selected by it. The index stays, since
+        # a model type can appear more than once and a repeated name would replace the earlier case.
+        name_func=lambda testcase_func, param_num, params: f"{testcase_func.__name__}_{param_num}_{parameterized.to_safe_name(params.args[1])}",
+    )
     def test_ovmodel_default_compression(
         self, model_cls, model_type, bits, default_config, expected_num_weight_nodes_per_model
     ):
@@ -1968,7 +2024,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
         ),
     ]
 
-    if is_transformers_version("<", "5"):
+    if is_transformers_version("<", "4.57.6"):
         PIPELINE_QUANTIZATION_SCOPE.append(
             (
                 OVModelForVisualCausalLM,

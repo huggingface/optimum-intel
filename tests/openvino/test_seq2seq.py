@@ -80,7 +80,12 @@ from optimum.intel.openvino.modeling_visual_language import (
     _OVQwen3OmniMoeForCausalLM,
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import (
+    is_compressed_tensors_available,
+    is_openvino_version,
+    is_qwen_tts_available,
+    is_transformers_version,
+)
 
 
 if is_transformers_version("<=", "4.52"):
@@ -593,6 +598,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "gemma4",
         "gemma4_moe",
         "gemma4_unified",
+        "gemma4_unified-it",
         "gemma3n",
         "qwen3_5",
         "qwen3_5_mtp",
@@ -604,6 +610,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "muse_glimmer",
         "deepseek_ocr2",
     ]
+    if is_openvino_version(">=", "2026.3") and is_compressed_tensors_available():
+        SUPPORTED_ARCHITECTURES.append("qwen3_5_compressed_tensors")
     SUPPORT_VIDEO = [
         "llava_next_video",
         "qwen2_vl",
@@ -614,8 +622,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "gemma4",
         "gemma4_moe",
         "gemma4_unified",
+        "gemma4_unified-it",
     ]
-    SUPPORT_AUDIO = ["qwen3_omni_moe"]
+    SUPPORT_AUDIO = ["gemma4", "gemma4_unified-it", "qwen3_omni_moe"]
     # "llama" is registered for image-text-to-text
     # to support VLM Eagle3 draft models (tested separately in test_genai.py).
     UNSUPPORTED_ARCHITECTURES = {"phi4_multimodal", "llama"}
@@ -674,10 +683,12 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "llama4",
             "qwen3_vl",
             "qwen3_5",
+            "qwen3_5_compressed_tensors",
             "qwen3_5_mtp",
             "qwen3_5_moe",
             "qwen3_5_moe_mtp",
             "gemma4_unified",
+            "gemma4_unified-it",
             "muse_glimmer",
         ]:
             from transformers import AutoModelForImageTextToText
@@ -741,7 +752,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             # Qwen3OmniMoeForConditionalGeneration has a custom generate() interface incompatible with this flow
             self.skipTest("qwen3_omni_moe comparison tested via dedicated test methods")
 
-        if model_arch == "gemma4":
+        if model_arch == "gemma4" and is_openvino_version("<", "2026.5"):
             self.skipTest("gemma4 is causing segfault CVS-193103")
 
         def compare_outputs(inputs, ov_model, transformers_model, generation_config):
@@ -785,14 +796,21 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             transformers_model.get_vision_tower().load_model()
         preprocessors = self.get_preprocessors(model_arch)
         set_seed(SEED)
+        ov_config = F32_CONFIG
+        if model_arch == "qwen3_5_compressed_tensors":
+            # The reference dequantizes packed weights, whereas OpenVINO preserves them as int4.
+            # Disable CPU dynamic activation quantization so both paths are compared at the same precision.
+            ov_config = {**F32_CONFIG, "DYNAMIC_QUANTIZATION_GROUP_SIZE": "0"}
         ov_model = self.OVMODEL_CLASS.from_pretrained(
             model_id,
             export=True,
             trust_remote_code=trust_remote_code,
             compile=False,
             device=OPENVINO_DEVICE,
-            ov_config=F32_CONFIG,
+            ov_config=ov_config,
         )
+        if model_arch == "gemma3n":
+            self.assertIsNone(ov_model.audio_embeddings)
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
 
         image = self.IMAGE.resize((600, 600))
@@ -900,7 +918,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             )
             num_frames = 2
             # Gemma4 requires 32 frames for video input without providing video metadata
-            if model_arch in ["gemma4", "gemma4_moe", "gemma4_unified"]:
+            if model_arch in ["gemma4", "gemma4_moe", "gemma4_unified", "gemma4_unified-it"]:
                 num_frames = 32
             input_video, _ = load_video(video_path, num_frames=num_frames, backend="opencv")
             question = "Why is this video funny?"
@@ -914,11 +932,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         if model_arch in self.SUPPORT_AUDIO:
             input_audio = self._generate_random_audio_data()
             question = "Translate this audio to French"
-            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
+            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, audio=input_audio)
             compare_outputs(inputs, ov_model, transformers_model, gen_config)
 
             question = "Describe this image and translate the audio"
-            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, image=image, audio=[input_audio])
+            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, image=image, audio=input_audio)
             compare_outputs(inputs, ov_model, transformers_model, gen_config)
         del transformers_model
         del ov_model
@@ -987,7 +1005,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_generate_utils(self, model_arch):
-        if model_arch == "gemma4":
+        if model_arch == "gemma4" and is_openvino_version("<", "2026.5"):
             self.skipTest("gemma4 is causing segfault CVS-193103")
         model_id = MODEL_NAMES[model_arch]
         trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
@@ -1023,7 +1041,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 )
                 num_frames = 2
                 # Gemma4 requires 32 frames for video input without providing video metadata
-                if model_arch in ["gemma4", "gemma4_moe", "gemma4_unified"]:
+                if model_arch in ["gemma4", "gemma4_moe", "gemma4_unified", "gemma4_unified-it"]:
                     num_frames = 32
                 input_video, _ = load_video(video_path, num_frames=num_frames, backend="opencv")
                 question = "Why is this video funny?"
@@ -1037,7 +1055,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         if model_arch in self.SUPPORT_AUDIO:
             input_audio = self._generate_random_audio_data()
             question = "Translate this audio to French"
-            inputs = model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
+            inputs = model.preprocess_inputs(**preprocessors, text=question, audio=input_audio)
             outputs = model.generate(**inputs, max_new_tokens=10)
             # filter out original prompt because it may contain out of tokenizer tokens e.g. in nanollava text separator = -200
             outputs = outputs[:, inputs["input_ids"].shape[1] :]
@@ -1064,7 +1082,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         if model_arch in self.SUPPORT_AUDIO_OUTPUT and model.has_talker and model_arch in self.SUPPORT_AUDIO:
             input_audio = self._generate_random_audio_data()
             question = "Repeat what you hear"
-            inputs = model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
+            inputs = model.preprocess_inputs(**preprocessors, text=question, audio=input_audio)
             text_result, audio_result = model.generate(
                 **inputs, max_new_tokens=10, return_audio=True, talker_max_new_tokens=20
             )
@@ -1144,7 +1162,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
         input_audio = self._generate_random_audio_data()
         inputs_turn2 = model.preprocess_inputs(
-            **preprocessors, text="Now listen to this audio and describe it", audio=[input_audio]
+            **preprocessors, text="Now listen to this audio and describe it", audio=input_audio
         )
         output_turn2 = model.generate(**inputs_turn2, max_new_tokens=20, do_sample=False)
 
@@ -1253,7 +1271,7 @@ class OVModelForMultimodalLMIntegrationTest(unittest.TestCase):
         model = OVModelForMultimodalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
         preprocessors = self._get_preprocessors(model_id)
         audio_data = self._generate_random_audio_data()
-        inputs = model.preprocess_inputs(text="Translate", audio=[audio_data], **preprocessors)
+        inputs = model.preprocess_inputs(text="Translate", audio=audio_data, **preprocessors)
         output = model.generate(**inputs, max_new_tokens=5)
         self.assertIsInstance(output, torch.Tensor)
         del model
@@ -1390,6 +1408,92 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         del vocoder
         del model
         del processor
+        gc.collect()
+
+    @unittest.skipUnless(is_qwen_tts_available(), "qwen_tts package is not installed")
+    def test_compare_to_qwen3_tts(self):
+        """Export Qwen3-TTS and check every component runs from OpenVINO and matches PyTorch.
+
+        The pipeline is exported component-wise and the exported directory carries no PyTorch
+        weights at all, so this also covers the weightless runtime path: if any component
+        failed to load from its IR, generation would run on empty tensors rather than fall
+        back silently.
+        """
+        from qwen_tts import Qwen3TTSModel
+
+        from optimum.exporters.openvino import export_from_model
+        from optimum.intel.openvino.modeling_text2speech import _OVModelForQwen3TTS
+        from optimum.intel.utils.modeling_utils import _Qwen3TTSForTextToSpeech
+
+        set_seed(SEED)
+        model_id = MODEL_NAMES["qwen3_tts"]
+
+        ref_pipeline = Qwen3TTSModel.from_pretrained(model_id, dtype=torch.float32)
+        ref_pipeline.model.eval()
+
+        sampling_rate = ref_pipeline.model.speaker_encoder_sample_rate
+        ref_audio = (np.random.default_rng(SEED).standard_normal(3 * sampling_rate) * 0.05).astype(np.float32)
+        ref_text = "reference transcript"
+        text = "a short sentence"
+
+        ref_model = _Qwen3TTSForTextToSpeech.from_pretrained(model_id)
+
+        with TemporaryDirectory() as tmpdir:
+            # The checkpoint is bfloat16 and the loader keeps that precision, so tracing needs the
+            # 16-bit patch that ``main_export`` would otherwise derive from the loaded model.
+            export_from_model(
+                model=ref_model, output=tmpdir, task="text-to-audio", stateful=True, patch_16bit_model=True
+            )
+
+            # Every neural component must be exported; the runtime has no weights to fall back on.
+            for name in (
+                "talker_model",
+                "code_predictor_model",
+                "text_embeddings",
+                "talker_embeddings",
+                "code_predictor_embeddings",
+                "speaker_encoder",
+                "codec_encoder",
+                "codec_decoder",
+            ):
+                self.assertTrue(Path(tmpdir, f"openvino_{name}.xml").is_file(), f"missing IR for {name}")
+            self.assertFalse(list(Path(tmpdir).glob("*.safetensors")), "export should not ship PyTorch weights")
+            self.assertFalse(
+                list(Path(tmpdir, "speech_tokenizer").glob("*.safetensors")),
+                "export should not ship codec weights",
+            )
+
+            # f32, as the speaker encoder is compared to PyTorch: a bf16/f16 default inference precision (e.g. CPUs
+            # with AMX) moves its output by ~2e-3, past the tolerance below.
+            ov_model = self.OVMODEL_CLASS.from_pretrained(tmpdir, ov_config=F32_CONFIG, device=OPENVINO_DEVICE)
+            self.assertIsInstance(ov_model, _OVModelForQwen3TTS)
+            self.assertEqual(getattr(ov_model.config, "model_type", None), "qwen3_tts")
+            self.assertEqual(sum(p.numel() for p in ov_model.model.parameters()), 0)
+
+            inputs = ov_model.preprocess_input(
+                text=text, language="English", ref_audio=(ref_audio, sampling_rate), ref_text=ref_text
+            )
+            set_seed(SEED)
+            ov_waveform = ov_model.generate(**inputs, max_new_tokens=16)
+
+            # The speaker encoder and the codec are deterministic given the same reference audio,
+            # so they are compared directly; the talker's sampled codes are not.
+            with torch.no_grad():
+                ref_speaker_embedding = ref_pipeline.model.extract_speaker_embedding(ref_audio, sr=sampling_rate)
+            ov_speaker_embedding = inputs["voice_clone_prompt"][0].ref_spk_embedding
+            self.assertEqual(ov_speaker_embedding.shape, ref_speaker_embedding.shape)
+            self.assertTrue(
+                torch.allclose(ov_speaker_embedding.float(), ref_speaker_embedding.float(), atol=1e-3),
+                "speaker encoder output diverged from PyTorch",
+            )
+
+            self.assertGreater(ov_waveform.numel(), 0)
+            self.assertTrue(torch.isfinite(ov_waveform).all(), "generated waveform contains NaN/inf")
+            self.assertGreater(float(ov_waveform.abs().max()), 1e-4, "generated waveform is silent")
+
+        del ref_model
+        del ref_pipeline
+        del ov_model
         gc.collect()
 
     def test_compare_to_kokoro(self):
