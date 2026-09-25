@@ -156,6 +156,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
+        ("automatic-speech-recognition", "cohere_asr"),
         ("image-text-to-text", "mistral3"),
         ("text-to-image", "z-image"),
         ("image-text-to-text", "muse_glimmer"),
@@ -214,6 +215,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "kokoro": 0,  # uses g2p, no tokenizer
         "qwen3_tts": 2,
         "clip": 2,
+        "cohere_asr": 2,
         "mamba": 2,
         "falcon_mamba": 2,
         "qwen3": 2,
@@ -1226,8 +1228,10 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = self._load_exported_ov_model(model_type, task, tmpdir, model_kwargs)
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
             expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
-            if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
-                del expected_int8["decoder_with_past"]
+            if (task.startswith("text2text-generation") or model_type == "cohere_asr") and (
+                not task.endswith("with-past") or model.decoder.stateful
+            ):
+                expected_int8.pop("decoder_with_past", None)
             if task == "text-to-video" and model_type.startswith("ltx2"):
                 # Only the LTX-2 image-to-video pipeline loads a VAE encoder, to encode the input image.
                 del expected_int8["vae_encoder"]
