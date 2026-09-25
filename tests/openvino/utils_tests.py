@@ -450,6 +450,9 @@ def _resolve_cached_model_paths(model_names: dict) -> dict:
 
 
 MODEL_NAMES = _resolve_cached_model_paths(HUB_MODEL_NAMES)
+MODEL_NAMES["muse_glimmer_assistant"] = str(
+    Path(__file__).resolve().parents[3] / "models" / "tiny-random-muse-glimmer-assistant"
+)
 
 EAGLE3_MODELS = {"qwen3_eagle3": ("qwen3_eagle3", "qwen3_eagle3_target")}
 
@@ -461,6 +464,7 @@ DFLASH_VLM_MODELS = {
     "qwen3_5_dflash": ("qwen3_5_dflash", "qwen3_5"),
     "qwen3_5_moe_dflash": ("qwen3_5_moe_dflash", "qwen3_5_moe"),
     "gemma4_dflash": ("gemma4_dflash", "gemma4"),
+    "muse_glimmer": ("muse_glimmer_assistant", "muse_glimmer"),
 }
 
 # VLM-based Eagle3 draft models (AngelSlim Eagle3LlamaForCausalLM architecture).

@@ -12001,9 +12001,7 @@ class MuseGlimmerLanguageModelPatcher(OVDecoderModelPatcher):
         try:
             embedding_norm = model.model.get_input_embeddings().embed_norm
         except AttributeError as error:
-            raise ValueError(
-                "MuseGlimmer language export requires the input embedding RMS normalization."
-            ) from error
+            raise ValueError("MuseGlimmer language export requires the input embedding RMS normalization.") from error
 
         def forward_wrap(
             self,
