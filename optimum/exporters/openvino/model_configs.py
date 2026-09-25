@@ -236,7 +236,11 @@ from optimum.exporters.openvino.model_patcher import (
     ZImageTransformerModelPatcher,
     _get_model_attribute,
 )
-from optimum.exporters.openvino.utils import is_ltx2_3_transformer_config
+from optimum.exporters.openvino.utils import (
+    GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
+    GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
+    is_ltx2_3_transformer_config,
+)
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_diffusers_available,
@@ -1527,7 +1531,6 @@ class Gemma4UnifiedTextOpenVINOConfig(Gemma4TextOpenVINOConfig):
     # attention, optional global KV heads / head dim), so add_past_key_values is inherited.
     # It has no per-layer embeddings (PLE), so no extra inputs are required.
     MIN_TRANSFORMERS_VERSION = "5.10"
-    MAX_TRANSFORMERS_VERSION = "5.10.99"
 
 
 @register_in_tasks_manager(
@@ -5770,7 +5773,6 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Gemma4UnifiedConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyTextInputGenerator)
     MIN_TRANSFORMERS_VERSION = "5.10"
-    MAX_TRANSFORMERS_VERSION = "5.10.99"
 
     def __init__(
         self,
@@ -6476,8 +6478,8 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
             decoder_sequence_name = "past_sequence_length + sequence_length"
             cache_name_prefix = "cache_params.present"
 
-        self.num_mamba_layers = self._normalized_config.layer_types.count("mamba")
-        self.num_attention_layers = self._normalized_config.layer_types.count("attention")
+        self.num_mamba_layers = self._normalized_config.layer_types.count(GRANITEMOEHYBRID_MAMBA_LAYER_TYPE)
+        self.num_attention_layers = self._normalized_config.layer_types.count(GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE)
         for i in range(self.num_mamba_layers):
             # [batch_size, conv_kernel_size - 1, d_model]
             inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
@@ -7451,8 +7453,7 @@ class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Qwen3_5DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Qwen3_5DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    MIN_TRANSFORMERS_VERSION = "5.2.0"
-    MAX_TRANSFORMERS_VERSION = "5.2.99"
+    MIN_TRANSFORMERS_VERSION = "5.15"
     _MODEL_PATCHER = Qwen3_5ModelPatcher
 
     @property
@@ -7533,8 +7534,8 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
         model_type.value for model_type in QwenVLConfigBehavior if model_type != QwenVLConfigBehavior.MTP
     ]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
-    MIN_TRANSFORMERS_VERSION = "5.2.0"
-    MAX_TRANSFORMERS_VERSION = "5.2.99"
+    MIN_TRANSFORMERS_VERSION = "5.15"
+    MAX_TRANSFORMERS_VERSION = None
 
     def __init__(
         self,
