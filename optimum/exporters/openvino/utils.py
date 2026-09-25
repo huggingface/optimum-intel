@@ -17,7 +17,7 @@ import logging
 import re
 from collections import namedtuple
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple, Union
 
 from transformers import AutoImageProcessor, PretrainedConfig
 from transformers.utils import is_torch_available
@@ -102,6 +102,23 @@ def is_ltx2_3_transformer_config(config: Any) -> bool:
     `perturbed_attn` on its own.
     """
     return getattr(config, "perturbed_attn", False) or not getattr(config, "use_prompt_embeddings", True)
+
+
+LTX2_3_AUTO_COMPRESSION_SUBMODELS = frozenset({"transformer", "text_encoder"})
+
+
+def get_auto_compression_submodels(model: Any) -> Optional[FrozenSet[str]]:
+    """
+    Returns None when the size-based rule applies to every submodel (the default for all models), an
+    empty set when automatic compression is disabled for the model, and otherwise the export subfolder
+    names of the only submodels it may compress; those still have to cross `_MAX_UNCOMPRESSED_SIZE`.
+    """
+    if not is_auto_compression_disabled(model):
+        return None
+    transformer = getattr(model, "transformer", None)
+    if transformer is not None and is_ltx2_3_transformer_config(transformer.config):
+        return LTX2_3_AUTO_COMPRESSION_SUBMODELS
+    return frozenset()
 
 
 def is_torch_model(model: Union["PreTrainedModel", "ModelMixin"]):

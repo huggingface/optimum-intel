@@ -16,8 +16,9 @@ import subprocess
 import unittest
 from pathlib import Path
 from typing import Dict
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
+from huggingface_hub import snapshot_download
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
@@ -40,7 +41,7 @@ from utils_tests import (
 )
 
 from optimum.exporters.openvino.__main__ import main_export
-from optimum.exporters.openvino.utils import COMPLEX_CHAT_TEMPLATES
+from optimum.exporters.openvino.utils import COMPLEX_CHAT_TEMPLATES, LTX2_3_AUTO_COMPRESSION_SUBMODELS
 from optimum.intel import (  # noqa
     OVFlux2KleinPipeline,
     OVFluxFillPipeline,
@@ -77,6 +78,7 @@ from optimum.intel.openvino.configuration import (
     _DEFAULT_8BIT_WQ_CONFIGS,
     _DEFAULT_IGNORED_SCOPE_CONFIGS,
     _DEFAULT_INT8_FQ_CONFIGS,
+    get_default_quantization_config,
 )
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
@@ -1201,6 +1203,49 @@ class OVCLIExportTestCase(unittest.TestCase):
             if model_type in REMOTE_CODE_MODELS:
                 model_kwargs["trust_remote_code"] = True
             self._load_exported_ov_model(model_type, task, tmpdir, model_kwargs)
+
+    def _check_ltx2_3_int8_only_transformer_and_text_encoder(self, model):
+        compressed = LTX2_3_AUTO_COMPRESSION_SUBMODELS
+        expected_int8 = {
+            name: {"int8": _ARCHITECTURES_TO_EXPECTED_INT8["ltx2.3"][name] if name in compressed else 0}
+            for name in model.ov_models
+        }
+        check_compression_state_per_model(self, model.ov_models, expected_int8, check_kv_cache_precision=False)
+
+    @parameterized.expand([("text-to-video",), ("image-to-video",)])
+    def test_ltx2_3_auto_int8_only_transformer_and_text_encoder(self, task: str):
+        # Tiny test models never reach the 1B-parameter threshold: lower it to exercise the automatic path.
+        with TemporaryDirectory() as tmpdir, patch("optimum.exporters.openvino.__main__._MAX_UNCOMPRESSED_SIZE", 0):
+            main_export(model_name_or_path=MODEL_NAMES["ltx2.3"], task=task, output=tmpdir)
+            model = self._load_exported_ov_model("ltx2.3", task, tmpdir, {})
+            self._check_ltx2_3_int8_only_transformer_and_text_encoder(model)
+
+    @parameterized.expand([("text-to-video",), ("image-to-video",)])
+    def test_exporters_cli_ltx2_3_int8_default_config(self, task: str):
+        with TemporaryDirectory() as tmpdir:
+            # A diffusers pipeline has no root config.json to carry `_name_or_path`, so the default config
+            # registry can only match a local copy by its folder name.
+            model_dir = Path(tmpdir) / "LTX-2.3-Diffusers"
+            snapshot_download(MODEL_NAMES["ltx2.3"], local_dir=model_dir)
+            output = Path(tmpdir) / "ov_model"
+            subprocess.run(
+                f"optimum-cli export openvino --model {model_dir} --task {task} --weight-format int8 {output}",
+                shell=True,
+                check=True,
+            )
+            model = self._load_exported_ov_model("ltx2.3", task, str(output), {})
+            self._check_ltx2_3_int8_only_transformer_and_text_encoder(model)
+
+    def test_ltx2_3_int8_default_config_matches_auto_compression_submodels(self):
+        # Explicit `--weight-format int8` and the automatic path must compress the same LTX-2.3 submodels.
+        for model_id_or_path in (
+            "diffusers/LTX-2.3-Diffusers",
+            "diffusers/LTX-2.3-Distilled-Diffusers",
+            "/local/models/LTX-2.3-Diffusers",
+        ):
+            config = get_default_quantization_config(model_id_or_path, weight_format="int8")
+            self.assertEqual(set(config["quantization_configs"]), LTX2_3_AUTO_COMPRESSION_SUBMODELS)
+            self.assertNotIn("default_config", config)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, name_func=_task_and_model_type_name)
     def test_exporters_cli_int8(self, task: str, model_type: str):
