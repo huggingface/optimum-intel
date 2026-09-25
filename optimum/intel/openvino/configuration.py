@@ -581,9 +581,6 @@ _DEFAULT_8BIT_WQ_CONFIGS = {
         },
     },
 }
-_DEFAULT_8BIT_WQ_CONFIGS["diffusers/LTX-2.3-Distilled-Diffusers"] = copy.deepcopy(
-    _DEFAULT_8BIT_WQ_CONFIGS["diffusers/LTX-2.3-Diffusers"]
-)
 
 # Add configs for model id aliases
 # The list below contains pairs of model ids: config for the second model id will be copied from the first model id.

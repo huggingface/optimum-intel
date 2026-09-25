@@ -42,6 +42,7 @@ from transformers.utils.quantization_config import QuantizationMethod
 from optimum.intel import (
     OVConfig,
     OVFluxPipeline,
+    OVLTX2Pipeline,
     OVLatentConsistencyModelPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
@@ -74,6 +75,7 @@ from optimum.intel.openvino.configuration import (
     OVQuantizationConfigBase,
     _DEFAULT_4BIT_WQ_CONFIGS,
     _DEFAULT_4BIT_WQ_CONFIG,
+    _DEFAULT_8BIT_WQ_CONFIGS,
     _quantization_config_from_dict,
     _GPTOSSQuantizationConfig,
 )
@@ -1242,6 +1244,20 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "vae_decoder": {},
                 "vae_encoder": {},
                 "text_encoder": {},
+            },
+        ),
+        (
+            OVLTX2Pipeline,
+            "ltx2.3",
+            8,
+            _DEFAULT_8BIT_WQ_CONFIGS["diffusers/LTX-2.3-Diffusers"],
+            {
+                "transformer": {"int8": 124},
+                "text_encoder": {"int8": 30},
+                "connectors": {},
+                "vae_decoder": {},
+                "audio_vae_decoder": {},
+                "vocoder": {},
             },
         ),
         (
