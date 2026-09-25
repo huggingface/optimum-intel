@@ -70,6 +70,10 @@ from utils_tests import (
 from optimum.intel import (
     OVDiffusionPipeline,
     OVFluxPipeline,
+    OVGuardConfig,
+    OVGuardReport,
+    OVGuardVerdict,
+    OVGuardViolationError,
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
     OVModelForAudioXVector,
@@ -1032,6 +1036,134 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         self.assertIn("Got unexpected inputs: ", str(context.exception))
         del model
         gc.collect()
+
+
+class OVModelForGuardIntegrationTest(unittest.TestCase):
+    """Tests the multi-head token-classification branch of `OVModelForTokenClassification` used by
+    guard models such as Qwen3Guard-Stream, and the `optimum.intel.OVGuardConfig`/`OVGuardReport`
+    building blocks. The `generate(guard_model=...)` integration itself is tested in
+    `test_decoder.py`."""
+
+    def _load(self, with_past: bool):
+        model_id = MODEL_NAMES["qwen3_guard"]
+        kwargs = {"task": "token-classification-with-past"} if with_past else {}
+        return OVModelForTokenClassification.from_pretrained(
+            model_id, export=True, trust_remote_code=True, device=OPENVINO_DEVICE, **kwargs
+        )
+
+    def test_stateless_moderate(self):
+        set_seed(SEED)
+        model = self._load(with_past=False)
+        self.assertFalse(model.stateful)
+        self.assertEqual(
+            model.head_names,
+            ("risk_level_logits", "category_logits", "query_risk_level_logits", "query_category_logits"),
+        )
+
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 5))
+        for role in ("user", "assistant"):
+            verdicts = model.moderate(input_ids, role=role)
+            self.assertEqual(len(verdicts), 2)
+            for sequence_verdicts in verdicts:
+                self.assertEqual(len(sequence_verdicts), 5)
+                for token_index, verdict in enumerate(sequence_verdicts):
+                    self.assertIsInstance(verdict, OVGuardVerdict)
+                    self.assertEqual(verdict.role, role)
+                    self.assertEqual(verdict.token_index, token_index)
+                    self.assertIsInstance(verdict.flagged, bool)
+                    self.assertIn(verdict.risk_level, {"Safe", "Unsafe", "Controversial"})
+
+        with self.assertRaises(ValueError):
+            model.moderate_stream(input_ids)
+
+        del model
+        gc.collect()
+
+    def test_moderate_rejects_unknown_blocking_label(self):
+        model = self._load(with_past=False)
+        with self.assertRaises(ValueError):
+            model.moderate(torch.randint(0, model.config.vocab_size, (1, 3)), blocking_labels=["NotALabel"])
+        del model
+        gc.collect()
+
+    def test_non_guard_architecture_rejects_moderate(self):
+        model = OVModelForTokenClassification.from_pretrained(MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
+        with self.assertRaises(ValueError):
+            model.moderate(torch.randint(0, 100, (1, 3)))
+        del model
+        gc.collect()
+
+    def test_stateful_reset_stream_matches_fresh_state(self):
+        set_seed(SEED)
+        model = self._load(with_past=True)
+        self.assertTrue(model.stateful)
+
+        input_ids = torch.randint(0, model.config.vocab_size, (1, 4))
+        continuation = torch.randint(0, model.config.vocab_size, (1, 2))
+
+        first = model.moderate(input_ids, role="user")
+        model.moderate_stream(continuation, role="assistant", token_offset=input_ids.shape[-1])
+
+        model.reset_stream()
+        second = model.moderate(input_ids, role="user")
+
+        self.assertEqual(
+            [(v.risk_level, v.category) for v in first[0]], [(v.risk_level, v.category) for v in second[0]]
+        )
+        del model
+        gc.collect()
+
+
+class OVGuardConfigAndReportTest(unittest.TestCase):
+    """Unit tests for the model-independent pieces of `optimum.intel.openvino.generation_guard`."""
+
+    def test_default_config_is_valid(self):
+        config = OVGuardConfig()
+        self.assertEqual(config.chunk_size, 1)
+        self.assertEqual(config.prompt_mode, "async")
+        self.assertEqual(config.on_violation, "stop")
+        self.assertTrue(config.emit_before_check)
+
+    def test_config_rejects_invalid_values(self):
+        with self.assertRaises(ValueError):
+            OVGuardConfig(chunk_size=0)
+        with self.assertRaises(ValueError):
+            OVGuardConfig(prompt_mode="invalid")
+        with self.assertRaises(ValueError):
+            OVGuardConfig(on_violation="invalid")
+
+    def _make_verdict(self, flagged: bool, role: str = "assistant", token_index: int = 0) -> OVGuardVerdict:
+        return OVGuardVerdict(
+            role=role,
+            batch_index=0,
+            token_index=token_index,
+            risk_level="Unsafe" if flagged else "Safe",
+            risk_probability=0.9,
+            category="Violent",
+            category_probability=0.8,
+            flagged=flagged,
+        )
+
+    def test_report_flagged_and_first_violation(self):
+        clean = OVGuardReport(prompt=[self._make_verdict(False)], response=[])
+        self.assertFalse(clean.flagged)
+        self.assertIsNone(clean.first_violation)
+
+        violation = self._make_verdict(True, token_index=3)
+        flagged = OVGuardReport(prompt=[self._make_verdict(False)], response=[violation])
+        self.assertTrue(flagged.flagged)
+        self.assertIs(flagged.first_violation, violation)
+        self.assertEqual(flagged.verdicts, [*flagged.prompt, *flagged.response])
+
+    def test_violation_error_message_contains_verdict_details(self):
+        violation = self._make_verdict(True, role="assistant", token_index=2)
+        report = OVGuardReport(prompt=[], response=[violation])
+        error = OVGuardViolationError(report)
+        self.assertIs(error.report, report)
+        message = str(error)
+        self.assertIn("role=assistant", message)
+        self.assertIn("Unsafe", message)
+        self.assertIn("Violent", message)
 
 
 class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):

@@ -13,8 +13,9 @@
 #  limitations under the License.
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
+from typing import Dict, Optional, Sequence, Union
 
 import numpy as np
 import openvino
@@ -51,8 +52,19 @@ from transformers.modeling_outputs import (
 )
 from transformers.models.clip.modeling_clip import CLIPOutput
 
+from optimum.exporters.openvino.stateful import model_has_state
+from optimum.exporters.openvino.utils import get_multi_head_token_classification_spec
+
 from ..utils.import_utils import is_timm_available, is_timm_version
 from .configuration import OVQuantizationConfigBase
+from .generation_guard import (
+    GUARD_ARCHITECTURES,
+    decode_guard_logits,
+    get_guard_architecture_spec,
+    resolve_blocking_labels,
+    resolve_label_maps,
+    to_long_tensor,
+)
 from .modeling_base import OVBaseModel
 from .modeling_sam import OVSamModel
 from .utils import (
@@ -282,6 +294,25 @@ TOKEN_CLASSIFICATION_EXAMPLE = r"""
 """
 
 
+@dataclass
+class OVMultiHeadTokenClassifierOutput:
+    """Output of a token classifier exposing several classification heads.
+
+    `ModelOutput` is deliberately not used here: it flattens a leading dictionary field into itself,
+    which would hide the head names behind the generic output keys.
+
+    Args:
+        logits (`Dict[str, torch.Tensor]`):
+            Per-token logits of every head, keyed by head name, each of shape
+            `(batch_size, sequence_length, num_labels)`.
+    """
+
+    logits: Dict[str, torch.Tensor]
+
+    def __getitem__(self, key: str) -> torch.Tensor:
+        return self.logits[key]
+
+
 @add_start_docstrings(
     """
     OpenVINO Model with a TokenClassifierOutput for token classification tasks.
@@ -293,7 +324,43 @@ class OVModelForTokenClassification(OVModel):
     auto_model_class = AutoModelForTokenClassification
 
     def __init__(self, model=None, config=None, **kwargs):
+        # Architectures with several per-token heads, such as guard models, do not fit the single
+        # `logits` output of a regular token classifier and are handled separately.
+        self._head_spec = get_multi_head_token_classification_spec(config)
+        self.stateful = self._head_spec is not None and model_has_state(model)
+        if self.stateful:
+            # The generic dynamic reshape cannot handle the rank-1 `beam_idx` input of a stateful IR.
+            kwargs["dynamic_shapes"] = False
         super().__init__(model, config, **kwargs)
+        self._past_length = 0
+        if self.stateful and self._compile_only:
+            self.request = self.model.create_infer_request()
+
+    @property
+    def head_names(self) -> Optional[tuple]:
+        """Names of the per-token classification heads, or `None` for a regular token classifier."""
+        return None if self._head_spec is None else self._head_spec.head_names
+
+    def compile(self):
+        if not self.stateful:
+            return super().compile()
+        if self.request is None:
+            logger.info(f"Compiling the model to {self._device} ...")
+            compiled_model = self._compile_model(self.model, self._device, {**self.ov_config}, self.model_save_dir)
+            # A stateful model keeps its KV cache inside the inference request, so a single request
+            # has to be reused across calls instead of being recreated per inference.
+            self.request = compiled_model.create_infer_request()
+
+    def _inference(self, inputs):
+        if not self.stateful:
+            return super()._inference(inputs)
+        return self.request.infer(inputs)
+
+    def reset_stream(self):
+        """Clears the KV cache of a streaming token classifier, starting a new sequence."""
+        if self.stateful and self.request is not None:
+            self.request.reset_state()
+        self._past_length = 0
 
     @add_start_docstrings_to_model_forward(
         INPUTS_DOCSTRING.format("batch_size, sequence_length")
@@ -308,8 +375,12 @@ class OVModelForTokenClassification(OVModel):
         input_ids: Union[torch.Tensor, np.ndarray],
         attention_mask: Union[torch.Tensor, np.ndarray],
         token_type_ids: Optional[Union[torch.Tensor, np.ndarray]] = None,
+        position_ids: Optional[Union[torch.Tensor, np.ndarray]] = None,
         **kwargs,
     ):
+        if self._head_spec is not None:
+            return self._multi_head_forward(input_ids, attention_mask, position_ids)
+
         self.compile()
 
         np_inputs = isinstance(input_ids, np.ndarray)
@@ -330,6 +401,116 @@ class OVModelForTokenClassification(OVModel):
         outputs = self._inference(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return TokenClassifierOutput(logits=logits)
+
+    def _multi_head_forward(self, input_ids, attention_mask, position_ids=None):
+        self.compile()
+
+        np_inputs = isinstance(input_ids, np.ndarray)
+        input_ids = ensure_numpy(input_ids)
+        batch_size, sequence_length = input_ids.shape
+        past_length = self._past_length if self.stateful else 0
+
+        if attention_mask is None:
+            attention_mask = np.ones((batch_size, past_length + sequence_length), dtype=np.int64)
+        else:
+            attention_mask = ensure_numpy(attention_mask)
+
+        if position_ids is None:
+            # Derived from the mask rather than from a plain range so that left-padded batches keep
+            # the padding out of the positions.
+            position_ids = np.clip(np.cumsum(attention_mask, axis=-1) - 1, 0, None)
+            position_ids = position_ids[:, -sequence_length:].astype(np.int64)
+        else:
+            position_ids = ensure_numpy(position_ids)
+
+        inputs = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "position_ids": position_ids,
+        }
+        if "beam_idx" in self.input_names:
+            inputs["beam_idx"] = np.arange(batch_size, dtype=np.int32)
+
+        outputs = self._inference(inputs)
+        # An inference request returns tensors that alias its own memory and are overwritten by the
+        # next inference, so the head logits have to be copied out.
+        logits = {name: np.array(outputs[self.output_names[name]], copy=True) for name in self.head_names}
+        if not np_inputs:
+            logits = {name: torch.from_numpy(value).to(self.device) for name, value in logits.items()}
+
+        if self.stateful:
+            self._past_length += sequence_length
+        return OVMultiHeadTokenClassifierOutput(logits=logits)
+
+    def moderate(
+        self,
+        input_ids,
+        attention_mask=None,
+        role: str = "user",
+        blocking_labels: Optional[Sequence[str]] = None,
+        token_offset: int = 0,
+    ):
+        """Classifies the risk of every token of `input_ids` with a guard model.
+
+        This does not reset the guard state, so calling it repeatedly on a stateful guard model
+        moderates a conversation incrementally: pass the full prompt first, then only the new tokens.
+        Use [`~OVModelForTokenClassification.reset_stream`] to start over.
+
+        Args:
+            input_ids (`torch.Tensor` or `np.ndarray` or `List[int]`):
+                Token ids to moderate, of shape `(batch_size, sequence_length)` or `(sequence_length,)`.
+            attention_mask (`torch.Tensor` or `np.ndarray`, *optional*):
+                Attention mask spanning the tokens already moderated plus `input_ids`. Defaults to
+                attending to everything.
+            role (`str`, defaults to `"user"`):
+                Conversation role of `input_ids`, either `"user"` or `"assistant"`. Guard models use
+                different heads for the two.
+            blocking_labels (`Sequence[str]`, *optional*):
+                Risk levels that count as a violation. Defaults to those declared for the architecture.
+            token_offset (`int`, defaults to 0):
+                Value added to the reported token positions, to keep them absolute when moderating
+                incrementally.
+
+        Returns:
+            `List[List[OVGuardVerdict]]`: Per-token verdicts, for every sequence in the batch.
+        """
+        spec = get_guard_architecture_spec(self.config)
+        if spec is None:
+            raise ValueError(
+                f"{self.__class__.__name__} was loaded from an architecture that does not support moderation. "
+                f"Supported guard architectures are {sorted(GUARD_ARCHITECTURES)}."
+            )
+
+        input_ids = to_long_tensor(input_ids)
+        outputs = self._multi_head_forward(input_ids, attention_mask)
+        return decode_guard_logits(
+            outputs.logits,
+            role=role,
+            spec=spec,
+            label_maps=resolve_label_maps(self.config, spec),
+            blocking_labels=resolve_blocking_labels(self.config, spec, blocking_labels),
+            token_offset=token_offset,
+        )
+
+    def moderate_stream(
+        self,
+        token_ids,
+        role: str = "assistant",
+        blocking_labels: Optional[Sequence[str]] = None,
+        token_offset: int = 0,
+    ):
+        """Moderates the next tokens of a conversation already started with `moderate`.
+
+        Equivalent to [`~OVModelForTokenClassification.moderate`], and only meaningful for a guard
+        model exported with the `token-classification-with-past` task, whose KV cache holds the
+        tokens moderated so far.
+        """
+        if not self.stateful:
+            raise ValueError(
+                "`moderate_stream` requires a guard model with a KV cache. Export the model with the "
+                "`token-classification-with-past` task, or use `moderate` to re-scan the whole sequence."
+            )
+        return self.moderate(token_ids, role=role, blocking_labels=blocking_labels, token_offset=token_offset)
 
 
 FEATURE_EXTRACTION_EXAMPLE = r"""

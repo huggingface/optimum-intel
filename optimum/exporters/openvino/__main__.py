@@ -51,6 +51,7 @@ from .utils import (
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     clear_class_registry,
     deduce_diffusers_dtype,
+    get_multi_head_token_classification_spec,
     is_auto_compression_disabled,
     keep_mixed_precision_parameters,
     load_preprocessors,
@@ -657,6 +658,13 @@ def main_export(
                 has_remote_code = hasattr(config, "auto_map")
                 if has_remote_code and trust_remote_code and task == "image-text-to-text":
                     task_model_loading = "text-generation"
+                elif (
+                    has_remote_code
+                    and trust_remote_code
+                    and task.startswith("token-classification")
+                    and (multi_head_spec := get_multi_head_token_classification_spec(config)) is not None
+                ):
+                    task_model_loading = multi_head_spec.loading_task
 
             model = TasksManager.get_model_from_task(
                 task_model_loading,

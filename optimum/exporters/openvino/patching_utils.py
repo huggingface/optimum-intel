@@ -344,6 +344,11 @@ class ModelPatcher:
 
             outputs = self.orig_forward(*args, **kwargs)
 
+            if dataclasses.is_dataclass(outputs) and not isinstance(outputs, dict):
+                # Some remote-code models return a plain dataclass rather than a ModelOutput, which
+                # torch.jit cannot trace through.
+                outputs = {field.name: getattr(outputs, field.name) for field in dataclasses.fields(outputs)}
+
             # This code block handles different cases of the filtered_outputs input to align it with the expected
             # format of outputs. It is common for the output type of a model to vary, such as tensor, list,
             # tuple, etc. For Transformers models, the output is encapsulated in a ModelOutput object that

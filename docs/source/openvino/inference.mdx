@@ -182,3 +182,48 @@ If not specified, `load_in_8bit` will be set to `True` by default when models la
 </Tip>
 
 It's also possible to apply quantization on both weights and activations using the [`OVQuantizer`](optimization#static-quantization).
+
+## Guarded text generation
+
+`OVModelForCausalLM.generate` accepts a `guard_model` argument to moderate the prompt and the generated tokens with a streaming guard model, such as [`Qwen/Qwen3Guard-Stream-0.6B`](https://huggingface.co/Qwen/Qwen3Guard-Stream-0.6B). The guard model must be loaded as an [`OVModelForTokenClassification`](reference#ovmodelfortokenclassification) and share the tokenizer of the guarded model.
+
+```python
+from transformers import AutoTokenizer
+from optimum.intel import OVModelForCausalLM, OVModelForTokenClassification, OVGuardConfig, OVGuardViolationError
+
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
+model = OVModelForCausalLM.from_pretrained("Qwen/Qwen3-0.6B", export=True)
+guard = OVModelForTokenClassification.from_pretrained(
+    "Qwen/Qwen3Guard-Stream-0.6B", export=True, trust_remote_code=True, task="token-classification-with-past"
+)
+
+inputs = tokenizer.apply_chat_template(
+    [{"role": "user", "content": "Write a short poem about the sea."}],
+    add_generation_prompt=True,
+    return_tensors="pt",
+)
+
+try:
+    output = model.generate(
+        inputs,
+        max_new_tokens=128,
+        guard_model=guard,
+        guard_config=OVGuardConfig(chunk_size=4),
+        return_dict_in_generate=True,
+    )
+except OVGuardViolationError as error:
+    print(error)
+else:
+    print(tokenizer.decode(output.sequences[0, inputs.shape[-1] :], skip_special_tokens=True))
+    print(output.guard)  # an `OVGuardReport` with the prompt and response verdicts
+```
+
+Generation stops as soon as the guard model flags the prompt or a generated chunk, unless `OVGuardConfig.on_violation` says otherwise:
+
+* `"stop"` (default) ends generation at the flagged chunk.
+* `"raise"` raises `OVGuardViolationError` instead.
+* `"continue"` only records the verdict and lets generation run to completion.
+
+`OVGuardConfig.prompt_mode` controls when the prompt is moderated: `"async"` (default) moderates it on a background thread while the first forward pass of the guarded model runs, so time to first token is not penalized; `"sync"` moderates it before generation starts; `"off"` skips prompt moderation entirely. `OVGuardConfig.chunk_size` batches that many newly generated tokens into a single guard forward pass, trading detection latency for throughput.
+
+See the [reference documentation](reference#ovguardconfig) for the full list of `OVGuardConfig` options, and [`generate`](reference#ovmodelforcausallm) for how the verdicts are reported through `OVGuardConfig.on_verdict`, `OVGuardViolationError`, and the `guard` field of the output.

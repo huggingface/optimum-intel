@@ -194,6 +194,50 @@ def _create_tiny_mistral3_model():
     return str(output_dir)
 
 
+def _create_tiny_qwen3_guard_model():
+    """Generate a tiny random Qwen3Guard-Stream model for testing and return its local path.
+
+    Config and remote code are fetched from the Hub with `trust_remote_code=True`, only the weights
+    are randomly re-initialized. Result is cached on disk under the system temp dir, so subsequent
+    calls are cheap. Kept at the real `vocab_size` (151936), matching `MODEL_NAMES["qwen3"]`, so the
+    two can be paired in `generate(guard_model=...)` tests.
+    """
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_qwen3_guard"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+    if config_file.exists() and weights_file.exists():
+        return str(output_dir)
+
+    from transformers import AutoConfig, AutoModel
+
+    model_id = "Qwen/Qwen3Guard-Stream-0.6B"
+
+    torch.manual_seed(SEED)
+
+    config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+    config.hidden_size = 32
+    config.intermediate_size = 128
+    config.guard_inner_size = 32
+    config.num_hidden_layers = 2
+    config.num_attention_heads = 2
+    config.num_key_value_heads = 2
+    config.head_dim = 8
+    config.max_window_layers = config.num_hidden_layers
+    config.layer_types = ["full_attention"] * config.num_hidden_layers
+    config.torch_dtype = "float32"
+    config.dtype = "float32"
+
+    model = AutoModel.from_config(config, trust_remote_code=True).float().eval()
+    # `save_pretrained` only copies the remote-code file(s) into `output_dir` when the model class
+    # is registered for the auto class it was loaded from.
+    model.__class__.register_for_auto_class("AutoModel")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(output_dir, safe_serialization=True)
+
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -370,6 +414,7 @@ HUB_MODEL_NAMES = {
     "qwen3_asr": "optimum-intel-internal-testing/tiny-random-qwen3-asr",
     "qwen3_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
     "qwen3_deepspec_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-deepspec-dflash",
+    "qwen3_guard": _create_tiny_qwen3_guard_model(),
     "fun_asr": "optimum-intel-internal-testing/tiny-random-fun-asr",
     "rembert": "optimum-intel-internal-testing/tiny-random-rembert",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",
@@ -813,6 +858,7 @@ REMOTE_CODE_MODELS = (
     "qwen3_asr",
     "fun_asr",
     "videochat_flash_qwen",
+    "qwen3_guard",
 )
 
 if is_transformers_version("<", "5"):

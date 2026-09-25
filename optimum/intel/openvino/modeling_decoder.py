@@ -52,6 +52,13 @@ from .configuration import (
     OVQuantizationConfigBase,
     OVWeightQuantizationConfig,
 )
+from .generation_guard import (
+    OVGuardConfig,
+    OVGuardedStreamer,
+    OVGuardSession,
+    OVGuardStoppingCriteria,
+    check_guard_compatibility,
+)
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import (
     ONNX_WEIGHTS_NAME,
@@ -768,8 +775,28 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         streamer: Optional["BaseStreamer"] = None,
         negative_prompt_ids: Optional[torch.Tensor] = None,
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
+        guard_model: Optional["PreTrainedModel"] = None,
+        guard_config: Optional[OVGuardConfig] = None,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
+        """Generates sequences, optionally moderated by a guard model.
+
+        Accepts the same arguments as `transformers.GenerationMixin.generate`, plus:
+
+        Args:
+            guard_model (`PreTrainedModel`, *optional*):
+                A guard model classifying the risk of the prompt and of the generated tokens, for
+                example an `OVModelForTokenClassification` loaded from `Qwen/Qwen3Guard-Stream-0.6B`.
+                It must share the tokenizer of this model. Generation stops as soon as content is
+                flagged, unless `guard_config` says otherwise.
+            guard_config (`OVGuardConfig`, *optional*):
+                Moderation settings, such as how many tokens are moderated at once and what happens
+                on a violation. Defaults to `OVGuardConfig()`.
+
+        The verdicts of the guard model are reported through `OVGuardConfig.on_verdict`, raised
+        inside `OVGuardViolationError` when `on_violation="raise"`, and returned as the `guard`
+        field of the output when `return_dict_in_generate=True`.
+        """
         _generation_config, _ = self._prepare_generation_config(generation_config, **kwargs)
         generation_mode = _generation_config.get_generation_mode(assistant_model)
 
@@ -781,19 +808,47 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         ]
         if is_beam_search:
             self._first_iter_beam_search = True
-        result = super().generate(
-            inputs,
-            generation_config,
-            logits_processor,
-            stopping_criteria,
-            prefix_allowed_tokens_fn,
-            synced_gpus,
-            assistant_model,
-            streamer,
-            negative_prompt_ids,
-            negative_prompt_attention_mask,
-            **kwargs,
-        )
+
+        guard_session = None
+        if guard_model is not None:
+            check_guard_compatibility(self.config, guard_model.config)
+            # Beam search reorders the running sequences, which invalidates an incrementally built
+            # guard KV cache, so the guard re-scans the whole sequence on every chunk instead.
+            guard_session = OVGuardSession(guard_model, guard_config, incremental=not is_beam_search)
+            input_ids = inputs if inputs is not None else kwargs.get("input_ids")
+            if input_ids is None:
+                raise ValueError("`guard_model` requires `input_ids` to be passed to `generate`.")
+            guard_session.start(input_ids, kwargs.get("attention_mask"))
+            stopping_criteria = StoppingCriteriaList(stopping_criteria or [])
+            stopping_criteria.append(OVGuardStoppingCriteria(guard_session))
+            if not guard_session.config.emit_before_check:
+                streamer = OVGuardedStreamer(streamer, guard_session) if streamer is not None else streamer
+
+        try:
+            result = super().generate(
+                inputs,
+                generation_config,
+                logits_processor,
+                stopping_criteria,
+                prefix_allowed_tokens_fn,
+                synced_gpus,
+                assistant_model,
+                streamer,
+                negative_prompt_ids,
+                negative_prompt_attention_mask,
+                **kwargs,
+            )
+        finally:
+            if guard_session is not None:
+                guard_session.close()
+
+        if guard_session is not None:
+            sequences = result.sequences if isinstance(result, ModelOutput) else result
+            # The stopping criteria only runs on whole chunks, so a generation that ends for another
+            # reason can leave a partial chunk unmoderated.
+            guard_session.flush(sequences)
+            if isinstance(result, ModelOutput):
+                result.guard = guard_session.report
         return result
 
     def _get_past_length(self, past_key_values=None):
