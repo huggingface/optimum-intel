@@ -574,6 +574,12 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
 
 _DEFAULT_8BIT_WQ_CONFIGS = {
     "Qwen/Qwen2.5-Coder-3B-Instruct": {"bits": 8, "sym": False, "dq_group_size": 128},
+    "diffusers/LTX-2.3-Diffusers": {
+        "quantization_configs": {
+            "transformer": {"bits": 8, "sym": False, "weight_only": True},
+            "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
+        },
+    },
 }
 
 # Add configs for model id aliases
