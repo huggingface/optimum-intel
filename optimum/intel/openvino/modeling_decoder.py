@@ -76,6 +76,12 @@ logger = logging.getLogger(__name__)
 core = Core()
 
 
+# Decoder model types whose greedy decoding diverges with the default FP16 activation precision used on some
+# devices (e.g. GPU). Forcing `INFERENCE_PRECISION_HINT=f32` governs activations only and stays compatible with
+# INT4/INT8 weight compression.
+_MODEL_TYPES_REQUIRING_FP32_INFERENCE = {"hunyuan_v1_dense"}
+
+
 TEXT_GENERATION_EXAMPLE = r"""
     Example of text generation:
     ```python
@@ -261,6 +267,14 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
                 if self.is_dynamic and not self._compile_only:
                     self.model = self._reshape(self.model, -1, -1)
                 self.request = None
+
+    def _set_ov_config_parameters(self):
+        super()._set_ov_config_parameters()
+        if (
+            getattr(self.config, "model_type", None) in _MODEL_TYPES_REQUIRING_FP32_INFERENCE
+            and self.ov_config.get("INFERENCE_PRECISION_HINT") is None
+        ):
+            self.ov_config["INFERENCE_PRECISION_HINT"] = "f32"
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """

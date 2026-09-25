@@ -49,6 +49,11 @@ InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
 OV_XML_FILE_NAME = "openvino_model.xml"
 _MAX_UNCOMPRESSED_SIZE = 1e9
 
+# Decoder-only model types whose Hub metadata advertises a non text-generation pipeline tag (e.g. translation for
+# Hy-MT2), which makes the automatic task inference pick a wrong task. They are exported as stateful decoders unless
+# a task is explicitly requested.
+_MODEL_TYPES_WITH_DEFAULT_TEXT_GENERATION_TASK = {"hunyuan_v1_dense"}
+
 # Parameter names that LTX-2 stores in fp32 in an otherwise bf16 checkpoint: the AdaLN modulation
 # tables, which are the only F32 tensors upstream ships (194 of 3510 in LTX-2.0, 290 of 4186 in
 # LTX-2.3) and the source of ~96% of the exported transformer's error against fp32 PyTorch. Used by

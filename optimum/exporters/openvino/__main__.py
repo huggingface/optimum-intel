@@ -48,6 +48,7 @@ from optimum.intel.utils.modeling_utils import (
 
 from .utils import (
     _MAX_UNCOMPRESSED_SIZE,
+    _MODEL_TYPES_WITH_DEFAULT_TEXT_GENERATION_TASK,
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     clear_class_registry,
     deduce_diffusers_dtype,
@@ -171,6 +172,10 @@ def infer_task(
             model_type = config.export_model_type
         else:
             model_type = config.model_type
+
+        if original_task == "auto" and model_type in _MODEL_TYPES_WITH_DEFAULT_TEXT_GENERATION_TASK:
+            return "text-generation-with-past"
+
         custom_architecture = model_type not in TasksManager._SUPPORTED_MODEL_TYPE
         if not custom_architecture and task + "-with-past" in TasksManager.get_supported_tasks_for_model_type(
             model_type, exporter="openvino", library_name=library_name
