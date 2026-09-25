@@ -512,14 +512,19 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         if self.dflash:
             common_inputs = super().inputs
             common_inputs.pop("input_ids", None)
-            common_inputs["inputs_embeds"] = {0: "batch_size", 1: "block_size"}
-            common_inputs["hidden_states"] = {0: "batch_size", 1: "context_length"}
+            # all per-token inputs cover the new rows [context delta ; block]: inputs_embeds is read in the
+            # block rows and hidden_states in the context rows, as token_type_ids tells
+            common_inputs["inputs_embeds"] = {0: "batch_size", 1: "context_length + block_size"}
+            common_inputs["hidden_states"] = {0: "batch_size", 1: "context_length + block_size"}
             common_inputs["position_ids"] = {0: "batch_size", 1: "context_length + block_size"}
             if self.use_past_in_inputs:
                 mask_length = "past_sequence_length + context_length + block_size"
             else:
                 mask_length = "context_length + block_size"
             common_inputs["attention_mask"] = {0: "batch_size", 1: mask_length}
+            # 0 for context rows, 1 for the block, which attends bidirectionally; SDPAToPagedAttention
+            # forwards it to PagedAttentionExtension
+            common_inputs["token_type_ids"] = {0: "batch_size", 1: "context_length + block_size"}
             return common_inputs
         if self.task in ["feature-extraction"]:
             common_inputs = {
@@ -544,14 +549,20 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     def overwrite_shape_and_generate_input(
         self, dummy_input_gen: DummyInputGenerator, input_name: str, framework: str, input_shapes: dict
     ):
+        if self.dflash and input_name == "token_type_ids":
+            sequence_length = dummy_input_gen.sequence_length
+            batch_size = dummy_input_gen.batch_size
+            return torch.cat(
+                [
+                    torch.zeros((batch_size, sequence_length), dtype=torch.int64),
+                    torch.ones((batch_size, sequence_length + 1), dtype=torch.int64),
+                ],
+                dim=1,
+            )
         if self.dflash and input_name in {"inputs_embeds", "hidden_states", "position_ids", "attention_mask"}:
             sequence_length = dummy_input_gen.sequence_length
             block_length = sequence_length + 1
-            if input_name == "inputs_embeds":
-                dummy_input_gen.sequence_length = block_length
-            elif input_name == "hidden_states":
-                dummy_input_gen.sequence_length = sequence_length
-            elif input_name == "position_ids":
+            if input_name in {"inputs_embeds", "hidden_states", "position_ids"}:
                 dummy_input_gen.sequence_length = sequence_length + block_length
             else:
                 if self.use_past_in_inputs:

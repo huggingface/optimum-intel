@@ -384,6 +384,7 @@ def main_export(
     do_quant_patching = False
     patch_16bit = False
     loading_kwargs = model_loading_kwargs or {}
+    draft_model_class_name = None
     if variant is not None:
         loading_kwargs["variant"] = variant
     dtype = loading_kwargs.get("torch_dtype", None)
@@ -410,6 +411,9 @@ def main_export(
             draft_classes = _CUSTOM_DRAFT_MODEL_MAP.get(archs[0])
             if draft_classes is not None:
                 loading_kwargs["config"] = update_config_for_custom_draft_model(config, *draft_classes)
+                # config.auto_map is honored only with trust_remote_code=True, which also makes transformers
+                # check every import of model_patcher.py, so the draft class is instantiated directly instead
+                draft_model_class_name = draft_classes[1] if task.startswith("text-generation") else draft_classes[0]
 
         # mxfp4 quantized model will be dequantized to bf16
         if quant_method == "mxfp4" and is_transformers_version(">=", "4.55"):
@@ -657,21 +661,37 @@ def main_export(
                 if has_remote_code and trust_remote_code and task == "image-text-to-text":
                     task_model_loading = "text-generation"
 
-            model = TasksManager.get_model_from_task(
-                task_model_loading,
-                model_name_or_path,
-                subfolder=subfolder,
-                revision=revision,
-                cache_dir=cache_dir,
-                token=token,
-                local_files_only=local_files_only,
-                force_download=force_download,
-                trust_remote_code=trust_remote_code,
-                framework=framework,
-                device=device,
-                library_name=library_name,
-                **loading_kwargs,
-            )
+            if draft_model_class_name is not None:
+                from optimum.exporters.openvino import model_patcher
+
+                with torch.device(device or "cpu"):
+                    model = getattr(model_patcher, draft_model_class_name).from_pretrained(
+                        model_name_or_path,
+                        subfolder=subfolder,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        token=token,
+                        local_files_only=local_files_only,
+                        force_download=force_download,
+                        **loading_kwargs,
+                    )
+                TasksManager.standardize_model_attributes(model, library_name=library_name)
+            else:
+                model = TasksManager.get_model_from_task(
+                    task_model_loading,
+                    model_name_or_path,
+                    subfolder=subfolder,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    token=token,
+                    local_files_only=local_files_only,
+                    force_download=force_download,
+                    trust_remote_code=trust_remote_code,
+                    framework=framework,
+                    device=device,
+                    library_name=library_name,
+                    **loading_kwargs,
+                )
 
         if getattr(model, "dtype", None) in [torch.float16, torch.bfloat16]:
             patch_16bit = True
