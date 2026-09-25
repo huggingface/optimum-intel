@@ -18,8 +18,12 @@ env:
   UV_SYSTEM_PYTHON: true
   TRANSFORMERS_IS_CI: true
 
+permissions: {}
+
 jobs:
   build:
+    permissions:
+      contents: read
     runs-on: ubuntu-22.04
 
     steps:

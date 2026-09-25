@@ -22,8 +22,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
 
 env:
   RUN_SLOW: true
@@ -32,8 +30,12 @@ env:
   TRANSFORMERS_IS_CI: true
   HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
+permissions: {}
+
 jobs:
   build:
+    permissions:
+      contents: read
     if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') ||  (github.event_name == 'push') || contains( github.event.pull_request.labels.*.name, 'openvino-nightly') }}
     strategy:
       fail-fast: false
