@@ -15,6 +15,7 @@
 
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import openvino as ov
 import torch
@@ -34,6 +35,8 @@ from optimum.exporters.openvino import export_from_model, main_export
 from optimum.exporters.openvino.model_configs import (
     BertOpenVINOConfig,
     LTX2TextEncoderOpenVINOConfig,
+    LTXVaeDecoderOpenVINOConfig,
+    LTXVaeEncoderOpenVINOConfig,
     Qwen3OmniMoeConfigBehavior,
 )
 from optimum.exporters.openvino.model_patcher import LTX2TextEncoderPatcher
@@ -510,6 +513,45 @@ class LTX2ExportContractTest(unittest.TestCase):
         export_config = LTX2TextEncoderOpenVINOConfig(Gemma3Config())
         self.assertEqual(set(export_config.outputs), {"prompt_embeds"})
         self.assertIs(export_config._MODEL_PATCHER, LTX2TextEncoderPatcher)
+
+
+class LTXVideoExportContractTest(unittest.TestCase):
+    def test_vae_dummy_inputs_for_both_versions(self):
+        cases = [
+            (
+                SimpleNamespace(
+                    down_block_types=["LTXVideoDownBlock3D"] * 4,
+                    in_channels=3,
+                    latent_channels=128,
+                    patch_size=4,
+                    spatio_temporal_scaling=[True, True, True, False],
+                    timestep_conditioning=False,
+                ),
+                2,
+            ),
+            (
+                SimpleNamespace(
+                    down_block_types=["LTXVideo095DownBlock3D"] * 4,
+                    in_channels=3,
+                    latent_channels=128,
+                    spatial_compression_ratio=32,
+                    temporal_compression_ratio=8,
+                    timestep_conditioning=True,
+                ),
+                9,
+            ),
+        ]
+        for config, encoder_frames in cases:
+            encoder_inputs = LTXVaeEncoderOpenVINOConfig(config).generate_dummy_inputs(framework="pt")
+            decoder_config = LTXVaeDecoderOpenVINOConfig(config)
+            decoder_inputs = decoder_config.generate_dummy_inputs(framework="pt")
+            self.assertEqual(tuple(encoder_inputs["sample"].shape[2:]), (encoder_frames, 64, 64))
+            self.assertEqual(tuple(decoder_inputs["latent_sample"].shape[2:]), (2, 64, 64))
+            self.assertEqual("timestep" in decoder_inputs, config.timestep_conditioning)
+            if config.timestep_conditioning:
+                self.assertEqual(tuple(decoder_inputs["timestep"].shape), (2,))
+                self.assertEqual(decoder_inputs["timestep"].dtype, torch.float32)
+                self.assertEqual(decoder_config.inputs["timestep"], {0: "batch_size"})
 
 
 class CustomExportModelTest(unittest.TestCase):
