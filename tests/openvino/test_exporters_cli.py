@@ -41,7 +41,7 @@ from utils_tests import (
 )
 
 from optimum.exporters.openvino.__main__ import main_export
-from optimum.exporters.openvino.utils import COMPLEX_CHAT_TEMPLATES, LTX2_3_AUTO_COMPRESSION_SUBMODELS
+from optimum.exporters.openvino.utils import COMPLEX_CHAT_TEMPLATES
 from optimum.intel import (  # noqa
     OVFlux2KleinPipeline,
     OVFluxFillPipeline,
@@ -1204,8 +1204,9 @@ class OVCLIExportTestCase(unittest.TestCase):
                 model_kwargs["trust_remote_code"] = True
             self._load_exported_ov_model(model_type, task, tmpdir, model_kwargs)
 
-    def _check_ltx2_3_int8_only_transformer_and_text_encoder(self, model):
-        compressed = LTX2_3_AUTO_COMPRESSION_SUBMODELS
+    LTX2_3_INT8_SUBMODELS = frozenset({"transformer", "text_encoder"})
+
+    def _check_ltx2_3_int8_submodels(self, model, compressed):
         expected_int8 = {
             name: {"int8": _ARCHITECTURES_TO_EXPECTED_INT8["ltx2.3"][name] if name in compressed else 0}
             for name in model.ov_models
@@ -1213,12 +1214,13 @@ class OVCLIExportTestCase(unittest.TestCase):
         check_compression_state_per_model(self, model.ov_models, expected_int8, check_kv_cache_precision=False)
 
     @parameterized.expand([("text-to-video",), ("image-to-video",)])
-    def test_ltx2_3_auto_int8_only_transformer_and_text_encoder(self, task: str):
-        # Tiny test models never reach the 1B-parameter threshold: lower it to exercise the automatic path.
+    def test_ltx2_3_no_auto_int8_compression(self, task: str):
+        # LTX-2 is excluded from automatic int8 compression. Tiny test models never reach the 1B-parameter
+        # threshold, so lower it to check that the exclusion, not the model size, keeps the weights uncompressed.
         with TemporaryDirectory() as tmpdir, patch("optimum.exporters.openvino.__main__._MAX_UNCOMPRESSED_SIZE", 0):
             main_export(model_name_or_path=MODEL_NAMES["ltx2.3"], task=task, output=tmpdir)
             model = self._load_exported_ov_model("ltx2.3", task, tmpdir, {})
-            self._check_ltx2_3_int8_only_transformer_and_text_encoder(model)
+            self._check_ltx2_3_int8_submodels(model, compressed=())
 
     @parameterized.expand([("text-to-video",), ("image-to-video",)])
     def test_exporters_cli_ltx2_3_int8_default_config(self, task: str):
@@ -1234,17 +1236,17 @@ class OVCLIExportTestCase(unittest.TestCase):
                 check=True,
             )
             model = self._load_exported_ov_model("ltx2.3", task, str(output), {})
-            self._check_ltx2_3_int8_only_transformer_and_text_encoder(model)
+            self._check_ltx2_3_int8_submodels(model, compressed=self.LTX2_3_INT8_SUBMODELS)
 
-    def test_ltx2_3_int8_default_config_matches_auto_compression_submodels(self):
-        # Explicit `--weight-format int8` and the automatic path must compress the same LTX-2.3 submodels.
+    def test_ltx2_3_int8_default_config(self):
+        # `--weight-format int8` compresses only the transformer and the text encoder of LTX-2.3.
         for model_id_or_path in (
             "diffusers/LTX-2.3-Diffusers",
             "diffusers/LTX-2.3-Distilled-Diffusers",
             "/local/models/LTX-2.3-Diffusers",
         ):
             config = get_default_quantization_config(model_id_or_path, weight_format="int8")
-            self.assertEqual(set(config["quantization_configs"]), LTX2_3_AUTO_COMPRESSION_SUBMODELS)
+            self.assertEqual(set(config["quantization_configs"]), self.LTX2_3_INT8_SUBMODELS)
             self.assertNotIn("default_config", config)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, name_func=_task_and_model_type_name)

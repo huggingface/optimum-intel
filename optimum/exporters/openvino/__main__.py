@@ -20,7 +20,7 @@ import os
 import shutil
 from functools import reduce
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
@@ -51,7 +51,7 @@ from .utils import (
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     clear_class_registry,
     deduce_diffusers_dtype,
-    get_auto_compression_submodels,
+    is_auto_compression_disabled,
     keep_mixed_precision_parameters,
     load_preprocessors,
     patch_qwenvl_configs,
@@ -727,9 +727,9 @@ def main_export(
         if convert_tokenizer:
             maybe_convert_tokenizers(library_name, output, model, preprocessors, task=task)
 
-        # Evaluated before `del model`: the size-based quantization below is skipped or restricted to
-        # some submodels for some model types, and by the time it runs the object is gone.
-        auto_compression_submodels = get_auto_compression_submodels(model)
+        # Evaluated before `del model`: the size-based quantization below is skipped for some model
+        # types, and by the time it runs the object is gone.
+        skip_auto_compression = is_auto_compression_disabled(model)
 
         clear_class_registry()
         del model
@@ -738,7 +738,7 @@ def main_export(
         # TODO: Remove GPT-OSS workaround when possible
         quantization_config = None if ov_config is None else ov_config.quantization_config
         if not quantization_config or isinstance(quantization_config, _GPTOSSQuantizationConfig):
-            _apply_model_size_based_quantization(submodel_paths, ov_config, output, auto_compression_submodels)
+            _apply_model_size_based_quantization(submodel_paths, ov_config, output, skip_auto_compression)
     finally:
         # Unpatch modules after quantized model export
         if do_quant_patching:
@@ -958,29 +958,21 @@ def _apply_model_size_based_quantization(
     submodel_paths: List[str],
     ov_config: "OVConfig",
     output: Union[str, Path],
-    auto_compression_submodels: Optional[FrozenSet[str]] = None,
+    skip_auto_compression: bool = False,
 ):
     """
     Apply weight-only quantization to int8_asym to submodels larger than 1B parameters.
 
-    `auto_compression_submodels` (see `get_auto_compression_submodels`) narrows the automatic case.
-    None leaves every submodel eligible. An empty set leaves the model uncompressed: it is large
-    enough to always cross the threshold, but loses too much quality at int8 for that to be a silent
-    default. A non-empty set restricts compression to the submodels saved under those subfolder
-    names. An explicitly requested weight format is unaffected -- it does not reach this branch.
+    Models for which `is_auto_compression_disabled` holds are left uncompressed: they are large
+    enough to always cross the threshold, but lose too much quality at int8 for that to be a silent
+    default. An explicitly requested weight format is unaffected -- it does not reach this branch.
     """
-    restrict_to = auto_compression_submodels if ov_config is None else None
-    if restrict_to is not None and not restrict_to:
+    if skip_auto_compression and ov_config is None:
         logger.info(
             "Automatic int8 weight compression is skipped for this model. Export with "
             "`--weight-format int8` to compress the weights anyway."
         )
         return
-    if restrict_to:
-        logger.info(
-            f"Automatic int8 weight compression is restricted to the {', '.join(sorted(restrict_to))} "
-            "submodel(s) of this model; the other submodels are kept as exported."
-        )
 
     # TODO: Refactor the code below in the following way:
     #   1. Create a OVPipelineQuantizationConfig based on each submodel size
@@ -993,10 +985,6 @@ def _apply_model_size_based_quantization(
             raise RuntimeError(
                 f"An issue happened during export : {submodel_path.name} was not converted and saved as expected."
             )
-
-        # Checked after the export sanity check above, and before reading the (possibly large) IR.
-        if restrict_to and submodel_path.parent.name not in restrict_to:
-            continue
 
         submodel = core.read_model(submodel_path)
 
