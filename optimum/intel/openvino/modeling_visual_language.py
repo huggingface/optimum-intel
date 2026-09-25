@@ -1148,7 +1148,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         position_ids=None,
         image_bound=None,
         tgt_sizes=None,
-        temporal_ids=None,
         pixel_values_videos=None,
         image_grid_thw=None,
         video_grid_thw=None,
@@ -1165,6 +1164,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         audio_embed_sizes=None,
         audio_attention_mask=None,
         input_mode=None,
+        temporal_ids=None,
         **kwargs,
     ):
         if pixel_values is None:
