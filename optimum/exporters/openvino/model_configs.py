@@ -174,6 +174,7 @@ from optimum.exporters.openvino.model_patcher import (
     MiniCPM3Patcher,
     MiniCPMModelPatcher,
     MiniCPMV4_7LanguageModelPatcher,
+    MiniCPMV4_7VisionEmbeddingsModule,
     MiniCPMV4_7VisionEmbeddingsPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
@@ -3625,7 +3626,8 @@ class MiniCPMV4_7ConfigBehavior(str, enum.Enum):
 class MiniCPMV4_7OpenVINOConfig(BaseVLMOpenVINOConfig):
     """
     MiniCPM-V 4.7: a SigLIP-style vision tower with a ViT window-attention merger and an MLP merger, on top of a
-    Qwen3.5 (hybrid Gated DeltaNet + full attention) language model with canvas M-RoPE.
+    Qwen3.5 (hybrid Gated DeltaNet + full attention) language model with canvas M-RoPE. The language model is either
+    dense (`qwen3_5_text`) or MoE (`qwen3_5_moe_text`).
 
     Uses the native transformers implementation (no remote code). The vision graph encodes one crop at a time, see
     `MiniCPMV4_7VisionEmbeddingsPatcher`.
@@ -3689,9 +3691,12 @@ class MiniCPMV4_7OpenVINOConfig(BaseVLMOpenVINOConfig):
         if isinstance(behavior, str) and not isinstance(behavior, MiniCPMV4_7ConfigBehavior):
             behavior = MiniCPMV4_7ConfigBehavior(behavior)
 
+        # qwen3_5_text for the dense checkpoints, qwen3_5_moe_text for the MoE ones (e.g. MiniCPM-V-4.7-35B-A3B)
+        text_model_type = self._orig_config.text_config.model_type
+
         if behavior == MiniCPMV4_7ConfigBehavior.TEXT_EMBEDDINGS:
             return get_vlm_text_embeddings_config(
-                "qwen3_5_text",
+                text_model_type,
                 self._orig_config.text_config,
                 self.int_dtype,
                 self.float_dtype,
@@ -3701,7 +3706,7 @@ class MiniCPMV4_7OpenVINOConfig(BaseVLMOpenVINOConfig):
 
         if behavior == MiniCPMV4_7ConfigBehavior.LANGUAGE:
             return get_vlm_text_generation_config(
-                "qwen3_5_text",
+                text_model_type,
                 self._orig_config.text_config,
                 self.int_dtype,
                 self.float_dtype,
@@ -3731,7 +3736,7 @@ class MiniCPMV4_7OpenVINOConfig(BaseVLMOpenVINOConfig):
             return model
 
         if behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
-            return model.model
+            return MiniCPMV4_7VisionEmbeddingsModule(model)
 
         if behavior == MiniCPMV4_7ConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = model.model.language_model.embed_tokens

@@ -8234,11 +8234,17 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
         text_prompt = processor.apply_chat_template(
             [{"role": "user", "content": content}], tokenize=False, add_generation_prompt=True
         )
+        kwargs = {}
+        if video is not None and not isinstance(video, str):
+            # already decoded frames come without the fps / duration metadata the video processor samples frames
+            # with, so they are used as given
+            kwargs["do_sample_frames"] = False
         return processor(
             text=text_prompt,
             images=[image] if image is not None else None,
             videos=[video] if video is not None else None,
             return_tensors="pt",
+            **kwargs,
         )
 
 

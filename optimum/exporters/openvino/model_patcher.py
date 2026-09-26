@@ -10189,6 +10189,10 @@ class Gemma4UnifiedImageEmbeddingsModelPatcher(ModelPatcher):
 # Patches the MoE block with a vectorized implementation.
 # The vectorized form is required to ensure correct torch.jit tracing for this component.
 # Original implementation: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/lfm2_moe/modeling_lfm2_moe.py#L167
+# Marks a module as already patched, so OpenVINO's 16-bit tracing helper leaves its weights alone.
+_OV_16BIT_PATCH_ATTR = "_openvino_module_extension_patch_orig_forward"
+
+
 def lfm2_moe_experts_forward(
     self,
     hidden_states: torch.Tensor,
@@ -10211,18 +10215,95 @@ def lfm2_moe_experts_forward(
         num_experts, -1, hidden_dim
     )  # (num_experts, num_tokens, hidden_dim)
 
-    gate_proj, up_proj = self.gate_up_proj.chunk(2, dim=-2)
+    if hasattr(self, "ov_gate_linear"):
+        # 16-bit export, see `prepare_16bit_moe_experts`
+        gate = self.ov_gate_linear(hidden_states_expanded)
+        up = self.ov_up_linear(hidden_states_expanded)
+        next_states = self.act_fn(gate) * up
+        next_states = self.ov_down_linear(next_states)
+    else:
+        gate_proj, up_proj = self.gate_up_proj.chunk(2, dim=-2)
 
-    gate = torch.bmm(hidden_states_expanded, gate_proj.transpose(1, 2))
-    up = torch.bmm(hidden_states_expanded, up_proj.transpose(1, 2))
-    next_states = self.act_fn(gate) * up
-    next_states = torch.bmm(next_states, self.down_proj.transpose(1, 2))
+        gate = torch.bmm(hidden_states_expanded, gate_proj.transpose(1, 2))
+        up = torch.bmm(hidden_states_expanded, up_proj.transpose(1, 2))
+        next_states = self.act_fn(gate) * up
+        next_states = torch.bmm(next_states, self.down_proj.transpose(1, 2))
 
     next_states = next_states.view(num_experts, num_tokens, hidden_dim)
     next_states = next_states * dense_routing_weights.transpose(0, 1).view(num_experts, num_tokens)[..., None]
     next_states = next_states.sum(dim=0)
 
     return next_states
+
+
+class OVBatchedLinear16bit(nn.Module):
+    """
+    Batched `x @ weight^T` over experts, `weight` being a 16-bit `(num_experts, out_features, in_features)` tensor.
+
+    Converted by `OV_BATCHED_LINEAR_16BIT_EXTENSION` to OpenVINO's `ov_ext::linear`, i.e. a `MatMul(transpose_b=True)`
+    whose weight is the 16-bit constant behind a decompression `Convert`: the form OpenVINO fuses into its MoE
+    operations and compresses with NNCF. The weight is a parameter of the parent experts module and is only referenced
+    here (not registered), so that tracing reads it as a module attribute instead of copying it into the graph.
+    """
+
+    def __init__(self, weight: torch.Tensor):
+        super().__init__()
+        self.__dict__["weight_16bit"] = weight
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        return torch.bmm(hidden_states, self.weight_16bit.transpose(1, 2).to(hidden_states.dtype))
+
+
+def _ov_batched_linear_16bit_extension():
+    from openvino.frontend.pytorch import ModuleExtension
+
+    return ModuleExtension(
+        OVBatchedLinear16bit,
+        "ov_ext::linear",
+        convert=lambda module, target_op, hidden_states, *args, **kwargs: target_op(
+            hidden_states, module.weight_16bit, None
+        ),
+        evaluate=lambda module, hidden_states, *args, **kwargs: torch.zeros(
+            *hidden_states.shape[:-1], module.weight_16bit.shape[1], dtype=torch.float32
+        ),
+    )
+
+
+def prepare_16bit_moe_experts(experts: nn.Module) -> Dict[type, Any]:
+    """
+    Prepares 16-bit experts (`gate_up_proj` / `down_proj` 3D weights) for `lfm2_moe_experts_forward` in a 16-bit export
+    and returns the module extensions the export needs.
+
+    The plain `torch.bmm(x, weight.transpose(1, 2))` form does not survive a 16-bit export of the big MoE checkpoints:
+    - OpenVINO's 16-bit tracing helper casts the parameters of the modules it does not wrap to f32;
+    - its `ov_ext::bmm` converts the 16-bit weight to f32 behind the `chunk` / `transpose`, so the whole chain is
+      constant-folded into new f32 constants,
+    both doubling the size of the experts. Instead each projection goes through `OVBatchedLinear16bit`, which keeps the
+    weights as 16-bit constants in the checkpoint `(num_experts, out, in)` layout. Only the gate / up halves are copied,
+    to make them contiguous. Undo with `restore_16bit_moe_experts`.
+    """
+    gate_proj, up_proj = experts.gate_up_proj.detach().chunk(2, dim=-2)
+    experts.ov_gate_proj = nn.Parameter(gate_proj.contiguous(), requires_grad=False)
+    experts.ov_up_proj = nn.Parameter(up_proj.contiguous(), requires_grad=False)
+    experts.ov_gate_linear = OVBatchedLinear16bit(experts.ov_gate_proj)
+    experts.ov_up_linear = OVBatchedLinear16bit(experts.ov_up_proj)
+    experts.ov_down_linear = OVBatchedLinear16bit(experts.down_proj)
+    # OpenVINO's 16-bit helper skips the modules carrying this attribute and restores `forward` from it when unpatching
+    setattr(experts, _OV_16BIT_PATCH_ATTR, experts.forward)
+    return {OVBatchedLinear16bit: _ov_batched_linear_16bit_extension()}
+
+
+def restore_16bit_moe_experts(experts: nn.Module):
+    for name in (
+        "ov_gate_linear",
+        "ov_up_linear",
+        "ov_down_linear",
+        "ov_gate_proj",
+        "ov_up_proj",
+        _OV_16BIT_PATCH_ATTR,
+    ):
+        if hasattr(experts, name):
+            delattr(experts, name)
 
 
 class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
@@ -13055,11 +13136,13 @@ class _MiniCPMV4_7HybridCache:
 
 class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
     """
-    Exports the Qwen3.5 (hybrid Gated DeltaNet + full attention) language model of MiniCPM-V 4.7.
+    Exports the Qwen3.5 / Qwen3.5-MoE (hybrid Gated DeltaNet + full attention) language model of MiniCPM-V 4.7.
 
     The decoder layers are driven directly instead of through `Qwen3_5TextModel.forward`, so the traced graph does not
     depend on the transformers hybrid cache or mask utilities: the causal mask is built from `attention_mask` and the
-    past length, and the linear-attention blocks use the recurrent form shared with the Qwen3.5 export.
+    past length, and the linear-attention blocks use the recurrent form shared with the Qwen3.5 export. For the MoE
+    checkpoints the routed experts use the vectorized `torch.bmm` form of `lfm2_moe_experts_forward`, which OpenVINO
+    fuses into its internal MoE operations.
     """
 
     def __init__(
@@ -13124,6 +13207,9 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
                 hidden_states = residual + hidden_states
                 residual = hidden_states
                 hidden_states = decoder_layer.mlp(decoder_layer.post_attention_layernorm(hidden_states))
+                if isinstance(hidden_states, tuple):
+                    # MoE blocks may also return the router logits
+                    hidden_states = hidden_states[0]
                 hidden_states = residual + hidden_states
 
             hidden_states = text_model.norm(hidden_states)
@@ -13161,6 +13247,13 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
                 linear_attn.forward = types.MethodType(qwen3_5_gated_delta_net_forward, linear_attn)
                 linear_attn.recurrent_gated_delta_rule = patched_recurrent_gated_delta_rule
                 linear_attn.recurrent_attention_cell = RecurrentAttentionCell()
+            experts = getattr(decoder_layer.mlp, "experts", None)
+            if experts is not None:
+                # Qwen3_5MoeExperts has the same interface and weight layout as Lfm2MoeExperts
+                experts._orig_forward = experts.forward
+                if experts.gate_up_proj.dtype in (torch.float16, torch.bfloat16):
+                    self.module_extensions.update(prepare_16bit_moe_experts(experts))
+                experts.forward = types.MethodType(lfm2_moe_experts_forward, experts)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -13170,6 +13263,10 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
                 linear_attn = decoder_layer.linear_attn
                 linear_attn.forward = linear_attn._orig_forward
                 del linear_attn.recurrent_gated_delta_rule, linear_attn.recurrent_attention_cell
+            experts = getattr(decoder_layer.mlp, "experts", None)
+            if experts is not None:
+                experts.forward = experts._orig_forward
+                restore_16bit_moe_experts(experts)
 
 
 def _minicpmv4_7_vision_attention_forward(
@@ -13202,6 +13299,24 @@ def _minicpmv4_7_window_merger_forward(self, hidden_states, window_index):
     patch_residual = patch.mean(dim=1)
     hidden_state = self.linear_2(self.act(self.linear_1(self.pre_norm(flat))))
     return (hidden_state + patch_residual).unsqueeze(0)
+
+
+class MiniCPMV4_7VisionEmbeddingsModule(nn.Module):
+    """
+    The vision part of MiniCPM-V 4.7 (vision tower and merger) without the language model.
+
+    Exported on its own so that the export helpers walking the modules of the exported model (e.g. OpenVINO's 16-bit
+    tracing helper, which casts the weights it does not wrap to f32) never touch the language model weights.
+    """
+
+    def __init__(self, model: "PreTrainedModel"):
+        super().__init__()
+        self.config = model.config
+        self.vision_tower = model.model.vision_tower
+        self.merger = model.model.merger
+
+    def forward(self, *args, **kwargs):
+        raise NotImplementedError("Replaced by MiniCPMV4_7VisionEmbeddingsPatcher during the export.")
 
 
 class MiniCPMV4_7VisionEmbeddingsPatcher(ModelPatcher):
