@@ -375,6 +375,7 @@ HUB_MODEL_NAMES = {
     "sana": "optimum-intel-internal-testing/tiny-random-sana",
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
+    "ltx-video-0.9.1": "optimum-intel-internal-testing/tiny-random-ltx-video-0.9.1",
     "qwenimage": "optimum-intel-internal-testing/tiny-random-qwen-image",
     "qwenimage21": "optimum-intel-internal-testing/tiny-random-qwen-image-2.1",
     "ltx2": "optimum-intel-internal-testing/tiny-random-ltx2",
