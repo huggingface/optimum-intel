@@ -13021,3 +13021,250 @@ class Qwen3TTSCodecPatcher(OVDecoderModelPatcher):
         for conv_cls, orig in self._orig_extra_padding.items():
             conv_cls._get_extra_padding_for_conv1d = orig
         self._orig_extra_padding = {}
+
+
+class _MiniCPMV4_7HybridCache:
+    """
+    Minimal trace-friendly cache for the Qwen3.5 language model of MiniCPM-V 4.7.
+
+    It holds the flattened conv / recurrent states of the linear-attention layers and the key / value tensors of the
+    full-attention layers, and exposes only what the patched blocks use: `conv_states`, `recurrent_states` and
+    `linear_attn_mapping` for `qwen3_5_gated_delta_net_forward`, and `update()` for `Qwen3_5Attention`. It is used
+    instead of the transformers `Cache` because the hybrid cache API changed across transformers 5.x releases.
+    """
+
+    def __init__(self, layer_types, conv_states, recurrent_states, key_cache, value_cache):
+        self.conv_states = conv_states
+        self.recurrent_states = recurrent_states
+        self.key_cache = key_cache
+        self.value_cache = value_cache
+        self.linear_attn_mapping = {}
+        self.full_attn_mapping = {}
+        for layer_idx, layer_type in enumerate(layer_types):
+            if layer_type == "linear_attention":
+                self.linear_attn_mapping[layer_idx] = len(self.linear_attn_mapping)
+            else:
+                self.full_attn_mapping[layer_idx] = len(self.full_attn_mapping)
+
+    def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
+        idx = self.full_attn_mapping[layer_idx]
+        self.key_cache[idx] = torch.cat([self.key_cache[idx], key_states], dim=2)
+        self.value_cache[idx] = torch.cat([self.value_cache[idx], value_states], dim=2)
+        return self.key_cache[idx], self.value_cache[idx]
+
+
+class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
+    """
+    Exports the Qwen3.5 (hybrid Gated DeltaNet + full attention) language model of MiniCPM-V 4.7.
+
+    The decoder layers are driven directly instead of through `Qwen3_5TextModel.forward`, so the traced graph does not
+    depend on the transformers hybrid cache or mask utilities: the causal mask is built from `attention_mask` and the
+    past length, and the linear-attention blocks use the recurrent form shared with the Qwen3.5 export.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
+
+        super().__init__(config, model, model_kwargs)
+
+        text_model = model.model.language_model
+        text_config = model.config.text_config
+        layer_types = text_config.layer_types
+        num_linear_attn_layers = layer_types.count("linear_attention")
+        num_full_attn_layers = layer_types.count("full_attention")
+
+        def patched_forward(inputs_embeds, attention_mask, position_ids, cache_params):
+            cache = _MiniCPMV4_7HybridCache(
+                layer_types,
+                conv_states=[cache_params[2 * i] for i in range(num_linear_attn_layers)],
+                recurrent_states=[cache_params[2 * i + 1] for i in range(num_linear_attn_layers)],
+                key_cache=[cache_params[2 * num_linear_attn_layers + 2 * i] for i in range(num_full_attn_layers)],
+                value_cache=[
+                    cache_params[2 * num_linear_attn_layers + 2 * i + 1] for i in range(num_full_attn_layers)
+                ],
+            )
+
+            seq_len = inputs_embeds.shape[1]
+            past_len = cache.key_cache[0].shape[2]
+            # (3, batch, seq) M-RoPE positions [T, H, W]
+            position_embeddings = text_model.rotary_emb(inputs_embeds, position_ids)
+
+            # 4D additive mask for the full-attention layers: causal and padding
+            query_pos = torch.arange(seq_len, device=inputs_embeds.device).unsqueeze(1) + past_len
+            key_pos = torch.arange(past_len + seq_len, device=inputs_embeds.device).unsqueeze(0)
+            masked = (key_pos > query_pos)[None, None, :, :] | (attention_mask[:, None, None, :] == 0)
+            causal_mask = torch.where(
+                masked,
+                torch.tensor(torch.finfo(torch.float16).min, dtype=inputs_embeds.dtype),
+                torch.tensor(0.0, dtype=inputs_embeds.dtype),
+            )
+            # 2D padding mask for the linear-attention layers, restricted to the current tokens
+            linear_attn_mask = attention_mask[:, -seq_len:]
+
+            hidden_states = inputs_embeds
+            for layer_idx, decoder_layer in enumerate(text_model.layers):
+                residual = hidden_states
+                hidden_states = decoder_layer.input_layernorm(hidden_states)
+                if layer_types[layer_idx] == "linear_attention":
+                    hidden_states = decoder_layer.linear_attn(
+                        hidden_states, cache_params=cache, attention_mask=linear_attn_mask
+                    )
+                else:
+                    hidden_states, _ = decoder_layer.self_attn(
+                        hidden_states=hidden_states,
+                        position_embeddings=position_embeddings,
+                        attention_mask=causal_mask,
+                        past_key_values=cache,
+                    )
+                hidden_states = residual + hidden_states
+                residual = hidden_states
+                hidden_states = decoder_layer.mlp(decoder_layer.post_attention_layernorm(hidden_states))
+                hidden_states = residual + hidden_states
+
+            hidden_states = text_model.norm(hidden_states)
+            logits = self._model.lm_head(hidden_states)
+
+            present_key_values = []
+            for idx in range(num_linear_attn_layers):
+                present_key_values.append(cache.conv_states[idx])
+                present_key_values.append(cache.recurrent_states[idx])
+            for idx in range(num_full_attn_layers):
+                present_key_values.append(cache.key_cache[idx])
+                present_key_values.append(cache.value_cache[idx])
+            return {"logits": logits, "present_key_values": present_key_values}
+
+        self._text_model = text_model
+        self._layer_types = layer_types
+        self.patched_forward = patched_forward
+        # the export orders the example inputs by the signature of `orig_forward`
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+        self.module_extensions = {
+            RecurrentAttentionCell: ModuleExtension(RecurrentAttentionCell, "RecurrentAttentionCellOp"),
+        }
+        self.conversion_extensions = [
+            ConversionExtension("RecurrentAttentionCellOp", convert_recurrent_attention_cell),
+        ]
+
+    def __enter__(self):
+        super().__enter__()
+        for layer_idx, decoder_layer in enumerate(self._text_model.layers):
+            if self._layer_types[layer_idx] == "linear_attention":
+                linear_attn = decoder_layer.linear_attn
+                linear_attn._orig_forward = linear_attn.forward
+                linear_attn.forward = types.MethodType(qwen3_5_gated_delta_net_forward, linear_attn)
+                linear_attn.recurrent_gated_delta_rule = patched_recurrent_gated_delta_rule
+                linear_attn.recurrent_attention_cell = RecurrentAttentionCell()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+        for layer_idx, decoder_layer in enumerate(self._text_model.layers):
+            if self._layer_types[layer_idx] == "linear_attention":
+                linear_attn = decoder_layer.linear_attn
+                linear_attn.forward = linear_attn._orig_forward
+                del linear_attn.recurrent_gated_delta_rule, linear_attn.recurrent_attention_cell
+
+
+def _minicpmv4_7_vision_attention_forward(
+    self, hidden_states, cu_seqlens=None, max_seqlen=None, attention_mask=None, **kwargs
+):
+    # The vision encoder runs on a single crop (or on a batch of equally sized windows), so every token attends to
+    # every other token of its sequence and the `cu_seqlens` based splitting of the original forward is not needed.
+    batch_size, seq_len, _ = hidden_states.shape
+    query = self.q_proj(hidden_states).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+    key = self.k_proj(hidden_states).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+    value = self.v_proj(hidden_states).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+    attn_output = F.scaled_dot_product_attention(query, key, value, scale=self.scaling)
+    attn_output = attn_output.transpose(1, 2).reshape(batch_size, seq_len, -1)
+    return self.out_proj(attn_output), None
+
+
+def _minicpmv4_7_window_merger_forward(self, hidden_states, window_index):
+    # Adapted from MiniCPMV4_7ViTWindowAttentionMerger.forward: `window_index` (computed on the host) reorders the
+    # tokens so that each window of `window_h * window_w` tokens is contiguous, and the window attention is run as a
+    # batch of windows instead of through `cu_seqlens`.
+    window_size = self.window_kernel_size[0] * self.window_kernel_size[1]
+    embed_dim = hidden_states.shape[-1]
+
+    residual = hidden_states[:, window_index, :].reshape(-1, window_size, embed_dim)
+    hidden_states = self.layer_norm1(hidden_states)[:, window_index, :].reshape(-1, window_size, embed_dim)
+    hidden_states, _ = self.self_attn(hidden_states)
+    patch = residual + hidden_states
+
+    flat = patch.flatten(1)
+    patch_residual = patch.mean(dim=1)
+    hidden_state = self.linear_2(self.act(self.linear_1(self.pre_norm(flat))))
+    return (hidden_state + patch_residual).unsqueeze(0)
+
+
+class MiniCPMV4_7VisionEmbeddingsPatcher(ModelPatcher):
+    """
+    Exports the MiniCPM-V 4.7 vision tower, the ViT window-attention merger and the MLP merger as one graph that
+    encodes a single image crop (or video frame crop).
+
+    The crops of an image never interact (attention, window merge and final merge are all per crop), so the host runs
+    this model once per crop. Everything that depends on the crop grid size is computed on the host and passed in:
+    `position_ids` (bucketed position embedding indices), `window_index` (token order for the 2x2 window merger) and
+    `merge_index` (token order for the final 2x2 merge).
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        vision_config = model.config.vision_config
+        if model.config.merger_times != 1:
+            raise NotImplementedError(
+                f"MiniCPM-V 4.7 export supports merger_times == 1, got {model.config.merger_times}."
+            )
+
+        def vision_embed_forward(self, pixel_values, position_ids, window_index, merge_index):
+            vision_tower = self.vision_tower
+            embeddings = vision_tower.embeddings
+            patch_embeds = embeddings.patch_embedding(pixel_values.to(embeddings.patch_embedding.weight.dtype))
+            hidden_states = patch_embeds.flatten(2).transpose(1, 2)
+            hidden_states = hidden_states + embeddings.position_embedding(position_ids).unsqueeze(0)
+
+            for layer_idx, encoder_layer in enumerate(vision_tower.encoder.layers):
+                hidden_states = encoder_layer(hidden_states, attention_mask=None)
+                if layer_idx == vision_config.insert_layer_id:
+                    hidden_states = vision_tower.vit_merger(hidden_states, window_index)
+            hidden_states = vision_tower.post_layernorm(hidden_states)
+
+            merge_h, merge_w = self.merger.merge_kernel_size
+            hidden_states = hidden_states[0, merge_index, :].reshape(-1, merge_h * merge_w * hidden_states.shape[-1])
+            return self.merger.mlp[0](hidden_states)
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(vision_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+        vision_tower = self._model.vision_tower
+        attention_modules = [layer.self_attn for layer in vision_tower.encoder.layers]
+        attention_modules.append(vision_tower.vit_merger.self_attn)
+        for attn in attention_modules:
+            attn._orig_forward = attn.forward
+            attn.forward = types.MethodType(_minicpmv4_7_vision_attention_forward, attn)
+        merger = vision_tower.vit_merger
+        merger._orig_forward = merger.forward
+        merger.forward = types.MethodType(_minicpmv4_7_window_merger_forward, merger)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        vision_tower = self._model.vision_tower
+        for layer in vision_tower.encoder.layers:
+            layer.self_attn.forward = layer.self_attn._orig_forward
+        vision_tower.vit_merger.self_attn.forward = vision_tower.vit_merger.self_attn._orig_forward
+        vision_tower.vit_merger.forward = vision_tower.vit_merger._orig_forward

@@ -467,6 +467,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "internvl_chat",
     "maira2",
     "minicpmv",
+    "minicpmv4_7",
     "phi3_v",
     "qwen2_vl",
     "qwen2_5_vl",
