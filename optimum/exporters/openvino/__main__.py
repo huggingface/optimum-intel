@@ -36,12 +36,14 @@ from optimum.intel.utils.import_utils import (
     is_diffusers_available,
     is_nncf_available,
     is_openvino_tokenizers_available,
+    is_openvino_version,
     is_transformers_version,
 )
 from optimum.intel.utils.modeling_utils import (
     _infer_library_from_model_name_or_path,
     _KokoroForTextToSpeech,
     _OpenClipForZeroShotImageClassification,
+    _Qwen3TTSForTextToSpeech,
 )
 
 from .utils import (
@@ -49,6 +51,8 @@ from .utils import (
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     clear_class_registry,
     deduce_diffusers_dtype,
+    is_auto_compression_disabled,
+    keep_mixed_precision_parameters,
     load_preprocessors,
     patch_qwenvl_configs,
 )
@@ -88,7 +92,7 @@ def infer_task(
     if task == "auto":
         if library_name == "open_clip":
             task = "zero-shot-image-classification"
-        elif library_name == "kokoro":
+        elif library_name in ("kokoro", "qwen3_tts"):
             task = "text-to-audio"
         elif library_name == "funasr":
             # Use the with-past task so the encoder-decoder export is stateful (KV cache hidden in
@@ -220,6 +224,7 @@ _CUSTOM_DRAFT_MODEL_MAP = {
     "LlamaForCausalLMEagle3": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
     "Eagle3LlamaForCausalLM": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
     "DFlashDraftModel": ("Qwen3DFlashDraftModel", "Qwen3DFlashForCausalLM"),
+    "Qwen3DSparkModel": ("Qwen3DFlashDraftModel", "Qwen3DSparkForCausalLM"),
 }
 
 
@@ -412,10 +417,28 @@ def main_export(
             dtype = torch.bfloat16
             loading_kwargs["quantization_config"] = Mxfp4Config(dequantize=True)
 
-        supported_quant_methods = ["gptq", "awq", "bitnet"]
+        supported_quant_methods = ["gptq", "awq", "bitnet", "compressed-tensors"]
         do_quant_patching = quant_method in supported_quant_methods
         do_gptq_patching = quant_method == "gptq"
         do_bitnet_patching = quant_method == "bitnet"
+        do_ct_patching = quant_method == "compressed-tensors"
+
+        # compressed-tensors export relies on the OpenVINO PyTorch frontend
+        # compressed-tensors patcher, which is only available since 2026.3.
+        if do_ct_patching and is_openvino_version("<", "2026.3"):
+            raise RuntimeError(
+                "Exporting compressed-tensors quantized models requires OpenVINO 2026.3 or newer, "
+                "but the installed OpenVINO does not meet this requirement. "
+                "Please upgrade OpenVINO, e.g. `pip install --upgrade openvino`."
+            )
+
+        # Loading a compressed-tensors model and keeping its packed weights intact
+        # requires the `compressed_tensors` package.
+        if do_ct_patching and importlib.util.find_spec("compressed_tensors") is None:
+            raise RuntimeError(
+                "Exporting compressed-tensors quantized models requires the `compressed_tensors` "
+                "package, which is not installed. Please install it, e.g. `pip install compressed_tensors`."
+            )
 
         if is_transformers_version(">=", "4.56") and config.model_type in {"qwen2_vl_text", "qwen2_5_vl_text"}:
             patch_qwenvl_configs()
@@ -550,6 +573,32 @@ def main_export(
                     return state_dict
 
                 AutoBitLinear.load_hook = bitnet_load_hook
+            if do_ct_patching:
+                from transformers.quantizers.quantizer_compressed_tensors import (
+                    CompressedTensorsHfQuantizer,
+                )
+
+                orig_ct_process = CompressedTensorsHfQuantizer._process_model_after_weight_loading
+
+                # Skip decompression so that weight_packed buffers remain intact for
+                # the OV PT frontend compressed-tensors patcher (quantized.py) to
+                # convert them to u4 constants during tracing.
+                CompressedTensorsHfQuantizer._process_model_after_weight_loading = lambda self, model, **kwargs: model
+
+                # In compressed-tensors >= 0.15, compress_model() installs a forward
+                # pre-hook (ct_decompress_hook) that lazily decompresses weights on
+                # the first forward pass.  We must suppress it so that weight_packed
+                # buffers stay intact for the OV traced graph. Older versions do not
+                # define the method, so nothing needs to be patched there.
+                orig_add_decompress_hook = None
+                try:
+                    from compressed_tensors import ModelCompressor
+
+                    if hasattr(ModelCompressor, "add_decompress_hook"):
+                        orig_add_decompress_hook = ModelCompressor.add_decompress_hook
+                        ModelCompressor.add_decompress_hook = lambda self, model: None
+                except ImportError:
+                    pass
     elif library_name == "diffusers":
         _loading_kwargs = {} if variant is None else {"variant": variant}
         if dtype == "auto" or dtype is None:
@@ -572,6 +621,7 @@ def main_export(
         if dtype in [torch.float16, torch.bfloat16]:
             loading_kwargs["torch_dtype"] = dtype
             patch_16bit = True
+            keep_mixed_precision_parameters()
         if loading_kwargs.get("torch_dtype") == "auto":
             loading_kwargs["torch_dtype"] = dtype
 
@@ -584,6 +634,21 @@ def main_export(
             from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
 
             model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+        elif library_name == "qwen3_tts":
+            # Without an explicit request the checkpoint's own precision is kept, so the IRs
+            # come out at the precision the model was published in rather than upcast. A
+            # floating-point --weight-format still pins the precision it names.
+            if ov_config is not None and ov_config.dtype in {"fp16", "fp32"}:
+                loading_kwargs.setdefault("torch_dtype", torch.float16 if ov_config.dtype == "fp16" else torch.float32)
+            model = _Qwen3TTSForTextToSpeech.from_pretrained(
+                model_name_or_path,
+                cache_dir=cache_dir,
+                token=token,
+                revision=revision,
+                local_files_only=local_files_only,
+                force_download=force_download,
+                **loading_kwargs,
+            )
         else:
             # remote code models like phi3_v internvl2, minicpmv, internvl2, nanollava, maira2 should be loaded using AutoModelForCausalLM and not AutoModelForImageTextToText
             # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)
@@ -663,6 +728,10 @@ def main_export(
         if convert_tokenizer:
             maybe_convert_tokenizers(library_name, output, model, preprocessors, task=task)
 
+        # Evaluated before `del model`: the size-based quantization below is skipped for some model
+        # types, and by the time it runs the object is gone.
+        skip_auto_compression = is_auto_compression_disabled(model)
+
         clear_class_registry()
         del model
         gc.collect()
@@ -670,7 +739,7 @@ def main_export(
         # TODO: Remove GPT-OSS workaround when possible
         quantization_config = None if ov_config is None else ov_config.quantization_config
         if not quantization_config or isinstance(quantization_config, _GPTOSSQuantizationConfig):
-            _apply_model_size_based_quantization(submodel_paths, ov_config, output)
+            _apply_model_size_based_quantization(submodel_paths, ov_config, output, skip_auto_compression)
     finally:
         # Unpatch modules after quantized model export
         if do_quant_patching:
@@ -679,6 +748,10 @@ def main_export(
                 GPTQQuantizer.post_init_model = orig_post_init_model
             if do_bitnet_patching:
                 AutoBitLinear.load_hook = orig_load_hook
+            if do_ct_patching:
+                CompressedTensorsHfQuantizer._process_model_after_weight_loading = orig_ct_process
+                if orig_add_decompress_hook is not None:
+                    ModelCompressor.add_decompress_hook = orig_add_decompress_hook
 
 
 def _main_quantize(
@@ -865,14 +938,43 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
                 tokenizer = getattr(model, tokenizer_name, None)
                 if tokenizer:
                     export_tokenizer(tokenizer, output / tokenizer_name, task=task)
+            # Some diffusion pipelines (e.g. QwenImage2.1) register a `processor` instead of a bare
+            # `tokenizer`; its tokenizer files are saved under the `processor` subfolder, so the OV
+            # tokenizer/detokenizer IRs must be written there too.
+            processor = getattr(model, "processor", None)
+            processor_tokenizer = getattr(processor, "tokenizer", None) if processor is not None else None
+            if processor_tokenizer is not None:
+                processor_chat_template = getattr(processor, "chat_template", None)
+                export_tokenizer(
+                    processor_tokenizer,
+                    output / "processor",
+                    task=task,
+                    processor_chat_template=processor_chat_template,
+                )
     else:
         logger.warning("Tokenizer won't be converted.")
 
 
-def _apply_model_size_based_quantization(submodel_paths: List[str], ov_config: "OVConfig", output: Union[str, Path]):
+def _apply_model_size_based_quantization(
+    submodel_paths: List[str],
+    ov_config: "OVConfig",
+    output: Union[str, Path],
+    skip_auto_compression: bool = False,
+):
     """
     Apply weight-only quantization to int8_asym to submodels larger than 1B parameters.
+
+    Models for which `is_auto_compression_disabled` holds are left uncompressed: they are large
+    enough to always cross the threshold, but lose too much quality at int8 for that to be a silent
+    default. An explicitly requested weight format is unaffected -- it does not reach this branch.
     """
+    if skip_auto_compression and ov_config is None:
+        logger.info(
+            "Automatic int8 weight compression is skipped for this model. Export with "
+            "`--weight-format int8` to compress the weights anyway."
+        )
+        return
+
     # TODO: Refactor the code below in the following way:
     #   1. Create a OVPipelineQuantizationConfig based on each submodel size
     #   2. Run _main_quantize() with the created quantization config

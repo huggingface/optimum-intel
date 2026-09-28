@@ -40,10 +40,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.10"
 
@@ -55,7 +55,7 @@ jobs:
       - name: Restore HF models cache
         id: hf-cache-restore
         if: env.HF_TOKEN == ''
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/huggingface/hub
           key: hf-models
@@ -76,6 +76,38 @@ jobs:
       - name: Test Qwen3-ASR and FunASR
         run: |
           pytest tests/openvino/${{ matrix.test-pattern }} -k "qwen3_asr or fun_asr" --durations=0
+
+      - if: ${{ matrix.test-pattern == '*export*' || matrix.test-pattern == '*quantization*' }}
+        name: Install qwen-tts package and uninstall qwen-asr
+        run: |
+          # qwen-tts pins transformers==4.57.3 and qwen-asr pins 4.57.6, so the two cannot be
+          # resolved together. qwen-asr is removed once its tests above have run, and qwen-tts
+          # is installed on its own for the Qwen3-TTS steps that follow.
+          uv pip uninstall qwen-asr
+          uv pip install qwen-tts
+
+      - if: ${{ matrix.test-pattern == '*export*' }}
+        name: Test Qwen3-TTS export
+        run: |
+          # The Qwen3-TTS cases only exist when `qwen-tts` is installed, as it is here, and every
+          # one of them is named after its model type.
+          pytest tests/openvino/test_exporters_cli.py -k "qwen3_tts" --durations=0
+          pytest tests/openvino/test_export.py -k "qwen3_tts" --durations=0
+          pytest tests/openvino/test_seq2seq.py -k "qwen3_tts" --durations=0
+          pytest tests/openvino/test_transformations.py -k "qwen3_tts" --durations=0
+          pytest tests/openvino/test_cb_compatible.py -k "qwen3_tts" --durations=0
+
+      - if: ${{ matrix.test-pattern == '*quantization*' }}
+        name: Test Qwen3-TTS weight compression
+        run: |
+          # The int8 and int4 cases of the default-compression test; they are only added to its
+          # configurations when `qwen-tts` is installed, as it is here.
+          pytest tests/openvino/test_quantization.py -k "default_compression and qwen3_tts" --durations=0
+
+      - if: ${{ matrix.test-pattern == '*export*' || matrix.test-pattern == '*quantization*' }}
+        name: Uninstall qwen-tts package
+        run: |
+          uv pip uninstall qwen-tts
 
       - if: ${{ matrix.test-pattern == '*export*' }}
         name: Test DFlash
