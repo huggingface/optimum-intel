@@ -1023,7 +1023,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         # transformers>=5.15 `generate` queries the experts implementation to decide
         # on a decode-time MoE kernel swap; that swap is a no-op for OpenVINO models,
         # since any MoE kernel is baked into the exported graph.
-        return "openvino_impl"
+        return {}
 
     def set_experts_implementation(self, experts_implementation):
         # No-op: the MoE kernel (if any) is baked into the exported OpenVINO graph.

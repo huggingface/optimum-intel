@@ -2283,14 +2283,6 @@ class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
                 else model.model.multi_modal_projector
             )
 
-        if behavior == Mistral3ConfigBehavior.TEXT_EMBEDDINGS:
-            # newer transformers versions nest the decoder under `model.model.language_model`
-            language_model = getattr(model, "language_model", None) or getattr(model.model, "language_model", None)
-            text_embedding = model.get_input_embeddings()
-            if language_model is not None:
-                text_embedding.config = language_model.config
-            return text_embedding
-
         return super().get_model_for_behavior(model, behavior)
 
     def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
