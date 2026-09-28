@@ -396,43 +396,18 @@ class VLMPipelineTestCase(unittest.TestCase):
     IMAGE = Image.open(requests.get(TEST_IMAGE_URL, stream=True).raw).convert("RGB")
 
     def _get_model_class(self, model_arch):
-        if model_arch in {
-            "llava",
-            "llava_next",
-            "llava_next_mistral",
-            "mistral3",
-            "qwen2_vl",
-            "qwen2_5_vl",
-            "qwen3_vl",
-            "gemma3",
-            "gemma3n",
-            "llama4",
-        }:
-            from transformers import AutoModelForImageTextToText
-
-            return AutoModelForImageTextToText
-        elif model_arch == "llava_next_video":
+        if model_arch == "llava_next_video":
             from transformers import LlavaNextVideoForConditionalGeneration
 
             return LlavaNextVideoForConditionalGeneration
-        elif model_arch == "llava":
-            from transformers import LlavaForConditionalGeneration
-
-            return LlavaForConditionalGeneration
-        elif model_arch in {"llava_next", "llava_next_mistral"}:
-            from transformers import LlavaNextForConditionalGeneration
-
-            return LlavaNextForConditionalGeneration
-        elif model_arch == "qwen2_vl":
-            from transformers import Qwen2VLForConditionalGeneration
-
-            return Qwen2VLForConditionalGeneration
         elif model_arch in REMOTE_CODE_MODELS:
             from transformers import AutoModel
 
             return AutoModel
         else:
-            return AutoModelForCausalLM
+            from transformers import AutoModelForImageTextToText
+
+            return AutoModelForImageTextToText
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     def test_compare_outputs(self, model_arch):
