@@ -647,6 +647,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     REMOTE_CODE_MODELS = [
         "internvl_chat",
         "minicpmv",
+        "minicpm_v4_5",
         "minicpmo",
         "llava-qwen2",
         "phi3_v",
@@ -939,6 +940,39 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         del transformers_model
         del ov_model
 
+        gc.collect()
+
+    def test_minicpm_v4_5_temporal_ids_generation(self):
+        # MiniCPM-V-4.5's image processor returns temporal_ids for still images.
+        # They must be accepted without changing the output.
+        model_arch = "minicpm_v4_5"
+        if "minicpmv" not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest("minicpmv is not supported by the installed transformers version")
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = self.OVMODEL_CLASS.from_pretrained(
+            model_id,
+            export=True,
+            trust_remote_code=True,
+            compile=False,
+            device=OPENVINO_DEVICE,
+            ov_config=F32_CONFIG,
+        )
+        preprocessors = self.get_preprocessors(model_arch)
+        image = self.IMAGE.resize((600, 600))
+        inputs = ov_model.preprocess_inputs(**preprocessors, text="What is shown in this image?", image=image)
+        self.assertIn("temporal_ids", inputs)
+
+        gen_config = GenerationConfig(max_new_tokens=10, min_new_tokens=10, do_sample=False, eos_token_id=None)
+        set_seed(SEED)
+        outputs_without_temporal_ids = ov_model.generate(
+            **{key: value for key, value in inputs.items() if key != "temporal_ids"}, generation_config=gen_config
+        )
+        set_seed(SEED)
+        outputs_with_temporal_ids = ov_model.generate(**inputs, generation_config=gen_config)
+        self.assertTrue(torch.equal(outputs_with_temporal_ids, outputs_without_temporal_ids))
+
+        del ov_model
         gc.collect()
 
     @parameterized.expand(
