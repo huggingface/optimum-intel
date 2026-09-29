@@ -42,39 +42,7 @@ from huggingface_hub import snapshot_download
 from huggingface_hub.errors import HFValidationError, RepositoryNotFoundError, RevisionNotFoundError
 from openvino import Core, Model
 
-from optimum.intel import (
-    OVDiffusionPipeline,
-    OVFlux2KleinPipeline,
-    OVFluxFillPipeline,
-    OVFluxPipeline,
-    OVLatentConsistencyModelPipeline,
-    OVLTX2Pipeline,
-    OVLTXPipeline,
-    OVModelForAudioClassification,
-    OVModelForCausalLM,
-    OVModelForFeatureExtraction,
-    OVModelForImageClassification,
-    OVModelForMaskedLM,
-    OVModelForMultimodalLM,
-    OVModelForPix2Struct,
-    OVModelForQuestionAnswering,
-    OVModelForSeq2SeqLM,
-    OVModelForSequenceClassification,
-    OVModelForSpeechSeq2Seq,
-    OVModelForTextToSpeechSeq2Seq,
-    OVModelForTokenClassification,
-    OVModelForVision2Seq,
-    OVModelForVisualCausalLM,
-    OVModelForZeroShotImageClassification,
-    OVModelOpenCLIPForZeroShotImageClassification,
-    OVQwenImage21Pipeline,
-    OVSamModel,
-    OVSanaPipeline,
-    OVStableDiffusion3Pipeline,
-    OVStableDiffusionPipeline,
-    OVStableDiffusionXLImg2ImgPipeline,
-    OVStableDiffusionXLPipeline,
-)
+import optimum.intel
 
 
 # Add tests/openvino to path to import utils_tests
@@ -82,40 +50,9 @@ sys.path.insert(0, str(PathlibPath(__file__).parent))
 from utils_tests import ARCH_TO_MODEL_CLASS, HUB_MODEL_NAMES, REMOTE_CODE_MODELS
 
 
-# Map class name strings to actual class objects
-CLASS_NAME_TO_CLASS = {
-    "OVDiffusionPipeline": OVDiffusionPipeline,
-    "OVFlux2KleinPipeline": OVFlux2KleinPipeline,
-    "OVFluxFillPipeline": OVFluxFillPipeline,
-    "OVFluxPipeline": OVFluxPipeline,
-    "OVLatentConsistencyModelPipeline": OVLatentConsistencyModelPipeline,
-    "OVLTX2Pipeline": OVLTX2Pipeline,
-    "OVLTXPipeline": OVLTXPipeline,
-    "OVModelForAudioClassification": OVModelForAudioClassification,
-    "OVModelForCausalLM": OVModelForCausalLM,
-    "OVModelForFeatureExtraction": OVModelForFeatureExtraction,
-    "OVModelForImageClassification": OVModelForImageClassification,
-    "OVModelForMaskedLM": OVModelForMaskedLM,
-    "OVModelForMultimodalLM": OVModelForMultimodalLM,
-    "OVModelForPix2Struct": OVModelForPix2Struct,
-    "OVModelForQuestionAnswering": OVModelForQuestionAnswering,
-    "OVModelForSeq2SeqLM": OVModelForSeq2SeqLM,
-    "OVModelForSequenceClassification": OVModelForSequenceClassification,
-    "OVModelForSpeechSeq2Seq": OVModelForSpeechSeq2Seq,
-    "OVModelForTextToSpeechSeq2Seq": OVModelForTextToSpeechSeq2Seq,
-    "OVModelForTokenClassification": OVModelForTokenClassification,
-    "OVModelForVision2Seq": OVModelForVision2Seq,
-    "OVModelForVisualCausalLM": OVModelForVisualCausalLM,
-    "OVModelForZeroShotImageClassification": OVModelForZeroShotImageClassification,
-    "OVModelOpenCLIPForZeroShotImageClassification": OVModelOpenCLIPForZeroShotImageClassification,
-    "OVQwenImage21Pipeline": OVQwenImage21Pipeline,
-    "OVSamModel": OVSamModel,
-    "OVSanaPipeline": OVSanaPipeline,
-    "OVStableDiffusion3Pipeline": OVStableDiffusion3Pipeline,
-    "OVStableDiffusionPipeline": OVStableDiffusionPipeline,
-    "OVStableDiffusionXLImg2ImgPipeline": OVStableDiffusionXLImg2ImgPipeline,
-    "OVStableDiffusionXLPipeline": OVStableDiffusionXLPipeline,
-}
+def resolve_model_class(class_name):
+    """The `optimum.intel` class called `class_name`, or None if this build does not export it."""
+    return getattr(optimum.intel, class_name, None)
 
 
 # Additional architecture-to-class mappings from test_export.py, test_decoder.py, and test_quantization.py
@@ -127,7 +64,6 @@ ADDITIONAL_ARCH_MAPPINGS = {
     "blenderbot": "OVModelForFeatureExtraction",
     "distilbert": "OVModelForQuestionAnswering",
     "hunyuan_v1_dense": "OVModelForCausalLM",
-    "kokoro": "OVModelForTextToSpeechSeq2Seq",
     "roberta": "OVModelForTokenClassification",
     "sam": "OVSamModel",
     "smollm3": "OVModelForCausalLM",
@@ -175,18 +111,20 @@ ADDITIONAL_ARCH_MAPPINGS = {
     "audio-spectrogram-transformer": "OVModelForAudioClassification",
     "beit": "OVModelForImageClassification",
     "convnext": "OVModelForImageClassification",
-    "convnextv2": "OVModelForImageClassification",
     "data2vec-vision": "OVModelForImageClassification",
     "deit": "OVModelForImageClassification",
     "levit": "OVModelForImageClassification",
     "mobilenet_v1": "OVModelForImageClassification",
     "mobilenet_v2": "OVModelForImageClassification",
     "mobilevit": "OVModelForImageClassification",
+    "perceiver_vision": "OVModelForImageClassification",
     "poolformer": "OVModelForImageClassification",
     "resnet": "OVModelForImageClassification",
     "swin": "OVModelForImageClassification",
+    "swin-window": "OVModelForImageClassification",
+    "vit-with-attentions": "OVModelForImageClassification",
+    "vit-with-hidden-states": "OVModelForImageClassification",
     # Vision models - Feature Extraction / Object Detection
-    "detr": "OVModelForFeatureExtraction",
     "donut-swin": "OVModelForFeatureExtraction",
     "open-clip": "OVModelOpenCLIPForZeroShotImageClassification",
     "segformer": "OVModelForFeatureExtraction",
@@ -200,7 +138,7 @@ ADDITIONAL_ARCH_MAPPINGS = {
     "ibert": "OVModelForMaskedLM",
     "mobilebert": "OVModelForMaskedLM",
     "mpnet": "OVModelForFeatureExtraction",
-    "nystromformer": "OVModelForMaskedLM",
+    "perceiver_text": "OVModelForMaskedLM",
     "rembert": "OVModelForMaskedLM",
     "roformer": "OVModelForMaskedLM",
     "sentence-transformers-bert": "OVModelForFeatureExtraction",
@@ -213,34 +151,23 @@ ADDITIONAL_ARCH_MAPPINGS = {
     "hubert": "OVModelForAudioClassification",
     "sew": "OVModelForAudioClassification",
     "sew-d": "OVModelForAudioClassification",
-    "speech_to_text": "OVModelForSpeechSeq2Seq",
     "unispeech": "OVModelForAudioClassification",
     "unispeech-sat": "OVModelForAudioClassification",
     "wav2vec2-conformer": "OVModelForAudioClassification",
     "wav2vec2-hf": "OVModelForAudioClassification",
     "wavlm": "OVModelForAudioClassification",
     # Causal LM - Additional models
-    "bitnet": "OVModelForCausalLM",
     "cohere2": "OVModelForCausalLM",
-    "dbrx": "OVModelForCausalLM",
     "gemma3": "OVModelForVisualCausalLM",
     "olmo": "OVModelForCausalLM",
     "olmo2": "OVModelForCausalLM",
     "opt125m": "OVModelForCausalLM",
     "phimoe": "OVModelForCausalLM",
     # Vision-Language / Multimodal models
-    "donut": "OVModelForVision2Seq",
     "gemma3n": "OVModelForVisualCausalLM",
     "gemma4": "OVModelForVisualCausalLM",
-    "internvl_chat": "OVModelForVisualCausalLM",
-    "llava-qwen2": "OVModelForVisualCausalLM",
     "llava_next": "OVModelForVisualCausalLM",
     "llava_next_mistral": "OVModelForVisualCausalLM",
-    "maira2": "OVModelForVisualCausalLM",
-    "minicpmo": "OVModelForVisualCausalLM",
-    "minicpmv": "OVModelForVisualCausalLM",
-    "phi3_v": "OVModelForVisualCausalLM",
-    "phi4mm": "OVModelForVisualCausalLM",
     "pix2struct": "OVModelForPix2Struct",
     "trocr": "OVModelForVision2Seq",
     "vision-encoder-decoder": "OVModelForVision2Seq",
@@ -252,7 +179,7 @@ ADDITIONAL_ARCH_MAPPINGS = {
     "ltx-video": "OVLTXPipeline",
     "ltx2": "OVLTX2Pipeline",
     "ltx2.3": "OVLTX2Pipeline",
-    "qwenimage21": "OVQwenImage21Pipeline",
+    "qwenimage": "OVQwenImagePipeline",
     "sana": "OVSanaPipeline",
     "sana-sprint": "OVSanaPipeline",
     "stable-diffusion-3": "OVStableDiffusion3Pipeline",
@@ -261,6 +188,7 @@ ADDITIONAL_ARCH_MAPPINGS = {
     "stable-diffusion-with-custom-variant": "OVStableDiffusionPipeline",
     "stable-diffusion-with-safety-checker": "OVStableDiffusionPipeline",
     "stable-diffusion-with-textual-inversion": "OVStableDiffusionPipeline",
+    "z-image": "OVZImagePipeline",
 }
 
 
@@ -289,17 +217,6 @@ def _generate_test_params():
         if arch in REMOTE_CODE_MODELS:
             continue
 
-        if arch in {  # multimodal models that also need trust_remote_code, but are not in REMOTE_CODE_MODELS
-            "internvl_chat",
-            "llava-qwen2",
-            "maira2",
-            "minicpmo",
-            "minicpmv",
-            "phi3_v",
-            "phi4mm",
-        }:
-            continue
-
         if arch in {  # seq2seq models
             "bigbird_pegasus",
             "blenderbot-small",
@@ -311,13 +228,14 @@ def _generate_test_params():
             continue
 
         if arch in {
-            "bart",
-            "donut",
-            "kokoro",
             # Not mapped here, but `ARCH_TO_MODEL_CLASS` supplies a class for them, so they need
             # naming to stay out of the suite.
+            "bart",
             "lfm2",
             "lfm2_moe",
+            "llama4",
+            "muse_glimmer",
+            "qwen3_5_moe",
         }:
             continue
 
@@ -329,10 +247,10 @@ def _generate_test_params():
             class_name = ADDITIONAL_ARCH_MAPPINGS[arch]
 
         # Skip if no mapping found or class not available
-        if class_name is None or class_name not in CLASS_NAME_TO_CLASS:
+        model_class = resolve_model_class(class_name) if class_name else None
+        if model_class is None:
             continue
 
-        model_class = CLASS_NAME_TO_CLASS[class_name]
         params.append((model_id, model_class))
     return params
 
