@@ -10186,13 +10186,15 @@ class Gemma4UnifiedImageEmbeddingsModelPatcher(ModelPatcher):
         self.patched_forward = patched_forward
 
 
-# Patches the MoE block with a vectorized implementation.
-# The vectorized form is required to ensure correct torch.jit tracing for this component.
-# Original implementation: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/lfm2_moe/modeling_lfm2_moe.py#L167
 # Marks a module as already patched, so OpenVINO's 16-bit tracing helper leaves its weights alone.
 _OV_16BIT_PATCH_ATTR = "_openvino_module_extension_patch_orig_forward"
 
 
+# Patches the MoE block with a vectorized implementation.
+# The vectorized form is required to ensure correct torch.jit tracing for this component.
+# Original implementation: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/lfm2_moe/modeling_lfm2_moe.py#L167
+# Also used for Qwen3_5MoeExperts (MiniCPM-V 4.7), which has the same interface and weight layout:
+# https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py#L857
 def lfm2_moe_experts_forward(
     self,
     hidden_states: torch.Tensor,
@@ -13104,16 +13106,10 @@ class Qwen3TTSCodecPatcher(OVDecoderModelPatcher):
         self._orig_extra_padding = {}
 
 
+# Replaces the transformers `Cache` passed to the Qwen3.5 decoder layers of MiniCPM-V 4.7.
+# Why: the hybrid cache API changes across transformers 5.x (no `Qwen3_5DynamicCache` since 5.18) and is not
+# trace-friendly; this one only holds the flattened model inputs and exposes what the patched layers use.
 class _MiniCPMV4_7HybridCache:
-    """
-    Minimal trace-friendly cache for the Qwen3.5 language model of MiniCPM-V 4.7.
-
-    It holds the flattened conv / recurrent states of the linear-attention layers and the key / value tensors of the
-    full-attention layers, and exposes only what the patched blocks use: `conv_states`, `recurrent_states` and
-    `linear_attn_mapping` for `qwen3_5_gated_delta_net_forward`, and `update()` for `Qwen3_5Attention`. It is used
-    instead of the transformers `Cache` because the hybrid cache API changed across transformers 5.x releases.
-    """
-
     def __init__(self, layer_types, conv_states, recurrent_states, key_cache, value_cache):
         self.conv_states = conv_states
         self.recurrent_states = recurrent_states
@@ -13137,12 +13133,6 @@ class _MiniCPMV4_7HybridCache:
 class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
     """
     Exports the Qwen3.5 / Qwen3.5-MoE (hybrid Gated DeltaNet + full attention) language model of MiniCPM-V 4.7.
-
-    The decoder layers are driven directly instead of through `Qwen3_5TextModel.forward`, so the traced graph does not
-    depend on the transformers hybrid cache or mask utilities: the causal mask is built from `attention_mask` and the
-    past length, and the linear-attention blocks use the recurrent form shared with the Qwen3.5 export. For the MoE
-    checkpoints the routed experts use the vectorized `torch.bmm` form of `lfm2_moe_experts_forward`, which OpenVINO
-    fuses into its internal MoE operations.
     """
 
     def __init__(
@@ -13161,6 +13151,11 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
         num_linear_attn_layers = layer_types.count("linear_attention")
         num_full_attn_layers = layer_types.count("full_attention")
 
+        # Replaces Qwen3_5TextModel.forward / Qwen3_5MoeTextModel.forward + lm_head:
+        # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/qwen3_5/modeling_qwen3_5.py#L1240
+        # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py#L1350
+        # Why: flat cache tensors as inputs / outputs and a mask built from `attention_mask` and the past length,
+        # instead of the transformers Cache and mask utilities, which do not trace.
         def patched_forward(inputs_embeds, attention_mask, position_ids, cache_params):
             cache = _MiniCPMV4_7HybridCache(
                 layer_types,
@@ -13242,6 +13237,11 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
         super().__enter__()
         for layer_idx, decoder_layer in enumerate(self._text_model.layers):
             if self._layer_types[layer_idx] == "linear_attention":
+                # Patches Qwen3_5GatedDeltaNet.forward / Qwen3_5MoeGatedDeltaNet.forward:
+                # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/qwen3_5/modeling_qwen3_5.py#L550
+                # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py#L552
+                # Why: it reads states via the transformers Cache (`cache_params.layers`) and switches chunked / recurrent
+                # paths on the input length; the recurrent-cell form traces and is fused into GatedDeltaNet by OpenVINO.
                 linear_attn = decoder_layer.linear_attn
                 linear_attn._orig_forward = linear_attn.forward
                 linear_attn.forward = types.MethodType(qwen3_5_gated_delta_net_forward, linear_attn)
@@ -13249,7 +13249,10 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
                 linear_attn.recurrent_attention_cell = RecurrentAttentionCell()
             experts = getattr(decoder_layer.mlp, "experts", None)
             if experts is not None:
-                # Qwen3_5MoeExperts has the same interface and weight layout as Lfm2MoeExperts
+                # Patches Qwen3_5MoeExperts.forward:
+                # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py#L857
+                # Why: the per-expert loop does not trace; the `torch.bmm` form is fused into OpenVINO's MoE op.
+                # 16-bit weights also need `prepare_16bit_moe_experts` to stay 16-bit (not upcast to f32) in the graph.
                 experts._orig_forward = experts.forward
                 if experts.gate_up_proj.dtype in (torch.float16, torch.bfloat16):
                     self.module_extensions.update(prepare_16bit_moe_experts(experts))
@@ -13269,11 +13272,13 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
                 restore_16bit_moe_experts(experts)
 
 
+# Patches MiniCPMV4_7VisionAttention.forward:
+# https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/minicpmv4_7/modeling_minicpmv4_7.py#L114
+# Why: the export encodes one crop (or a batch of equal windows), so the data-dependent `cu_seqlens` split is dropped
+# and plain SDPA is used, which OpenVINO fuses.
 def _minicpmv4_7_vision_attention_forward(
     self, hidden_states, cu_seqlens=None, max_seqlen=None, attention_mask=None, **kwargs
 ):
-    # The vision encoder runs on a single crop (or on a batch of equally sized windows), so every token attends to
-    # every other token of its sequence and the `cu_seqlens` based splitting of the original forward is not needed.
     batch_size, seq_len, _ = hidden_states.shape
     query = self.q_proj(hidden_states).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
     key = self.k_proj(hidden_states).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
@@ -13283,10 +13288,11 @@ def _minicpmv4_7_vision_attention_forward(
     return self.out_proj(attn_output), None
 
 
+# Patches MiniCPMV4_7ViTWindowAttentionMerger.forward:
+# https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/minicpmv4_7/modeling_minicpmv4_7.py#L237
+# Why: `get_window_index` builds indices from the grid size in Python; the host passes `window_index` instead and the
+# window attention runs as a batch of windows, not through `cu_seqlens`.
 def _minicpmv4_7_window_merger_forward(self, hidden_states, window_index):
-    # Adapted from MiniCPMV4_7ViTWindowAttentionMerger.forward: `window_index` (computed on the host) reorders the
-    # tokens so that each window of `window_h * window_w` tokens is contiguous, and the window attention is run as a
-    # batch of windows instead of through `cu_seqlens`.
     window_size = self.window_kernel_size[0] * self.window_kernel_size[1]
     embed_dim = hidden_states.shape[-1]
 
@@ -13301,14 +13307,10 @@ def _minicpmv4_7_window_merger_forward(self, hidden_states, window_index):
     return (hidden_state + patch_residual).unsqueeze(0)
 
 
+# Vision tower + merger of MiniCPM-V 4.7 without the language model.
+# Why: OpenVINO's 16-bit tracing helper casts all weights of the exported module to f32; exporting the full model
+# would upcast the (35B) language model weights too.
 class MiniCPMV4_7VisionEmbeddingsModule(nn.Module):
-    """
-    The vision part of MiniCPM-V 4.7 (vision tower and merger) without the language model.
-
-    Exported on its own so that the export helpers walking the modules of the exported model (e.g. OpenVINO's 16-bit
-    tracing helper, which casts the weights it does not wrap to f32) never touch the language model weights.
-    """
-
     def __init__(self, model: "PreTrainedModel"):
         super().__init__()
         self.config = model.config
@@ -13321,13 +13323,9 @@ class MiniCPMV4_7VisionEmbeddingsModule(nn.Module):
 
 class MiniCPMV4_7VisionEmbeddingsPatcher(ModelPatcher):
     """
-    Exports the MiniCPM-V 4.7 vision tower, the ViT window-attention merger and the MLP merger as one graph that
-    encodes a single image crop (or video frame crop).
-
-    The crops of an image never interact (attention, window merge and final merge are all per crop), so the host runs
-    this model once per crop. Everything that depends on the crop grid size is computed on the host and passed in:
-    `position_ids` (bucketed position embedding indices), `window_index` (token order for the 2x2 window merger) and
-    `merge_index` (token order for the final 2x2 merge).
+    Exports the MiniCPM-V 4.7 vision tower, ViT window merger and MLP merger as one graph encoding one crop.
+    Crops never interact, so the host runs it per crop and passes the grid-dependent indices: `position_ids`,
+    `window_index` and `merge_index`.
     """
 
     def __init__(
@@ -13342,6 +13340,12 @@ class MiniCPMV4_7VisionEmbeddingsPatcher(ModelPatcher):
                 f"MiniCPM-V 4.7 export supports merger_times == 1, got {model.config.merger_times}."
             )
 
+        # Replaces MiniCPMV4_7VisionModel.forward (with MiniCPMV4_7VisionEmbeddings.forward) + MiniCPMV4_7Merger.forward:
+        # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/minicpmv4_7/modeling_minicpmv4_7.py#L450
+        # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/minicpmv4_7/modeling_minicpmv4_7.py#L308
+        # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/minicpmv4_7/modeling_minicpmv4_7.py#L531
+        # Why: position ids, `cu_seqlens` and the per-crop merge loop are computed from `target_sizes` in Python; the
+        # host passes `position_ids` / `merge_index` instead, so the graph is not tied to the example grid size.
         def vision_embed_forward(self, pixel_values, position_ids, window_index, merge_index):
             vision_tower = self.vision_tower
             embeddings = vision_tower.embeddings
