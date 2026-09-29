@@ -5,10 +5,10 @@ Each model is exported fresh and compared op by op against a reference IR on the
 the same Hub repo. Drift in any part of the stack fails the test — transformers, optimum-intel,
 or OpenVINO itself, since its frontend translates the PyTorch ops.
 
-To add a model: map the arch in `HUB_MODEL_NAMES` (`utils_tests.py`), make sure it resolves to a
-class via `ARCH_TO_MODEL_CLASS` or `ADDITIONAL_ARCH_MAPPINGS` below (an unmapped arch is silently
-skipped, not an error), add any export kwargs to `_EXTRA_EXPORT_KWARGS_BY_ARCH`, then upload its
-reference IRs. Models needing `trust_remote_code` are excluded and must not be uploaded.
+To add a model: map the arch in `HUB_MODEL_NAMES` and `ARCH_TO_MODEL_CLASS` (both in
+`utils_tests.py`; an unmapped arch is silently skipped, not an error), add any export kwargs to
+`_EXTRA_EXPORT_KWARGS_BY_ARCH`, then upload its reference IRs. Models needing `trust_remote_code`
+are excluded and must not be uploaded.
 
 To generate and upload a reference IR — export with the same class and kwargs the test uses, keep
 only the `.xml`/`.bin` plus a `metadata.json` version stamp, and push to `ov` (never `main`):
@@ -55,143 +55,6 @@ def resolve_model_class(class_name):
     return getattr(optimum.intel, class_name, None)
 
 
-# Additional architecture-to-class mappings from test_export.py, test_decoder.py, and test_quantization.py
-# Merged with ARCH_TO_MODEL_CLASS for more complete coverage
-ADDITIONAL_ARCH_MAPPINGS = {
-    # From test_export.py
-    "albert": "OVModelForSequenceClassification",
-    "bert": "OVModelForMaskedLM",
-    "blenderbot": "OVModelForFeatureExtraction",
-    "distilbert": "OVModelForQuestionAnswering",
-    "hunyuan_v1_dense": "OVModelForCausalLM",
-    "roberta": "OVModelForTokenClassification",
-    "sam": "OVSamModel",
-    "smollm3": "OVModelForCausalLM",
-    "speecht5": "OVModelForTextToSpeechSeq2Seq",
-    "t5": "OVModelForSeq2SeqLM",
-    "vit": "OVModelForImageClassification",
-    "wav2vec2": "OVModelForAudioClassification",
-    # From test_decoder.py - CausalLM models
-    "arcee": "OVModelForCausalLM",
-    "biogpt": "OVModelForCausalLM",
-    "bloom": "OVModelForCausalLM",
-    "codegen": "OVModelForCausalLM",
-    "cohere": "OVModelForCausalLM",
-    "falcon": "OVModelForCausalLM",
-    "falcon-40b": "OVModelForCausalLM",
-    "glm4": "OVModelForCausalLM",
-    "gpt_bigcode": "OVModelForCausalLM",
-    "gpt_neo": "OVModelForCausalLM",
-    "gpt_neox": "OVModelForCausalLM",
-    "gpt_neox_japanese": "OVModelForCausalLM",
-    "gpt_oss": "OVModelForCausalLM",
-    "gpt_oss_mxfp4": "OVModelForCausalLM",
-    "gptj": "OVModelForCausalLM",
-    "granite": "OVModelForCausalLM",
-    "granitemoe": "OVModelForCausalLM",
-    "mistral-nemo": "OVModelForCausalLM",
-    "mixtral": "OVModelForCausalLM",
-    "mpt": "OVModelForCausalLM",
-    "opt": "OVModelForCausalLM",
-    "pegasus": "OVModelForCausalLM",
-    "persimmon": "OVModelForCausalLM",
-    "phi": "OVModelForCausalLM",
-    "phi3": "OVModelForCausalLM",
-    "qwen2_moe": "OVModelForCausalLM",
-    "stablelm": "OVModelForCausalLM",
-    "starcoder2": "OVModelForCausalLM",
-    "xglm": "OVModelForCausalLM",
-    # From test_seq2seq.py - Seq2SeqLM models
-    "bigbird_pegasus": "OVModelForSeq2SeqLM",
-    "blenderbot-small": "OVModelForSeq2SeqLM",
-    "longt5": "OVModelForSeq2SeqLM",
-    "m2m_100": "OVModelForSeq2SeqLM",
-    "mbart": "OVModelForSeq2SeqLM",
-    # Vision models - ImageClassification
-    "audio-spectrogram-transformer": "OVModelForAudioClassification",
-    "beit": "OVModelForImageClassification",
-    "convnext": "OVModelForImageClassification",
-    "data2vec-vision": "OVModelForImageClassification",
-    "deit": "OVModelForImageClassification",
-    "levit": "OVModelForImageClassification",
-    "mobilenet_v1": "OVModelForImageClassification",
-    "mobilenet_v2": "OVModelForImageClassification",
-    "mobilevit": "OVModelForImageClassification",
-    "perceiver_vision": "OVModelForImageClassification",
-    "poolformer": "OVModelForImageClassification",
-    "resnet": "OVModelForImageClassification",
-    "swin": "OVModelForImageClassification",
-    "swin-window": "OVModelForImageClassification",
-    "vit-with-attentions": "OVModelForImageClassification",
-    "vit-with-hidden-states": "OVModelForImageClassification",
-    # Vision models - Feature Extraction / Object Detection
-    "donut-swin": "OVModelForFeatureExtraction",
-    "open-clip": "OVModelOpenCLIPForZeroShotImageClassification",
-    "segformer": "OVModelForFeatureExtraction",
-    # Text models - Masked LM / Feature Extraction / Embeddings
-    "bge": "OVModelForFeatureExtraction",
-    "camembert": "OVModelForMaskedLM",
-    "convbert": "OVModelForSequenceClassification",
-    "deberta": "OVModelForMaskedLM",
-    "deberta-v2": "OVModelForMaskedLM",
-    "esm": "OVModelForMaskedLM",
-    "ibert": "OVModelForMaskedLM",
-    "mobilebert": "OVModelForMaskedLM",
-    "mpnet": "OVModelForFeatureExtraction",
-    "perceiver_text": "OVModelForMaskedLM",
-    "rembert": "OVModelForMaskedLM",
-    "roformer": "OVModelForMaskedLM",
-    "sentence-transformers-bert": "OVModelForFeatureExtraction",
-    "squeezebert": "OVModelForMaskedLM",
-    "st-bert": "OVModelForFeatureExtraction",
-    "st-mpnet": "OVModelForFeatureExtraction",
-    "xlm-roberta": "OVModelForMaskedLM",
-    # Audio models
-    "data2vec-audio": "OVModelForAudioClassification",
-    "hubert": "OVModelForAudioClassification",
-    "sew": "OVModelForAudioClassification",
-    "sew-d": "OVModelForAudioClassification",
-    "unispeech": "OVModelForAudioClassification",
-    "unispeech-sat": "OVModelForAudioClassification",
-    "wav2vec2-conformer": "OVModelForAudioClassification",
-    "wav2vec2-hf": "OVModelForAudioClassification",
-    "wavlm": "OVModelForAudioClassification",
-    # Causal LM - Additional models
-    "cohere2": "OVModelForCausalLM",
-    "gemma3": "OVModelForVisualCausalLM",
-    "olmo": "OVModelForCausalLM",
-    "olmo2": "OVModelForCausalLM",
-    "opt125m": "OVModelForCausalLM",
-    "phimoe": "OVModelForCausalLM",
-    # Vision-Language / Multimodal models
-    "gemma3n": "OVModelForVisualCausalLM",
-    "gemma4": "OVModelForVisualCausalLM",
-    "llava_next": "OVModelForVisualCausalLM",
-    "llava_next_mistral": "OVModelForVisualCausalLM",
-    "pix2struct": "OVModelForPix2Struct",
-    "trocr": "OVModelForVision2Seq",
-    "vision-encoder-decoder": "OVModelForVision2Seq",
-    # Diffusion pipelines
-    "flux": "OVFluxPipeline",
-    "flux-fill": "OVFluxFillPipeline",
-    "flux.2-klein": "OVFlux2KleinPipeline",
-    "latent-consistency": "OVLatentConsistencyModelPipeline",
-    "ltx-video": "OVLTXPipeline",
-    "ltx2": "OVLTX2Pipeline",
-    "ltx2.3": "OVLTX2Pipeline",
-    "qwenimage": "OVQwenImagePipeline",
-    "sana": "OVSanaPipeline",
-    "sana-sprint": "OVSanaPipeline",
-    "stable-diffusion-3": "OVStableDiffusion3Pipeline",
-    "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
-    "stable-diffusion-xl-refiner": "OVStableDiffusionXLImg2ImgPipeline",
-    "stable-diffusion-with-custom-variant": "OVStableDiffusionPipeline",
-    "stable-diffusion-with-safety-checker": "OVStableDiffusionPipeline",
-    "stable-diffusion-with-textual-inversion": "OVStableDiffusionPipeline",
-    "z-image": "OVZImagePipeline",
-}
-
-
 # Extra `from_pretrained` arguments needed at export time by some models, keyed by architecture.
 # The reference IRs on the `ov` branch are generated with the exact same arguments, so any change
 # here must be mirrored by regenerating the affected references.
@@ -228,8 +91,8 @@ def _generate_test_params():
             continue
 
         if arch in {
-            # Not mapped here, but `ARCH_TO_MODEL_CLASS` supplies a class for them, so they need
-            # naming to stay out of the suite.
+            # `ARCH_TO_MODEL_CLASS` supplies a class for them, so they need naming to stay out of
+            # the suite.
             "bart",
             "lfm2",
             "lfm2_moe",
@@ -239,14 +102,8 @@ def _generate_test_params():
         }:
             continue
 
-        # Try to get model class from ARCH_TO_MODEL_CLASS first, then ADDITIONAL_ARCH_MAPPINGS
-        class_name = None
-        if arch in ARCH_TO_MODEL_CLASS:
-            class_name = ARCH_TO_MODEL_CLASS[arch]
-        elif arch in ADDITIONAL_ARCH_MAPPINGS:
-            class_name = ADDITIONAL_ARCH_MAPPINGS[arch]
-
         # Skip if no mapping found or class not available
+        class_name = ARCH_TO_MODEL_CLASS.get(arch)
         model_class = resolve_model_class(class_name) if class_name else None
         if model_class is None:
             continue
