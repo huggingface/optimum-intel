@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import functools
+import importlib.metadata as importlib_metadata
 import importlib.util
 import logging
 import operator as op
@@ -20,12 +21,6 @@ from collections import OrderedDict
 from typing import Union
 
 from packaging.version import Version, parse
-
-
-if sys.version_info < (3, 8):
-    import importlib_metadata
-else:
-    import importlib.metadata as importlib_metadata
 
 
 logger = logging.getLogger(__name__)
@@ -176,6 +171,9 @@ if _accelerate_available:
         _accelerate_version = importlib_metadata.version("accelerate")
     except importlib_metadata.PackageNotFoundError:
         _accelerate_available = False
+
+
+_compressed_tensors_available = importlib.util.find_spec("compressed_tensors") is not None
 
 _numa_available = importlib.util.find_spec("numa") is not None
 
@@ -344,6 +342,10 @@ def is_pillow_available():
 
 def is_accelerate_available():
     return _accelerate_available
+
+
+def is_compressed_tensors_available():
+    return _compressed_tensors_available
 
 
 def is_sentence_transformers_available():
