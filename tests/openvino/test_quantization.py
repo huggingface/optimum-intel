@@ -42,6 +42,7 @@ from transformers.utils.quantization_config import QuantizationMethod
 from optimum.intel import (
     OVConfig,
     OVFluxPipeline,
+    OVLTX2Pipeline,
     OVLatentConsistencyModelPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
@@ -74,6 +75,7 @@ from optimum.intel.openvino.configuration import (
     OVQuantizationConfigBase,
     _DEFAULT_4BIT_WQ_CONFIGS,
     _DEFAULT_4BIT_WQ_CONFIG,
+    _DEFAULT_8BIT_WQ_CONFIGS,
     _quantization_config_from_dict,
     _GPTOSSQuantizationConfig,
 )
@@ -495,7 +497,7 @@ class OVQuantizerTest(unittest.TestCase):
                 "vision_embeddings_model": {"int8": 13},
                 "vision_embeddings_pos_model": {"int8": 1},
                 "audio_encoder_model": {"int8": 18},
-                "talker_model": {"int8": 25},
+                "talker_model": {"int8": 26},
                 "talker_text_embeddings_model": {"int8": 1},
                 "talker_projections_model": {"int8": 4},
                 "code_predictor_model": {"int8": 16},
@@ -1026,7 +1028,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "vision_embeddings_model": {"int8": 13},
                 "vision_embeddings_pos_model": {"int8": 1},
                 "audio_encoder_model": {"int8": 18},
-                "talker_model": {"int8": 25},
+                "talker_model": {"int8": 26},
                 "talker_text_embeddings_model": {"int8": 1},
                 "talker_projections_model": {"int8": 4},
                 "code_predictor_model": {"int8": 16},
@@ -1245,6 +1247,20 @@ class OVWeightCompressionTest(unittest.TestCase):
             },
         ),
         (
+            OVLTX2Pipeline,
+            "ltx2.3",
+            8,
+            _DEFAULT_8BIT_WQ_CONFIGS["diffusers/LTX-2.3-Diffusers"],
+            {
+                "transformer": {"int8": 124},
+                "text_encoder": {"int8": 30},
+                "connectors": {},
+                "vae_decoder": {},
+                "audio_vae_decoder": {},
+                "vocoder": {},
+            },
+        ),
+        (
             OVModelForVisualCausalLM,
             "llava",
             4,
@@ -1402,7 +1418,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             if not is_model_type_transformers_compatible(model_type)
         }
         if is_transformers_version(">=", "5"):
-            expected.update({"llama4", "llava_next_video", "minicpmv", "internvl_chat", "exaone4"})
+            expected.update({"llama4", "llava_next_video", "minicpmv", "exaone4"})
+        expected.update({"internvl_chat"})
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.LOAD_IN_4_BITS_SCOPE}
@@ -2022,7 +2039,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
         ),
     ]
 
-    if is_transformers_version("<", "5"):
+    if is_transformers_version("<", "4.57.6"):
         PIPELINE_QUANTIZATION_SCOPE.append(
             (
                 OVModelForVisualCausalLM,

@@ -43,7 +43,6 @@ from optimum.exporters.openvino.utils import (
     _normalize_dummy_inputs,
     allow_skip_tracing_check,
     clear_class_registry,
-    is_ltx2_3_transformer_config,
     remove_none_from_dummy_inputs,
     save_config,
     save_preprocessors,
@@ -154,7 +153,11 @@ def _save_model(
     if getattr(config, "eagle3", False):
         model = _add_eagle3_mode_to_rt_info(model)
     if getattr(config, "dflash", False):
-        model = _add_dflash_mode_to_rt_info(model, config._config)
+        model = _add_dflash_mode_to_rt_info(
+            model,
+            config._config,
+            candidate_position_offset=getattr(config, "candidate_position_offset", 1),
+        )
     if source_model is not None and getattr(getattr(source_model, "config", None), "model_type", None) in {
         "qwen3",
         "qwen3_moe",
@@ -910,6 +913,9 @@ def export_from_model(
         tokenizer_3 = getattr(model, "tokenizer_3", None)
         if tokenizer_3 is not None:
             tokenizer_3.save_pretrained(output.joinpath("tokenizer_3"))
+        processor = getattr(model, "processor", None)
+        if processor is not None:
+            processor.save_pretrained(output.joinpath("processor"))
         safety_checker = getattr(model, "safety_checker", None)
         if safety_checker is not None:
             safety_checker.save_pretrained(output.joinpath("safety_checker"))
@@ -1021,20 +1027,21 @@ def _add_eagle3_mode_to_rt_info(model: Model):
     return model
 
 
-def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig") -> Model:
+def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig", candidate_position_offset: int) -> Model:
     """
     Add DFlash metadata to DFlash draft model.
 
     Marks model as DFlash draft model and adds DFlash configuration to the model including
-    mask token id and target layer ids.
+    mask token id, target layer ids, and candidate position offset.
     """
     try:
         model.set_rt_info("True", ["dflash_mode"])
-        dflash_config = getattr(hf_config, "dflash_config", {})
+        dflash_config = getattr(hf_config, "dflash_config", None) or hf_config.to_dict()
         if "mask_token_id" in dflash_config:
             model.set_rt_info(str(dflash_config["mask_token_id"]), ["dflash", "mask_token_id"])
         if "target_layer_ids" in dflash_config:
             model.set_rt_info(",".join(map(str, dflash_config["target_layer_ids"])), ["dflash", "target_layer_ids"])
+        model.set_rt_info(str(candidate_position_offset), ["dflash", "candidate_position_offset"])
     except Exception:
         pass
 
@@ -1208,7 +1215,8 @@ def get_diffusion_models_for_export_ext(
     is_flux = pipeline.__class__.__name__.startswith("Flux")
     is_sana = pipeline.__class__.__name__.startswith("Sana")
     is_ltx_video = pipeline.__class__.__name__.startswith("LTX")
-    is_qwen_image = pipeline.__class__.__name__.startswith("QwenImage")
+    is_qwen_image_21 = pipeline.__class__.__name__.startswith("QwenImage21")
+    is_qwen_image = pipeline.__class__.__name__.startswith("QwenImage") and not is_qwen_image_21
     is_zimage = pipeline.__class__.__name__.startswith("ZImage")
     is_sd = pipeline.__class__.__name__.startswith("StableDiffusion") and not is_sd3
     is_lcm = pipeline.__class__.__name__.startswith("LatentConsistencyModel")
@@ -1233,6 +1241,8 @@ def get_diffusion_models_for_export_ext(
         models_for_export = get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_sana:
         models_for_export = get_sana_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+    elif is_qwen_image_21:
+        models_for_export = get_qwen_image21_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_qwen_image:
         models_for_export = get_qwen_image_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_ltx_video:
@@ -1419,13 +1429,10 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
         task="feature-extraction",
         model_type="ltx2-text-encoder",
     )
-    # The 2.0 and 2.3 text encoder configs are identical, so the packing decision comes from the
-    # transformer. LTX-2.0 keeps one output per layer, as its published IRs already have.
     export_config = export_config_constructor(
         text_encoder.config,
         int_dtype=int_dtype,
         float_dtype=float_dtype,
-        pack_hidden_states=is_ltx2_3_transformer_config(pipeline.transformer.config),
     )
     export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["text_encoder"] = (text_encoder, export_config)
@@ -1917,6 +1924,147 @@ def get_qwen_image_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     )
     vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
+
+    return models_for_export
+
+
+def get_qwen_image21_models_for_export(pipeline, exporter, int_dtype, float_dtype):
+    models_for_export = {}
+
+    # Text encoder: QwenImage2.1 uses a Qwen3-VL model that is run text-only for the t2i prompt embeddings.
+    # Only the language model part is required to reproduce the prompt embeddings: the pipeline reads the last
+    # decoder layer's output before the final norm, which the patcher exports as `last_hidden_state`.
+    text_encoder = getattr(pipeline, "text_encoder", None)
+    if text_encoder is not None:
+        pipeline_text_encoder_class = text_encoder.__class__.__name__
+        text_encoder = text_encoder.model.language_model
+        # `_class_name` is not written by `transformers` configs (only diffusers ones); set it on the saved
+        # sub-config (the language model config) so `text_encoder/config.json` carries it like the
+        # transformer/vae, matching the `model_index.json` component class.
+        text_encoder.config._class_name = pipeline_text_encoder_class
+        text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=text_encoder,
+            exporter=exporter,
+            library_name="diffusers",
+            task="feature-extraction",
+            model_type="qwenimage21-text-encoder",
+        )
+        text_encoder_export_config = text_encoder_config_constructor(
+            text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        text_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+        models_for_export["text_encoder"] = (text_encoder, text_encoder_export_config)
+
+    # Transformer: exported as a single-pass, block-causal graph. All data-dependent tensors (real rotary
+    # cos/sin, the joint-sequence gather index, the dense block-causal attention mask and the modulation
+    # mask) are precomputed on the host in the runtime pipeline and passed in as graph inputs, so the trace
+    # is pure tensor algebra with a fusable ScaledDotProductAttention and RoPE.
+    transformer = pipeline.transformer
+    transformer.config.time_cond_proj_dim = None
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=transformer,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="qwenimage21-transformer",
+    )
+    transformer_export_config = export_config_constructor(
+        pipeline.transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    transformer_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["transformer"] = (transformer, transformer_export_config)
+
+    # VAE Encoder. QwenImage21 uses a 3D causal-conv (video) VAE run on a single temporal frame. The
+    # model's own `_encode` drives the correct single-frame streaming path (its "CausalConv3d" is a Conv2d
+    # that squeezes the temporal axis, so the naive cache bypass breaks temporal handling). Input is 4-ch
+    # RGBA (the pipeline converts images to RGBA before encoding). `_encode` returns the latent moments.
+    vae_encoder = copy.deepcopy(pipeline.vae)
+
+    def _qwen21_vae_encode(sample, vae_encoder=vae_encoder):
+        return {"latent_parameters": vae_encoder._encode(sample)}
+
+    vae_encoder.forward = _qwen21_vae_encode
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="qwenimage21-vae-encoder",
+    )
+    vae_encoder_export_config = vae_config_constructor(
+        vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
+
+    # VAE Decoder
+    vae_decoder = copy.deepcopy(pipeline.vae)
+    vae_decoder.register_to_config(
+        latents_mean_data=vae_decoder.config.latents_mean,
+        latents_std_data=vae_decoder.config.latents_std,
+    )
+
+    def _qwen21_vae_decode(latent_sample, vae_decoder=vae_decoder):
+        return vae_decoder._decode(latent_sample).sample
+
+    vae_decoder.forward = _qwen21_vae_decode
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_decoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="qwenimage21-vae-decoder",
+    )
+    vae_decoder_export_config = vae_config_constructor(
+        vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
+
+    # Image-to-image (Qwen-Image edit) submodels. When the condition image is present the prompt embeddings
+    # come from the full Qwen3-VL model: the vision tower encodes the image and the language model runs over
+    # `inputs_embeds` (with vision embeds scattered in) plus DeepStack features. These are exported as two
+    # extra graphs. The t2i text_encoder graph (input_ids-based) is kept as-is for the text-only path.
+    if text_encoder is not None:
+        full_text_encoder = pipeline.text_encoder
+
+        # Vision tower. Consumes host-precomputed grid-derived tensors (bilinear gather indices/weights and
+        # rotary cos/sin) so the sequence length stays dynamic; returns merged image embeds + DeepStack.
+        vision_model = full_text_encoder.model.visual
+        vision_model.config._class_name = vision_model.__class__.__name__
+        vision_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=vision_model,
+            exporter=exporter,
+            library_name="diffusers",
+            task="feature-extraction",
+            model_type="qwenimage21-vision-encoder",
+        )
+        vision_export_config = vision_config_constructor(
+            vision_model.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        vision_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+        models_for_export["vision_encoder"] = (vision_model, vision_export_config)
+
+        # i2i language model. Same underlying `Qwen3VLTextModel` as the t2i text encoder but traced with
+        # `inputs_embeds`, 3D M-RoPE `position_ids` and a dense DeepStack tensor. The top-level Qwen3-VL
+        # config is passed because the dummy generator needs both `text_config` and `vision_config`.
+        i2i_text_encoder = full_text_encoder.model.language_model
+        i2i_text_encoder.config._class_name = full_text_encoder.__class__.__name__
+        # The i2i text graph builds the image-pad mask internally from `input_ids`; stash the image token id
+        # on the language model's own config where the patcher can read it.
+        i2i_text_encoder.config._qwenimage21_image_token_id = full_text_encoder.config.image_token_id
+        i2i_text_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=i2i_text_encoder,
+            exporter=exporter,
+            library_name="diffusers",
+            task="feature-extraction",
+            model_type="qwenimage21-text-encoder-i2i",
+        )
+        i2i_text_export_config = i2i_text_config_constructor(
+            full_text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        i2i_text_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+        models_for_export["text_encoder_i2i"] = (i2i_text_encoder, i2i_text_export_config)
 
     return models_for_export
 

@@ -144,56 +144,6 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
-def _create_tiny_mistral3_model():
-    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_mistral3"
-    config_file = output_dir / "config.json"
-    weights_file = output_dir / "model.safetensors"
-
-    if config_file.exists() and weights_file.exists():
-        return str(output_dir)
-
-    from transformers import AutoConfig, AutoModelForImageTextToText, AutoProcessor
-
-    model_id = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
-
-    torch.manual_seed(SEED)
-
-    config = AutoConfig.from_pretrained(model_id)
-
-    config.tie_word_embeddings = False
-    config.text_config.tie_word_embeddings = False
-
-    config.text_config.num_hidden_layers = 2
-    config.text_config.hidden_size = 64
-    config.text_config.intermediate_size = 128
-    config.text_config.num_attention_heads = 4
-    config.text_config.num_key_value_heads = 2
-    config.text_config.head_dim = 16
-    config.text_config.max_position_embeddings = 512
-
-    config.vision_config.num_hidden_layers = 2
-    config.vision_config.hidden_size = 64
-    config.vision_config.intermediate_size = 128
-    config.vision_config.num_attention_heads = 4
-    config.vision_config.head_dim = 16
-    config.vision_config.image_size = 56
-
-    for subconfig in (config, config.text_config, config.vision_config):
-        subconfig.dtype = "float32"
-        subconfig.torch_dtype = "float32"
-
-    model = AutoModelForImageTextToText.from_config(config).float().eval()
-    processor = AutoProcessor.from_pretrained(model_id)
-    processor.image_processor.size = {"longest_edge": 56}
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    model.save_pretrained(output_dir, safe_serialization=True)
-    processor.save_pretrained(output_dir)
-
-    return str(output_dir)
-
-
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -263,6 +213,7 @@ HUB_MODEL_NAMES = {
     "gemma4_dflash": "optimum-intel-internal-testing/tiny-random-gemma4-dflash",
     "gemma4_moe": "optimum-intel-internal-testing/tiny-random-gemma4-moe",
     "gemma4_unified": "optimum-intel-internal-testing/tiny-random-gemma4-unified",
+    "gemma4_unified-it": "optimum-intel-internal-testing/tiny-random-gemma4-unified-it",
     "falcon": "optimum-intel-internal-testing/really-tiny-falcon-testing",
     "falcon-40b": "optimum-intel-internal-testing/tiny-random-falcon-40b",
     "falcon_mamba": "optimum-intel-internal-testing/tiny-falcon-mamba",
@@ -297,6 +248,7 @@ HUB_MODEL_NAMES = {
     "longt5": "optimum-intel-internal-testing/tiny-random-longt5",
     "llama": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
     "llama_awq": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
+    "llama_compressed_tensors": "optimum-intel-internal-testing/tiny-random-llama-compressed-tensors",
     "llama4": "optimum-intel-internal-testing/tiny-random-llama4",
     "llava": "optimum-intel-internal-testing/tiny-random-llava",
     "llava_next": "optimum-intel-internal-testing/tiny-random-llava-next",
@@ -315,9 +267,10 @@ HUB_MODEL_NAMES = {
     "minicpm3": "optimum-intel-internal-testing/tiny-random-minicpm3",
     "minicpmv": "optimum-intel-internal-testing/tiny-random-minicpmv-2_6",
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
+    "minicpm_v4_5": "optimum-intel-internal-testing/tiny-random-minicpm-v-4_5",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
     "mistral-nemo": "optimum-intel-internal-testing/tiny-random-mistral-nemo",
-    "mistral3": _create_tiny_mistral3_model(),
+    "mistral3": "optimum-intel-internal-testing/tiny-random-mistral3",
     "mixtral": "optimum-intel-internal-testing/tiny-mixtral",
     "mixtral_awq": "optimum-intel-internal-testing/tiny-mixtral-AWQ-4bit",
     "mobilebert": "optimum-intel-internal-testing/tiny-random-MobileBertModel",
@@ -359,6 +312,7 @@ HUB_MODEL_NAMES = {
     "qwen3_tts": "optimum-intel-internal-testing/tiny-random-qwen3-tts",
     "qwen3_next": "optimum-intel-internal-testing/tiny-random-qwen3-next",
     "qwen3_5": "optimum-intel-internal-testing/tiny-random-qwen3.5",
+    "qwen3_5_compressed_tensors": "optimum-intel-internal-testing/tiny-random-qwen3.5-compressed-tensors",
     "qwen3_5_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-mtp",
     "qwen3_5_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-dflash",
     "qwen3_5_moe": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
@@ -366,6 +320,7 @@ HUB_MODEL_NAMES = {
     "qwen3_5_moe_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-dflash",
     "qwen3_asr": "optimum-intel-internal-testing/tiny-random-qwen3-asr",
     "qwen3_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
+    "qwen3_deepspec_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-deepspec-dflash",
     "fun_asr": "optimum-intel-internal-testing/tiny-random-fun-asr",
     "rembert": "optimum-intel-internal-testing/tiny-random-rembert",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",
@@ -422,6 +377,7 @@ HUB_MODEL_NAMES = {
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
     "qwenimage": "optimum-intel-internal-testing/tiny-random-qwen-image",
+    "qwenimage21": "optimum-intel-internal-testing/tiny-random-qwen-image-2.1",
     "ltx2": "optimum-intel-internal-testing/tiny-random-ltx2",
     "ltx2.3": "optimum-intel-internal-testing/tiny-random-ltx2.3",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
@@ -451,16 +407,25 @@ def _resolve_cached_model_paths(model_names: dict) -> dict:
         if not os.path.exists(constants.HF_HUB_CACHE):
             return model_names
 
-        repo_id_to_local_paths = {
-            repo.repo_id: str(next(iter(repo.revisions)).snapshot_path)
-            for repo in scan_cache_dir().repos
-            if repo.revisions
-        }
-        resolved = {}
-        for k, v in model_names.items():
-            local_path = repo_id_to_local_paths.get(v)
-            resolved[k] = local_path if local_path and _is_valid_snapshot(local_path) else v
-        return resolved
+        repo_id_to_local_paths = {}
+        for repo in scan_cache_dir().repos:
+            if not repo.revisions:
+                continue
+            best = None
+            for rev in sorted(repo.revisions, key=lambda r: r.last_modified, reverse=True):
+                file_names = {f.file_name for f in rev.files}
+                if "config.json" not in file_names:
+                    continue
+                # Skip repos with custom Python code — their Hub repos can add new .py
+                # files that a stale local snapshot won't have, causing FileNotFoundError
+                if any(f.endswith(".py") for f in file_names):
+                    break
+                if all(os.path.exists(f.file_path) for f in rev.files):
+                    best = rev
+                    break
+            if best is not None:
+                repo_id_to_local_paths[repo.repo_id] = str(best.snapshot_path)
+        return {k: repo_id_to_local_paths.get(v, v) for k, v in model_names.items()}
     except Exception:
         return model_names
 
@@ -471,6 +436,7 @@ EAGLE3_MODELS = {"qwen3_eagle3": ("qwen3_eagle3", "qwen3_eagle3_target")}
 
 DFLASH_MODELS = {
     "qwen3_dflash": ("qwen3_dflash", "qwen3"),
+    "qwen3_deepspec_dflash": ("qwen3_deepspec_dflash", "qwen3"),
 }
 
 DFLASH_VLM_MODELS = {
@@ -499,7 +465,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "albert": {"model": 84},
     "vit": {"model": 64},
     "blenderbot": {"model": 70 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 72},
-    "cohere2": {"model": 30},
+    "cohere2": {"model": 32},
     "gpt2": {"model": 44},
     "granitemoehybrid": {"model": 118},
     "wav2vec2": {"model": 34},
@@ -673,7 +639,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 13,
         "vision_embeddings_pos_model": 1,
         "audio_encoder_model": 18,
-        "talker_model": 25,
+        "talker_model": 26,
         "talker_text_embeddings_model": 1,
         "talker_projections_model": 4,
         "code_predictor_model": 16,
@@ -748,6 +714,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "hunyuan_v1_dense": {"model": 32},
     "qwen3_eagle3": {"model": 20},
     "qwen3_dflash": {"model": 30},
+    "qwen3_deepspec_dflash": {"model": 30},
     "qwen3_vl_eagle3": {"model": 18},
     "qwen3_next": {"model": 100},
     "gemma3n": {
@@ -761,11 +728,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 10 if is_transformers_version("<", "5.10") else 11,
         "text_embeddings_per_layer_model": 1,
+        "audio_embeddings_model": 17,
     },
     "gemma4_moe": {
         "lm_model": 48,
         "text_embeddings_model": 1,
-        "vision_embeddings_model": 10 if is_transformers_version("<", "5.10") else 11,
+        "vision_embeddings_model": 10 if is_transformers_version("<", "5.10") else 12,
         "text_embeddings_per_layer_model": 0,
     },
     "smollm3": {"model": 30},
@@ -777,8 +745,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "ouro": {"model": 34},
     "qwen3_asr": {
         "encoder": 36,
-        "decoder": 30,
-        "decoder_with_past": 30,
+        "decoder": 32,
+        "decoder_with_past": 32,
     },
     "fun_asr": {
         "encoder": 46,
@@ -811,6 +779,7 @@ REMOTE_CODE_MODELS = (
     "minicpm3",
     "deepseek",
     "qwen3_dflash",
+    "qwen3_deepspec_dflash",
     "qwen3_5_dflash",
     "qwen3_5_moe_dflash",
     "gemma4_dflash",
@@ -819,6 +788,15 @@ REMOTE_CODE_MODELS = (
     "qwen3_asr",
     "fun_asr",
     "videochat_flash_qwen",
+    "internvl_chat",
+    "minicpmv",
+    "minicpm_v4_5",
+    "minicpmo",
+    "llava-qwen2",
+    "phi3_v",
+    "maira2",
+    "phi4mm",
+    "gemma3n",
 )
 
 if is_transformers_version("<", "5"):
@@ -840,6 +818,7 @@ ARCH_TO_MODEL_CLASS = {
     "qwen3_5_moe": "OVModelForVisualCausalLM",
     "gemma4_moe": "OVModelForVisualCausalLM",
     "gemma4_unified": "OVModelForVisualCausalLM",
+    "gemma4_unified-it": "OVModelForVisualCausalLM",
     "muse_glimmer": "OVModelForVisualCausalLM",
     "qwen3_omni_moe": "OVModelForMultimodalLM",
     "stable-diffusion": "OVDiffusionPipeline",
@@ -946,6 +925,7 @@ def check_compression_state_per_model(
     models: Dict[str, ov.Model],
     expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
     expected_num_fake_nodes_per_model: Optional[Dict[str, int]] = None,
+    check_kv_cache_precision: bool = True,
 ):
     test_case.assertEqual(len(models), len(expected_num_weight_nodes_per_model))
     actual_num_weights_per_model = {}
@@ -958,7 +938,10 @@ def check_compression_state_per_model(
         actual_num_weights_per_model[ov_model_name] = num_weight_nodes
         actual_num_fake_nodes_per_model[ov_model_name] = num_fake_nodes
 
-        test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+        # Weights compressed by NNCF drop the KV cache precision hint, but models that are
+        # already quantized (e.g. compressed-tensors) keep the default f16 KV cache precision.
+        if check_kv_cache_precision:
+            test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     # Check weight nodes
     test_case.assertEqual(expected_num_weight_nodes_per_model, actual_num_weights_per_model)
@@ -986,8 +969,10 @@ TEST_NAME_TO_MODEL_TYPE = {
     "falcon-40b": "falcon",
     "gemma4_dflash": "qwen3",
     "gemma4_moe": "gemma4",
+    "gemma4_unified-it": "gemma4_unified",
     "gpt_oss_mxfp4": "gpt_oss",
     "llama_awq": "llama",
+    "llama_compressed_tensors": "llama",
     "llava_next_mistral": "llava_next",
     "ltx-video": "ltx-video-transformer",
     "ltx2": "ltx2-video-transformer",
@@ -1001,9 +986,11 @@ TEST_NAME_TO_MODEL_TYPE = {
     "perceiver_vision": "perceiver",
     "qwen3_5_dflash": "qwen3",
     "qwen3_5_moe_dflash": "qwen3",
+    "qwen3_5_compressed_tensors": "qwen3_5",
     "qwen3_5_mtp": "qwen3_5",
     "qwen3_5_moe_mtp": "qwen3_5_moe",
     "qwen3_dflash": "qwen3",
+    "qwen3_deepspec_dflash": "qwen3",
     "qwen3_eagle3": "llama",
     "qwen3_eagle3_target": "qwen3",
     "qwen3_vl_eagle3": "llama",
@@ -1019,6 +1006,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     # entries in test_export.py / test_exporters_cli.py are collected instead of silently
     # deselected.
     "z-image": "z-image-transformer",
+    "qwenimage21": "qwenimage21-transformer",
 }
 
 

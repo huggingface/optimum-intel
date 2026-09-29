@@ -19,6 +19,7 @@ import os
 import shutil
 from abc import abstractmethod
 from collections import OrderedDict
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import gettempdir
 from types import SimpleNamespace
@@ -142,6 +143,11 @@ else:
     CacheMixin = object
     QwenImagePipeline = object
 
+try:
+    from diffusers import QwenImage21Pipeline
+except ImportError:
+    QwenImage21Pipeline = object
+
 if is_diffusers_version(">=", "0.37.0"):
     from diffusers import Flux2KleinPipeline
 else:
@@ -149,6 +155,8 @@ else:
 
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
 DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER = "text_encoder_3"
+DIFFUSION_MODEL_VISION_ENCODER_SUBFOLDER = "vision_encoder"
+DIFFUSION_MODEL_TEXT_ENCODER_I2I_SUBFOLDER = "text_encoder_i2i"
 DIFFUSION_MODEL_CONNECTORS_SUBFOLDER = "connectors"
 DIFFUSION_MODEL_AUDIO_VAE_DECODER_SUBFOLDER = "audio_vae_decoder"
 DIFFUSION_MODEL_VOCODER_SUBFOLDER = "vocoder"
@@ -176,6 +184,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "text_encoder": os.path.join(DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER, OV_XML_FILE_NAME),
             "text_encoder_2": os.path.join(DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER, OV_XML_FILE_NAME),
             "text_encoder_3": os.path.join(DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER, OV_XML_FILE_NAME),
+            "vision_encoder": os.path.join(DIFFUSION_MODEL_VISION_ENCODER_SUBFOLDER, OV_XML_FILE_NAME),
+            "text_encoder_i2i": os.path.join(DIFFUSION_MODEL_TEXT_ENCODER_I2I_SUBFOLDER, OV_XML_FILE_NAME),
             "connectors": os.path.join(DIFFUSION_MODEL_CONNECTORS_SUBFOLDER, OV_XML_FILE_NAME),
             "audio_vae_decoder": os.path.join(DIFFUSION_MODEL_AUDIO_VAE_DECODER_SUBFOLDER, OV_XML_FILE_NAME),
             "vocoder": os.path.join(DIFFUSION_MODEL_VOCODER_SUBFOLDER, OV_XML_FILE_NAME),
@@ -193,6 +203,9 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         text_encoder_2: Optional[openvino.Model] = None,
         text_encoder_3: Optional[openvino.Model] = None,
         transformer: Optional[openvino.Model] = None,
+        # QwenImage2.1 image-to-image specific optional models
+        vision_encoder: Optional[openvino.Model] = None,
+        text_encoder_i2i: Optional[openvino.Model] = None,
         # LTX2-specific optional models
         connectors: Optional[openvino.Model] = None,
         audio_vae_decoder: Optional[openvino.Model] = None,
@@ -202,6 +215,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         tokenizer_2: Optional[CLIPTokenizer] = None,
         tokenizer_3: Optional[CLIPTokenizer] = None,
         feature_extractor: Optional[CLIPImageProcessor] = None,
+        processor: Optional[Any] = None,
         # stable diffusion xl specific arguments
         force_zeros_for_empty_prompt: bool = True,
         requires_aesthetics_score: bool = False,
@@ -244,9 +258,12 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 )
 
         self.unet = OVModelUnet(unet, self, DIFFUSION_MODEL_UNET_SUBFOLDER) if unet is not None else None
-        transformer_cls = (
-            OVModelQwenImageTransformer if self.__class__.__name__.startswith("OVQwenImage") else OVModelTransformer
-        )
+        if self.__class__.__name__.startswith("OVQwenImage21"):
+            transformer_cls = OVModelQwenImage21Transformer
+        elif self.__class__.__name__.startswith("OVQwenImage"):
+            transformer_cls = OVModelQwenImageTransformer
+        else:
+            transformer_cls = OVModelTransformer
         self.transformer = (
             transformer_cls(transformer, self, DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER)
             if transformer is not None
@@ -276,6 +293,17 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             if text_encoder_3 is not None
             else None
         )
+        # QwenImage2.1 image-to-image: Qwen3-VL vision tower + language model over inputs_embeds.
+        self.vision_encoder = (
+            OVModelQwenImage21Vision(vision_encoder, self, DIFFUSION_MODEL_VISION_ENCODER_SUBFOLDER)
+            if vision_encoder is not None
+            else None
+        )
+        self.text_encoder_i2i = (
+            OVModelQwenImage21I2ITextEncoder(text_encoder_i2i, self, DIFFUSION_MODEL_TEXT_ENCODER_I2I_SUBFOLDER)
+            if text_encoder_i2i is not None
+            else None
+        )
         # LTX2-specific models
         self.connectors = None
         self.audio_vae_decoder = None
@@ -288,6 +316,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         self.tokenizer_2 = tokenizer_2
         self.tokenizer_3 = tokenizer_3
         self.feature_extractor = feature_extractor
+        self.processor = processor
 
         # we allow passing these as torch models for now
         self.image_encoder = kwargs.pop("image_encoder", None)  # TODO: maybe mplement OVModelImageEncoder
@@ -307,6 +336,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "tokenizer_2": self.tokenizer_2,
             "tokenizer_3": self.tokenizer_3,
             "feature_extractor": self.feature_extractor,
+            "processor": self.processor,
             "requires_aesthetics_score": requires_aesthetics_score,
             "force_zeros_for_empty_prompt": force_zeros_for_empty_prompt,
             "add_watermarker": add_watermarker,
@@ -386,6 +416,25 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         self.scheduler.save_pretrained(save_directory / "scheduler")
 
+        # QwenImage2.1 i2i parts are not registered as diffusers pipeline modules, so they are not part of
+        # `self.components`; save them explicitly when present.
+        for part_name in ("vision_encoder", "text_encoder_i2i"):
+            part = getattr(self, part_name, None)
+            if part is None:
+                continue
+            dst_path = save_directory / self._ov_model_paths[part_name]
+            save_path = dst_path.parent
+            save_path.mkdir(parents=True, exist_ok=True)
+            openvino.save_model(part.model, dst_path, compress_to_fp16=False)
+            model_dir = (
+                self.model_save_dir
+                if not isinstance(self.model_save_dir, TemporaryDirectory)
+                else self.model_save_dir.name
+            )
+            config_path = Path(model_dir) / save_path.name / CONFIG_NAME
+            if config_path.is_file():
+                shutil.copyfile(config_path, save_path / CONFIG_NAME)
+
         if self.tokenizer is not None:
             self.tokenizer.save_pretrained(save_directory / "tokenizer")
         if self.tokenizer_2 is not None:
@@ -394,6 +443,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             self.tokenizer_3.save_pretrained(save_directory / "tokenizer_3")
         if self.feature_extractor is not None:
             self.feature_extractor.save_pretrained(save_directory / "feature_extractor")
+        if getattr(self, "processor", None) is not None:
+            self.processor.save_pretrained(save_directory / "processor")
         if getattr(self, "safety_checker", None) is not None:
             self.safety_checker.save_pretrained(save_directory / "safety_checker")
 
@@ -464,6 +515,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "text_encoder_2": text_encoder_2_file_name or default_file_name,
             "text_encoder_3": text_encoder_3_file_name or default_file_name,
             "transformer": transformer_file_name or default_file_name,
+            "vision_encoder": default_file_name,
+            "text_encoder_i2i": default_file_name,
             "connectors": connectors_file_name or default_file_name,
             "audio_vae_decoder": audio_vae_decoder_file_name or default_file_name,
             "vocoder": vocoder_file_name or default_file_name,
@@ -510,6 +563,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "tokenizer_2": None,
             "tokenizer_3": None,
             "feature_extractor": None,
+            "processor": None,
             "safety_checker": None,
             "image_encoder": None,
         }
@@ -646,6 +700,12 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         model_save_path = Path(model_save_dir.name)
         variant = kwargs.pop("variant", None)
 
+        task = cls.export_feature
+        if task is None and config.get("_class_name") == "QwenImage21Pipeline":
+            # QwenImage21Pipeline is missing from the diffusers AutoPipeline mappings, so the export task cannot be
+            # inferred for it: export it for the task of its default OpenVINO pipeline (text-to-image)
+            task = OVQwenImage21Pipeline.export_feature
+
         main_export(
             model_name_or_path=model_id,
             output=model_save_path,
@@ -653,7 +713,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             no_post_process=True,
             revision=revision,
             cache_dir=cache_dir,
-            task=cls.export_feature,
+            task=task,
             token=token,
             local_files_only=local_files_only,
             force_download=force_download,
@@ -800,7 +860,13 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         num_frames: int = -1,
     ):
         is_qwen_image = self.__class__.__name__.startswith("OVQwenImage")
+        is_qwen_image21 = self.__class__.__name__.startswith("OVQwenImage21")
         is_zimage = self.__class__.__name__.startswith("OVZImage")
+        if is_qwen_image21:
+            # The Qwen-Image-2.1 transformer takes host-precomputed graph inputs (attention mask,
+            # rotary cos/sin, gather indices, ...) whose shapes are fully dynamic and do not map onto
+            # the diffusers input conventions handled below. Leave the model dynamic.
+            return model
         if batch_size == -1 or num_images_per_prompt == -1:
             batch_size = -1
         else:
@@ -1448,6 +1514,239 @@ class OVModelQwenImageTransformer(OVPipelinePart):
         }
         if guidance is not None:
             model_inputs["guidance"] = guidance
+
+        ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
+
+        model_outputs = {}
+        for key, value in ov_outputs.items():
+            model_outputs[next(iter(key.names))] = torch.from_numpy(value)
+
+        sample = next(iter(model_outputs.values()))
+        if return_dict:
+            return {"sample": sample}
+        return (sample,)
+
+
+class OVModelQwenImage21Vision(OVPipelinePart):
+    """
+    Qwen3-VL vision-tower wrapper for QwenImage2.1 image-to-image. The exported OpenVINO graph takes the
+    flattened patch pixels plus host-precomputed grid-derived tensors (the bilinear position-embedding
+    gather indices/weights and the rotary cos/sin). It returns the merged image embeddings and one
+    DeepStack feature tensor per DeepStack layer (`image_embeds`, `deepstack_0`, `deepstack_1`, ...).
+    """
+
+    def __init__(self, model: openvino.Model, parent_pipeline: OVDiffusionPipeline, model_name: str = ""):
+        super().__init__(model, parent_pipeline, model_name)
+        self.input_names = [inp.get_any_name() for inp in self.model.inputs]
+        self.output_names = [out.get_any_name() for out in self.model.outputs]
+
+    def forward(self, pixel_values, bilinear_indices, bilinear_weights, cos, sin):
+        self.compile()
+        model_inputs = {
+            "pixel_values": pixel_values,
+            "bilinear_indices": bilinear_indices,
+            "bilinear_weights": bilinear_weights,
+            "cos": cos,
+            "sin": sin,
+        }
+        ov_outputs = self.request(model_inputs, share_inputs=True)
+        image_embeds = torch.from_numpy(ov_outputs[0])
+        deepstack = [torch.from_numpy(ov_outputs[i]) for i in range(1, len(self.model.outputs))]
+        return image_embeds, deepstack
+
+
+class OVModelQwenImage21I2ITextEncoder(OVPipelinePart):
+    """
+    Qwen3-VL language-model wrapper for QwenImage2.1 image-to-image. The exported OpenVINO graph takes
+    `input_ids` and the vision `image_embeds` (it embeds the tokens and scatters the vision embeds into the
+    image-pad positions internally), the `attention_mask`, 3D M-RoPE `position_ids`, and the DeepStack
+    visual features as a dense additive tensor of shape `[num_deepstack_layers, batch, seq, hidden]`. It
+    returns the last hidden state.
+    """
+
+    def forward(self, input_ids, image_embeds, attention_mask, position_ids, deepstack_dense):
+        self.compile()
+        model_inputs = {
+            "input_ids": input_ids,
+            "image_embeds": image_embeds,
+            "attention_mask": attention_mask,
+            "position_ids": position_ids,
+            "deepstack_dense": deepstack_dense,
+        }
+        ov_outputs = self.request(model_inputs, share_inputs=True)
+        return torch.from_numpy(ov_outputs[0])
+
+
+class OVModelQwenImage21Transformer(OVPipelinePart):
+    """
+    Transformer wrapper for QwenImage2.1. The exported OpenVINO graph is a single-pass, block-causal
+    transformer whose data-dependent tensors (real rotary cos/sin, the joint-sequence gather index, the
+    dense block-causal additive attention mask and the modulation target mask) are precomputed on the host
+    and passed in as graph inputs. This wrapper reproduces that host precompute from the pipeline's
+    `img_shapes`/`img_mask`/`encoder_hidden_states_mask`, then feeds the eight graph inputs.
+
+    KV caching is not used by the exported graph: every denoising step runs a full single pass (numerically
+    identical to the cached path), so the `kv_cache`/`kv_cache_mode` arguments are accepted and ignored.
+    """
+
+    _IMG_TOKENS_PER_SLOT = 4
+    # The host inputs are invariant across a generation, so only a couple of distinct keys are ever live
+    # (one per CFG pass). Cap the cache to bound memory across successive generations.
+    _HOST_CACHE_MAX = 4
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # A weight-free rotary table built from the exported transformer config. Reused across steps.
+        from diffusers.models.transformers.transformer_qwenimage21 import QwenImage21Rope
+
+        axes_dims_rope = list(getattr(self.config, "axes_dims_rope", (16, 56, 56)))
+        self._rope = QwenImage21Rope(theta=10000, axes_dim=axes_dims_rope)
+        # Caches the step-invariant host inputs (cos/sin/gather_idx/attn_mask/modulation_mask) keyed on the
+        # generation-fixed geometry so the O(seq^2) mask is built once, not per denoising step.
+        self._host_inputs_cache = {}
+        # The exported graph is cache-free; expose a block list only so the diffusers pipeline can query
+        # `len(self.transformer.transformer_blocks)` and a no-op `cache_context`.
+        self.transformer_blocks = [None] * int(getattr(self.config, "num_layers", 0))
+
+    @contextmanager
+    def cache_context(self, *args, **kwargs):
+        yield
+
+    @staticmethod
+    def _build_token_metadata(image_pad_mask, img_shapes):
+        image_positions = image_pad_mask.nonzero(as_tuple=True)[0]
+        block_lengths = [int(np.prod(shape)) for shape in img_shapes]
+        image_ids = torch.full_like(image_pad_mask, -1, dtype=torch.long)
+        block_ids = torch.repeat_interleave(torch.arange(len(block_lengths)), torch.tensor(block_lengths))
+        image_ids[image_positions] = block_ids
+        target_token_mask = torch.zeros_like(image_pad_mask)
+        target_token_mask[image_positions[-block_lengths[-1] :]] = True
+        return image_ids, target_token_mask
+
+    def _build_host_inputs(self, hidden_states, encoder_hidden_states, img_shapes, img_mask, ehs_mask):
+        # Each image-token slot in `img_mask` expands to the number of packed transformer tokens of its
+        # image block. The expansion factor is `block_area / run_length` per contiguous True run, derived
+        # from `img_shapes` rather than assumed constant, so it is correct for the target block (text-to-
+        # image) as well as the condition + target blocks (image-to-image), regardless of the vae/vision
+        # downsample ratio.
+        img_mask0 = img_mask[0]
+        mask_list = img_mask0.tolist()
+        runs = []
+        idx = 0
+        n = len(mask_list)
+        while idx < n:
+            if mask_list[idx]:
+                start = idx
+                while idx < n and mask_list[idx]:
+                    idx += 1
+                runs.append((start, idx - start))
+            else:
+                idx += 1
+        repeats = torch.ones(n, dtype=torch.long)
+        for (start, length), (_, block_h, block_w) in zip(runs, img_shapes[0]):
+            repeats[start : start + length] = (block_h * block_w) // length
+
+        image_pad_mask = torch.repeat_interleave(img_mask0, repeats)
+        seq = image_pad_mask.shape[0]
+        vlm_seq = encoder_hidden_states.shape[1]
+
+        # gather_idx: for each joint position, index into combined = cat([txt(vlm_seq), img(n_latent)]).
+        gather_idx = torch.empty(seq, dtype=torch.long)
+        target_slots = img_mask.shape[1] - vlm_seq
+        src_slot_index = torch.arange(vlm_seq + target_slots)
+        expanded_src = torch.repeat_interleave(src_slot_index, repeats)
+        text_pos = ~image_pad_mask
+        gather_idx[text_pos] = expanded_src[text_pos]
+        n_img = int(image_pad_mask.sum())
+        gather_idx[image_pad_mask] = vlm_seq + torch.arange(n_img)
+
+        # Real cos/sin from the complex rotary table.
+        rotary_emb = self._rope(img_shapes[0], image_pad_mask, device=hidden_states.device)
+        cos_half = rotary_emb.real
+        sin_half = rotary_emb.imag
+        cos = torch.cat([cos_half, cos_half], dim=-1)[None, :, None, :]
+        sin = torch.cat([sin_half, sin_half], dim=-1)[None, :, None, :]
+
+        # Dense block-causal additive mask.
+        image_ids, target_token_mask = self._build_token_metadata(image_pad_mask, img_shapes[0])
+        idx = torch.arange(seq)
+        causal = idx[:, None] >= idx[None, :]
+        same_block = (image_ids[:, None] == image_ids[None, :]) & (image_ids[:, None] >= 0)
+        allowed = causal | same_block
+        batch_size = hidden_states.shape[0]
+        joint_key_valid = torch.ones(batch_size, seq, dtype=torch.bool)
+        if ehs_mask is not None:
+            text_positions = (~image_pad_mask).nonzero(as_tuple=True)[0]
+            vlm_text_positions = ~img_mask[0][: ehs_mask.shape[1]]
+            joint_key_valid[:, text_positions] = ehs_mask.bool()[:, vlm_text_positions]
+        allowed = allowed[None] & joint_key_valid[:, None, :]
+        attn_mask = torch.zeros(batch_size, 1, seq, seq)
+        attn_mask.masked_fill_(~allowed[:, None], float("-inf"))
+
+        return cos, sin, gather_idx, attn_mask, target_token_mask
+
+    @staticmethod
+    def _mask_key(mask):
+        if mask is None:
+            return None
+        m = mask.detach().to("cpu").contiguous()
+        return (tuple(m.shape), m.numpy().tobytes())
+
+    def _get_host_inputs(self, hidden_states, encoder_hidden_states, img_shapes, img_mask, ehs_mask):
+        # The host inputs depend only on the generation-fixed geometry (block shapes, image/text masks,
+        # batch size and prompt length), not on the timestep or latent values, so build them once per
+        # distinct key and reuse across every denoising step and both CFG passes.
+        key = (
+            tuple(tuple(int(v) for v in block) for block in img_shapes[0]),
+            self._mask_key(img_mask),
+            self._mask_key(ehs_mask),
+            int(hidden_states.shape[0]),
+            int(encoder_hidden_states.shape[1]),
+        )
+        cached = self._host_inputs_cache.get(key)
+        if cached is None:
+            cached = self._build_host_inputs(hidden_states, encoder_hidden_states, img_shapes, img_mask, ehs_mask)
+            if len(self._host_inputs_cache) >= self._HOST_CACHE_MAX:
+                self._host_inputs_cache.pop(next(iter(self._host_inputs_cache)))
+            self._host_inputs_cache[key] = cached
+        return cached
+
+    def forward(
+        self,
+        hidden_states: torch.FloatTensor,
+        encoder_hidden_states: torch.FloatTensor = None,
+        timestep: torch.LongTensor = None,
+        img_shapes: Optional[List] = None,
+        img_mask: torch.Tensor = None,
+        encoder_hidden_states_mask: torch.Tensor = None,
+        attention_kwargs: Optional[Dict[str, Any]] = None,
+        kv_cache: Any = None,
+        kv_cache_mode: Optional[str] = None,
+        return_dict: bool = True,
+        **kwargs,
+    ):
+        self.compile()
+
+        if not isinstance(hidden_states, torch.Tensor):
+            hidden_states = torch.as_tensor(hidden_states)
+        hidden_states = hidden_states.to(torch.float32)
+        encoder_hidden_states = torch.as_tensor(encoder_hidden_states).to(torch.float32)
+        timestep = torch.as_tensor(timestep).to(torch.float32)
+
+        cos, sin, gather_idx, attn_mask, modulation_mask = self._get_host_inputs(
+            hidden_states, encoder_hidden_states, img_shapes, img_mask, encoder_hidden_states_mask
+        )
+
+        model_inputs = {
+            "hidden_states": hidden_states,
+            "encoder_hidden_states": encoder_hidden_states,
+            "timestep": timestep,
+            "cos": cos,
+            "sin": sin,
+            "gather_idx": gather_idx,
+            "attn_mask": attn_mask,
+            "modulation_mask": modulation_mask,
+        }
 
         ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
 
@@ -2454,7 +2753,7 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         # Mirror `LTX2Pipeline._get_gemma_prompt_embeds`:
         # https://github.com/huggingface/diffusers/blob/v0.40.0/src/diffusers/pipelines/ltx2/pipeline_ltx2.py#L300-L362
         # but read the packed prompt embeddings
-        # straight from the text encoder: `LTX2PackedTextEncoderPatcher` moves the reference
+        # straight from the text encoder: `LTX2TextEncoderPatcher` moves the reference
         # implementation's `stack(dim=-1).flatten(2, 3)` into the exported graph, where it is the
         # connectors' `text_encoder_hidden_states` layout already. On the host that copy is 735 MiB
         # per encode for LTX-2.3 at the default sequence length, twice per generation under CFG.
@@ -2565,6 +2864,217 @@ class OVQwenImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, Qw
         prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
 
         return prompt_embeds, encoder_attention_mask
+
+
+class OVQwenImage21Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, QwenImage21Pipeline):
+    main_input_name = "prompt"
+    export_feature = "text-to-image"
+    auto_model_class = QwenImage21Pipeline
+
+    def _get_qwen_prompt_embeds(
+        self,
+        prompt: Union[str, List[str]] = None,
+        image: Optional[list] = None,
+        device: Optional[torch.device] = None,
+    ):
+        # Mirror diffusers.QwenImage21Pipeline._get_qwen_prompt_embeds. The text-to-image path runs only the
+        # OpenVINO text encoder (input_ids -> last_hidden_state). The image-to-image (Qwen-Image edit) path
+        # additionally runs the Qwen3-VL vision tower and feeds the language model with `input_ids` and the
+        # vision `image_embeds` (embedded + scattered inside the graph), 3D M-RoPE `position_ids` and a dense
+        # DeepStack tensor. All grid-derived tensors and the rotary position ids are precomputed on the host.
+        device = device or self._execution_device
+        prompt = [prompt] if isinstance(prompt, str) else prompt
+        is_t2i = image is None
+
+        if is_t2i:
+            prompts = [self.prompt_template_t2i.format(t) for t in prompt]
+            drop_idx = self._drop_idx
+            model_inputs = self.processor(text=prompts, padding=True, return_tensors="pt").to(device)
+            encoder_outputs = self.text_encoder(
+                input_ids=model_inputs.input_ids,
+                attention_mask=model_inputs.attention_mask,
+                output_hidden_states=True,
+            )
+            hidden_states = encoder_outputs.last_hidden_state
+        else:
+            if self.vision_encoder is None or self.text_encoder_i2i is None:
+                raise ValueError(
+                    "Image-to-image requires the `vision_encoder` and `text_encoder_i2i` OpenVINO submodels. "
+                    "Please re-export the model with a recent optimum-intel version."
+                )
+            hidden_states, model_inputs = self._get_qwen_i2i_hidden_states(prompt, image, device)
+            drop_idx = self._drop_idx
+
+        split_hidden_states = list(self._extract_masked_hidden(hidden_states, model_inputs.attention_mask))
+        split_hidden_states = [e[drop_idx:] for e in split_hidden_states]
+
+        image_pad_mask = [
+            (sample_ids[sample_mask.bool()] == self._img_token_id)
+            for sample_ids, sample_mask in zip(model_inputs.input_ids, model_inputs.attention_mask)
+        ]
+        image_pad_mask = [e[drop_idx:] for e in image_pad_mask]
+
+        attn_mask_list = [torch.ones(e.size(0), dtype=torch.long, device=e.device) for e in split_hidden_states]
+        max_seq_len = max(e.size(0) for e in split_hidden_states)
+        prompt_embeds = torch.stack(
+            [torch.cat([u, u.new_zeros(max_seq_len - u.size(0), u.size(1))]) for u in split_hidden_states]
+        )
+        encoder_attention_mask = torch.stack(
+            [torch.cat([u, u.new_zeros(max_seq_len - u.size(0))]) for u in attn_mask_list]
+        )
+        image_pad_mask = torch.stack([torch.cat([u, u.new_zeros(max_seq_len - u.size(0))]) for u in image_pad_mask])
+
+        return prompt_embeds, encoder_attention_mask, image_pad_mask
+
+    def _get_qwen_i2i_hidden_states(self, prompt, image, device):
+        # Host-side reproduction of the Qwen3-VL forward for image-to-image, replacing the vision tower and
+        # language model with their exported OpenVINO graphs. Returns the last hidden state and the processor
+        # inputs (for the shared post-processing above). Assumes a single condition image (Qwen-Image edit).
+        from PIL import Image as PILImage
+
+        prompts = []
+        condition_pil_list = []
+        for t in prompt:
+            n_imgs = len(image)
+            replace = "<image1><|vision_start|><|image_pad|><|vision_end|>"
+            for i in range(2, n_imgs + 1):
+                replace += f" <image{i}><|vision_start|><|image_pad|><|vision_end|>"
+            template = self.prompt_template_ti2i.replace(
+                "<image1><|vision_start|><|image_pad|><|vision_end|>", replace
+            )
+            prompts.append(template.format(t))
+        # Each prompt's template repeats the `<|image_pad|>` placeholders, so the processor needs one set of images
+        # per prompt, in the order the placeholders appear.
+        for _ in prompt:
+            for img in image:
+                if not isinstance(img, PILImage.Image):
+                    img = PILImage.fromarray(img)
+                condition_pil_list.append(img)
+
+        model_inputs = self.processor(text=prompts, images=condition_pil_list, padding=True, return_tensors="pt").to(
+            device
+        )
+        input_ids = model_inputs.input_ids
+        attention_mask = model_inputs.attention_mask
+        pixel_values = model_inputs.pixel_values.float()
+        grid_thw = model_inputs.image_grid_thw
+        mm_token_type_ids = model_inputs.mm_token_type_ids
+
+        # Vision tower: precompute the grid-derived tensors, then run the OpenVINO graph.
+        bilinear_indices, bilinear_weights, cos, sin = self._qwen21_host_vision_inputs(pixel_values, grid_thw)
+        image_embeds, deepstack = self.vision_encoder(pixel_values, bilinear_indices, bilinear_weights, cos, sin)
+
+        # 3D M-RoPE position ids (host arithmetic port of Qwen3VLModel.get_rope_index).
+        position_ids = self._qwen21_get_rope_index(input_ids, mm_token_type_ids, grid_thw, attention_mask)
+
+        # Dense DeepStack tensor: place each DeepStack feature at the image-pad positions.
+        image_mask = input_ids == self._img_token_id
+        n_deep = len(deepstack)
+        batch, seq = input_ids.shape
+        hidden = image_embeds.shape[-1]
+        dense = torch.zeros(n_deep, batch, seq, hidden, dtype=image_embeds.dtype)
+        for layer in range(n_deep):
+            tmp = torch.zeros(batch, seq, hidden, dtype=image_embeds.dtype)
+            tmp[image_mask] = deepstack[layer].to(image_embeds.dtype)
+            dense[layer] = tmp
+
+        hidden_states = self.text_encoder_i2i(input_ids, image_embeds, attention_mask, position_ids, dense)
+        return hidden_states, model_inputs
+
+    def _qwen21_host_vision_inputs(self, pixel_values, grid_thw):
+        from transformers.vision_utils import (
+            get_vision_bilinear_indices_and_weights,
+            get_vision_position_ids,
+        )
+
+        cfg = self.vision_encoder.config
+        sms = cfg.spatial_merge_size
+        num_grid_per_side = int(cfg.num_position_embeddings**0.5)
+        bilinear_indices, bilinear_weights = get_vision_bilinear_indices_and_weights(grid_thw, num_grid_per_side, sms)
+        position_ids = get_vision_position_ids(grid_thw, sms)
+        head_dim = cfg.hidden_size // cfg.num_heads
+        dim = head_dim // 2
+        inv_freq = 1.0 / (10000.0 ** (torch.arange(0, dim, 2, dtype=torch.float) / dim))
+        rotary = (position_ids.unsqueeze(-1) * inv_freq).flatten(1)
+        seq_len = pixel_values.shape[0]
+        rotary = rotary.reshape(seq_len, -1)
+        emb = torch.cat((rotary, rotary), dim=-1)
+        return bilinear_indices, bilinear_weights.float(), emb.cos().float(), emb.sin().float()
+
+    def _qwen21_get_rope_index(self, input_ids, mm_token_type_ids, image_grid_thw, attention_mask):
+        import itertools
+
+        spatial_merge_size = self.vision_encoder.config.spatial_merge_size
+
+        def vision_position_ids(start_position, grid_thw):
+            llm_t = int(grid_thw[0]) // 1
+            llm_h = int(grid_thw[1]) // spatial_merge_size
+            llm_w = int(grid_thw[2]) // spatial_merge_size
+            position_temporal = torch.arange(llm_t)
+            position_width = (torch.arange(llm_w) + start_position).repeat(llm_h * llm_t)
+            position_height = (torch.arange(llm_h) + start_position).repeat_interleave(llm_w).repeat(llm_t)
+            position_temporal = position_temporal.repeat_interleave(llm_h * llm_w) + start_position
+            return torch.stack([position_temporal, position_height, position_width], dim=0)
+
+        position_ids = torch.zeros(3, input_ids.shape[0], input_ids.shape[1], dtype=input_ids.dtype)
+        grid_iter = iter(image_grid_thw) if image_grid_thw is not None else None
+
+        for batch_idx in range(input_ids.shape[0]):
+            token_type = mm_token_type_ids[batch_idx]
+            if attention_mask is not None:
+                token_type = token_type[attention_mask[batch_idx].bool()]
+
+            groups = []
+            for key, group in itertools.groupby(enumerate(token_type.tolist()), lambda x: x[1]):
+                group = list(group)
+                groups.append((key, group[0][0], group[-1][0] + 1))
+
+            current_pos = 0
+            pos_list = []
+            for modality_type, start_idx, end_idx in groups:
+                if modality_type == 0:
+                    text_len = end_idx - start_idx
+                    pos_list.append(torch.arange(text_len).view(1, -1).expand(3, -1) + current_pos)
+                    current_pos += text_len
+                else:
+                    grid_thw = next(grid_iter)
+                    pos_list.append(vision_position_ids(current_pos, grid_thw))
+                    current_pos += max(int(grid_thw[1]), int(grid_thw[2])) // spatial_merge_size
+            llm_positions = torch.cat(pos_list, dim=1).reshape(3, -1)
+            if attention_mask is not None:
+                position_ids[:, batch_idx, attention_mask[batch_idx].bool()] = llm_positions.to(position_ids.dtype)
+            else:
+                position_ids[:, batch_idx] = llm_positions.to(position_ids.dtype)
+
+        return position_ids
+
+    def __call__(self, *args, **kwargs):
+        # The exported transformer graph is a cache-free single pass, so force KV caching off. The wrapper
+        # recomputes the full joint sequence every step (numerically identical to the cached path).
+        kwargs["use_kv_cache"] = False
+        # Go through OVDiffusionPipeline.__call__ like the other pipelines: it converts numpy generators and
+        # applies a statically reshaped pipeline's height/width before calling QwenImage21Pipeline.__call__.
+        return OVDiffusionPipeline.__call__(self, *args, **kwargs)
+
+
+class OVQwenImage21Img2ImgPipeline(OVQwenImage21Pipeline):
+    """
+    Image-to-image (image editing) counterpart of `OVQwenImage21Pipeline`. diffusers serves both tasks with the single
+    `QwenImage21Pipeline`, which edits when a condition `image` is passed, so this pipeline shares the exported
+    submodels and the inference code and only requires that image.
+    """
+
+    main_input_name = "image"
+    export_feature = "image-to-image"
+
+    def __call__(self, *args, **kwargs):
+        # `image` follows `prompt` in QwenImage21Pipeline.__call__
+        image = kwargs.get("image", args[1] if len(args) > 1 else None)
+        if image is None:
+            raise ValueError(
+                "`image` is required for image-to-image generation. Use `OVQwenImage21Pipeline` for text-to-image."
+            )
+        return super().__call__(*args, **kwargs)
 
 
 class _OVZImageTransformerAdapter:
@@ -2891,6 +3401,13 @@ if is_diffusers_version(">=", "0.33.0"):
 if is_diffusers_version(">=", "0.35.0"):
     SUPPORTED_OV_PIPELINES.append(OVQwenImagePipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["qwenimage"] = OVQwenImagePipeline
+
+if QwenImage21Pipeline is not object:
+    # Both classes wrap the same diffusers QwenImage21Pipeline; the text-to-image one comes first so that it is the
+    # default resolved from `model_index.json` (e.g. by OVDiffusionPipeline.from_pretrained).
+    SUPPORTED_OV_PIPELINES.extend([OVQwenImage21Pipeline, OVQwenImage21Img2ImgPipeline])
+    OV_TEXT2IMAGE_PIPELINES_MAPPING["qwenimage21"] = OVQwenImage21Pipeline
+    OV_IMAGE2IMAGE_PIPELINES_MAPPING["qwenimage21"] = OVQwenImage21Img2ImgPipeline
 
 if is_diffusers_version(">=", "0.37.0"):
     SUPPORTED_OV_PIPELINES.append(OVFlux2KleinPipeline)
