@@ -1187,6 +1187,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         audio_embed_sizes=None,
         audio_attention_mask=None,
         input_mode=None,
+        temporal_ids=None,
         **kwargs,
     ):
         if pixel_values is None:
@@ -1338,6 +1339,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "image_sizes": image_sizes,
                 "image_bound": kwargs.get("image_bound"),
                 "tgt_sizes": kwargs.get("tgt_sizes"),
+                "temporal_ids": kwargs.get("temporal_ids"),
                 "pixel_values_videos": kwargs.get("pixel_values_videos"),
                 "image_grid_thw": kwargs.get("image_grid_thw"),
                 "video_grid_thw": kwargs.get("video_grid_thw"),
