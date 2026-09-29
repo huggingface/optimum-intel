@@ -48,7 +48,7 @@ jobs:
 
     steps:
       - name: Free Disk Space (Ubuntu)
-        if: runner.os == 'Linux'
+        if: matrix.runs-on == 'ubuntu-22.04'
         uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6 # v2.0.0
 
       - name: Checkout code
