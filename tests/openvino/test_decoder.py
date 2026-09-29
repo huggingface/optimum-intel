@@ -519,7 +519,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         set_seed(SEED)
         model = OVModelForCausalLM.from_pretrained(
-            model_id, use_cache=True, compile=False, device=OPENVINO_DEVICE, **model_kwargs
+            model_id, use_cache=True, compile=False, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, **model_kwargs
         )
         model.eval()
         model.config.encoder_no_repeat_ngram_size = 0
@@ -538,6 +538,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             accelerator="openvino",
             trust_remote_code=model_arch in REMOTE_CODE_MODELS,
             tokenizer=None,
+            model_kwargs={"ov_config": F32_CONFIG},
         )
         set_seed(SEED)
         ov_outputs = ov_pipe(inputs, min_new_tokens=5, max_new_tokens=5, **additional_args, do_sample=False)
@@ -756,12 +757,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             # currently broken in transformers == 4.57.*
             gen_configs.extend([group_beam_search_gen_config, constrained_beam_search_gen_config])
 
-        ov_kwargs = {}
+        ov_kwargs = {"ov_config": F32_CONFIG}
         # For an already 4-bit checkpoint the reference dequantizes the weights to fp32, while OV
         # keeps int4 constants. CPU dynamic quantization of the activations then perturbs the logits
         # enough to pick different tokens, so disable it to compare both paths at the same precision.
         if model_arch == "llama_compressed_tensors":
-            ov_kwargs["ov_config"] = {"DYNAMIC_QUANTIZATION_GROUP_SIZE": "0"}
+            ov_kwargs["ov_config"] = {**F32_CONFIG, "DYNAMIC_QUANTIZATION_GROUP_SIZE": "0"}
 
         set_seed(SEED)
         ov_model_stateful = OVModelForCausalLM.from_pretrained(

@@ -8,16 +8,18 @@ on:
         type: boolean
         default: false
 
-permissions:
-  contents: read
-  actions: write  # needed to delete the stale cache entry
 
 env:
   HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
   UV_SYSTEM_PYTHON: true
 
+permissions: {}
+
 jobs:
   create-cache:
+    permissions:
+      actions: write
+      contents: read
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
 
@@ -28,7 +30,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.10"
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |

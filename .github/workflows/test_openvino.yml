@@ -15,8 +15,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
 
 env:
   UV_TORCH_BACKEND: cpu
@@ -24,8 +22,12 @@ env:
   TRANSFORMERS_IS_CI: true
   HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
+permissions: {}
+
 jobs:
   build:
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -51,7 +53,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.10"
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
